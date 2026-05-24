@@ -2,7 +2,6 @@ import logging
 import json
 import aiohttp
 import asyncio
-from bs4 import BeautifulSoup
 from app.tools.registry import registry
 from tenacity import retry, stop_after_attempt, wait_fixed
 
@@ -21,142 +20,40 @@ def get_hermes_session() -> aiohttp.ClientSession:
     return _hermes_session
 
 
-logger = logging.getLogger(__name__)
-
-
-@registry.register(
-    name="search_web",
-    description="Perform a web search to find recent news or information. Returns top results.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "The search query."},
-            "num_results": {
-                "type": "integer",
-                "description": "Number of results to return (default: 3).",
-            },
-        },
-        "required": ["query"],
-    },
-    tier=0,
-    source="hermes",
-)
-async def search_web(query: str, num_results: int = 3) -> str:
-    """
-    Search the web using Hermes Gateway.
-    Returns real search results with titles, URLs, and snippets.
-    """
-    logger.info(f"[WebTools] Searching web via Hermes for: {query}")
-
-    try:
-        prompt = (
-            f"Please perform a web search for the following query: '{query}'. "
-            f"Return the top {num_results} most relevant and recent results. "
-            f"Provide the information in a concise structure with titles, URLs (if known), and brief snippets."
-        )
-
-        hermes_resp_json = await query_hermes(prompt)
-        hermes_data = json.loads(hermes_resp_json)
-
-        if hermes_data.get("status") in ("success", "mock_success"):
-            results = [
-                {
-                    "title": "Hermes Search Summary",
-                    "url": "hermes://search",
-                    "snippet": hermes_data.get("response", ""),
-                }
-            ]
-            return json.dumps(
-                {
-                    "status": "success",
-                    "query": query,
-                    "results": results,
-                }
-            )
-        else:
-            return hermes_resp_json
-
-    except Exception as e:
-        logger.warning("[WebTools] Web search failed, returning empty: %s", e)
-        return json.dumps(
-            {
-                "status": "error",
-                "query": query,
-                "results": [],
-                "message": str(e),
+async def get_healthy_hermes_endpoints(endpoints: list[str], key: str, session: aiohttp.ClientSession) -> list[str]:
+    """Ping all endpoints in parallel and return the healthy ones."""
+    async def check_one(endpoint: str) -> str | None:
+        try:
+            ping_payload = {
+                "model": "hermes-agent",
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 1,
+                "stream": False,
             }
-        )
+            ping_headers = {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            }
+            ping_timeout = aiohttp.ClientTimeout(total=15.0)
+            async with session.post(
+                endpoint, json=ping_payload, headers=ping_headers, timeout=ping_timeout
+            ) as response:
+                if response.status == 200:
+                    logger.info(f"[WebTools] Responsive Hermes endpoint found: {endpoint}")
+                    return endpoint
+        except Exception as e:
+            logger.debug(f"[WebTools] Hermes endpoint {endpoint} failed ping check: {e}")
+        return None
+
+    results = await asyncio.gather(*(check_one(ep) for ep in endpoints))
+    healthy = [r for r in results if r is not None]
+    if healthy:
+        return healthy
+    logger.warning("[WebTools] No responsive Hermes endpoints found during ping. Falling back to all.")
+    return endpoints
 
 
-@registry.register(
-    name="web_search",
-    description="Perform a web search to find recent news or information. Returns top results.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "The search query."},
-            "num_results": {
-                "type": "integer",
-                "description": "Number of results to return (default: 3).",
-            },
-        },
-        "required": ["query"],
-    },
-    tier=0,
-    source="hermes",
-)
-async def web_search(query: str, num_results: int = 3) -> str:
-    """
-    Search the web using Hermes Gateway. Alias for search_web.
-    """
-    return await search_web(query, num_results)
-
-
-@registry.register(
-    name="scrape_url",
-    description="Scrape the main text content from a URL. Use this to read articles or SEC filings.",
-    parameters={
-        "type": "object",
-        "properties": {"url": {"type": "string", "description": "The URL to scrape."}},
-        "required": ["url"],
-    },
-    tier=0,
-    source="aiohttp",
-)
-async def scrape_url(url: str) -> str:
-    """
-    Scrape text content from a web page using aiohttp and BeautifulSoup.
-    """
-    logger.info(f"[WebTools] Scraping URL: {url}")
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
-                if response.status != 200:
-                    return f"Error: Received status code {response.status}"
-                html = await response.text()
-
-                soup = BeautifulSoup(html, "html.parser")
-                # Remove scripts and styles
-                for script in soup(["script", "style", "nav", "footer", "header"]):
-                    script.decompose()
-
-                text = soup.get_text(separator=" ", strip=True)
-                # Truncate to avoid massive context window usage
-                truncated_text = text[:8000]
-
-                return json.dumps(
-                    {
-                        "status": "success",
-                        "url": url,
-                        "content": truncated_text,
-                        "truncated": len(text) > 8000,
-                    }
-                )
-    except Exception as e:
-        logger.error(f"[WebTools] Scraping failed for {url}: {e}")
-        return json.dumps({"status": "error", "message": str(e)})
-
-
+logger = logging.getLogger(__name__)
 
 
 @registry.register(
@@ -209,7 +106,10 @@ async def query_hermes(prompt: str) -> str:
     last_error = None
     session = get_hermes_session()
 
-    for hermes_endpoint in hermes_endpoints:
+    # Discover responsive endpoints to avoid hanging on slow/offline nodes
+    endpoints_to_try = await get_healthy_hermes_endpoints(hermes_endpoints, hermes_key, session)
+
+    for hermes_endpoint in endpoints_to_try:
         try:
             payload = {
                 "model": "hermes-agent",
@@ -223,7 +123,7 @@ async def query_hermes(prompt: str) -> str:
             }
 
             try:
-                timeout = aiohttp.ClientTimeout(total=600)
+                timeout = aiohttp.ClientTimeout(total=60)
                 async with session.post(
                     hermes_endpoint, json=payload, headers=headers, timeout=timeout
                 ) as response:
@@ -394,6 +294,10 @@ async def stream_hermes_chat(
         "Content-Type": "application/json",
     }
     session = get_hermes_session()
+    # Filter for healthy endpoints if not overridden by user
+    if not endpoint_override:
+        hermes_endpoints = await get_healthy_hermes_endpoints(hermes_endpoints, hermes_key, session)
+        
     REQUIRES_CONFIRMATION = {"buy_stock", "sell_stock", "remove_from_watchlist"}
     
     turn_count = 0

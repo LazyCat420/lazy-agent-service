@@ -6,14 +6,9 @@ from app.tools.finance_tools import (
 )
 from app.tools.wiki_tools import write_memory_note, read_memory_note, search_wiki
 from app.tools.quant_tools import run_quant_equation
-from app.tools.web_tools import search_web, web_search, scrape_url, query_hermes
+from app.tools.web_tools import query_hermes, hermes_web_research
 
 from app.tools.db_tools import search_internal_database, update_youtube_channel_handle
-from app.tools.system_tools import run_local_command
-from app.tools.browser_tools import (
-    browser_navigate,
-    run_playwright_script,
-)
 from app.tools.youtube_tools import (
     youtube_search_handle,
     youtube_test_channel,
@@ -78,9 +73,6 @@ from app.tools.calculator_tools import (
 # Phase 10: Capsule Context Expansion Tools
 from app.tools.context_tools import get_cycle_context, get_cycle_context_all
 
-# Phase 5: Sandboxed Python Execution (Quant Scripts)
-from app.tools.script_sandbox import execute_quant_script
-
 # Phase 6: Prism Agent Harness (Onion Layer)
 from app.tools.prism_agent_harness import run_prism_agent
 
@@ -93,16 +85,11 @@ __all__ = [
     "write_memory_note",
     "read_memory_note",
     "search_wiki",
-    "search_web",
-    "web_search",
-    "scrape_url",
     "query_hermes",
+    "hermes_web_research",
     "run_quant_equation",
     "search_internal_database",
     "update_youtube_channel_handle",
-    "run_local_command",
-    "browser_navigate",
-    "run_playwright_script",
     "youtube_search_handle",
     "youtube_test_channel",
     # Phase 2: Pipeline Tools
@@ -123,8 +110,6 @@ __all__ = [
     # Phase 5: Trading Tools
     "buy_stock",
     "sell_stock",
-    # Phase 5b: Sandboxed Quant Execution
-    "execute_quant_script",
     # Phase 6: Deterministic Financial Calculators
     "calculate_position_size",
     "calculate_stop_loss",
