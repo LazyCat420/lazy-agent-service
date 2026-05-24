@@ -58,8 +58,10 @@ function createMcpServer() {
           name: t.name,
           description: t.description || "",
           inputSchema: t.parameters || { type: "object", properties: {} },
-          domain: t.domain,
-          labels: t.labels,
+          _meta: {
+            domain: t.domain,
+            labels: t.labels,
+          },
         })),
       };
     },
