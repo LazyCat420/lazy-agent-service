@@ -14,7 +14,8 @@ export const executeTool = async (toolName: string, args: Record<string, any>): 
     const env = {
       ...process.env,
       PYTHONPATH: CONFIG.PYTHONPATH,
-      SKIP_TOOL_USAGE_LOG: "true"
+      SKIP_TOOL_USAGE_LOG: "true",
+      USE_LAZY_TOOL_SERVICE: "false"
     };
 
     const child = spawn(

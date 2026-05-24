@@ -254,6 +254,7 @@ class VLLMClient:
             self._endpoints["dgx_spark"] = ep
 
         if settings.DGX_SPARK_2_VLLM_URL:
+            is_enabled = not getattr(settings, "DISREGARD_MSI_SPARK", False)
             ep = VLLMEndpoint(
                 name="dgx_spark_2",
                 url=settings.DGX_SPARK_2_VLLM_URL,
@@ -261,6 +262,7 @@ class VLLMClient:
                 max_concurrent=settings.DGX_SPARK_2_MAX_CONCURRENT,
                 purpose="Deep analysis, RLM decisions, debate engine",
                 batch_size=settings.DGX_SPARK_2_BATCH_SIZE,
+                enabled=is_enabled,
             )
             ep.init_concurrency(self.RESERVED_HIGH_SLOTS)
             self._endpoints["dgx_spark_2"] = ep
@@ -1796,8 +1798,9 @@ class VLLMClient:
                     if models:
                         ep.model = models[0]["id"]
                         roles[f"{name}_model"] = models[0]["id"]
-                        for m in models:
-                            self._model_endpoint_cache[m["id"]] = name
+                        if ep.enabled:
+                            for m in models:
+                                self._model_endpoint_cache[m["id"]] = name
 
                         # Capture max_model_len for context budget system
                         raw_ctx = models[0].get("max_model_len", 0)
