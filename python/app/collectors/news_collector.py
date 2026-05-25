@@ -76,27 +76,104 @@ RSS_FEEDS = {
 }
 
 
+def _extract_seeking_alpha_ssr(html: str) -> str | None:
+    """Extract and format Seeking Alpha article contents from embedded JSON state."""
+    import json
+    from bs4 import BeautifulSoup
+    match = re.search(r"window\.SSR_DATA\s*=\s*(\{.*?\});?\s*</script>", html, re.DOTALL)
+    if not match:
+        match = re.search(r"window\.SSR_DATA\s*=\s*(\{.*?\}),?\s*\n", html, re.DOTALL)
+    if not match:
+        return None
+    try:
+        data_str = match.group(1)
+        data = json.loads(data_str)
+        article = data.get("article", {}).get("response", {}).get("data", {}).get("attributes", {})
+        content_html = article.get("content")
+        if content_html:
+            soup = BeautifulSoup(content_html, "html.parser")
+            text = soup.get_text(separator=" ", strip=True)
+            
+            # Extract Quick Insights if available
+            insights = article.get("quickInsights", [])
+            if insights:
+                insights_text = []
+                for ins in sorted(insights, key=lambda x: x.get("order", 0)):
+                    q = ins.get("question", "")
+                    a = ins.get("answer", "")
+                    if q and a:
+                        insights_text.append(f"Q: {q}\nA: {a}")
+                if insights_text:
+                    text = text + "\n\nQuick Insights:\n" + "\n".join(insights_text)
+            return text.strip()
+    except Exception as e:
+        logger.warning(f"Failed to parse Seeking Alpha SSR_DATA: {e}")
+    return None
+
+
+def _clean_html_fallback(html: str, max_chars: int = 15000) -> str:
+    """Fallback utility to strip HTML tags, script blocks, and style blocks using regex."""
+    if not html:
+        return ""
+    cleaned = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<script[^>]*>.*?</script>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<svg[^>]*>.*?</svg>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:max_chars]
+
+
 def _extract_text_from_html(html: str, max_chars: int = 15000) -> str:
     """Extract readable text from HTML using Trafilatura."""
+    if not html:
+        return ""
+
+    # Seeking Alpha JSON extraction
+    if "seekingalpha" in html.lower() or "ssr_data" in html.lower():
+        sa_text = _extract_seeking_alpha_ssr(html)
+        if sa_text:
+            return sa_text[:max_chars]
+
     import trafilatura
     
     # Extract main article text, dropping menus, footers, etc.
-    text = trafilatura.extract(
-        html, 
-        include_links=False, 
-        include_images=False, 
-        include_tables=False,
-        no_fallback=False
-    )
+    text = None
+    try:
+        text = trafilatura.extract(
+            html, 
+            include_links=False, 
+            include_images=False, 
+            include_tables=False,
+            no_fallback=False
+        )
+    except Exception:
+        pass
     
+    if text and len(text) > 50:
+        # Strip remaining HTML tags just in case
+        text = re.sub(r"<[^>]+>", "", text)
+        # Normalize whitespace
+        text = re.sub(r"\s+", " ", text).strip()
+    else:
+        text = ""
+
+    # Try BeautifulSoup fallback
     if not text:
-        return ""
-        
-    # Strip remaining HTML tags just in case
-    text = re.sub(r"<[^>]+>", "", text)
-    # Normalize whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-    
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer", "header"]):
+                tag.decompose()
+            text = soup.get_text(separator=" ", strip=True)
+            text = re.sub(r"\s+", " ", text).strip()
+        except Exception:
+            pass
+
+    # Try regex fallback if still empty
+    if not text:
+        text = _clean_html_fallback(html, max_chars)
+
     # Phase 2: Dynamic Noise Filtering
     noise_patterns = [
         r"Copy LinkSavePlay\(\d+min\)Comments",
@@ -154,11 +231,15 @@ async def _scrape_article_body(
 ) -> str:
     """Fetch article URL and extract visible text as summary.
 
-    Uses httpx only — this is called for EVERY RSS article (~100+) so it
-    must be fast. No browser overhead.
+    Uses httpx or cloudscraper for Cloudflare-protected sites.
     """
     if _is_cloudflare_domain(url):
-        return await asyncio.to_thread(_scrape_with_cloudscraper, url)
+        raw_html = await asyncio.to_thread(_scrape_with_cloudscraper, url)
+        if raw_html:
+            text = _extract_text_from_html(raw_html, max_chars)
+            if text and len(text) > 50:
+                return text
+        return ""
 
     try:
         r = await client.get(url)
