@@ -22,6 +22,9 @@ app.use(express.json({ limit: "50mb" }));
 // Mount execution routes
 app.use("/execute", executeRoutes);
 
+// Serve static charts
+app.use("/charts", express.static("data/charts"));
+
 // Mount MCP routes
 mountMcpRoutes(app);
 

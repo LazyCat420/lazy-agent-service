@@ -1639,5 +1639,42 @@
       "teamwork",
       "cycle-context"
     ]
+  },
+  {
+    "name": "generate_trading_chart",
+    "description": "Generate an interactive HTML technical analysis chart for a stock using LLM quant strategies.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol"
+        },
+        "iterations": {
+          "type": "integer",
+          "description": "Number of self-reflection iterations (default 1)"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "llm_agent",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "chart",
+      "analysis",
+      "visual"
+    ],
+    "domain": "Quant & Analytics",
+    "labels": [
+      "quant",
+      "analytics",
+      "charting"
+    ]
   }
 ]

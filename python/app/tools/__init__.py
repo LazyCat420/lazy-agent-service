@@ -71,6 +71,9 @@ from app.tools.context_tools import get_cycle_context, get_cycle_context_all
 # Phase 6: Prism Agent Harness (Onion Layer)
 from app.tools.prism_agent_harness import run_prism_agent
 
+# Phase 11: Charting Tools
+from app.tools.charting_tools import generate_trading_chart
+
 __all__ = [
     "registry",
     "PermissionLevel",
@@ -124,4 +127,6 @@ __all__ = [
     # Phase 10: Capsule Context Tools
     "get_cycle_context",
     "get_cycle_context_all",
+    # Phase 11: Charting Tools
+    "generate_trading_chart",
 ]
