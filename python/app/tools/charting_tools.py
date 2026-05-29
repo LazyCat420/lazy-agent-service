@@ -228,6 +228,27 @@ async def generate_trading_chart(ticker: str, iterations: int = 1, period: str =
     latest = prev_specs[-1]
     chart_url = f"http://10.0.0.16:5591/charts/{latest['filename']}"
     
+    # Save raw JSON for the frontend
+    try:
+        # Convert df index (dates) to string for JSON serialization
+        df_json = df.reset_index()
+        df_json['Date'] = df_json['Date'].dt.strftime('%Y-%m-%d')
+        json_data = {
+            "symbol": symbol,
+            "period": period,
+            "timestamp": int(datetime.datetime.now().timestamp()),
+            "ohlcv": df_json[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].to_dict(orient='records'),
+            "ema_20": df_json['EMA_20'].fillna(0).tolist(),
+            "ema_50": df_json['EMA_50'].fillna(0).tolist(),
+            "latest_analysis": latest
+        }
+        json_path = os.path.join(OUTPUT_DIR, f"{symbol}.json")
+        with open(json_path, 'w') as f:
+            json.dump(json_data, f)
+    except Exception as e:
+        print(f"Error saving JSON chart data: {e}")
+
+    
     result = f"Successfully generated trading chart for {symbol}.\n\n"
     result += f"**Chart URL**: {chart_url}\n"
     result += f"**Strategy**: {latest.get('strategy_name')}\n"
