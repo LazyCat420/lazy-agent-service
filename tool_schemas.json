@@ -1653,6 +1653,10 @@
         "iterations": {
           "type": "integer",
           "description": "Number of self-reflection iterations (default 1)"
+        },
+        "period": {
+          "type": "string",
+          "description": "Timeframe of historical data to fetch (e.g., '1mo', '3mo', '6mo', '1y')"
         }
       },
       "required": [

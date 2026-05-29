@@ -35,6 +35,7 @@ OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../d
 class ChartingInput(BaseModel):
     ticker: str = Field(description="The stock ticker symbol (e.g. AAPL)")
     iterations: int = Field(default=1, description="Number of LLM reasoning iterations to build the chart (default 1)")
+    period: str = Field(default="3mo", description="Timeframe of historical data to fetch (e.g., '1mo', '3mo', '6mo', '1y')")
 
 
 def fetch_data(symbol, period="3mo"):
@@ -50,9 +51,9 @@ def fetch_data(symbol, period="3mo"):
     return df
 
 
-def build_iteration_prompt(symbol, data_str, iteration, prev_specs):
+def build_iteration_prompt(symbol, data_str, iteration, prev_specs, period):
     base = f"""You are an elite quantitative technical analyst.
-I am giving you the last 30 days of OHLCV data for {symbol}.
+I am giving you the OHLCV data for {symbol} over the last {period}.
 
 Analyze the data and produce a JSON overlay specification:
 1. Support / Trendlines (kind: "line")
@@ -89,14 +90,14 @@ Output ONLY raw JSON matching this schema — no markdown, no explanation outsid
     return base
 
 
-async def ask_llm(session, df, symbol, iteration=1, prev_specs=None):
-    recent_df = df.tail(30)
+async def ask_llm(session, df, symbol, iteration=1, prev_specs=None, period="3mo"):
+    # Pass all rows from df, no artificial 30 day limit if they requested more
     data_str = "Date | Open | High | Low | Close | Volume\n"
-    for date, row in recent_df.iterrows():
+    for date, row in df.iterrows():
         ds = date.strftime('%Y-%m-%d')
         data_str += f"{ds} | {row['Open']:.2f} | {row['High']:.2f} | {row['Low']:.2f} | {row['Close']:.2f} | {row['Volume']}\n"
 
-    prompt = build_iteration_prompt(symbol, data_str, iteration, prev_specs or [])
+    prompt = build_iteration_prompt(symbol, data_str, iteration, prev_specs or [], period)
 
     payload = {
         "model": MODEL_NAME,
@@ -189,7 +190,8 @@ def render_chart(df, spec, symbol, iteration=1):
         "type": "object",
         "properties": {
             "ticker": {"type": "string", "description": "The stock ticker symbol"},
-            "iterations": {"type": "integer", "description": "Number of self-reflection iterations (default 1)"}
+            "iterations": {"type": "integer", "description": "Number of self-reflection iterations (default 1)"},
+            "period": {"type": "string", "description": "Timeframe of historical data to fetch (e.g., '1mo', '3mo', '6mo', '1y')"}
         },
         "required": ["ticker"],
     },
@@ -197,16 +199,16 @@ def render_chart(df, spec, symbol, iteration=1):
     source="llm_agent",
     input_model=ChartingInput,
 )
-async def generate_trading_chart(ticker: str, iterations: int = 1) -> str:
+async def generate_trading_chart(ticker: str, iterations: int = 1, period: str = "3mo") -> str:
     """Generates an agentic trading chart and returns the URL and analysis."""
     symbol = ticker.upper()
-    df = await asyncio.to_thread(fetch_data, symbol)
+    df = await asyncio.to_thread(fetch_data, symbol, period)
     prev_specs = []
 
     async with aiohttp.ClientSession() as session:
         for i in range(1, iterations + 1):
             try:
-                spec, reasoning = await ask_llm(session, df, symbol, i, prev_specs)
+                spec, reasoning = await ask_llm(session, df, symbol, i, prev_specs, period)
                 filename = await asyncio.to_thread(render_chart, df, spec, symbol, i)
 
                 entry = {
