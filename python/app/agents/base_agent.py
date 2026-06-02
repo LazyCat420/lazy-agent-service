@@ -298,7 +298,7 @@ async def run_agent(
         budget = AgentBudget(max_turns=budget_turns)
 
         # Per-agent tool whitelist: only show tools relevant to this agent's role
-        agent_tools = get_agent_tools(agent_name) if enable_tools else None
+        agent_tools = get_agent_tools(agent_name) if enable_tools else []
 
         result = await run_agent_loop(
             system_prompt=actual_system_prompt,
