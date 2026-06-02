@@ -72,7 +72,7 @@ from app.tools.context_tools import get_cycle_context, get_cycle_context_all
 from app.tools.prism_agent_harness import run_prism_agent
 
 # Phase 11: Charting Tools
-from app.tools.charting_tools import generate_trading_chart
+from app.tools.charting_tools import save_trading_chart
 
 __all__ = [
     "registry",
@@ -128,5 +128,5 @@ __all__ = [
     "get_cycle_context",
     "get_cycle_context_all",
     # Phase 11: Charting Tools
-    "generate_trading_chart",
+    "save_trading_chart",
 ]
