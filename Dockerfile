@@ -3,7 +3,7 @@
 # ============================================================
 
 # ── Stage 1: Python venv Builder ─────────────────────────────
-FROM python:3.13-slim AS python-deps
+FROM python:3.11-slim AS python-deps
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
