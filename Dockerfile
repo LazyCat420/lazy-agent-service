@@ -5,6 +5,8 @@
 # ── Stage 1: Python venv Builder ─────────────────────────────
 FROM python:3.11-slim AS python-deps
 
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ build-essential && rm -rf /var/lib/apt/lists/*
+
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
