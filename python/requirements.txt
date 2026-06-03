@@ -72,4 +72,3 @@ rouge-score==0.1.2
 urllib3==1.26.18
 chardet==5.2.0
 
-pydantic==2.9.2
