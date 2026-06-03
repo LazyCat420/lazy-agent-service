@@ -3,11 +3,17 @@
 # ============================================================
 
 # ── Stage 1: Python venv Builder ─────────────────────────────
-FROM python:3.11-slim AS python-deps
+FROM node:26-slim AS python-deps
 
-RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ build-essential && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    gcc \
+    g++ \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN python -m venv /opt/venv
+RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY python/requirements.txt /tmp/requirements.txt
