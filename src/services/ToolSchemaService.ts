@@ -86,14 +86,15 @@ try {
     const rawData = fs.readFileSync(schemasPath, "utf-8");
     const list = JSON.parse(rawData);
     schemas = list.map((item: any) => {
+      const tool = item.function || item;
       return {
-        ...item,
-        domain: item.domain || "General",
-        labels: item.labels || ["tool"],
-        emoji: item.emoji || null,
+        ...tool,
+        domain: item.domain || tool.domain || "General",
+        labels: item.labels || tool.labels || ["tool"],
+        emoji: item.emoji || tool.emoji || null,
         // Map every tool to a post execution endpoint in lazy-tool-service
-        endpoint: item.endpoint || {
-          path: `/execute/${item.name}`,
+        endpoint: item.endpoint || tool.endpoint || {
+          path: `/execute/${tool.name}`,
           method: "POST"
         }
       };
