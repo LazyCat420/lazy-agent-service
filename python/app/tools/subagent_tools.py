@@ -140,6 +140,7 @@ async def spawn_research_subagent(
                 tools_override=active_schemas,
                 max_tokens=2048,
                 temperature=0.3,
+                actor_label="research_subagent",
             )
 
             routed_via = result.get("routed_via", "unknown")

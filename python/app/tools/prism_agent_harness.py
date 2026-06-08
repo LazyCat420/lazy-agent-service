@@ -194,6 +194,7 @@ async def run_prism_agent(
     max_tokens: int = 2048,
     temperature: float = 0.3,
     timeout_seconds: int = 120,
+    actor_label: str | None = None,
 ) -> dict[str, Any]:
     """Run an agent via Prism Gateway's /agent endpoint.
 
@@ -215,6 +216,7 @@ async def run_prism_agent(
         max_tokens: Max tokens for the LLM response.
         temperature: LLM temperature.
         timeout_seconds: Max time for the full agent run.
+        actor_label: Optional label for the actor/username overriding default.
 
     Returns:
         dict with keys: final_text, token_usage, execution_ms,
@@ -222,6 +224,9 @@ async def run_prism_agent(
     """
     prism = llm.prism_client
     start = time.monotonic()
+
+    if ticker:
+        ticker = ticker.upper()
 
     # Check if Prism is available
     prism_healthy = await prism.check_health()
@@ -267,10 +272,16 @@ async def run_prism_agent(
         enable_thinking=False,
         tools=active_tools,
         agentic_mode=True,
+        actor_label=actor_label,
     )
 
     # Add metadata for tracking
-    payload["conversationMeta"]["title"] = f"Agent: {agent_name} · {ticker}"
+    title_parts = [agent_name]
+    if ticker:
+        title_parts.append(ticker)
+    if cycle_id:
+        title_parts.append(cycle_id[:12])
+    payload["conversationMeta"]["title"] = " · ".join(title_parts)
 
     logger.info(
         "[PrismHarness] Delegating %s to Prism /agent (model=%s, tools=%d, ticker=%s)",
