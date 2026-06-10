@@ -13,6 +13,8 @@ interface LazyToolServiceConfig {
   LAZY_TOOL_SERVICE_API_KEY: string | undefined;
   EXECUTION_TIMEOUT_MS: number;
   CACHE_TTL_MS: number;
+  TRADING_SERVICE_URL: string;
+  TRADING_SERVICE_API_KEY: string | undefined;
 }
 
 // Detect if we are inside the Docker container
@@ -48,6 +50,8 @@ const CONFIG: LazyToolServiceConfig = {
   LAZY_TOOL_SERVICE_API_KEY: process.env.LAZY_TOOL_SERVICE_API_KEY,
   EXECUTION_TIMEOUT_MS: Number(process.env.EXECUTION_TIMEOUT_MS || "30000"),
   CACHE_TTL_MS: Number(process.env.CACHE_TTL_MS || "60000"),
+  TRADING_SERVICE_URL: process.env.TRADING_SERVICE_URL || "http://10.0.0.16:3031",
+  TRADING_SERVICE_API_KEY: process.env.TRADING_SERVICE_API_KEY || "sun-trading-secure-api-key-2026",
 };
 
 export default CONFIG;

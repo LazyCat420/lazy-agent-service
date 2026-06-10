@@ -94,22 +94,85 @@ export const executeTool = async (toolName: string, args: Record<string, any>): 
   });
 };
 
+async function reportUsage(payload: {
+  tool_name: string;
+  agent_name?: string;
+  ticker?: string;
+  cycle_id?: string;
+  success: boolean;
+  execution_ms: number;
+  error_message?: string;
+  service_source: string;
+}) {
+  if (!CONFIG.TRADING_SERVICE_URL) return;
+  const url = `${CONFIG.TRADING_SERVICE_URL}/api/v1/agent-tools/usage`;
+  
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+    if (CONFIG.TRADING_SERVICE_API_KEY) {
+      headers["Authorization"] = `Bearer ${CONFIG.TRADING_SERVICE_API_KEY}`;
+    }
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+    
+    if (!response.ok) {
+      logger.warn(`[UsageReporting] Failed to report tool usage, status=${response.status}`);
+    }
+  } catch (err: any) {
+    logger.error(`[UsageReporting] Network error reporting tool usage: ${err.message}`);
+  }
+}
+
 const handleExecuteRoute: RequestHandler = async (req, res) => {
   const { toolName } = req.params;
   const args = req.body || {};
   const startTime = Date.now();
+
+  const agentName = (req.headers["x-agent"] || req.headers["x-username"] || "") as string;
+  const cycleId = (req.headers["x-conversation-id"] || req.headers["x-request-id"] || "") as string;
+  const ticker = (req.headers["x-ticker"] || args.ticker || args.Ticker || "") as string;
 
   try {
     logger.info(JSON.stringify({ event: "tool_start", toolName, args }));
     const result = await executeTool(toolName as string, args);
     const durationMs = Date.now() - startTime;
     logger.info(JSON.stringify({ event: "tool_success", toolName, durationMs }));
+    
+    // Fire-and-forget report to trading-service
+    reportUsage({
+      tool_name: toolName as string,
+      agent_name: agentName,
+      ticker,
+      cycle_id: cycleId,
+      success: true,
+      execution_ms: durationMs,
+      service_source: "lazy-tool-service"
+    }).catch(() => {});
+
     res.json(result);
   } catch (error: any) {
     const errorMsg = (error as Error).message;
     const durationMs = Date.now() - startTime;
     logger.error(JSON.stringify({ event: "tool_failure", toolName, error: errorMsg, durationMs }));
     
+    // Fire-and-forget report to trading-service
+    reportUsage({
+      tool_name: toolName as string,
+      agent_name: agentName,
+      ticker,
+      cycle_id: cycleId,
+      success: false,
+      execution_ms: durationMs,
+      error_message: errorMsg,
+      service_source: "lazy-tool-service"
+    }).catch(() => {});
+
     // Append to DLQ
     try {
       const dlqEntry = JSON.stringify({ timestamp: new Date().toISOString(), toolName, args, error: errorMsg, durationMs }) + "\n";
