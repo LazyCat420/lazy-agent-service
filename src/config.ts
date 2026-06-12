@@ -51,7 +51,7 @@ const CONFIG: LazyToolServiceConfig = {
   EXECUTION_TIMEOUT_MS: Number(process.env.EXECUTION_TIMEOUT_MS || "30000"),
   CACHE_TTL_MS: Number(process.env.CACHE_TTL_MS || "60000"),
   TRADING_SERVICE_URL: process.env.TRADING_SERVICE_URL || "http://10.0.0.16:3031",
-  TRADING_SERVICE_API_KEY: process.env.TRADING_SERVICE_API_KEY || "sun-trading-secure-api-key-2026",
+  TRADING_SERVICE_API_KEY: process.env.TRADING_SERVICE_API_KEY,
 };
 
 export default CONFIG;

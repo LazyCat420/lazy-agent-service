@@ -8,11 +8,33 @@ import rateLimit from "express-rate-limit";
 
 const app = express();
 
+// ── CORS — Explicit origin allowlist ────────────────────────
+const DEFAULT_CORS_ORIGINS = [
+  "http://localhost:3000",
+  "http://localhost:3035",
+  "http://localhost:8888",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3035",
+  "http://127.0.0.1:8888",
+  "http://10.0.0.16:3000",
+  "http://10.0.0.16:3035",
+  "http://10.0.0.16:8888",
+];
+
+const envOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
+  : [];
+
+const ALLOWED_ORIGINS = new Set([...DEFAULT_CORS_ORIGINS, ...envOrigins]);
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin;
-  res.header("Access-Control-Allow-Origin", origin || "*");
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header("Access-Control-Allow-Headers", "Content-Type, X-Project, X-Username, X-Agent, X-Request-Id, X-Conversation-Id");
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
+  }
+  // If origin is not in allowlist, no ACAO header is set → browser blocks the request
+  res.header("Access-Control-Allow-Headers", "Content-Type, X-Project, X-Username, X-Agent, X-Request-Id, X-Conversation-Id, X-Api-Key, Authorization");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
@@ -29,11 +51,18 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// API Key Authentication Middleware
+// ── API Key Authentication — hard-fail in production ────────
+const isProduction = process.env.NODE_ENV === "production";
+
+if (isProduction && !CONFIG.LAZY_TOOL_SERVICE_API_KEY) {
+  logger.error("FATAL: LAZY_TOOL_SERVICE_API_KEY is not set. Refusing to start in production without authentication.");
+  process.exit(1);
+}
+
 const requireApiKey = (req: Request, res: Response, next: NextFunction) => {
   if (!CONFIG.LAZY_TOOL_SERVICE_API_KEY) {
-    // If no key is configured, allow all (or reject? Better to allow for dev but warn)
-    logger.warn("LAZY_TOOL_SERVICE_API_KEY is not set in environment. Running in unsecured mode!");
+    // Dev-only: warn once per startup, allow requests through
+    logger.warn("LAZY_TOOL_SERVICE_API_KEY is not set in environment. Running in unsecured mode (dev only)!");
     return next();
   }
   
@@ -84,4 +113,7 @@ httpServer.listen(port, () => {
   logger.success(`Lazy Tools API running on port ${port}`);
   logger.info(`Endpoint: /execute/:toolName`);
   logger.info(`MCP SSE endpoint: /mcp/sse`);
+  if (!isProduction) {
+    logger.info(`CORS allowed origins: ${[...ALLOWED_ORIGINS].join(", ")}`);
+  }
 });
