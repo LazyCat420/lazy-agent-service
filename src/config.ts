@@ -22,21 +22,21 @@ const isDocker = fs.existsSync("/.dockerenv") || fs.existsSync("/opt/venv/bin/py
 
 const defaultInterpreter = isDocker
   ? "/opt/venv/bin/python"
-  : "/home/lazycat/github/rods-project/sun/trading-service/.venv/bin/python";
+  : "/home/lazycat/github/projects/sun/trading-service/.venv/bin/python";
 
 const defaultExecScript = isDocker
   ? "/app/python/scripts/execute_tool.py"
-  : "/home/lazycat/github/rods-project/sun/trading-service/scripts/execute_tool.py";
+  : "/home/lazycat/github/projects/sun/trading-service/scripts/execute_tool.py";
 
 const defaultCwd = isDocker
   ? "/app/python"
-  : "/home/lazycat/github/rods-project/sun/trading-service";
+  : "/home/lazycat/github/projects/sun/trading-service";
 
 const defaultPythonPath = isDocker
   ? "/app/python"
   : [
-      "/home/lazycat/github/rods-project/sun/trading-service",
-      "/home/lazycat/github/rods-project/sun/trading-client"
+      "/home/lazycat/github/projects/sun/trading-service",
+      "/home/lazycat/github/projects/sun/trading-client"
     ].join(process.platform === "win32" ? ";" : ":");
 
 const CONFIG: LazyToolServiceConfig = {
