@@ -144,12 +144,42 @@ const handleExecuteRoute: RequestHandler = async (req, res) => {
     let result;
     const tName = toolName as string;
     if (tName.startsWith("music_player_")) {
+      const musicApiUrl = "http://10.0.0.16:8002";
+      let res: any = null;
       if (tName === "music_player_suggest_artists") {
         result = { artists: args.artists || [] };
       } else if (tName === "music_player_add_node") {
-        result = { artist_name: args.name || args.artist_name || "", type: args.type || "artist" };
+        res = await fetch(`${musicApiUrl}/api/artists/add-node`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({name: args.name, type: args.type}) });
+      } else if (tName === "music_player_remove_node") {
+        res = await fetch(`${musicApiUrl}/api/graph/discovered/${encodeURIComponent(args.node_id)}`, { method: "DELETE" });
+      } else if (tName === "music_player_add_edge") {
+        res = await fetch(`${musicApiUrl}/api/graph/edge`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({source: args.source, target: args.target, relationship: args.relationship || "related"}) });
+      } else if (tName === "music_player_remove_edge") {
+        res = await fetch(`${musicApiUrl}/api/graph/edge?source=${encodeURIComponent(args.source)}&target=${encodeURIComponent(args.target)}`, { method: "DELETE" });
+      } else if (tName === "music_player_override_node_type") {
+        res = await fetch(`${musicApiUrl}/api/graph/override-type`, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({node_id: args.node_id, group_type: args.group_type}) });
+      } else if (tName === "music_player_expand_artist") {
+        res = await fetch(`${musicApiUrl}/api/graph/expand/${encodeURIComponent(args.artist)}?count=${args.count || 8}`);
+      } else if (tName === "music_player_expand_genre") {
+        res = await fetch(`${musicApiUrl}/api/graph/expand/genre/${encodeURIComponent(args.genre)}?count=${args.count || 8}`);
+      } else if (tName === "music_player_get_graph_state") {
+        res = await fetch(`${musicApiUrl}/api/graph/discovered`);
+      } else if (tName === "music_player_search_artists") {
+        res = await fetch(`${musicApiUrl}/api/artists`);
+      } else if (tName === "music_player_get_artist_info") {
+        res = await fetch(`${musicApiUrl}/api/artist/info/${encodeURIComponent(args.name)}`);
+      } else if (tName === "music_player_list_genres") {
+        res = await fetch(`${musicApiUrl}/api/genres`);
       } else {
         result = { success: true };
+      }
+
+      if (res !== null) {
+        if (res.ok) {
+          result = await res.json();
+        } else {
+          result = { error: await res.text() };
+        }
       }
     } else {
       result = await executeTool(tName, args);
