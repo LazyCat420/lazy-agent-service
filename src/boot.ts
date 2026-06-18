@@ -1,7 +1,7 @@
 // ─── Boot Sequence ──────────────────────────────────────────
 
-import { bootstrapEnv } from "@rodrigo-barraza/utilities-library/vault";
+import { bootstrapEnvironment } from "@rodrigo-barraza/utilities-library/vault";
 
-await bootstrapEnv();
+await bootstrapEnvironment();
 
 await import("./server.js");
