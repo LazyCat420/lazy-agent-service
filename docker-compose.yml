@@ -4,7 +4,7 @@ services:
     container_name: lazy-tool-service
     restart: unless-stopped
     ports:
-      - "5591:5591"
+      - "127.0.0.1:5591:5591"
     env_file:
       - .env
     environment:

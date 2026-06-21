@@ -26,4 +26,9 @@ exit() {
   builtin exit "$code"
 }
 
+PRE_BUILD() {
+  step "Running tool schema updater (add_schemas.cjs)"
+  node "${SCRIPT_DIR}/add_schemas.cjs"
+}
+
 source "${SCRIPT_DIR}/../deploy-kit/lib.sh"
