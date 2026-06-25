@@ -46,7 +46,14 @@ from app.config import settings
 from app.config.config_models import get_model_limits
 from app.config.context_budget import register_model_context
 from app.db.connection import get_db
-from app.monitoring.llm_tracker import tracker
+try:
+    from app.monitoring.llm_tracker import tracker
+except ImportError:
+    class _NoOpTracker:
+        """Stub tracker — monitoring module moved to trading-service."""
+        def __getattr__(self, name):
+            return lambda *a, **kw: None
+    tracker = _NoOpTracker()
 from app.services.prism_client import PrismClient
 from app.utils.text_utils import strip_think_tags
 

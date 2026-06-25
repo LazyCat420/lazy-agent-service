@@ -11,7 +11,10 @@ import json
 import logging
 
 from app.tools.registry import registry, PermissionLevel
-from app.agents.task_board import task_board
+try:
+    from app.agents.task_board import task_board
+except ImportError:
+    task_board = None
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,10 @@ import time
 
 from app.config import settings
 from app.db.connection import get_db
-from app.cognition.remote_embedder import RemoteEmbedder
+try:
+    from app.cognition.remote_embedder import RemoteEmbedder
+except ImportError:
+    RemoteEmbedder = None
 
 logger = logging.getLogger(__name__)
 

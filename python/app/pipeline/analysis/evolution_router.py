@@ -11,7 +11,10 @@ import json
 import logging
 
 from app.db.connection import get_db
-from app.cognition.evolution.debate import council
+try:
+    from app.cognition.evolution.debate import council
+except ImportError:
+    council = None
 
 logger = logging.getLogger(__name__)
 

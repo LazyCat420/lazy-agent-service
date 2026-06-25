@@ -21,9 +21,15 @@ import asyncio
 import logging
 from typing import Callable
 from app.pipeline.data.collection_scheduler import should_collect, record_collection
-from app.pipeline.orchestration.cycle_control import cycle_control
+try:
+    from app.pipeline.orchestration.cycle_control import cycle_control
+except ImportError:
+    cycle_control = None
 from app.utils.pipeline_utils import noop as _noop, elapsed_ms
-from app.monitoring.pipeline_profiler import profiler as pipeline_profiler
+try:
+    from app.monitoring.pipeline_profiler import profiler as pipeline_profiler
+except ImportError:
+    pipeline_profiler = None
 
 logger = logging.getLogger(__name__)
 

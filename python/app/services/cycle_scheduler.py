@@ -12,7 +12,10 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import HTTPException
 
-from app.pipeline.orchestration.cycle_control import cycle_control
+try:
+    from app.pipeline.orchestration.cycle_control import cycle_control
+except ImportError:
+    cycle_control = None  # orchestration code moved to trading-service
 from app.db.connection import get_db
 from app.services.bot_manager import get_active_bot_id
 from app.trading.paper_trader import check_stop_losses, check_take_profits

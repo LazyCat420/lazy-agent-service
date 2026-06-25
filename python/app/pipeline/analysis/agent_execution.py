@@ -5,7 +5,10 @@ import json
 
 from app.config.config_tickers import ALT_ASSET_TICKERS
 from app.config.config_tickers import classify_asset as _classify_asset
-from app.agents.base_agent import run_agent
+try:
+    from app.agents.base_agent import run_agent
+except ImportError:
+    run_agent = None
 
 logger = logging.getLogger(__name__)
 

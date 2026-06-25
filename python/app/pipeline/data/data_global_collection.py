@@ -2,7 +2,10 @@ import time
 import asyncio
 import logging
 from typing import Callable
-from app.monitoring.pipeline_profiler import profiler as pipeline_profiler
+try:
+    from app.monitoring.pipeline_profiler import profiler as pipeline_profiler
+except ImportError:
+    pipeline_profiler = None
 from app.pipeline.data.collection_scheduler import should_collect, record_collection
 from app.utils.pipeline_utils import elapsed_ms
 

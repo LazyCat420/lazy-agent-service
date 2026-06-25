@@ -15,7 +15,10 @@ from typing import Callable
 from app.db.connection import get_db
 from app.services.vllm_client import llm, Priority
 from app.utils.pipeline_utils import noop as _noop
-from app.cognition.reflection_utils import generate_critique_prompt
+try:
+    from app.cognition.reflection_utils import generate_critique_prompt
+except ImportError:
+    generate_critique_prompt = None
 
 logger = logging.getLogger(__name__)
 

@@ -470,7 +470,10 @@ TRADING_TOOLS.update(
 )
 
 # ── Add graph learning tool ──
-from app.cognition.ontology.graph_learn_tool import graph_learn
+try:
+    from app.cognition.ontology.graph_learn_tool import graph_learn
+except ImportError:
+    graph_learn = None
 
 TRADING_TOOLS["graph_learn"] = {
     "tool": graph_learn,
