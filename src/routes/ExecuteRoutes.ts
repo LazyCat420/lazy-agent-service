@@ -142,7 +142,12 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
     logger.info(JSON.stringify({ event: "tool_start", toolName, args: toolArguments }));
     
     let result: unknown;
-    const tName = toolName as string;
+    let tName = toolName as string;
+    
+    if (tName.startsWith("mcp__lazy-tool-service__")) {
+      tName = tName.replace("mcp__lazy-tool-service__", "");
+    }
+
     if (tName.startsWith("music_player_")) {
       const musicApiUrl = "http://10.0.0.16:8002";
       let musicApiResponse: globalThis.Response | null = null;
@@ -181,17 +186,29 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
           result = { error: await musicApiResponse.text() };
         }
       }
-    } else if (tName.startsWith("html_notes_") || tName === "render_component") {
+    } else if (
+      tName.startsWith("html_notes_") || 
+      tName === "render_component" || 
+      tName.startsWith("canvas_")
+    ) {
       const htmlNotesUrl = process.env.HTML_NOTES_URL || "http://10.0.0.16:8035";
-      const apiResponse = await fetch(`${htmlNotesUrl}/internal/execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tool: tName, args: toolArguments })
-      });
-      if (apiResponse.ok) {
-        result = await apiResponse.json();
-      } else {
-        result = { error: await apiResponse.text(), is_error: true };
+      try {
+        const apiResponse = await fetch(`${htmlNotesUrl}/internal/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tool: tName, args: toolArguments })
+        });
+        if (apiResponse.ok) {
+          result = await apiResponse.json();
+        } else {
+          result = { error: await apiResponse.text(), is_error: true };
+        }
+      } catch (fetchError: unknown) {
+        // Return 200 OK with is_error=true so the LLM sees the connection error instead of a generic 500
+        result = { 
+          error: `Failed to connect to html-notes service at ${htmlNotesUrl}. Is the service down? Details: ${(fetchError as Error).message}`, 
+          is_error: true 
+        };
       }
     } else {
       result = await executeTool(tName, toolArguments);
