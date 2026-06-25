@@ -297,7 +297,7 @@
     },
     {
         "name": "render_component",
-        "description": "Render fetched or computed data as a styled HTML/CSS component injected into the canvas. Provide raw structured data, the system will apply a template. For custom HTML, use component_type=custom_html and provide the HTML in rendered_html.",
+        "description": "Render structured data as a styled HTML/CSS component on the canvas. Pass data matching the component_type format. For arbitrary HTML use component_type=custom_html with rendered_html field.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -311,10 +311,7 @@
                         "habit_tracker",
                         "data_card",
                         "data_table",
-                        "price_ticker",
                         "summary_panel",
-                        "news_feed",
-                        "chart_embed",
                         "alert_banner",
                         "custom_html"
                     ],
@@ -326,7 +323,7 @@
                 },
                 "data": {
                     "type": "object",
-                    "description": "The raw structured data payload being rendered."
+                    "description": "Structured data for the component. Format by type: calendar_widget={days:[{day:str, events:[str]}]}. task_checklist={tasks:[{text:str, done:bool, due?:str}]}. reminder_banner={title:str, message:str, time?:str, color?:str}. data_table={headers:[str], rows:[[str]]}. kanban_board={columns:[{name:str, cards:[{title:str}]}]}. habit_tracker={habits:[{name:str, history:[bool]}]}. data_card={value:str, label:str, icon?:str, badge?:str, progress?:int, description?:str}. summary_panel={sections:[{heading:str, content:str}]}. alert_banner={severity:info|success|warning|danger, message:str, action?:str}."
                 },
                 "rendered_html": {
                     "type": "string",
@@ -347,6 +344,86 @@
         ],
         "endpoint": {
             "path": "/execute/render_component",
+            "method": "POST"
+        }
+    },
+    {
+        "name": "canvas_read_dom",
+        "description": "Read the current live canvas DOM and return a structured summary of all visible elements. Use this to understand what is currently displayed before making modifications. Returns element count, component types found, text content summaries, and optionally the HTML of a specific element matched by CSS selector.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "canvas_html": {
+                    "type": "string",
+                    "description": "The current canvas HTML content (provided automatically by the system)."
+                },
+                "css_selector": {
+                    "type": "string",
+                    "description": "Optional CSS selector to read a specific element. If omitted, returns full canvas summary."
+                }
+            },
+            "required": [
+                "canvas_html"
+            ]
+        },
+        "tier": 0,
+        "permission": "read_only",
+        "concurrency_safe": true,
+        "domain": "General",
+        "labels": [
+            "tool"
+        ],
+        "endpoint": {
+            "path": "/execute/canvas_read_dom",
+            "method": "POST"
+        }
+    },
+    {
+        "name": "canvas_modify_dom",
+        "description": "Modify an element on the live canvas using a CSS selector. Use this to update, append to, or remove existing components without replacing the entire canvas. Returns the modified canvas HTML.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "canvas_html": {
+                    "type": "string",
+                    "description": "The current canvas HTML content (provided automatically by the system)."
+                },
+                "css_selector": {
+                    "type": "string",
+                    "description": "CSS selector to locate the target element (e.g., .task-checklist, .glass-card:first-child, h3)"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "append",
+                        "prepend",
+                        "replace",
+                        "remove",
+                        "insert_after",
+                        "insert_before"
+                    ],
+                    "description": "The DOM operation: append/prepend add inside the element, replace swaps it, remove deletes it, insert_before/after add as siblings."
+                },
+                "html_snippet": {
+                    "type": "string",
+                    "description": "The HTML to insert. Not required for remove action."
+                }
+            },
+            "required": [
+                "canvas_html",
+                "css_selector",
+                "action"
+            ]
+        },
+        "tier": 0,
+        "permission": "write",
+        "concurrency_safe": true,
+        "domain": "General",
+        "labels": [
+            "tool"
+        ],
+        "endpoint": {
+            "path": "/execute/canvas_modify_dom",
             "method": "POST"
         }
     },
