@@ -432,7 +432,14 @@
       "properties": {
         "widget_type": {
           "type": "string",
-          "enum": ["checklist", "kanban", "clock", "calendar", "notes"],
+          "enum": [
+            "checklist",
+            "kanban",
+            "clock",
+            "calendar",
+            "notes",
+            "iframe_app"
+          ],
           "description": "The type of widget to spawn."
         },
         "widget_id": {
@@ -444,13 +451,18 @@
           "description": "Configuration object for the widget (e.g., {\"title\": \"My Tasks\", \"items\": [\"Task 1\"]})"
         }
       },
-      "required": ["widget_type", "widget_id"]
+      "required": [
+        "widget_type",
+        "widget_id"
+      ]
     },
     "tier": 0,
     "permission": "write",
     "concurrency_safe": true,
     "domain": "General",
-    "labels": ["tool"],
+    "labels": [
+      "tool"
+    ],
     "endpoint": {
       "path": "/execute/canvas_add_widget",
       "method": "POST"
