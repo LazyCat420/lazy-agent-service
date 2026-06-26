@@ -1,9 +1,0 @@
-{
-  "name": "trading-service",
-  "private": true,
-  "version": "1.0.0",
-  "scripts": {
-    "deploy": "bash deploy.sh",
-    "deploy:dry": "bash deploy.sh --dry-run"
-  }
-}
