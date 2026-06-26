@@ -438,7 +438,8 @@
             "clock",
             "calendar",
             "notes",
-            "iframe_app"
+            "iframe_app",
+            "mini_music_player"
           ],
           "description": "The type of widget to spawn."
         },
