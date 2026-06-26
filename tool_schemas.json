@@ -362,9 +362,7 @@
           "description": "Optional CSS selector to read a specific element. If omitted, returns full canvas summary."
         }
       },
-      "required": [
-        "canvas_html"
-      ]
+      "required": []
     },
     "tier": 0,
     "permission": "read_only",
@@ -410,7 +408,6 @@
         }
       },
       "required": [
-        "canvas_html",
         "css_selector",
         "action"
       ]

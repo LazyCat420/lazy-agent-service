@@ -191,6 +191,10 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
       tName === "render_component" || 
       tName.startsWith("canvas_")
     ) {
+      if (tName === "canvas_modify_dom" && !toolArguments.canvas_html) {
+         // Intercept missing canvas HTML so schema validation doesn't fail. Client will handle actual modify logic natively.
+         result = { success: true, message: "Handled natively by HTML-Notes client" };
+      } else {
       const htmlNotesUrl = process.env.HTML_NOTES_URL || "http://10.0.0.16:8035";
       try {
         const apiResponse = await fetch(`${htmlNotesUrl}/internal/execute`, {
@@ -209,6 +213,7 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
           error: `Failed to connect to html-notes service at ${htmlNotesUrl}. Is the service down? Details: ${(fetchError as Error).message}`, 
           is_error: true 
         };
+      }
       }
     } else {
       result = await executeTool(tName, toolArguments);
