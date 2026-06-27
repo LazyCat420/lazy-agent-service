@@ -1,0 +1,256 @@
+"""
+Prism Agent Registry — Maps local trading-service agent names to Prism custom agent IDs.
+
+When Prism is enabled, every LLM call routes through Prism's /agent endpoint
+using the custom agent ID from this registry. If an agent doesn't exist in Prism
+yet, the caller can auto-register it via POST /custom-agents.
+
+This replaces the scattered if/elif chain that was in prism_client.py.
+"""
+
+
+# ── Central Agent ID Map ──
+# Keys: local agent_name strings used in llm.chat() calls
+# Values: Prism custom agent IDs (uppercase, CUSTOM_ prefix)
+AGENT_ID_MAP: dict[str, str] = {
+    # ── Canonical Prism Agent IDs (Self-Mapping) ──
+    "CUSTOM_SYSTEM_JANITOR_AGENT": "CUSTOM_SYSTEM_JANITOR_AGENT",
+    "CUSTOM_QUANT_RESEARCH_AGENT": "CUSTOM_QUANT_RESEARCH_AGENT",
+    "CUSTOM_TECHNICAL_ANALYSIS_AGENT": "CUSTOM_TECHNICAL_ANALYSIS_AGENT",
+    "CUSTOM_AGENT_ARCHITECT": "CUSTOM_AGENT_ARCHITECT",
+    "CUSTOM_AGENT_BUDGET_MANAGER": "CUSTOM_AGENT_BUDGET_MANAGER",
+    "CUSTOM_BULLISH_DEBATER": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_MARKET_ALPHA": "CUSTOM_MARKET_ALPHA",
+    "CUSTOM_RETRIEVER_AGENT": "CUSTOM_RETRIEVER_AGENT",
+    "CUSTOM_VERIFIER_AGENT": "CUSTOM_VERIFIER_AGENT",
+    "CUSTOM_SYNTHESIZER_AGENT": "CUSTOM_SYNTHESIZER_AGENT",
+    "CUSTOM_PRE_TRADE_AGENT": "CUSTOM_PRE_TRADE_AGENT",
+    "CUSTOM_META_AUDIT_AGENT": "CUSTOM_META_AUDIT_AGENT",
+
+    # ── System Janitor Agent Mappings ──
+    "CUSTOM_DATA_JANITOR_AGENT": "CUSTOM_MARKET_SCOUT",
+    "CUSTOM_DATA_JANITOR_CRITIC_AGENT": "CUSTOM_MARKET_SCOUT",
+    "CUSTOM_DATA_CURATOR_AGENT": "CUSTOM_MARKET_SCOUT",
+    "CUSTOM_LIFECYCLE_SUMMARIZER_AGENT": "CUSTOM_MARKET_SCOUT",
+    "CUSTOM_SUMMARIZER_AGENT": "CUSTOM_MARKET_SCOUT",
+    "CUSTOM_PURGE_PASS_AGENT": "CUSTOM_MARKET_SCOUT",
+    "CUSTOM_POST_CYCLE_LEARNER_AGENT": "CUSTOM_POST_CYCLE_LEARNER_AGENT",
+    "data_janitor": "CUSTOM_MARKET_SCOUT",
+    "data_janitor_critic": "CUSTOM_MARKET_SCOUT",
+    "data_curator": "CUSTOM_MARKET_SCOUT",
+    "database_curator": "CUSTOM_MARKET_SCOUT",
+    "lifecycle_summarizer": "CUSTOM_MARKET_SCOUT",
+    "summarizer_news": "CUSTOM_MARKET_SCOUT",
+    "summarizer_youtube": "CUSTOM_MARKET_SCOUT",
+    "summarizer_reddit": "CUSTOM_MARKET_SCOUT",
+    "purge_pass": "CUSTOM_MARKET_SCOUT",
+    "post_cycle_learner": "CUSTOM_POST_CYCLE_LEARNER_AGENT",
+    "maintenance_agent": "CUSTOM_MARKET_SCOUT",
+    "janitor": "CUSTOM_MARKET_SCOUT",
+    
+    # ── Quant Research Agent ──
+    "CUSTOM_RESEARCH_SUBAGENT_YIELD_AGENT": "CUSTOM_QUANT_RESEARCH_AGENT",
+    "quant_research": "CUSTOM_QUANT_RESEARCH_AGENT",
+    "autoresearch": "CUSTOM_QUANT_RESEARCH_AGENT",
+    "research_subagent": "CUSTOM_QUANT_RESEARCH_AGENT",
+    "research_subagent_yield": "CUSTOM_QUANT_RESEARCH_AGENT",
+
+    # ── Technical Analysis Agent ──
+    "technical": "CUSTOM_TECHNICAL_ANALYSIS_AGENT",
+
+    # ── Agent Architect ──
+    "agent_architect": "CUSTOM_AGENT_ARCHITECT",
+
+    # ── Agent Budget Manager ──
+    "budget": "CUSTOM_AGENT_BUDGET_MANAGER",
+
+    # ── Bullish Debater & Debate Agents ──
+    "CUSTOM_THESIS_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_DEBATE_META_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_DEBATE_CHALLENGE_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_DEBATE_CROSS_EXAM_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_DEBATE_SYNTHESIS_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_DEBATE_JUDGE_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_DEBATE_CRITIC_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_EVO_PROPOSER_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_EVO_CRITIC_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_EVO_JUDGE_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "bull_agent": "CUSTOM_BULLISH_DEBATER",
+    "bear_agent": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_BULL_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "CUSTOM_BEAR_AGENT": "CUSTOM_BULLISH_DEBATER",
+    "debater": "CUSTOM_BULLISH_DEBATER",
+    "debate_debater": "CUSTOM_BULLISH_DEBATER",
+    "specialized_debater": "CUSTOM_BULLISH_DEBATER",
+    "evolution_debater_proposed": "CUSTOM_BULLISH_DEBATER",
+    "evolution_debater_critic": "CUSTOM_BULLISH_DEBATER",
+    "evolution_debater_judge": "CUSTOM_BULLISH_DEBATER",
+    "debate_meta": "CUSTOM_BULLISH_DEBATER",
+    "debate_cross_examiner": "CUSTOM_BULLISH_DEBATER",
+    "debate_synthesizer": "CUSTOM_BULLISH_DEBATER",
+    "thesis_agent": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "debate_judge": "CUSTOM_BULLISH_DEBATER",
+    "debate_critic": "CUSTOM_BULLISH_DEBATER",
+    "debate_coordinator": "CUSTOM_DEBATE_COORDINATOR",
+    "CUSTOM_DEBATE_COORDINATOR": "CUSTOM_DEBATE_COORDINATOR",
+
+    # ── Trading Cycle Analysis Agent ──
+    "CUSTOM_CURATION_PASS_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_MACRO_SCOUT_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_DECISION_GLANCE_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_DATA_VERIFIER_AGENT": "CUSTOM_VERIFIER_AGENT",
+    "CUSTOM_CONSENSUS_CHECK_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_EXECUTIVE_DECISION_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_BENCHMARK_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_MORNING_BRIEFING_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_MEMORY_CONSOLIDATION_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_DEEPEVAL_JUDGE_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_STRATEGY_EVALUATOR_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_EVO_TEST_PROVE_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_REFLECTOR_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_EVO_GENERATOR_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_CONTEXT_COMPRESSOR_AGENT": "CUSTOM_SYSTEM_JANITOR_AGENT",
+    "CUSTOM_CONSENSUS_ENGINE_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_FLASH_BRIEFING_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_CONSOLIDATOR_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "CUSTOM_MEMORY_BRIEFER_AGENT": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "sentiment": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "fundamental": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "risk": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "fund_flow": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "comparative": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "retriever": "CUSTOM_RETRIEVER_AGENT",
+    "verifier": "CUSTOM_VERIFIER_AGENT",
+    "synthesizer": "CUSTOM_SYNTHESIZER_AGENT",
+    "pre_trade": "CUSTOM_PRE_TRADE_AGENT",
+    "meta_audit": "CUSTOM_META_AUDIT_AGENT",
+    "decision_engine": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "decision_glance": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "trading_phase": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "trading_cycle": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "morning_briefing_analyst": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "briefing": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "flash_briefing": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "consolidator": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "context_compressor": "CUSTOM_SYSTEM_JANITOR_AGENT",
+    "swarm_quant": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "swarm_macro": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "swarm_cio": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "swarm_consensus": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "swarm_exec_planner": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "swarm_evaluator": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "reflector": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "evolution_runner": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "test_prove": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "strategy_auditor": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "judge_agent": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "deepeval_client": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "memory_consolidation": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "trading_memory": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "tool_analyst": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "benchmark_agent": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "curation_pass": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "macro_scout": "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT",
+    "ticker_validator": "CUSTOM_SYSTEM_JANITOR_AGENT",
+    "CUSTOM_TICKER_VALIDATOR_AGENT": "CUSTOM_SYSTEM_JANITOR_AGENT",
+}
+
+# Agent names that map to CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT (catch-all for standard analysis)
+_STANDARD_ANALYSIS_AGENTS = frozenset({
+    "sentiment", "fundamental", "risk", "fund_flow", "comparative",
+    "decision_engine", "trading_phase", "trading_cycle",
+})
+
+
+def resolve_agent_id(agent_name: str, default_agent: str = "CUSTOM_MARKET_ALPHA") -> str:
+    """Resolve a local agent name to a Prism custom agent ID.
+
+    Args:
+        agent_name: The local agent name (e.g. "data_janitor", "morning_briefing_analyst").
+        default_agent: Fallback agent ID if no mapping exists.
+
+    Returns:
+        The Prism custom agent ID string.
+    """
+    if not agent_name:
+        return default_agent
+
+    name_lower = agent_name.lower()
+    suffix = ""
+    if "_tot" in name_lower:
+        suffix = "_TOT"
+    elif "_got" in name_lower:
+        suffix = "_GOT"
+    elif "_cot" in name_lower:
+        suffix = "_COT"
+
+    # If the caller already provided a canonical custom agent ID, return it as-is
+    # Except if it maps to a more specific custom agent ID in AGENT_ID_MAP (like CUSTOM_DATA_VERIFIER_AGENT)
+    if agent_name.startswith("CUSTOM_"):
+        mapped = AGENT_ID_MAP.get(agent_name)
+        if mapped:
+            base_agent = mapped
+        else:
+            base_agent = agent_name
+        
+        if suffix and not base_agent.endswith(suffix):
+            return f"{base_agent}{suffix}"
+        return base_agent
+
+    # Direct lookup first (fast path)
+    agent_id = AGENT_ID_MAP.get(agent_name)
+    if agent_id:
+        if suffix and not agent_id.endswith(suffix):
+            return f"{agent_id}{suffix}"
+        return agent_id
+
+    # Fuzzy matching for specific specialist agents first
+    if name_lower.startswith("v3_"):
+        base_agent = f"CUSTOM_{agent_name.upper()}"
+    elif "retriever" in name_lower:
+        base_agent = "CUSTOM_RETRIEVER_AGENT"
+    elif "verifier" in name_lower:
+        base_agent = "CUSTOM_VERIFIER_AGENT"
+    elif "synthesizer" in name_lower:
+        base_agent = "CUSTOM_SYNTHESIZER_AGENT"
+    elif "pre_trade" in name_lower:
+        base_agent = "CUSTOM_PRE_TRADE_AGENT"
+    elif "meta_audit" in name_lower:
+        base_agent = "CUSTOM_META_AUDIT_AGENT"
+
+    # Fuzzy matching for standard analysis agents
+    elif any(x in name_lower for x in _STANDARD_ANALYSIS_AGENTS):
+        base_agent = "CUSTOM_TRADING_CYCLE_ANALYSIS_AGENT"
+
+    # Fuzzy matching for known prefixes (backward compat with prism_client.py logic)
+    elif "quant_research" in name_lower:
+        base_agent = "CUSTOM_QUANT_RESEARCH_AGENT"
+    elif "janitor" in name_lower or "maintenance" in name_lower or "summarizer" in name_lower:
+        base_agent = "CUSTOM_MARKET_SCOUT"
+    elif "reddit" in name_lower or "youtube" in name_lower or "news" in name_lower:
+        base_agent = "CUSTOM_MARKET_SCOUT"
+    elif "curator" in name_lower or "data" in name_lower:
+        base_agent = "CUSTOM_MARKET_SCOUT"
+    else:
+        base_agent = None
+
+    if base_agent:
+        if suffix and not base_agent.endswith(suffix):
+            return f"{base_agent}{suffix}"
+        return base_agent
+    
+    base_agent = "CUSTOM_MARKET_SCOUT"
+    # Otherwise, default to MARKET_SCOUT for data ingestion
+    if "technical" in name_lower:
+        base_agent = "CUSTOM_TECHNICAL_ANALYSIS_AGENT"
+    elif "agent_architect" in name_lower or "architect" in name_lower:
+        base_agent = "CUSTOM_AGENT_ARCHITECT"
+    elif "budget" in name_lower:
+        base_agent = "CUSTOM_AGENT_BUDGET_MANAGER"
+    elif "debater" in name_lower:
+        base_agent = "CUSTOM_BULLISH_DEBATER"
+
+    if suffix and not base_agent.endswith(suffix):
+        return f"{base_agent}{suffix}"
+    return base_agent
