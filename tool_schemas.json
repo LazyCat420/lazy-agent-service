@@ -247,107 +247,6 @@
     ]
   },
   {
-    "name": "html_notes_modify_dom",
-    "description": "Precisely modify a specific part of a note's HTML using CSS selectors. Use this to insert tables, sidebars, or other components relative to existing elements.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "note_id": {
-          "type": "string",
-          "description": "The ID of the note to modify"
-        },
-        "css_selector": {
-          "type": "string",
-          "description": "A valid CSS selector to locate the target element (e.g., '#main-content', '.sidebar', 'table:nth-of-type(1)')"
-        },
-        "action": {
-          "type": "string",
-          "enum": [
-            "append",
-            "prepend",
-            "insert_before",
-            "insert_after",
-            "replace"
-          ],
-          "description": "The DOM operation to perform relative to the matched element"
-        },
-        "html_snippet": {
-          "type": "string",
-          "description": "The raw HTML string to insert or replace with"
-        }
-      },
-      "required": [
-        "note_id",
-        "css_selector",
-        "action",
-        "html_snippet"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "render_component",
-    "description": "Render structured data as a styled HTML/CSS component on the canvas. Pass data matching the component_type format. For arbitrary HTML use component_type=custom_html with rendered_html field.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "component_type": {
-          "type": "string",
-          "enum": [
-            "calendar_widget",
-            "task_checklist",
-            "reminder_banner",
-            "kanban_board",
-            "habit_tracker",
-            "data_card",
-            "data_table",
-            "summary_panel",
-            "alert_banner",
-            "custom_html"
-          ],
-          "description": "The visual layout to use for rendering. Use custom_html for arbitrary HTML."
-        },
-        "title": {
-          "type": "string",
-          "description": "Heading label for the component"
-        },
-        "data": {
-          "type": "object",
-          "description": "Structured data for the component. Format by type: calendar_widget={days:[{day:str, events:[str]}]}. task_checklist={tasks:[{text:str, done:bool, due?:str}]}. reminder_banner={title:str, message:str, time?:str, color?:str}. data_table={headers:[str], rows:[[str]]}. kanban_board={columns:[{name:str, cards:[{title:str}]}]}. habit_tracker={habits:[{name:str, history:[bool]}]}. data_card={value:str, label:str, icon?:str, badge?:str, progress?:int, description?:str}. summary_panel={sections:[{heading:str, content:str}]}. alert_banner={severity:info|success|warning|danger, message:str, action?:str}."
-        },
-        "rendered_html": {
-          "type": "string",
-          "description": "Raw HTML string. Only use this if component_type is custom_html."
-        }
-      },
-      "required": [
-        "component_type",
-        "title"
-      ]
-    },
-    "tier": 0,
-    "permission": "read_only",
-    "concurrency_safe": true,
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "endpoint": {
-      "path": "/execute/render_component",
-      "method": "POST"
-    }
-  },
-  {
     "name": "canvas_read_dom",
     "description": "Read the current live canvas DOM and return a structured summary of all visible elements. Use this to understand what is currently displayed before making modifications. Returns element count, component types found, text content summaries, and optionally the HTML of a specific element matched by CSS selector.",
     "parameters": {
@@ -373,54 +272,6 @@
     ],
     "endpoint": {
       "path": "/execute/canvas_read_dom",
-      "method": "POST"
-    }
-  },
-  {
-    "name": "canvas_modify_dom",
-    "description": "Modify an element on the live canvas using a CSS selector. Use this to update, append to, or remove existing components without replacing the entire canvas. Returns the modified canvas HTML.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "canvas_html": {
-          "type": "string",
-          "description": "The current canvas HTML content (provided automatically by the system)."
-        },
-        "css_selector": {
-          "type": "string",
-          "description": "CSS selector to locate the target element (e.g., .task-checklist, .glass-card:first-child, h3)"
-        },
-        "action": {
-          "type": "string",
-          "enum": [
-            "append",
-            "prepend",
-            "replace",
-            "remove",
-            "insert_after",
-            "insert_before"
-          ],
-          "description": "The DOM operation: append/prepend add inside the element, replace swaps it, remove deletes it, insert_before/after add as siblings."
-        },
-        "html_snippet": {
-          "type": "string",
-          "description": "The HTML to insert. Not required for remove action."
-        }
-      },
-      "required": [
-        "css_selector",
-        "action"
-      ]
-    },
-    "tier": 0,
-    "permission": "write",
-    "concurrency_safe": true,
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "endpoint": {
-      "path": "/execute/canvas_modify_dom",
       "method": "POST"
     }
   },
@@ -981,7 +832,7 @@
       "properties": {
         "content": {
           "type": "string",
-          "description": "The finding to share (e.g. 'RSI is at 28.5 — stock is oversold')."
+          "description": "The finding to share (e.g. 'RSI is at 28.5 \u2014 stock is oversold')."
         },
         "ticker": {
           "type": "string",
@@ -2054,7 +1905,7 @@
   },
   {
     "name": "get_cycle_context",
-    "description": "Expand a capsule source reference to get the full raw agent findings from a prior step. Use this when the compressed capsule summary is insufficient for your analysis. The ref_id is found in the '→ Expand: ref:capsule:<id>' line of each capsule summary.",
+    "description": "Expand a capsule source reference to get the full raw agent findings from a prior step. Use this when the compressed capsule summary is insufficient for your analysis. The ref_id is found in the '\u2192 Expand: ref:capsule:<id>' line of each capsule summary.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2088,7 +1939,7 @@
   },
   {
     "name": "get_cycle_context_all",
-    "description": "Get ALL capsule summaries for the current cycle and ticker. Returns Layer 1 summaries from every agent that ran this cycle. Use this to re-ground yourself on what all agents found without needing individual ref_ids. Does NOT return full raw responses — use get_cycle_context(ref_id) for that.",
+    "description": "Get ALL capsule summaries for the current cycle and ticker. Returns Layer 1 summaries from every agent that ran this cycle. Use this to re-ground yourself on what all agents found without needing individual ref_ids. Does NOT return full raw responses \u2014 use get_cycle_context(ref_id) for that.",
     "parameters": {
       "type": "object",
       "properties": {
