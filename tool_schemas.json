@@ -501,6 +501,22 @@
     "tags": []
   },
   {
+    "name": "vllm_vision_analyze",
+    "description": "Analyze an image (from a local file path or remote URL) using a local vLLM vision model (Gemma 4 or Qwen 3.6).",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": []
+  },
+  {
     "name": "check_hallucination",
     "description": "Run a hallucination check on an LLM claim by cross-referencing it against the actual data in our database. Useful during debates when one agent suspects another agent is citing fabricated numbers.",
     "parameters": {
