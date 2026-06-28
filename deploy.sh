@@ -12,8 +12,8 @@
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-IMAGE_NAME="lazy-tool-service"
-DISPLAY_NAME="Lazy Tool Service"
+IMAGE_NAME="lazy-agent-service"
+DISPLAY_NAME="Lazy Agent Service"
 
 # Intercept exit to introduce a delay on successful build exit.
 # This prevents a filesystem race condition in deploy-all.sh

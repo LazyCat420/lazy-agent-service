@@ -1,7 +1,7 @@
 services:
-  lazy-tool-service:
-    image: lazy-tool-service:latest
-    container_name: lazy-tool-service
+  lazy-agent-service:
+    image: lazy-agent-service:latest
+    container_name: lazy-agent-service
     restart: unless-stopped
     ports:
       - "5591:5591"
