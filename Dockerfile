@@ -21,23 +21,15 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # ── Stage 2: Node.js TS Builder ──────────────────────────────
 FROM node:20-slim AS node-build
 
-# git and openssh-client are required by npm to fetch private git packages
+# git is required to install git-based dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
-    openssh-client \
     && rm -rf /var/lib/apt/lists/*
-
-# Add GitHub host key to known_hosts to prevent key verification failure
-RUN mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
-
-# Redirect git SSH URLs to HTTPS so public git dependencies can build without SSH keys
-RUN git config --system url."https://github.com/".insteadOf "ssh://git@github.com/" && \
-    git config --system url."https://github.com/".insteadOf "git@github.com:"
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY .npmrc ./
-RUN --mount=type=ssh npm ci
+RUN npm ci
 
 COPY . .
 RUN npm run build
