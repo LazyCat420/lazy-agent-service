@@ -4,7 +4,7 @@ services:
     container_name: lazy-agent-service
     restart: unless-stopped
     ports:
-      - "5591:5591"
+      - "7778:7778"
     env_file:
       - .env
     environment:
@@ -15,7 +15,7 @@ services:
       - ./data/charts:/app/data/charts
 
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:5591/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:7778/health"]
       interval: 30s
       timeout: 5s
       retries: 3

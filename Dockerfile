@@ -58,9 +58,9 @@ COPY python/ /app/python/
 COPY tool_schemas.json ./tool_schemas.json
 
 # Expose port
-EXPOSE 5591
+EXPOSE 7778
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget --no-verbose --tries=1 -O /dev/null http://127.0.0.1:5591/health || exit 1
+  CMD wget --no-verbose --tries=1 -O /dev/null http://127.0.0.1:7778/health || exit 1
 
 CMD ["node", "dist/boot.js"]

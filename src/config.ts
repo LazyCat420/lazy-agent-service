@@ -41,8 +41,8 @@ const defaultPythonPath = isDocker
     ].join(process.platform === "win32" ? ";" : ":");
 
 const CONFIG: LazyToolServiceConfig = {
-  LAZY_TOOL_SERVICE_PORT: Number(process.env.LAZY_TOOL_SERVICE_PORT || "5591"),
-  LAZY_TOOL_SERVICE_URL: process.env.LAZY_TOOL_SERVICE_URL || "http://localhost:5591",
+  LAZY_TOOL_SERVICE_PORT: Number(process.env.LAZY_TOOL_SERVICE_PORT || "7778"),
+  LAZY_TOOL_SERVICE_URL: process.env.LAZY_TOOL_SERVICE_URL || "http://localhost:7778",
   MONGODB_URI: process.env.MONGO_URI || process.env.MONGODB_URI,
   PYTHON_INTERPRETER: process.env.PYTHON_INTERPRETER || defaultInterpreter,
   PYTHON_EXEC_SCRIPT: process.env.PYTHON_EXEC_SCRIPT || defaultExecScript,
