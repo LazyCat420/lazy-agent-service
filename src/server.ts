@@ -1,10 +1,13 @@
 import http from "node:http";
 import express, { type Request, type Response, type NextFunction } from "express";
 import logger from "./logger.js";
-import CONFIG from "../config.js";
+import CONFIG, { MONGO_DB_NAME, MONGO_URI } from "../config.js";
 import executeRoutes, { executeTool } from "./routes/ExecuteRoutes.js";
 import AgentRoutes from "./routes/AgentRoutes.js";
 import { mountMcpRoutes } from "./services/McpAdapter.js";
+import MongoWrapper from "./wrappers/MongoWrapper.js";
+import AgentPersonaRegistry from "./services/AgentPersonaRegistry.js";
+import { getErrorMessage } from "./utils/ErrorHelpers.js";
 import rateLimit from "express-rate-limit";
 
 const app = express();
@@ -202,11 +205,23 @@ app.get("/health", (_req: Request, res: Response) => {
 const port = CONFIG.LAZY_TOOL_SERVICE_PORT;
 const httpServer = http.createServer(app);
 
-httpServer.listen(port, () => {
+httpServer.listen(port, async () => {
   logger.success(`Lazy Tools API running on port ${port}`);
   logger.info(`Endpoint: /execute/:toolName`);
   logger.info(`MCP SSE endpoint: /mcp/sse`);
   if (!isProduction) {
     logger.info(`CORS allowed origins: ${[...ALLOWED_ORIGINS].join(", ")}`);
+  }
+
+  // Initialize MongoDB connection and load custom agents
+  try {
+    if (MONGO_URI) {
+      await MongoWrapper.createClient(MONGO_DB_NAME, MONGO_URI);
+      await AgentPersonaRegistry.loadCustomAgents();
+    } else {
+      logger.warn("MONGO_URI not defined, skipping DB connection");
+    }
+  } catch (error: unknown) {
+    logger.error(`Database initialization or custom agent loading failed: ${getErrorMessage(error)}`);
   }
 });

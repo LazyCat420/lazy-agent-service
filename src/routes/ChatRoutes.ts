@@ -1522,7 +1522,11 @@ router.post(
       username: req.username,
       clientIp: req.clientIp,
     };
-    if (req.query.stream !== "false") {
+    const acceptsSse = req.headers.accept?.includes("text/event-stream");
+    const streamQuery = req.query.stream;
+    const isSse = streamQuery === "true" || (acceptsSse && streamQuery !== "false" && req.body.stream !== false);
+
+    if (isSse) {
       await handleSseRequest(req, res, params);
     } else {
       await handleJsonRequest(req, res, next, params);

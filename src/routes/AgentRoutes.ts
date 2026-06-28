@@ -212,7 +212,11 @@ router.post(
       workspaceRoot: req.workspaceRoot || req.body.workspaceRoot || null,
     };
 
-    if (req.query.stream !== "false") {
+    const acceptsSse = req.headers.accept?.includes("text/event-stream");
+    const streamQuery = req.query.stream;
+    const isSse = streamQuery === "true" || (acceptsSse && streamQuery !== "false" && req.body.stream !== false);
+
+    if (isSse) {
       await handleSseRequest(req, res, params, handleAgent, {
         persistOnDisconnect: true,
       });
