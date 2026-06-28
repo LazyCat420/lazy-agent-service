@@ -19,6 +19,28 @@ FIRM_CONTEXT = (
     "extract structured financial data to make profitable trading decisions.\n\n"
 )
 
+def resolve_default_model_for_agent(agent_name: str) -> str:
+    """Resolve default model based on agent role to balance load.
+    Jetson (Qwen 35B) handles lightweight janitorial, consensus, and curation tasks.
+    Gold Spark (Gemma 4 26B) handles heavy quant research, debates, and final decisions.
+    """
+    if not agent_name:
+        return "google/gemma-4-26B-A4B-it"
+
+    name_lower = agent_name.lower()
+    
+    # Collector & lightweight agents route to Jetson (Qwen 35B)
+    collector_keywords = (
+        "janitor", "curator", "summarizer", "scout", "purge",
+        "maintenance", "consensus", "ticker_validator"
+    )
+    if any(kw in name_lower for kw in collector_keywords):
+        return "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit"
+        
+    # Default to Gemma on Gold Spark for heavy tasks
+    return "google/gemma-4-26B-A4B-it"
+
+
 async def call_prism_agent(
     agent_id: str,
     user_message: str,
@@ -92,8 +114,11 @@ async def call_prism_agent(
         from app.v3.guardrails import get_budget_for_role
         max_iter = get_budget_for_role(agent_id).max_turns
 
+        default_model = resolve_default_model_for_agent(fallback_agent_name or agent_id)
+        model = model_override or default_model
+        provider = "vllm-2" if model == "google/gemma-4-26B-A4B-it" else "vllm"
         resp = await prism_client.call_agent(
-            model=model_override or "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit",
+            model=model,
             messages=messages,
             system_prompt=FIRM_CONTEXT + (fallback_system_prompt or ""),
             agent_name=agent_id,
@@ -101,9 +126,13 @@ async def call_prism_agent(
             temperature=temperature,
             project=project or settings.PROJECT_NAME,
             max_iterations=max_iter,
+            provider=provider,
         )
         
-        response_text = resp.text.strip()
+        try:
+            response_text = resp.json().get("text", "").strip()
+        except Exception:
+            response_text = resp.text.strip()
         elapsed_ms = int((time.monotonic() - start) * 1000)
         tokens = len(response_text) // 4
         
@@ -155,6 +184,7 @@ class PrismLLMShim:
     def __init__(self):
         self._killed = False
         self.prism_client = prism_client
+        self.model = "google/gemma-4-26B-A4B-it"
         
     def reset_kill_switch(self):
         self._killed = False

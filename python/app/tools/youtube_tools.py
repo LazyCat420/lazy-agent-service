@@ -159,21 +159,6 @@ async def youtube_search(query: str = None, channels: list[str] = None, sort: st
             is_latest_query = True
             if not sort:
                 sort = "date"
-            
-            # Map queries containing channel keywords to specific channel handles
-            channel_mappings = {
-                "primagen": "@ThePrimeagen",
-                "primeagen": "@ThePrimeagen",
-                "fireship": "@Fireship",
-                "bloomberg": "@BloombergTechnology"
-            }
-            for kw, handle in channel_mappings.items():
-                if kw in q_lower:
-                    if not channels:
-                        channels = []
-                    if handle not in channels:
-                        channels.append(handle)
-                    logger.info(f"[YouTubeTools] Mapped query keyword '{kw}' to channel handle '{handle}'")
 
     logger.info(f"[YouTubeTools] Searching YouTube (query='{query}', channels={channels}, sort='{sort}') via scraper-service at {scraper_url}")
 
