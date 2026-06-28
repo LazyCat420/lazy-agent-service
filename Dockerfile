@@ -27,6 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
+# Add GitHub host key to known_hosts to prevent key verification failure
+RUN mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
+
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY .npmrc ./
