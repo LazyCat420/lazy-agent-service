@@ -21,19 +21,16 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # ── Stage 2: Node.js TS Builder ──────────────────────────────
 FROM node:20-slim AS node-build
 
-# git is required to install git-based dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g pnpm
 
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY .npmrc ./
-RUN npm ci
+RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN npm run build
-RUN npm prune --omit=dev
+RUN pnpm run build
+RUN pnpm prune --prod
 
 # ── Stage 3: Runtime ──────────────────────────────────────────
 FROM python:3.11-slim
