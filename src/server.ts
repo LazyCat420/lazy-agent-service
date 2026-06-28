@@ -99,6 +99,63 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   }
 });
 
+// Chat completions proxy route directing to Jetson or Spark vLLM based on model name
+app.post(["/chat", "/v1/chat/completions"], apiLimiter, requireApiKey, async (req: Request, res: Response) => {
+  const { model, messages, tools, tool_choice, temperature, max_tokens, stream } = req.body;
+  const isQwen = String(model || "").toLowerCase().includes("qwen");
+  const defaultHost = "10.0.0.16";
+  const jetsonUrl = process.env.JETSON_VLLM_URL || `http://${defaultHost}:8001`;
+  const sparkUrl = process.env.DGX_SPARK_VLLM_URL || `http://10.0.0.141:8000`;
+  const vllmBase = isQwen ? jetsonUrl : sparkUrl;
+  
+  const targetUrl = `${vllmBase}/v1/chat/completions`;
+  logger.info(`[Chat-Proxy] Routing model=${model} to vLLM at ${targetUrl}`);
+  
+  try {
+    const response = await fetch(targetUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        tools,
+        tool_choice,
+        temperature,
+        max_tokens,
+        stream: !!stream
+      })
+    });
+    
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(response.status).json({ error: errText });
+    }
+    
+    if (stream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      if (response.body) {
+        const reader = (response.body as any).getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+      }
+      res.end();
+    } else {
+      const data = await response.json();
+      res.json(data);
+    }
+  } catch (error: any) {
+    logger.error(`[Chat-Proxy] Failed to query vLLM: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Compatibility endpoints for apps expecting Prism API contract
 app.get("/config", apiLimiter, requireApiKey, (_req: Request, res: Response) => {
   res.json({
