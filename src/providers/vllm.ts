@@ -58,11 +58,9 @@ function rewriteNonLeadingSystemMessages(
 ): InputMessage[] {
   if (!requiresSystemMessageRewriteTemporaryPatch(modelName)) return messages;
 
-  let hasSeenFirstSystemMessage = false;
-  return messages.map((message) => {
+  return messages.map((message, index) => {
     if (message.role === "system") {
-      if (!hasSeenFirstSystemMessage) {
-        hasSeenFirstSystemMessage = true;
+      if (index === 0) {
         return message;
       }
       logger.warn(
