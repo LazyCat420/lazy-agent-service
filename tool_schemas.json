@@ -12402,43 +12402,6 @@
     "system": false
   },
   {
-    "name": "youtube_search",
-    "description": "Search YouTube for videos matching a query, or get latest videos from specific channel(s). Returns a list of video objects (video_id, title, channel, duration_secs, url, published_at).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "The search query (e.g. 'Bloomberg News Live'). Optional if channels is provided."
-        },
-        "channels": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Optional list of YouTube channel handles or IDs (e.g. ['@ThePrimeagen']) to fetch recent videos from directly."
-        },
-        "sort": {
-          "type": "string",
-          "enum": [
-            "relevance",
-            "date"
-          ],
-          "description": "Optional sort order for search: 'date' (default) or 'relevance'."
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Maximum number of results to return (default 5).",
-          "minimum": 1,
-          "maximum": 20
-        }
-      }
-    },
-    "domain": "General",
-    "domainKey": "mcp",
-    "system": false
-  },
-  {
     "name": "vllm_vision_analyze",
     "description": "Analyze an image (from a local file path or remote URL) using a local vLLM vision model (Gemma 4 or Qwen 3.6).",
     "parameters": {
@@ -13773,7 +13736,10 @@
     },
     "domain": "General",
     "domainKey": "mcp",
-    "system": false
+    "system": false,
+    "labels": [
+      "tool"
+    ]
   },
   {
     "name": "html_notes_update_note",
@@ -13814,7 +13780,10 @@
     },
     "domain": "General",
     "domainKey": "mcp",
-    "system": false
+    "system": false,
+    "labels": [
+      "tool"
+    ]
   },
   {
     "name": "html_notes_get_note",
@@ -13833,7 +13802,10 @@
     },
     "domain": "General",
     "domainKey": "mcp",
-    "system": false
+    "system": false,
+    "labels": [
+      "tool"
+    ]
   },
   {
     "name": "html_notes_search_notes",
@@ -13852,7 +13824,10 @@
     },
     "domain": "General",
     "domainKey": "mcp",
-    "system": false
+    "system": false,
+    "labels": [
+      "tool"
+    ]
   },
   {
     "name": "html_notes_link_notes",
@@ -13876,7 +13851,10 @@
     },
     "domain": "General",
     "domainKey": "mcp",
-    "system": false
+    "system": false,
+    "labels": [
+      "tool"
+    ]
   },
   {
     "name": "canvas_read_dom",
@@ -13897,7 +13875,10 @@
     },
     "domain": "General",
     "domainKey": "mcp",
-    "system": false
+    "system": false,
+    "labels": [
+      "tool"
+    ]
   },
   {
     "name": "canvas_add_widget",
@@ -13914,7 +13895,8 @@
             "calendar",
             "notes",
             "iframe_app",
-            "mini_music_player"
+            "mini_music_player",
+            "youtube_player"
           ],
           "description": "The type of widget to spawn."
         },
@@ -13934,6 +13916,9 @@
     },
     "domain": "General",
     "domainKey": "mcp",
+    "labels": [
+      "tool"
+    ],
     "system": false
   },
   {
@@ -14023,6 +14008,55 @@
     },
     "domain": "General",
     "domainKey": "mcp",
+    "system": false
+  },
+  {
+    "name": "html_notes_youtube_search",
+    "description": "Search YouTube for videos. Returns video titles and IDs.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query (e.g. video topic or channel name)"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default 5)",
+          "default": 5
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "domain": "Research & Intelligence",
+    "domainKey": "mcp",
+    "labels": [
+      "tool"
+    ],
+    "system": false
+  },
+  {
+    "name": "html_notes_add_youtube_widget",
+    "description": "Searches YouTube and immediately adds the first matching video to the dashboard canvas as a youtube_player widget.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query or video description"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "domain": "General",
+    "domainKey": "mcp",
+    "labels": [
+      "tool"
+    ],
     "system": false
   },
   {

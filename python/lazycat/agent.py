@@ -204,12 +204,21 @@ class AgentHarness:
             # 4. Dispatch tool calls
             for tc in tool_calls:
                 tc_id = tc.get("id", "")
-                func = tc.get("function", {})
-                func_name = func.get("name", "")
-                try:
-                    arguments = json.loads(func.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    arguments = {}
+                if "function" in tc:
+                    func = tc.get("function", {})
+                    func_name = func.get("name", "")
+                    try:
+                        arguments = json.loads(func.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        arguments = {}
+                else:
+                    func_name = tc.get("name", "")
+                    arguments = tc.get("arguments") or tc.get("args") or {}
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            arguments = {}
                 
                 logger.info(f"[{self.agent.name}] Executing tool: {func_name}")
                 

@@ -175,18 +175,56 @@ class ToolRegistry:
             
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
+            
+            raw_list = []
             if isinstance(data, list):
-                self.schemas.extend(data)
-                for s in data:
-                    name = s.get("function", {}).get("name")
-                    if name and name not in self.tools:
-                        self.tools[name] = None
+                raw_list = data
             elif isinstance(data, dict) and "schemas" in data:
-                self.schemas.extend(data["schemas"])
-                for s in data["schemas"]:
-                    name = s.get("function", {}).get("name")
-                    if name and name not in self.tools:
+                raw_list = data["schemas"]
+
+            normalized_schemas = []
+            for s in raw_list:
+                if "function" in s:
+                    normalized = s
+                    func_info = s["function"]
+                    name = func_info.get("name")
+                else:
+                    name = s.get("name")
+                    func_info = {
+                        "name": name,
+                        "description": s.get("description", ""),
+                        "parameters": s.get("parameters", {})
+                    }
+                    normalized = {
+                        "type": "function",
+                        "function": func_info
+                    }
+                
+                normalized_schemas.append(normalized)
+                
+                if name:
+                    if name not in self.tools:
                         self.tools[name] = None
+                    
+                    perm_str = s.get("permission", "read_only")
+                    try:
+                        perm = PermissionLevel(perm_str)
+                    except ValueError:
+                        perm = PermissionLevel.READ_ONLY
+                        
+                    self._meta[name] = ToolMeta(
+                        tier=s.get("tier", 0),
+                        source=s.get("source", ""),
+                        fallback_only=s.get("fallback_only", False),
+                        permission=perm,
+                        max_result_chars=s.get("max_result_chars", 50000),
+                        concurrency_safe=s.get("concurrency_safe", True),
+                        tags=s.get("tags", []),
+                        domain=s.get("domain"),
+                        labels=s.get("labels", []),
+                    )
+            
+            self.schemas.extend(normalized_schemas)
         logger.info(f"[ToolRegistry] Loaded {len(self.schemas)} schemas from {filepath}")
 
     def register(
@@ -643,10 +681,7 @@ class ToolRegistry:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.exception("[ToolRegistry] Tool execution failed for %s", func_name)
             service_source = "lazy-tool-service"
-            self._log_usage(
-                func_name, agent_name, False, elapsed_ms, str(e), 
-                func_name, agent_name, False, elapsed_ms, str(e)
-            )
+            self._log_usage(func_name, agent_name, False, elapsed_ms, str(e))
             return {
                 "role": "tool",
                 "tool_call_id": tool_call_id,
@@ -655,15 +690,55 @@ class ToolRegistry:
                 "service_source": service_source,
             }
 
-    def _log_usage(
-        self,
-        tool_name: str,
-        agent_name: str | None = None,
-        success: bool = True,
-        execution_ms: int = 0,
-        error_message: str | None = None,
-    ) -> None:
-        """Log a tool usage event."""
+    def _log_usage(self, *args, **kwargs) -> None:
+        """Log a tool usage event.
+        
+        Supports both:
+          - 5-arg style: (tool_name, agent_name, success, execution_ms, error_message)
+          - 7-arg style: (tool_name, agent_name, ticker, cycle_id, success, execution_ms, error_message)
+        """
+        tool_name = "unknown"
+        agent_name = None
+        ticker = None
+        cycle_id = None
+        success = True
+        execution_ms = 0
+        error_message = None
+
+        if len(args) >= 1:
+            tool_name = args[0]
+        if len(args) >= 2:
+            agent_name = args[1]
+
+        if len(args) >= 3:
+            if isinstance(args[2], bool):
+                # 5-argument style: (tool_name, agent_name, success, execution_ms, error_message)
+                success = args[2]
+                if len(args) >= 4:
+                    execution_ms = args[3] if isinstance(args[3], int) else 0
+                if len(args) >= 5:
+                    error_message = args[4]
+            else:
+                # 7-argument style: (tool_name, agent_name, ticker, cycle_id, success, execution_ms, error_message)
+                ticker = args[2]
+                if len(args) >= 4:
+                    cycle_id = args[3]
+                if len(args) >= 5:
+                    success = args[4] if isinstance(args[4], bool) else True
+                if len(args) >= 6:
+                    execution_ms = args[5] if isinstance(args[5], int) else 0
+                if len(args) >= 7:
+                    error_message = args[6]
+
+        # Apply kwargs overrides if present
+        tool_name = kwargs.get("tool_name", tool_name)
+        agent_name = kwargs.get("agent_name", agent_name)
+        ticker = kwargs.get("ticker", ticker)
+        cycle_id = kwargs.get("cycle_id", cycle_id)
+        success = kwargs.get("success", success)
+        execution_ms = kwargs.get("execution_ms", execution_ms)
+        error_message = kwargs.get("error_message", error_message)
+
         import os
         if getattr(self, "_telemetry_callback", None):
             try:
