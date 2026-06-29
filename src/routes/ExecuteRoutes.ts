@@ -5,6 +5,8 @@ import crypto from "node:crypto";
 import path from "node:path";
 import CONFIG from "../../config.js";
 import logger from "../logger.js";
+import { PrismProxyService } from "../services/prism/PrismProxyService.js";
+
 
 const router = Router();
 
@@ -148,9 +150,34 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
   }
   const startTime = Date.now();
 
-  const agentName = (request.headers["x-agent"] || request.headers["x-username"] || "") as string;
-  const cycleId = (request.headers["x-conversation-id"] || request.headers["x-request-id"] || "") as string;
-  const ticker = (request.headers["x-ticker"] || toolArguments.ticker || toolArguments.Ticker || "") as string;
+  const agentName = String(request.headers["x-agent"] || request.headers["x-username"] || "");
+  const cycleId = String(request.headers["x-conversation-id"] || request.headers["x-request-id"] || "");
+  const ticker = String(request.headers["x-ticker"] || toolArguments.ticker || toolArguments.Ticker || "");
+
+  // Check if tool is authorized for this conversation session (Prism Proxy)
+  if (cycleId && !PrismProxyService.isToolAllowed(cycleId as string, (toolName || "") as string)) {
+    const errorMsg = `The tool "${toolName}" is not whitelisted for your agent role. You must reason using the data in the 'Pre-Collected Data Report' instead of calling unauthorized tools.`;
+    logger.warn(`[PrismProxy] Intercepted unauthorized tool call for conversation ${cycleId}: ${toolName}`);
+    
+    const durationMs = Date.now() - startTime;
+    reportUsage({
+      tool_name: toolName as string,
+      agent_name: agentName,
+      ticker,
+      cycle_id: cycleId,
+      success: false,
+      execution_ms: durationMs,
+      error_message: errorMsg,
+      service_source: "lazy-tool-service"
+    }).catch(() => {});
+
+    response.json({
+      success: false,
+      error: "PERMISSION_DENIED",
+      message: errorMsg
+    });
+    return;
+  }
 
   try {
     logger.info(JSON.stringify({ event: "tool_start", toolName, args: toolArguments }));

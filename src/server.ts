@@ -89,6 +89,12 @@ const requireApiKey = (req: Request, res: Response, next: NextFunction) => {
 app.use("/execute", apiLimiter, requireApiKey, executeRoutes);
 app.use("/agent", apiLimiter, requireApiKey, AgentRoutes);
 
+import { PrismProxyService } from "./services/prism/PrismProxyService.js";
+app.all("/prism-proxy/*", apiLimiter, requireApiKey, async (req: Request, res: Response) => {
+  await PrismProxyService.handle(req, res);
+});
+
+
 // Serve static charts
 app.use("/charts", express.static("data/charts"));
 
