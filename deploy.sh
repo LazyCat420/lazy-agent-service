@@ -42,6 +42,9 @@ PRE_BUILD() {
 
   # Copy lazycat SDK dependencies
   cp -r "${SCRIPT_DIR}/../lazycat-sdk/lazycat" "${SCRIPT_DIR}/python/"
+
+  # Copy tool_schemas.json into python/ so the docker builder includes it inside /app/python
+  cp "${SCRIPT_DIR}/tool_schemas.json" "${SCRIPT_DIR}/python/tool_schemas.json"
 }
 
 EXTRA_SSH_SYNC() {

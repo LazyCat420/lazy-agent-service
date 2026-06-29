@@ -182,7 +182,7 @@
     },
     "domain": "Weather & Environment",
     "domainKey": "weather",
-    "emoji": "\ud83c\udf24\ufe0f",
+    "emoji": "🌤️",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -238,7 +238,7 @@
         },
         "units": {
           "type": "string",
-          "description": "Unit system: metric (\u00b0C, km/h, mm) or imperial (\u00b0F, mph, inch). Default: metric",
+          "description": "Unit system: metric (°C, km/h, mm) or imperial (°F, mph, inch). Default: metric",
           "enum": [
             "metric",
             "imperial"
@@ -248,7 +248,7 @@
     },
     "domain": "Weather & Environment",
     "domainKey": "weather",
-    "emoji": "\ud83c\udf24\ufe0f",
+    "emoji": "🌤️",
     "intelligenceTier": "medium",
     "complexityScore": 6.4,
     "system": false
@@ -259,7 +259,7 @@
       "type": "onDemand",
       "provider": "Multiple APIs"
     },
-    "description": "Get cached environmental, weather, or space data for the server's local area. This returns pre-fetched data for the server's IP-based location \u2014 for weather at a specific place, use get_weather instead. Select a source: current_weather (temp/wind/humidity), air_quality (AQI/pollutants), earthquakes (seismic), solar_activity (flares/storms), aurora (Kp index), twilight (sunrise/sunset), tides, wildfires, iss (ISS position), neo (near-Earth objects), solar_wind, pollen, apod (NASA pic of the day), launches (rockets), warnings (NWS alerts), air_quality_google, moon_phase (current lunar phase/illumination).",
+    "description": "Get cached environmental, weather, or space data for the server's local area. This returns pre-fetched data for the server's IP-based location — for weather at a specific place, use get_weather instead. Select a source: current_weather (temp/wind/humidity), air_quality (AQI/pollutants), earthquakes (seismic), solar_activity (flares/storms), aurora (Kp index), twilight (sunrise/sunset), tides, wildfires, iss (ISS position), neo (near-Earth objects), solar_wind, pollen, apod (NASA pic of the day), launches (rockets), warnings (NWS alerts), air_quality_google, moon_phase (current lunar phase/illumination).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -355,7 +355,7 @@
     },
     "domain": "Weather & Environment",
     "domainKey": "weather",
-    "emoji": "\u2600\ufe0f",
+    "emoji": "☀️",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -366,7 +366,7 @@
       "type": "onDemand",
       "provider": "NOAA SWPC Kp Index (cached)"
     },
-    "description": "Get the current planetary Kp index and aurora forecast. The Kp index (0-9) indicates geomagnetic activity \u2014 Kp \u2265 5 means a geomagnetic storm with possible aurora visibility at lower latitudes. Returns current Kp, classification (quiet/unsettled/storm), and 24h peak.",
+    "description": "Get the current planetary Kp index and aurora forecast. The Kp index (0-9) indicates geomagnetic activity — Kp ≥ 5 means a geomagnetic storm with possible aurora visibility at lower latitudes. Returns current Kp, classification (quiet/unsettled/storm), and 24h peak.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -389,7 +389,7 @@
       "type": "onDemand",
       "provider": "NOAA DSCOVR (cached)"
     },
-    "description": "Get real-time solar wind data from the DSCOVR satellite at the L1 Lagrange point. Returns speed (km/s), density (protons/cm\u00b3), temperature, and interplanetary magnetic field components (Bz, Bt). A southward Bz (negative) and high speed (>500 km/s) indicate conditions favorable for aurora.",
+    "description": "Get real-time solar wind data from the DSCOVR satellite at the L1 Lagrange point. Returns speed (km/s), density (protons/cm³), temperature, and interplanetary magnetic field components (Bz, Bt). A southward Bz (negative) and high speed (>500 km/s) indicate conditions favorable for aurora.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -401,7 +401,7 @@
     },
     "domain": "Weather & Environment",
     "domainKey": "weather",
-    "emoji": "\ud83d\udca8",
+    "emoji": "💨",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -424,7 +424,7 @@
     },
     "domain": "Weather & Environment",
     "domainKey": "weather",
-    "emoji": "\ud83c\udf05",
+    "emoji": "🌅",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -574,7 +574,7 @@
     },
     "domain": "Weather & Environment",
     "domainKey": "weather",
-    "emoji": "\ud83d\udd2d",
+    "emoji": "🔭",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -585,7 +585,7 @@
       "type": "onDemand",
       "provider": "Algorithmic (cached)"
     },
-    "description": "Get the current moon phase using a pure algorithmic calculation based on the synodic lunar cycle (~29.53 days). Returns phase name (New Moon, Waxing Crescent, First Quarter, Waxing Gibbous, Full Moon, Waning Gibbous, Last Quarter, Waning Crescent), illumination percentage, age in days, waxing/waning state, and dates for the next new moon and full moon. No external API dependency \u2014 computed from the synodic period relative to a known reference New Moon.",
+    "description": "Get the current moon phase using a pure algorithmic calculation based on the synodic lunar cycle (~29.53 days). Returns phase name (New Moon, Waxing Crescent, First Quarter, Waxing Gibbous, Full Moon, Waning Gibbous, Last Quarter, Waning Crescent), illumination percentage, age in days, waxing/waning state, and dates for the next new moon and full moon. No external API dependency — computed from the synodic period relative to a known reference New Moon.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -597,7 +597,7 @@
     },
     "domain": "Weather & Environment",
     "domainKey": "weather",
-    "emoji": "\ud83c\udf19",
+    "emoji": "🌙",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -620,7 +620,7 @@
     },
     "domain": "Weather & Environment",
     "domainKey": "weather",
-    "emoji": "\ud83c\udf24\ufe0f",
+    "emoji": "🌤️",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -650,7 +650,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83d\udce1",
+    "emoji": "📡",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -828,7 +828,7 @@
     },
     "domain": "Trends",
     "domainKey": "trends",
-    "emoji": "\ud83d\udcc8",
+    "emoji": "📈",
     "intelligenceTier": "medium",
     "complexityScore": 9.1,
     "system": false
@@ -867,7 +867,7 @@
     },
     "domain": "Products",
     "domainKey": "products",
-    "emoji": "\ud83d\udd0d",
+    "emoji": "🔍",
     "intelligenceTier": "medium",
     "complexityScore": 5.5,
     "system": false
@@ -925,7 +925,7 @@
     },
     "domain": "Products",
     "domainKey": "products",
-    "emoji": "\ud83d\udc41\ufe0f",
+    "emoji": "👁️",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": false
@@ -1014,7 +1014,7 @@
     },
     "domain": "Finance",
     "domainKey": "finance",
-    "emoji": "\ud83d\udcb9",
+    "emoji": "💹",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -1041,7 +1041,7 @@
     },
     "domain": "Finance",
     "domainKey": "finance",
-    "emoji": "\ud83d\udcb0",
+    "emoji": "💰",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": false
@@ -1082,7 +1082,7 @@
     },
     "domain": "Finance",
     "domainKey": "finance",
-    "emoji": "\ud83d\udcb9",
+    "emoji": "💹",
     "intelligenceTier": "medium",
     "complexityScore": 8.8,
     "system": false
@@ -1209,7 +1209,7 @@
     },
     "domain": "Finance",
     "domainKey": "finance",
-    "emoji": "\ud83d\udd6f\ufe0f",
+    "emoji": "🕯️",
     "intelligenceTier": "high",
     "complexityScore": 12.9,
     "system": false
@@ -1256,7 +1256,7 @@
     },
     "domain": "Finance",
     "domainKey": "finance",
-    "emoji": "\ud83d\udcca",
+    "emoji": "📊",
     "intelligenceTier": "medium",
     "complexityScore": 9.1,
     "system": false
@@ -1279,7 +1279,7 @@
     },
     "domain": "Finance",
     "domainKey": "finance",
-    "emoji": "\ud83c\udf0a",
+    "emoji": "🌊",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -1290,7 +1290,7 @@
       "type": "onDemand",
       "provider": "Alternative.me (cached)"
     },
-    "description": "Get the Crypto Fear & Greed Index \u2014 a sentiment gauge from 0 (Extreme Fear) to 100 (Extreme Greed). Shows current value, classification, and historical trend. Useful for contrarian analysis.",
+    "description": "Get the Crypto Fear & Greed Index — a sentiment gauge from 0 (Extreme Fear) to 100 (Extreme Greed). Shows current value, classification, and historical trend. Useful for contrarian analysis.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1306,7 +1306,7 @@
     },
     "domain": "Finance",
     "domainKey": "finance",
-    "emoji": "\ud83d\ude30",
+    "emoji": "😰",
     "intelligenceTier": "low",
     "complexityScore": 2,
     "system": false
@@ -1357,7 +1357,7 @@
     },
     "domain": "Finance",
     "domainKey": "finance",
-    "emoji": "\ud83c\udfdb\ufe0f",
+    "emoji": "🏛️",
     "intelligenceTier": "medium",
     "complexityScore": 10.1,
     "system": false
@@ -1380,7 +1380,7 @@
     },
     "domain": "Finance",
     "domainKey": "finance",
-    "emoji": "\ud83d\udcca",
+    "emoji": "📊",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -1496,7 +1496,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "high",
     "complexityScore": 14.9,
     "system": false
@@ -1565,7 +1565,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\u269b\ufe0f",
+    "emoji": "⚛️",
     "intelligenceTier": "high",
     "complexityScore": 15.700000000000001,
     "system": false
@@ -1694,7 +1694,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83c\udf8c",
+    "emoji": "🎌",
     "intelligenceTier": "high",
     "complexityScore": 14.3,
     "system": false
@@ -1724,7 +1724,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83d\udcd6",
+    "emoji": "📖",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -1821,7 +1821,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\u25b6\ufe0f",
+    "emoji": "▶️",
     "intelligenceTier": "medium",
     "complexityScore": 11.3,
     "system": false
@@ -1832,7 +1832,7 @@
       "type": "onDemand",
       "provider": "yt-dlp + ffmpeg"
     },
-    "description": "Download a video from any supported platform as MP4, extract audio as MP3, or convert to animated GIF. Supports YouTube (all URL formats including youtube.com/watch, youtu.be, shorts, live, embed, or raw 11-character video IDs), Twitter/X, TikTok, Twitch clips, Vimeo, Dailymotion, Streamable, Facebook, and 1000+ more sites \u2014 yt-dlp auto-detects the platform from the URL. For 'mp4' and 'mp3': downloads the media and returns a persistent download URL (stored in cloud storage). For 'gif': downloads the video, converts it to an animated GIF using an optimized ffmpeg palette pipeline, and displays it automatically \u2014 do NOT include the GIF URL in your text response, the user already sees it rendered. Use download_reddit_video for Reddit videos (subreddit/author metadata). Maximum input file size is 200 MB.",
+    "description": "Download a video from any supported platform as MP4, extract audio as MP3, or convert to animated GIF. Supports YouTube (all URL formats including youtube.com/watch, youtu.be, shorts, live, embed, or raw 11-character video IDs), Twitter/X, TikTok, Twitch clips, Vimeo, Dailymotion, Streamable, Facebook, and 1000+ more sites — yt-dlp auto-detects the platform from the URL. For 'mp4' and 'mp3': downloads the media and returns a persistent download URL (stored in cloud storage). For 'gif': downloads the video, converts it to an animated GIF using an optimized ffmpeg palette pipeline, and displays it automatically — do NOT include the GIF URL in your text response, the user already sees it rendered. Use download_reddit_video for Reddit videos (subreddit/author metadata). Maximum input file size is 200 MB.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1856,7 +1856,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83c\udfac",
+    "emoji": "🎬",
     "intelligenceTier": "medium",
     "complexityScore": 6.1,
     "system": false
@@ -1873,7 +1873,7 @@
       "properties": {
         "url": {
           "type": "string",
-          "description": "Source video URL \u2014 any public video URL or a MinIO download URL from a previous video download tool call."
+          "description": "Source video URL — any public video URL or a MinIO download URL from a previous video download tool call."
         },
         "start": {
           "type": "string",
@@ -1901,7 +1901,7 @@
       "type": "onDemand",
       "provider": "Auto-detected platform API"
     },
-    "description": "Extract structured content from any URL. Auto-detects platform and uses the best extraction method: GitHub (repo metadata + README + languages), Reddit (post + comments), Twitter/X (tweet + metrics + media), Hacker News (post + comments), Stack Overflow (question + answers with code blocks), YouTube (metadata + transcript). For any other URL (news articles, blogs, documentation, etc.), extracts the page title, metadata, and main readable text using lightweight HTML parsing \u2014 no headless browser needed.",
+    "description": "Extract structured content from any URL. Auto-detects platform and uses the best extraction method: GitHub (repo metadata + README + languages), Reddit (post + comments), Twitter/X (tweet + metrics + media), Hacker News (post + comments), Stack Overflow (question + answers with code blocks), YouTube (metadata + transcript). For any other URL (news articles, blogs, documentation, etc.), extracts the page title, metadata, and main readable text using lightweight HTML parsing — no headless browser needed.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1956,7 +1956,7 @@
     },
     "domain": "Core Harness Tools",
     "domainKey": "core_harness",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "high",
     "complexityScore": 16.7,
     "system": true
@@ -1999,7 +1999,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83d\udce6",
+    "emoji": "📦",
     "intelligenceTier": "medium",
     "complexityScore": 10.8,
     "system": false
@@ -2029,7 +2029,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83d\udcd8",
+    "emoji": "📘",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -2071,7 +2071,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83d\udd70\ufe0f",
+    "emoji": "🕰️",
     "intelligenceTier": "medium",
     "complexityScore": 7,
     "system": false
@@ -2082,7 +2082,7 @@
       "type": "onDemand",
       "provider": "Reddit .json API + yt-dlp + ffmpeg"
     },
-    "description": "Download a Reddit-hosted video (v.redd.it) as MP4 or convert to animated GIF. Reddit stores video and audio as separate DASH streams \u2014 this tool handles muxing them together automatically. Accepts any Reddit post URL, redd.it short link, or v.redd.it direct video link. For 'mp4': downloads the video and returns a persistent download URL (stored in cloud storage). For 'gif': downloads the video, converts it to an animated GIF using an optimized ffmpeg palette pipeline, and displays it automatically \u2014 do NOT include the GIF URL in your text response, the user already sees it rendered. Only works with Reddit's native video player \u2014 external links (YouTube, Streamable, etc.) are not supported.",
+    "description": "Download a Reddit-hosted video (v.redd.it) as MP4 or convert to animated GIF. Reddit stores video and audio as separate DASH streams — this tool handles muxing them together automatically. Accepts any Reddit post URL, redd.it short link, or v.redd.it direct video link. For 'mp4': downloads the video and returns a persistent download URL (stored in cloud storage). For 'gif': downloads the video, converts it to an animated GIF using an optimized ffmpeg palette pipeline, and displays it automatically — do NOT include the GIF URL in your text response, the user already sees it rendered. Only works with Reddit's native video player — external links (YouTube, Streamable, etc.) are not supported.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2105,7 +2105,7 @@
     },
     "domain": "Reddit",
     "domainKey": "reddit",
-    "emoji": "\ud83e\udd16",
+    "emoji": "🤖",
     "intelligenceTier": "medium",
     "complexityScore": 5.9,
     "system": false
@@ -2117,7 +2117,7 @@
       "provider": "internal",
       "dataset": "USDA SR Legacy"
     },
-    "description": "Find foods highest in a specific nutrient. Choose a category (macros, minerals, vitamins, amino_acids, lipids, carbs, sterols) and nutrient to rank by. Examples: 'foods high in protein' \u2192 category='macros', nutrient='protein'. 'Best omega-3 sources' \u2192 category='lipids', nutrient='c22_d6_n3_dha'. Use list_category_nutrients to discover valid nutrient names per category.",
+    "description": "Find foods highest in a specific nutrient. Choose a category (macros, minerals, vitamins, amino_acids, lipids, carbs, sterols) and nutrient to rank by. Examples: 'foods high in protein' → category='macros', nutrient='protein'. 'Best omega-3 sources' → category='lipids', nutrient='c22_d6_n3_dha'. Use list_category_nutrients to discover valid nutrient names per category.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2182,7 +2182,7 @@
       "properties": {
         "q": {
           "type": "string",
-          "description": "Search query \u2014 drug name, NDC code, ingredient, or class"
+          "description": "Search query — drug name, NDC code, ingredient, or class"
         },
         "searchBy": {
           "type": "string",
@@ -2218,7 +2218,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83d\udc8a",
+    "emoji": "💊",
     "intelligenceTier": "medium",
     "complexityScore": 10.5,
     "system": false
@@ -2252,7 +2252,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\u2695\ufe0f",
+    "emoji": "⚕️",
     "intelligenceTier": "low",
     "complexityScore": 4.5,
     "system": false
@@ -2283,7 +2283,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83d\udeab",
+    "emoji": "🚫",
     "intelligenceTier": "low",
     "complexityScore": 3,
     "system": false
@@ -2339,7 +2339,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83c\udfcb\ufe0f",
+    "emoji": "🏋️",
     "intelligenceTier": "medium",
     "complexityScore": 9,
     "system": false
@@ -2358,7 +2358,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83c\udfcb\ufe0f",
+    "emoji": "🏋️",
     "intelligenceTier": "low",
     "complexityScore": 0,
     "system": false
@@ -2489,7 +2489,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83e\udd66",
+    "emoji": "🥦",
     "intelligenceTier": "medium",
     "complexityScore": 9.1,
     "system": false
@@ -2543,7 +2543,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83e\udd57",
+    "emoji": "🥗",
     "intelligenceTier": "low",
     "complexityScore": 0,
     "system": false
@@ -2598,7 +2598,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83e\udd57",
+    "emoji": "🥗",
     "intelligenceTier": "medium",
     "complexityScore": 5.9,
     "system": false
@@ -2610,7 +2610,7 @@
       "provider": "internal",
       "dataset": "USDA SR Legacy"
     },
-    "description": "Find all foods matching a specific biological taxonomic classification. Filter by any Linnaean rank \u2014 kingdom, phylum, class, order, family, subfamily, tribe, genus, species, subspecies, variety, cultivar, etc. Example: rank='family', value='Rosaceae' returns all rose-family foods (apples, pears, cherries, etc). Use get_food_taxonomy first to discover available values.",
+    "description": "Find all foods matching a specific biological taxonomic classification. Filter by any Linnaean rank — kingdom, phylum, class, order, family, subfamily, tribe, genus, species, subspecies, variety, cultivar, etc. Example: rank='family', value='Rosaceae' returns all rose-family foods (apples, pears, cherries, etc). Use get_food_taxonomy first to discover available values.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2660,7 +2660,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83c\udf3f",
+    "emoji": "🌿",
     "intelligenceTier": "high",
     "complexityScore": 13.2,
     "system": false
@@ -2794,7 +2794,7 @@
       "provider": "internal",
       "runtime": "Mifflin-St Jeor / TDEE"
     },
-    "description": "Calculate Basal Metabolic Rate (BMR) and Total Daily Energy Expenditure (TDEE) using the Mifflin-St Jeor equation. Returns caloric targets, macronutrient split (protein/carbs/fat in grams), BMI, and optional body composition. Essential first step for nutrition planning \u2014 feed the TDEE into get_nutritional_requirements as caloricIntake.",
+    "description": "Calculate Basal Metabolic Rate (BMR) and Total Daily Energy Expenditure (TDEE) using the Mifflin-St Jeor equation. Returns caloric targets, macronutrient split (protein/carbs/fat in grams), BMI, and optional body composition. Essential first step for nutrition planning — feed the TDEE into get_nutritional_requirements as caloricIntake.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2865,7 +2865,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83d\udd22",
+    "emoji": "🔢",
     "intelligenceTier": "frontier",
     "complexityScore": 25.4,
     "system": false
@@ -2976,7 +2976,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83d\udd04",
+    "emoji": "🔄",
     "intelligenceTier": "high",
     "complexityScore": 12.9,
     "system": false
@@ -3026,7 +3026,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83c\udfc3",
+    "emoji": "🏃",
     "intelligenceTier": "high",
     "complexityScore": 12.1,
     "system": false
@@ -3059,7 +3059,7 @@
         },
         "climateTemp": {
           "type": "number",
-          "description": "Ambient temperature in \u00b0C (adjusts for heat/cold)"
+          "description": "Ambient temperature in °C (adjusts for heat/cold)"
         },
         "exerciseMinutes": {
           "type": "number",
@@ -3199,7 +3199,7 @@
       "properties": {
         "drug": {
           "type": "string",
-          "description": "Drug name \u2014 brand or generic (e.g. 'metformin', 'omeprazole', 'lisinopril', 'prednisone')"
+          "description": "Drug name — brand or generic (e.g. 'metformin', 'omeprazole', 'lisinopril', 'prednisone')"
         },
         "nutrients": {
           "type": "string",
@@ -3212,7 +3212,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83d\udc8a",
+    "emoji": "💊",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -3224,7 +3224,7 @@
       "provider": "internal",
       "runtime": "Python 3 subprocess"
     },
-    "description": "Execute Python 3 code in a sandboxed subprocess. Ideal for complex calculations, statistical analysis, text parsing, collection manipulation, and date/time arithmetic. The environment has access to the full Python standard library (math, json, datetime, collections, itertools, statistics, re, csv, io, etc.) but blocks network access, filesystem mutation, and dangerous modules (subprocess, shutil, ctypes, multiprocessing, signal). Code runs with a 30-second default timeout (max 60s) and 256 MB memory limit. Print results to stdout \u2014 both stdout and stderr are captured and returned.",
+    "description": "Execute Python 3 code in a sandboxed subprocess. Ideal for complex calculations, statistical analysis, text parsing, collection manipulation, and date/time arithmetic. The environment has access to the full Python standard library (math, json, datetime, collections, itertools, statistics, re, csv, io, etc.) but blocks network access, filesystem mutation, and dangerous modules (subprocess, shutil, ctypes, multiprocessing, signal). Code runs with a 30-second default timeout (max 60s) and 256 MB memory limit. Print results to stdout — both stdout and stderr are captured and returned.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -3288,7 +3288,7 @@
     },
     "domain": "Core Harness Tools",
     "domainKey": "core_harness",
-    "emoji": "\ud83e\uddee",
+    "emoji": "🧮",
     "intelligenceTier": "medium",
     "complexityScore": 9.4,
     "system": true
@@ -3354,7 +3354,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udda5\ufe0f",
+    "emoji": "🖥️",
     "intelligenceTier": "high",
     "complexityScore": 12.5,
     "system": false
@@ -3366,7 +3366,7 @@
       "provider": "internal",
       "runtime": "convert-units"
     },
-    "description": "Convert between physical measurement units. Supports length, mass, volume, temperature, time, speed, area, pressure, energy, power, frequency, data, acceleration, current, voltage, and more. LLMs frequently hallucinate unit conversions \u2014 use this tool for accuracy.",
+    "description": "Convert between physical measurement units. Supports length, mass, volume, temperature, time, speed, area, pressure, energy, power, frequency, data, acceleration, current, voltage, and more. LLMs frequently hallucinate unit conversions — use this tool for accuracy.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -3391,7 +3391,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udcd0",
+    "emoji": "📐",
     "intelligenceTier": "medium",
     "complexityScore": 7.5,
     "system": false
@@ -3403,7 +3403,7 @@
       "provider": "internal",
       "runtime": "date-fns"
     },
-    "description": "Parse, format, compare, and perform arithmetic on dates and times. Operations: 'now' (current time), 'parse' (analyze a date), 'format' (custom formatting), 'diff' (difference between two dates in all units), 'add'/'subtract' (date arithmetic), 'startOf'/'endOf' (period boundaries), 'isValid' (validation). Supports timezone conversion. LLMs frequently get date math wrong \u2014 use this tool for accuracy.",
+    "description": "Parse, format, compare, and perform arithmetic on dates and times. Operations: 'now' (current time), 'parse' (analyze a date), 'format' (custom formatting), 'diff' (difference between two dates in all units), 'add'/'subtract' (date arithmetic), 'startOf'/'endOf' (period boundaries), 'isValid' (validation). Supports timezone conversion. LLMs frequently get date math wrong — use this tool for accuracy.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -3424,7 +3424,7 @@
         },
         "date": {
           "type": "string",
-          "description": "Date input \u2014 ISO 8601 string (e.g. '2024-03-15T10:30:00Z'), Unix timestamp (number), or 'now'. Required for most operations."
+          "description": "Date input — ISO 8601 string (e.g. '2024-03-15T10:30:00Z'), Unix timestamp (number), or 'now'. Required for most operations."
         },
         "date2": {
           "type": "string",
@@ -3468,7 +3468,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udcc5",
+    "emoji": "📅",
     "intelligenceTier": "high",
     "complexityScore": 16.9,
     "system": false
@@ -3490,7 +3490,7 @@
         },
         "expression": {
           "type": "string",
-          "description": "JSONPath expression to extract data (e.g. '$.store.book[*].author', '$..price', '$.items[?(@.active==true)]'). Optional \u2014 can use operations alone."
+          "description": "JSONPath expression to extract data (e.g. '$.store.book[*].author', '$..price', '$.items[?(@.active==true)]'). Optional — can use operations alone."
         },
         "operations": {
           "type": "array",
@@ -3524,7 +3524,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udd27",
+    "emoji": "🔧",
     "intelligenceTier": "high",
     "complexityScore": 22.7,
     "system": false
@@ -3569,7 +3569,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udccb",
+    "emoji": "📋",
     "intelligenceTier": "medium",
     "complexityScore": 11.5,
     "system": false
@@ -3581,7 +3581,7 @@
       "provider": "internal",
       "runtime": "qrcode"
     },
-    "description": "Generate a QR code PNG image from text, URLs, WiFi credentials, vCards, or any string data. The QR code is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above.",
+    "description": "Generate a QR code PNG image from text, URLs, WiFi credentials, vCards, or any string data. The QR code is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -3630,7 +3630,7 @@
       "provider": "internal",
       "runtime": "KaTeX CDN"
     },
-    "description": "Render LaTeX mathematical expressions as a beautiful embedded page using KaTeX. Use this to display equations, formulas, and mathematical notation. The rendered equation is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above.",
+    "description": "Render LaTeX mathematical expressions as a beautiful embedded page using KaTeX. Use this to display equations, formulas, and mathematical notation. The rendered equation is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -3649,7 +3649,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udcd0",
+    "emoji": "📐",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -3661,7 +3661,7 @@
       "provider": "internal",
       "runtime": "Mermaid CDN"
     },
-    "description": "Render Mermaid diagrams (flowcharts, sequence diagrams, class diagrams, ER diagrams, Gantt charts, state diagrams, pie charts, git graphs) as interactive embedded pages. The diagram is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above.",
+    "description": "Render Mermaid diagrams (flowcharts, sequence diagrams, class diagrams, ER diagrams, Gantt charts, state diagrams, pie charts, git graphs) as interactive embedded pages. The diagram is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -3729,7 +3729,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udd00",
+    "emoji": "🔀",
     "intelligenceTier": "medium",
     "complexityScore": 9,
     "system": false
@@ -3768,7 +3768,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udd10",
+    "emoji": "🔐",
     "intelligenceTier": "medium",
     "complexityScore": 5.5,
     "system": false
@@ -3804,7 +3804,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udd23",
+    "emoji": "🔣",
     "intelligenceTier": "high",
     "complexityScore": 18,
     "system": false
@@ -3816,7 +3816,7 @@
       "provider": "internal",
       "runtime": "internal"
     },
-    "description": "Encode or decode data between formats: Base64, Base64URL, hex, URL encoding, HTML entities, ROT13, binary, and JWT decode (no verification). Bidirectional \u2014 specify encode or decode direction.",
+    "description": "Encode or decode data between formats: Base64, Base64URL, hex, URL encoding, HTML entities, ROT13, binary, and JWT decode (no verification). Bidirectional — specify encode or decode direction.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -3854,7 +3854,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udd01",
+    "emoji": "🔁",
     "intelligenceTier": "high",
     "complexityScore": 12,
     "system": false
@@ -3884,7 +3884,7 @@
             "tetradic",
             "monochromatic"
           ],
-          "description": "Optional \u2014 generate a color harmony palette based on the input color"
+          "description": "Optional — generate a color harmony palette based on the input color"
         }
       },
       "required": [
@@ -3905,7 +3905,7 @@
       "provider": "internal",
       "runtime": "sharp + imagemagick"
     },
-    "description": "Manipulate, transform, and process images using a hybrid Sharp + ImageMagick engine. Accepts an image from a URL, base64 data URI, or a previous imageId (for chaining operations). Supports resize, crop, rotate, flip, blur, sharpen, grayscale, negate, tint, brightness/saturation/hue adjustments, gamma correction, trim whitespace, extend canvas, composite/overlay images, format conversion (PNG, JPEG, WebP, AVIF, TIFF), text overlay with font control, distortion effects (swirl, wave, implode, barrel), and border addition. Multiple operations can be chained in a single call. The processed image is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above. Use the 'metadata' operation to inspect image dimensions, format, color space, and channel info without transforming it.",
+    "description": "Manipulate, transform, and process images using a hybrid Sharp + ImageMagick engine. Accepts an image from a URL, base64 data URI, or a previous imageId (for chaining operations). Supports resize, crop, rotate, flip, blur, sharpen, grayscale, negate, tint, brightness/saturation/hue adjustments, gamma correction, trim whitespace, extend canvas, composite/overlay images, format conversion (PNG, JPEG, WebP, AVIF, TIFF), text overlay with font control, distortion effects (swirl, wave, implode, barrel), and border addition. Multiple operations can be chained in a single call. The processed image is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above. Use the 'metadata' operation to inspect image dimensions, format, color space, and channel info without transforming it.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -3915,7 +3915,7 @@
         },
         "operations": {
           "type": "array",
-          "description": "Array of operations to apply sequentially. Each operation is an object with a 'type' field and type-specific parameters. Operations are applied in order, enabling pipelines like resize \u2192 blur \u2192 format conversion in one call.",
+          "description": "Array of operations to apply sequentially. Each operation is an object with a 'type' field and type-specific parameters. Operations are applied in order, enabling pipelines like resize → blur → format conversion in one call.",
           "items": {
             "type": "object",
             "properties": {
@@ -4182,7 +4182,7 @@
       "provider": "internal",
       "runtime": "ffmpeg"
     },
-    "description": "Convert a video (MP4, WebM, MOV, etc.) into an animated GIF using an optimized two-pass palette mapping pipeline. Supports high-quality conversion (custom 256-color palette generated dynamically from video) and low-file-size conversion (128 colors, reduced frame rate, no dithering). Accepts public URLs or local workspace video paths. The converted GIF is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above.",
+    "description": "Convert a video (MP4, WebM, MOV, etc.) into an animated GIF using an optimized two-pass palette mapping pipeline. Supports high-quality conversion (custom 256-color palette generated dynamically from video) and low-file-size conversion (128 colors, reduced frame rate, no dithering). Accepts public URLs or local workspace video paths. The converted GIF is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -4213,7 +4213,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83c\udfac",
+    "emoji": "🎬",
     "intelligenceTier": "medium",
     "complexityScore": 7.9,
     "system": false,
@@ -4228,7 +4228,7 @@
       "provider": "internal",
       "runtime": "LOGO interpreter"
     },
-    "description": "Draw animated 2D turtle graphics using the LOGO programming language. Write LOGO source code in the 'code' parameter. The code is interpreted server-side and the drawing is replayed with step-by-step animation in the browser. IMPORTANT: The canvas background is BLACK \u2014 use bright, vivid colors. Use setpencolor with palette numbers 1-15 (1=blue, 2=green, 3=cyan, 4=red, 5=magenta, 6=yellow, 7=white, 8=brown, 9=tan, 10=forest, 11=aqua, 12=salmon, 13=purple, 14=orange, 15=grey) or RGB lists like setpencolor [255 100 50]. ITERATIVE DRAWING: Pass a drawingId (returned from a previous call) to append new commands to an existing drawing. This lets you build drawings incrementally \u2014 first call creates a base, subsequent calls add detail. Between calls, describe what you just drew and what comes next. COMMANDS: Movement \u2014 fd/forward dist, bk/back dist, rt/right degrees, lt/left degrees, home, setxy x y, setx x, sety y, seth/setheading angle, arc angle radius, circle radius. Pen \u2014 pu/penup, pd/pendown, setpencolor/setpc color, setpensize size, setbackground/setbg color. Drawing \u2014 label text, dot radius, clean, cs/clearscreen, ht/hideturtle, st/showturtle. Control \u2014 repeat count [...], for [var start end step] [...], if condition [...], ifelse condition [...] [...], to name :params ... end, stop, output/op value. Variables \u2014 make \\\"name value, :name (getter). Math \u2014 random n, sqrt x, sin x, cos x, abs x, int x, round x, power base exp, remainder a b. Queries \u2014 xcor, ycor, heading, towards x y, pendownp. Logic \u2014 and a b, or a b, not a, = < > <= >= <>. EXAMPLES: repeat 180 [fd 200 bk 200 rt 2] \u2014 radial fan. repeat 400 [repeat 34 [fd 12 rt 10] rt 90] \u2014 nested pattern. for [i 0.01 4 0.05] [repeat 180 [fd :i rt 1]] \u2014 growing spiral. to tree :size if :size < 5 [fd :size bk :size stop] fd :size / 3 lt 30 tree :size * 2 / 3 rt 60 tree :size * 2 / 3 lt 30 bk :size / 3 end tree 100 \u2014 recursive tree. The drawing is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above.",
+    "description": "Draw animated 2D turtle graphics using the LOGO programming language. Write LOGO source code in the 'code' parameter. The code is interpreted server-side and the drawing is replayed with step-by-step animation in the browser. IMPORTANT: The canvas background is BLACK — use bright, vivid colors. Use setpencolor with palette numbers 1-15 (1=blue, 2=green, 3=cyan, 4=red, 5=magenta, 6=yellow, 7=white, 8=brown, 9=tan, 10=forest, 11=aqua, 12=salmon, 13=purple, 14=orange, 15=grey) or RGB lists like setpencolor [255 100 50]. ITERATIVE DRAWING: Pass a drawingId (returned from a previous call) to append new commands to an existing drawing. This lets you build drawings incrementally — first call creates a base, subsequent calls add detail. Between calls, describe what you just drew and what comes next. COMMANDS: Movement — fd/forward dist, bk/back dist, rt/right degrees, lt/left degrees, home, setxy x y, setx x, sety y, seth/setheading angle, arc angle radius, circle radius. Pen — pu/penup, pd/pendown, setpencolor/setpc color, setpensize size, setbackground/setbg color. Drawing — label text, dot radius, clean, cs/clearscreen, ht/hideturtle, st/showturtle. Control — repeat count [...], for [var start end step] [...], if condition [...], ifelse condition [...] [...], to name :params ... end, stop, output/op value. Variables — make \\\"name value, :name (getter). Math — random n, sqrt x, sin x, cos x, abs x, int x, round x, power base exp, remainder a b. Queries — xcor, ycor, heading, towards x y, pendownp. Logic — and a b, or a b, not a, = < > <= >= <>. EXAMPLES: repeat 180 [fd 200 bk 200 rt 2] — radial fan. repeat 400 [repeat 34 [fd 12 rt 10] rt 90] — nested pattern. for [i 0.01 4 0.05] [repeat 180 [fd :i rt 1]] — growing spiral. to tree :size if :size < 5 [fd :size bk :size stop] fd :size / 3 lt 30 tree :size * 2 / 3 rt 60 tree :size * 2 / 3 lt 30 bk :size / 3 end tree 100 — recursive tree. The drawing is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -4267,7 +4267,7 @@
       "provider": "internal",
       "runtime": "internal"
     },
-    "description": "Create a 3D object from raw triangle mesh data \u2014 vertices and face indices. IMPORTANT: You can build the 3D mesh incrementally \u2014 break the generation into logical parts (e.g. base, wings, details, sections) and call this tool multiple times using the sessionId returned from the first call. Pass the sessionId to append new vertices and faces. Note: Face indices in subsequent calls are absolute (0-based indexing relative to the total accumulated vertices). Between calls, briefly describe what you just added and what comes next so the user can follow along. Omit sessionId to start a new 3D mesh session. The interactive 3D scene is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above. Max 50,000 total vertices and 100,000 total faces per session.",
+    "description": "Create a 3D object from raw triangle mesh data — vertices and face indices. IMPORTANT: You can build the 3D mesh incrementally — break the generation into logical parts (e.g. base, wings, details, sections) and call this tool multiple times using the sessionId returned from the first call. Pass the sessionId to append new vertices and faces. Note: Face indices in subsequent calls are absolute (0-based indexing relative to the total accumulated vertices). Between calls, briefly describe what you just added and what comes next so the user can follow along. Omit sessionId to start a new 3D mesh session. The interactive 3D scene is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above. Max 50,000 total vertices and 100,000 total faces per session.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -4379,7 +4379,7 @@
     },
     "domain": "Creative",
     "domainKey": "creative",
-    "emoji": "\ud83d\udd3a",
+    "emoji": "🔺",
     "intelligenceTier": "frontier",
     "complexityScore": 48,
     "system": false
@@ -4391,7 +4391,7 @@
       "provider": "internal",
       "runtime": "internal"
     },
-    "description": "Create a 3D object from a voxel grid. You can specify a list of explicit voxel coordinates, and/or a list of declarative primitive shapes (box, sphere, cylinder, cone, pyramid, ellipsoid, torus) that will be rasterized into voxels. IMPORTANT: You can build the 3D voxel grid incrementally \u2014 break the generation into logical parts (e.g. terrain, walls, decorations, modular additions) and call this tool multiple times using the sessionId returned from the first call. Pass the sessionId to append new voxels and shapes progressively. Between calls, briefly describe what you just added and what comes next so the user can follow along. Omit sessionId to start a new 3D voxel session. Features highly optimized rendering using GPU-based Three.js InstancedMesh for thousands of voxels. Supports customizable voxel sizing, spacing, outline borders, wireframes, flat shading, colors, opacity, and ambient/directional light casting. The interactive 3D voxel grid is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above. Max 100,000 total voxels per session.",
+    "description": "Create a 3D object from a voxel grid. You can specify a list of explicit voxel coordinates, and/or a list of declarative primitive shapes (box, sphere, cylinder, cone, pyramid, ellipsoid, torus) that will be rasterized into voxels. IMPORTANT: You can build the 3D voxel grid incrementally — break the generation into logical parts (e.g. terrain, walls, decorations, modular additions) and call this tool multiple times using the sessionId returned from the first call. Pass the sessionId to append new voxels and shapes progressively. Between calls, briefly describe what you just added and what comes next so the user can follow along. Omit sessionId to start a new 3D voxel session. Features highly optimized rendering using GPU-based Three.js InstancedMesh for thousands of voxels. Supports customizable voxel sizing, spacing, outline borders, wireframes, flat shading, colors, opacity, and ambient/directional light casting. The interactive 3D voxel grid is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above. Max 100,000 total voxels per session.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -4587,7 +4587,7 @@
       "provider": "internal",
       "runtime": "internal"
     },
-    "description": "Create a 3D object/model by composing primitive shapes with PBR materials and transforms. Available shapes: box, sphere, cylinder, cone, torus, torusKnot, plane, ring, circle, dodecahedron, icosahedron, octahedron, tetrahedron, capsule. Each object supports position, rotation (degrees), scale, and material properties (color, metalness, roughness, opacity, emissive, wireframe, flatShading). Use cases: architectural mockups, abstract sculptures, game prototyping, educational geometry, product showcases. The interactive 3D model is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above. Max 200 objects per call. Supports shadow casting, ambient/directional lighting control, and auto-orbit camera. When the user attaches an image, set textureUrl to 'reference' on the specific objects that should display it \u2014 the system will replace 'reference' with the actual image data automatically. Only mark objects that should show the user's image; leave textureUrl unset on objects that should use solid material colors. Do NOT search the web for image URLs. Supports progressive, step-by-step incremental building using a sessionId (analogous to the draw_turtle_graphics tool) where subsequent calls with the same sessionId append new objects to the existing model rather than overwriting it.",
+    "description": "Create a 3D object/model by composing primitive shapes with PBR materials and transforms. Available shapes: box, sphere, cylinder, cone, torus, torusKnot, plane, ring, circle, dodecahedron, icosahedron, octahedron, tetrahedron, capsule. Each object supports position, rotation (degrees), scale, and material properties (color, metalness, roughness, opacity, emissive, wireframe, flatShading). Use cases: architectural mockups, abstract sculptures, game prototyping, educational geometry, product showcases. The interactive 3D model is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above. Max 200 objects per call. Supports shadow casting, ambient/directional lighting control, and auto-orbit camera. When the user attaches an image, set textureUrl to 'reference' on the specific objects that should display it — the system will replace 'reference' with the actual image data automatically. Only mark objects that should show the user's image; leave textureUrl unset on objects that should use solid material colors. Do NOT search the web for image URLs. Supports progressive, step-by-step incremental building using a sessionId (analogous to the draw_turtle_graphics tool) where subsequent calls with the same sessionId append new objects to the existing model rather than overwriting it.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -4796,7 +4796,7 @@
       "provider": "internal",
       "runtime": "internal"
     },
-    "description": "Create a rich 3D scene using a declarative scene graph with hierarchical grouping, built-in animations, environment lighting presets, ground planes, and 3D text labels. This is the highest-level 3D tool. Object types: box, sphere, cylinder, cone, torus, torusKnot, plane, ring, circle, dodecahedron, icosahedron, octahedron, tetrahedron, capsule, group (container for children), text3d (3D text label). Built-in animations: spin, bounce, orbit, pulse, float \u2014 applied per-object with configurable speed/amplitude. Environment presets: studio, outdoor, night, sunset, dawn, warehouse, neutral \u2014 control ambient, directional, fill, and hemisphere lighting automatically. Supports ground plane with shadows, fog, camera FOV control, and auto-orbit. Use cases: product showcases, animated explainers, data visualization, artistic compositions, holiday scenes. The interactive 3D scene is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above. Max 300 total objects (including nested children), max 5 levels of nesting. When the user attaches an image, set textureUrl to 'reference' on the specific objects that should display it \u2014 the system will replace 'reference' with the actual image data automatically. Only mark objects that should show the user's image; leave textureUrl unset on objects that should use solid material colors. Do NOT search the web for image URLs. Supports progressive, step-by-step incremental building using a sessionId (analogous to the draw_turtle_graphics tool) where subsequent calls with the same sessionId append new objects to the existing scene rather than overwriting it.",
+    "description": "Create a rich 3D scene using a declarative scene graph with hierarchical grouping, built-in animations, environment lighting presets, ground planes, and 3D text labels. This is the highest-level 3D tool. Object types: box, sphere, cylinder, cone, torus, torusKnot, plane, ring, circle, dodecahedron, icosahedron, octahedron, tetrahedron, capsule, group (container for children), text3d (3D text label). Built-in animations: spin, bounce, orbit, pulse, float — applied per-object with configurable speed/amplitude. Environment presets: studio, outdoor, night, sunset, dawn, warehouse, neutral — control ambient, directional, fill, and hemisphere lighting automatically. Supports ground plane with shadows, fog, camera FOV control, and auto-orbit. Use cases: product showcases, animated explainers, data visualization, artistic compositions, holiday scenes. The interactive 3D scene is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above. Max 300 total objects (including nested children), max 5 levels of nesting. When the user attaches an image, set textureUrl to 'reference' on the specific objects that should display it — the system will replace 'reference' with the actual image data automatically. Only mark objects that should show the user's image; leave textureUrl unset on objects that should use solid material colors. Do NOT search the web for image URLs. Supports progressive, step-by-step incremental building using a sessionId (analogous to the draw_turtle_graphics tool) where subsequent calls with the same sessionId append new objects to the existing scene rather than overwriting it.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -5232,7 +5232,7 @@
     },
     "domain": "Creative",
     "domainKey": "creative",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "frontier",
     "complexityScore": 171.3,
     "system": false,
@@ -5274,7 +5274,7 @@
     },
     "domain": "Utilities",
     "domainKey": "utilities",
-    "emoji": "\ud83d\udcb1",
+    "emoji": "💱",
     "intelligenceTier": "medium",
     "complexityScore": 7,
     "system": false
@@ -5309,7 +5309,7 @@
     },
     "domain": "Utilities",
     "domainKey": "utilities",
-    "emoji": "\ud83d\udd50",
+    "emoji": "🕐",
     "intelligenceTier": "medium",
     "complexityScore": 6,
     "system": false
@@ -5336,7 +5336,7 @@
     },
     "domain": "Utilities",
     "domainKey": "utilities",
-    "emoji": "\ud83d\udd0e",
+    "emoji": "🔎",
     "intelligenceTier": "low",
     "complexityScore": 2,
     "system": false
@@ -5347,7 +5347,7 @@
       "type": "onDemand",
       "provider": "internal"
     },
-    "description": "Generate an interactive chart (bar, line, or pie) from structured data. Use this to visualize comparisons, trends, distributions, or any numeric data the user asks to see as a chart. Pass labels (category names or x-axis values) and one or more datasets (each with a label and numeric data array). The chart is displayed automatically in the tool result panel \u2014 do NOT include the URL or any link to it in your text response \u2014 the user already sees it rendered above.",
+    "description": "Generate an interactive chart (bar, line, or pie) from structured data. Use this to visualize comparisons, trends, distributions, or any numeric data the user asks to see as a chart. Pass labels (category names or x-axis values) and one or more datasets (each with a label and numeric data array). The chart is displayed automatically in the tool result panel — do NOT include the URL or any link to it in your text response — the user already sees it rendered above.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -5423,7 +5423,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83d\udcc8",
+    "emoji": "📈",
     "intelligenceTier": "low",
     "complexityScore": 0,
     "system": false
@@ -5575,7 +5575,7 @@
     },
     "domain": "Health",
     "domainKey": "health",
-    "emoji": "\ud83d\udc89",
+    "emoji": "💉",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -5625,7 +5625,7 @@
     },
     "domain": "Energy",
     "domainKey": "energy",
-    "emoji": "\u26a1",
+    "emoji": "⚡",
     "intelligenceTier": "low",
     "complexityScore": 2,
     "system": false
@@ -5710,7 +5710,7 @@
     },
     "domain": "Energy",
     "domainKey": "energy",
-    "emoji": "\u26a1",
+    "emoji": "⚡",
     "intelligenceTier": "medium",
     "complexityScore": 8.5,
     "system": false
@@ -5753,7 +5753,7 @@
     },
     "domain": "Energy",
     "domainKey": "energy",
-    "emoji": "\ud83d\udd0c",
+    "emoji": "🔌",
     "intelligenceTier": "medium",
     "complexityScore": 6,
     "system": false
@@ -5796,7 +5796,7 @@
     },
     "domain": "Energy",
     "domainKey": "energy",
-    "emoji": "\ud83d\udee2\ufe0f",
+    "emoji": "🛢️",
     "intelligenceTier": "medium",
     "complexityScore": 6,
     "system": false
@@ -5839,7 +5839,7 @@
     },
     "domain": "Energy",
     "domainKey": "energy",
-    "emoji": "\ud83d\udd25",
+    "emoji": "🔥",
     "intelligenceTier": "medium",
     "complexityScore": 6,
     "system": false
@@ -5851,7 +5851,7 @@
       "provider": "internal",
       "runtime": "sandboxed fs"
     },
-    "description": "Read the content of a file from the local filesystem. Returns numbered lines for easy reference. Supports optional line range selection for targeted reading of large files. Use this to inspect code, understand context, or identify where to make changes. Maximum 800 lines per read \u2014 use startLine/endLine for large files.",
+    "description": "Read the content of a file from the local filesystem. Returns numbered lines for easy reference. Supports optional line range selection for targeted reading of large files. Use this to inspect code, understand context, or identify where to make changes. Maximum 800 lines per read — use startLine/endLine for large files.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -5874,7 +5874,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udcc4",
+    "emoji": "📄",
     "intelligenceTier": "low",
     "complexityScore": 4.5,
     "system": true
@@ -5886,7 +5886,7 @@
       "provider": "internal",
       "runtime": "sandboxed fs"
     },
-    "description": "Create a new file or overwrite an existing file with the provided content. Parent directories are created automatically. Use this for creating new files \u2014 for targeted edits to existing files, prefer replace_in_file instead (it's safer and more token-efficient). Maximum file size: 5 MB.",
+    "description": "Create a new file or overwrite an existing file with the provided content. Parent directories are created automatically. Use this for creating new files — for targeted edits to existing files, prefer replace_in_file instead (it's safer and more token-efficient). Maximum file size: 5 MB.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -5922,7 +5922,7 @@
       "provider": "internal",
       "runtime": "sandboxed fs"
     },
-    "description": "Perform a targeted string replacement in a file. Finds the exact 'oldString' and replaces it with 'newString'. The oldString must match EXACTLY (including whitespace and indentation). This is the preferred method for editing existing files \u2014 it's safer than write_file because it can't accidentally overwrite the entire file, and it's more token-efficient. If multiple occurrences are found and allowMultiple is false, it returns an error asking you to provide more context for a unique match.",
+    "description": "Perform a targeted string replacement in a file. Finds the exact 'oldString' and replaces it with 'newString'. The oldString must match EXACTLY (including whitespace and indentation). This is the preferred method for editing existing files — it's safer than write_file because it can't accidentally overwrite the entire file, and it's more token-efficient. If multiple occurrences are found and allowMultiple is false, it returns an error asking you to provide more context for a unique match.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -5951,7 +5951,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udd27",
+    "emoji": "🔧",
     "intelligenceTier": "high",
     "complexityScore": 12.5,
     "system": true
@@ -5998,7 +5998,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83e\uddf1",
+    "emoji": "🧱",
     "intelligenceTier": "high",
     "complexityScore": 16.5,
     "system": true
@@ -6057,7 +6057,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83e\ude79",
+    "emoji": "🩹",
     "intelligenceTier": "frontier",
     "complexityScore": 30,
     "system": true
@@ -6089,7 +6089,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83e\ude79",
+    "emoji": "🩹",
     "intelligenceTier": "medium",
     "complexityScore": 5,
     "system": true
@@ -6124,7 +6124,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udcc1",
+    "emoji": "📁",
     "intelligenceTier": "low",
     "complexityScore": 4.5,
     "system": true
@@ -6142,7 +6142,7 @@
       "properties": {
         "pattern": {
           "type": "string",
-          "description": "The search pattern \u2014 a literal string or regex. Use isRegex=true for regex mode."
+          "description": "The search pattern — a literal string or regex. Use isRegex=true for regex mode."
         },
         "searchPath": {
           "type": "string",
@@ -6175,7 +6175,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udcc4",
+    "emoji": "📄",
     "intelligenceTier": "high",
     "complexityScore": 24,
     "system": true
@@ -6237,7 +6237,7 @@
     },
     "domain": "Web",
     "domainKey": "web",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -6258,7 +6258,7 @@
         },
         "maxPages": {
           "type": "integer",
-          "description": "Extract only the first N pages of the PDF (e.g. 5 = pages 1\u20135)."
+          "description": "Extract only the first N pages of the PDF (e.g. 5 = pages 1–5)."
         },
         "maxChars": {
           "type": "integer",
@@ -6273,7 +6273,7 @@
         },
         "startPage": {
           "type": "integer",
-          "description": "Start of an inclusive page range to extract (e.g. startPage=3, endPage=8 extracts pages 3\u20138)."
+          "description": "Start of an inclusive page range to extract (e.g. startPage=3, endPage=8 extracts pages 3–8)."
         },
         "endPage": {
           "type": "integer",
@@ -6286,7 +6286,7 @@
     },
     "domain": "Web",
     "domainKey": "web",
-    "emoji": "\ud83d\udcc4",
+    "emoji": "📄",
     "intelligenceTier": "medium",
     "complexityScore": 10.5,
     "system": false,
@@ -6327,7 +6327,7 @@
     },
     "domain": "Web",
     "domainKey": "web",
-    "emoji": "\ud83d\udcdd",
+    "emoji": "📝",
     "intelligenceTier": "medium",
     "complexityScore": 6.9,
     "system": false,
@@ -6359,7 +6359,7 @@
         },
         "sheet": {
           "type": "string",
-          "description": "Specific sheet to extract \u2014 by name (e.g. 'Sheet1') or 0-based index (e.g. '0'). If omitted, all sheets are extracted."
+          "description": "Specific sheet to extract — by name (e.g. 'Sheet1') or 0-based index (e.g. '0'). If omitted, all sheets are extracted."
         },
         "includeHeaders": {
           "type": "boolean",
@@ -6381,7 +6381,7 @@
     },
     "domain": "Web",
     "domainKey": "web",
-    "emoji": "\ud83d\udcc4",
+    "emoji": "📄",
     "intelligenceTier": "medium",
     "complexityScore": 10.1,
     "system": false,
@@ -6422,7 +6422,7 @@
     },
     "domain": "Core Harness Tools",
     "domainKey": "core_harness",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "medium",
     "complexityScore": 5.5,
     "system": true
@@ -6434,7 +6434,7 @@
       "provider": "internal",
       "runtime": "sandboxed fs"
     },
-    "description": "Read multiple files in a single call. Returns numbered lines for each file. Much more efficient than calling read_file multiple times \u2014 use this when you need to read 2-20 files for context (e.g. a component, its CSS module, and the service it imports). Each file supports optional line range selection. Maximum 20 files per batch, 800 lines per file.",
+    "description": "Read multiple files in a single call. Returns numbered lines for each file. Much more efficient than calling read_file multiple times — use this when you need to read 2-20 files for context (e.g. a component, its CSS module, and the service it imports). Each file supports optional line range selection. Maximum 20 files per batch, 800 lines per file.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -6469,7 +6469,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udcd1",
+    "emoji": "📑",
     "intelligenceTier": "high",
     "complexityScore": 14,
     "system": true
@@ -6501,7 +6501,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udcc4",
+    "emoji": "📄",
     "intelligenceTier": "medium",
     "complexityScore": 5,
     "system": true
@@ -6540,7 +6540,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udd00",
+    "emoji": "🔀",
     "intelligenceTier": "medium",
     "complexityScore": 5.5,
     "system": true
@@ -6576,7 +6576,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udcc2",
+    "emoji": "📂",
     "intelligenceTier": "medium",
     "complexityScore": 6,
     "system": true
@@ -6619,7 +6619,7 @@
       "provider": "internal",
       "runtime": "sandboxed subprocess"
     },
-    "description": "Execute a command in a workspace subprocess. Supports any shell or terminal command (e.g. running tests, compiling, starting dev servers, package management, workspace file/directory organization, administrative operations). The working directory must be within the allowed workspace. Timeout default: 60s, max: 120s. For dev servers and long-running watchers, set run_in_background: true \u2014 the command will start, collect ~2.5s of initial output, then return immediately with a process ID while the server continues running. Commands that exceed the timeout without run_in_background are also auto-backgrounded instead of killed.",
+    "description": "Execute a command in a workspace subprocess. Supports any shell or terminal command (e.g. running tests, compiling, starting dev servers, package management, workspace file/directory organization, administrative operations). The working directory must be within the allowed workspace. Timeout default: 60s, max: 120s. For dev servers and long-running watchers, set run_in_background: true — the command will start, collect ~2.5s of initial output, then return immediately with a process ID while the server continues running. Commands that exceed the timeout without run_in_background are also auto-backgrounded instead of killed.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -6647,7 +6647,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\u25b6\ufe0f",
+    "emoji": "▶️",
     "intelligenceTier": "high",
     "complexityScore": 15,
     "system": true
@@ -6674,7 +6674,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udccb",
+    "emoji": "📋",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": true
@@ -6686,7 +6686,7 @@
       "provider": "internal",
       "runtime": "git subprocess"
     },
-    "description": "Run git operations on a repository. Actions: 'status' (branch, staged/unstaged/untracked files), 'diff' (show changes \u2014 optionally staged, specific file, or against a ref), 'log' (commit history \u2014 filter by author, date, file).",
+    "description": "Run git operations on a repository. Actions: 'status' (branch, staged/unstaged/untracked files), 'diff' (show changes — optionally staged, specific file, or against a ref), 'log' (commit history — filter by author, date, file).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -6735,7 +6735,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udce6",
+    "emoji": "📦",
     "intelligenceTier": "high",
     "complexityScore": 13.6,
     "system": true
@@ -6747,13 +6747,13 @@
       "provider": "internal",
       "runtime": "headless Chromium (Playwright)"
     },
-    "description": "Control a headless Chromium browser for web automation, E2E testing, visual QA, and interacting with JavaScript-rendered pages that read_web_page cannot handle. Each call performs ONE action. The browser session persists between calls (same sessionId) so you can build multi-step flows.\n\nRECOMMENDED WORKFLOW: navigate \u2192 snapshot \u2192 click_ref/type_ref. The 'snapshot' action returns an ARIA accessibility tree (roles, names, states) which is ~4x more token-efficient than screenshots. It outputs elements like: heading \"Title\" [level=1], button \"Submit\", textbox \"Search\". Use 'click_ref' or 'type_ref' with a 'role:name' ref string (e.g. ref=\"button:Submit\") to interact with elements from the snapshot \u2014 no CSS selectors needed.\n\nALTERNATIVE WORKFLOW: navigate \u2192 get_elements \u2192 click/type (uses CSS selectors instead of ARIA refs).\n\nFor complex multi-step browser automation, use the 'execute_browser_script' tool instead \u2014 it executes a full Playwright script in a single call. Sessions auto-close after 5 minutes of inactivity.",
+    "description": "Control a headless Chromium browser for web automation, E2E testing, visual QA, and interacting with JavaScript-rendered pages that read_web_page cannot handle. Each call performs ONE action. The browser session persists between calls (same sessionId) so you can build multi-step flows.\n\nRECOMMENDED WORKFLOW: navigate → snapshot → click_ref/type_ref. The 'snapshot' action returns an ARIA accessibility tree (roles, names, states) which is ~4x more token-efficient than screenshots. It outputs elements like: heading \"Title\" [level=1], button \"Submit\", textbox \"Search\". Use 'click_ref' or 'type_ref' with a 'role:name' ref string (e.g. ref=\"button:Submit\") to interact with elements from the snapshot — no CSS selectors needed.\n\nALTERNATIVE WORKFLOW: navigate → get_elements → click/type (uses CSS selectors instead of ARIA refs).\n\nFor complex multi-step browser automation, use the 'execute_browser_script' tool instead — it executes a full Playwright script in a single call. Sessions auto-close after 5 minutes of inactivity.",
     "parameters": {
       "type": "object",
       "properties": {
         "action": {
           "type": "string",
-          "description": "The browser action to perform. SNAPSHOT FLOW: 'snapshot' (get ARIA accessibility tree \u2014 preferred over screenshot for page understanding), 'click_ref' (click element by role:name ref), 'type_ref' (type into element by ref), 'hover_ref' (hover element by ref), 'select_ref' (select dropdown option by ref). SELECTOR FLOW: 'click' (click by CSS selector), 'type' (type by CSS selector), 'get_elements' (discover interactive elements). GENERAL: 'navigate' (go to URL), 'screenshot' (capture viewport as image), 'scroll' (scroll page), 'evaluate' (run JS), 'get_content' (extract text/HTML), 'wait' (wait for element/time), 'run_script' (execute Playwright script), 'close' (end session).",
+          "description": "The browser action to perform. SNAPSHOT FLOW: 'snapshot' (get ARIA accessibility tree — preferred over screenshot for page understanding), 'click_ref' (click element by role:name ref), 'type_ref' (type into element by ref), 'hover_ref' (hover element by ref), 'select_ref' (select dropdown option by ref). SELECTOR FLOW: 'click' (click by CSS selector), 'type' (type by CSS selector), 'get_elements' (discover interactive elements). GENERAL: 'navigate' (go to URL), 'screenshot' (capture viewport as image), 'scroll' (scroll page), 'evaluate' (run JS), 'get_content' (extract text/HTML), 'wait' (wait for element/time), 'run_script' (execute Playwright script), 'close' (end session).",
           "enum": [
             "navigate",
             "screenshot",
@@ -6844,7 +6844,7 @@
     },
     "domain": "Browser",
     "domainKey": "browser",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "frontier",
     "complexityScore": 32.7,
     "system": false
@@ -6879,7 +6879,7 @@
     },
     "domain": "Browser",
     "domainKey": "browser",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "high",
     "complexityScore": 13.5,
     "system": false
@@ -6891,7 +6891,7 @@
       "provider": "internal",
       "runtime": "LSP server (stdio JSON-RPC)"
     },
-    "description": "Interact with Language Server Protocol (LSP) servers for precise, compiler-grade code intelligence. Use this instead of search_file_contents when you need EXACT semantic information about symbols \u2014 it understands types, scopes, and cross-file relationships that text search cannot. Supports JavaScript, TypeScript, Python, Rust, Go, C/C++, and Lua. Servers start lazily on first request (may take a few seconds). Provide 1-based line and character positions.\n\nOperations:\n\u2022 goToDefinition \u2014 Jump to where a symbol (function, variable, class, import) is defined. Returns file path and line.\n\u2022 findReferences \u2014 Find ALL usages of a symbol across the entire workspace. Returns list of locations.\n\u2022 hover \u2014 Get the type signature, documentation, and inferred type of a symbol at a position.\n\u2022 documentSymbol \u2014 Get an outline of all symbols (functions, classes, variables, exports) in a file. Does NOT require line/character.\n\u2022 goToImplementation \u2014 Find concrete implementations of an interface, abstract class, or overridden method.",
+    "description": "Interact with Language Server Protocol (LSP) servers for precise, compiler-grade code intelligence. Use this instead of search_file_contents when you need EXACT semantic information about symbols — it understands types, scopes, and cross-file relationships that text search cannot. Supports JavaScript, TypeScript, Python, Rust, Go, C/C++, and Lua. Servers start lazily on first request (may take a few seconds). Provide 1-based line and character positions.\n\nOperations:\n• goToDefinition — Jump to where a symbol (function, variable, class, import) is defined. Returns file path and line.\n• findReferences — Find ALL usages of a symbol across the entire workspace. Returns list of locations.\n• hover — Get the type signature, documentation, and inferred type of a symbol at a position.\n• documentSymbol — Get an outline of all symbols (functions, classes, variables, exports) in a file. Does NOT require line/character.\n• goToImplementation — Find concrete implementations of an interface, abstract class, or overridden method.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -6979,7 +6979,7 @@
     },
     "domain": "Core Task Tools",
     "domainKey": "core_task",
-    "emoji": "\u2795",
+    "emoji": "➕",
     "intelligenceTier": "medium",
     "complexityScore": 10.6,
     "system": true
@@ -7002,7 +7002,7 @@
             "in_progress",
             "completed"
           ],
-          "description": "Optional filter \u2014 only return tasks with this status."
+          "description": "Optional filter — only return tasks with this status."
         },
         "limit": {
           "type": "integer",
@@ -7013,7 +7013,7 @@
     },
     "domain": "Core Task Tools",
     "domainKey": "core_task",
-    "emoji": "\ud83d\udcdd",
+    "emoji": "📝",
     "intelligenceTier": "low",
     "complexityScore": 4.6,
     "system": true
@@ -7040,7 +7040,7 @@
     },
     "domain": "Core Task Tools",
     "domainKey": "core_task",
-    "emoji": "\ud83d\udccb",
+    "emoji": "📋",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": true
@@ -7052,7 +7052,7 @@
       "provider": "internal",
       "runtime": "MongoDB agent_tasks"
     },
-    "description": "Update an existing task's status, subject, description, or metadata. Use this to mark tasks as 'in_progress' when you start working on them, 'completed' when done, or to refine the description as your understanding of the task evolves. Metadata is merged (not replaced) \u2014 you can incrementally add key-value pairs without losing existing metadata.",
+    "description": "Update an existing task's status, subject, description, or metadata. Use this to mark tasks as 'in_progress' when you start working on them, 'completed' when done, or to refine the description as your understanding of the task evolves. Metadata is merged (not replaced) — you can incrementally add key-value pairs without losing existing metadata.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -7093,7 +7093,7 @@
     },
     "domain": "Core Task Tools",
     "domainKey": "core_task",
-    "emoji": "\u270f\ufe0f",
+    "emoji": "✏️",
     "intelligenceTier": "medium",
     "complexityScore": 10.3,
     "system": true
@@ -7105,7 +7105,7 @@
       "provider": "internal",
       "runtime": "Prism MemoryService"
     },
-    "description": "Persist a piece of information to long-term agent memory. Call this tool in TWO cases:\n1. **Explicit requests**: The user says 'remember', 'save', 'note', 'store', 'keep in mind', or 'don't forget'.\n2. **Implicit preference signals**: The user reveals a personal preference, opinion, or fact about themselves \u2014 even without asking you to remember it. Trigger words/patterns include: 'I like ...', 'I love ...', 'I hate ...', 'I dislike ...', 'I prefer ...', 'I enjoy ...', 'I can\\'t stand ...', 'I always ...', 'I never ...', 'my favorite ...', 'I\\'m allergic to ...', 'I\\'m a ... person', or any statement expressing a personal taste, habit, identity trait, or strong opinion. When in doubt, SAVE IT \u2014 over-remembering is better than forgetting.\n\nMemories are deduplicated automatically \u2014 calling this with content that already exists is safe and will not create duplicates. Returns the stored memory document or null if a near-duplicate was detected.",
+    "description": "Persist a piece of information to long-term agent memory. Call this tool in TWO cases:\n1. **Explicit requests**: The user says 'remember', 'save', 'note', 'store', 'keep in mind', or 'don't forget'.\n2. **Implicit preference signals**: The user reveals a personal preference, opinion, or fact about themselves — even without asking you to remember it. Trigger words/patterns include: 'I like ...', 'I love ...', 'I hate ...', 'I dislike ...', 'I prefer ...', 'I enjoy ...', 'I can\\'t stand ...', 'I always ...', 'I never ...', 'my favorite ...', 'I\\'m allergic to ...', 'I\\'m a ... person', or any statement expressing a personal taste, habit, identity trait, or strong opinion. When in doubt, SAVE IT — over-remembering is better than forgetting.\n\nMemories are deduplicated automatically — calling this with content that already exists is safe and will not create duplicates. Returns the stored memory document or null if a near-duplicate was detected.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -7146,17 +7146,17 @@
       "provider": "Google Emoji Kitchen",
       "intervalSeconds": 86400
     },
-    "description": "Combine two emojis to get their Google Emoji Kitchen mashup image. Accepts emoji characters (e.g. '\ud83d\udc3c', '\u2744\ufe0f') or hex codepoint strings (e.g. '1f43c', '2744-fe0f'). Returns the static PNG image URL, GBoard order, and metadata.",
+    "description": "Combine two emojis to get their Google Emoji Kitchen mashup image. Accepts emoji characters (e.g. '🐼', '❄️') or hex codepoint strings (e.g. '1f43c', '2744-fe0f'). Returns the static PNG image URL, GBoard order, and metadata.",
     "parameters": {
       "type": "object",
       "properties": {
         "left": {
           "type": "string",
-          "description": "The first emoji character or hex codepoint (e.g., '\ud83d\udc3c' or '1f43c')"
+          "description": "The first emoji character or hex codepoint (e.g., '🐼' or '1f43c')"
         },
         "right": {
           "type": "string",
-          "description": "The second emoji character or hex codepoint (e.g., '\u2744\ufe0f' or '2744-fe0f')"
+          "description": "The second emoji character or hex codepoint (e.g., '❄️' or '2744-fe0f')"
         }
       },
       "required": [
@@ -7178,13 +7178,13 @@
       "provider": "Google Emoji Kitchen",
       "intervalSeconds": 86400
     },
-    "description": "Get all supported GBoard Emoji Kitchen combinations for a single emoji. Accepts an emoji character (e.g. '\ud83d\udc3c') or a hex codepoint (e.g. '1f43c'). Returns a list of other emojis it can combine with, along with their mashup image URLs.",
+    "description": "Get all supported GBoard Emoji Kitchen combinations for a single emoji. Accepts an emoji character (e.g. '🐼') or a hex codepoint (e.g. '1f43c'). Returns a list of other emojis it can combine with, along with their mashup image URLs.",
     "parameters": {
       "type": "object",
       "properties": {
         "emoji": {
           "type": "string",
-          "description": "The emoji character or hex codepoint to check (e.g., '\ud83d\udc3c' or '1f43c')"
+          "description": "The emoji character or hex codepoint to check (e.g., '🐼' or '1f43c')"
         },
         "limit": {
           "type": "number",
@@ -7197,7 +7197,7 @@
     },
     "domain": "Creative",
     "domainKey": "creative",
-    "emoji": "\ud83e\uddd1\u200d\ud83c\udf73",
+    "emoji": "🧑‍🍳",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -7208,7 +7208,7 @@
       "type": "onDemand",
       "provider": "Google Gemini via Prism"
     },
-    "description": "Generate or edit an image using AI image generation. When reference images are attached in the conversation, they are automatically passed to the image model \u2014 write a SHORT edit instruction (e.g. 'Redraw this with bigger eyes', 'Make this character blue'). Do NOT re-describe the attached image; the model can already see it. When NO reference images are attached, write a rich, detailed prompt from scratch. The generated image will be delivered to the user automatically. IMPORTANT: Do NOT call this tool unless the user's current message explicitly asks for an image, drawing, painting, illustration, or artwork. Never call it for greetings, questions, or casual conversation.",
+    "description": "Generate or edit an image using AI image generation. When reference images are attached in the conversation, they are automatically passed to the image model — write a SHORT edit instruction (e.g. 'Redraw this with bigger eyes', 'Make this character blue'). Do NOT re-describe the attached image; the model can already see it. When NO reference images are attached, write a rich, detailed prompt from scratch. The generated image will be delivered to the user automatically. IMPORTANT: Do NOT call this tool unless the user's current message explicitly asks for an image, drawing, painting, illustration, or artwork. Never call it for greetings, questions, or casual conversation.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -7237,7 +7237,7 @@
       "type": "onDemand",
       "provider": "Google Gemini via Prism"
     },
-    "description": "Describe the visual contents of one or more images (avatars, banners, photos, etc.) by URL. Returns a text description of each image. Use this when you need to understand what someone looks like (their avatar or banner) before generating artwork, or when you need to describe any image from a URL. IMPORTANT: Always batch ALL image URLs into a single call \u2014 pass all URLs in the imageUrls array at once. Never make multiple separate calls for individual URLs.",
+    "description": "Describe the visual contents of one or more images (avatars, banners, photos, etc.) by URL. Returns a text description of each image. Use this when you need to understand what someone looks like (their avatar or banner) before generating artwork, or when you need to describe any image from a URL. IMPORTANT: Always batch ALL image URLs into a single call — pass all URLs in the imageUrls array at once. Never make multiple separate calls for individual URLs.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -7279,7 +7279,7 @@
       "type": "onDemand",
       "provider": "Inworld / ElevenLabs / OpenAI / Google via Prism"
     },
-    "description": "Convert text into spoken audio using text-to-speech. Returns base64-encoded audio data. Use this when the user asks you to read something aloud, narrate text, or generate audio from text. The TTS provider and model are configured by the user in settings \u2014 only specify text and voice. When the Inworld provider is active, the text field supports instruction tags (natural language directions in square brackets) for expressive delivery \u2014 e.g. [say excitedly], [whisper], [laugh]. Combine qualities for nuance: [say sadly with deliberate pauses in a low voice]. Write all numbers in spoken form and avoid markdown or structured text.",
+    "description": "Convert text into spoken audio using text-to-speech. Returns base64-encoded audio data. Use this when the user asks you to read something aloud, narrate text, or generate audio from text. The TTS provider and model are configured by the user in settings — only specify text and voice. When the Inworld provider is active, the text field supports instruction tags (natural language directions in square brackets) for expressive delivery — e.g. [say excitedly], [whisper], [laugh]. Combine qualities for nuance: [say sadly with deliberate pauses in a low voice]. Write all numbers in spoken form and avoid markdown or structured text.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -7289,7 +7289,7 @@
         },
         "voice": {
           "type": "string",
-          "description": "Voice identifier \u2014 pick the voice that best matches the user's request. {{TTS_VOICE_CATALOG}}"
+          "description": "Voice identifier — pick the voice that best matches the user's request. {{TTS_VOICE_CATALOG}}"
         }
       },
       "required": [
@@ -7298,7 +7298,7 @@
     },
     "domain": "Creative",
     "domainKey": "creative",
-    "emoji": "\ud83d\udd0a",
+    "emoji": "🔊",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -7310,7 +7310,7 @@
       "provider": "internal",
       "runtime": "espeak-ng (local)"
     },
-    "description": "Convert text into spoken audio using the local espeak-ng speech synthesizer \u2014 no AI models, no API keys, zero cost. Produces robotic but intelligible WAV audio instantly. Supports 30+ language voices (en-us, en-gb, es, fr, de, ja, ko, zh, and more), adjustable speech rate, pitch, volume, and word gap. Use this for quick read-aloud, accessibility, notification sounds, or whenever AI TTS is unavailable or unnecessary.",
+    "description": "Convert text into spoken audio using the local espeak-ng speech synthesizer — no AI models, no API keys, zero cost. Produces robotic but intelligible WAV audio instantly. Supports 30+ language voices (en-us, en-gb, es, fr, de, ja, ko, zh, and more), adjustable speech rate, pitch, volume, and word gap. Use this for quick read-aloud, accessibility, notification sounds, or whenever AI TTS is unavailable or unnecessary.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -7324,19 +7324,19 @@
         },
         "speed": {
           "type": "integer",
-          "description": "Speech rate in words per minute (80\u2013450, default: 175). Lower is slower."
+          "description": "Speech rate in words per minute (80–450, default: 175). Lower is slower."
         },
         "pitch": {
           "type": "integer",
-          "description": "Voice pitch (0\u201399, default: 50). Higher values produce a higher-pitched voice."
+          "description": "Voice pitch (0–99, default: 50). Higher values produce a higher-pitched voice."
         },
         "volume": {
           "type": "integer",
-          "description": "Output volume (0\u2013200, default: 100)."
+          "description": "Output volume (0–200, default: 100)."
         },
         "wordGap": {
           "type": "integer",
-          "description": "Extra pause between words in 10ms units (0\u2013100, default: none). Set to 5\u201310 for slower, more deliberate speech."
+          "description": "Extra pause between words in 10ms units (0–100, default: none). Set to 5–10 for slower, more deliberate speech."
         }
       },
       "required": [
@@ -7356,7 +7356,7 @@
       "type": "onDemand",
       "provider": "Creative Vector Animation Engine"
     },
-    "description": "Create interactive, vector-based keyframe animations in HTML5 Canvas. Supports multiple layers, shapes (rectangle, circle, ellipse, line, polygon, path, text), keyframes, frame-by-frame animations, and shape/transform tweening (translation, scale, rotation, color, opacity) along linear, Bezier curve, or custom paths. Subsequent calls with the same sessionId append/edit keyframes to build complex animations incrementally. When the user attaches an image, set imageUrl to 'reference' on the specific layers that should display it \u2014 the system will replace 'reference' with the actual image data automatically. Only mark layers that should show the user's image; leave imageUrl unset on layers that should use solid color fills. Do NOT search the web for image URLs.",
+    "description": "Create interactive, vector-based keyframe animations in HTML5 Canvas. Supports multiple layers, shapes (rectangle, circle, ellipse, line, polygon, path, text), keyframes, frame-by-frame animations, and shape/transform tweening (translation, scale, rotation, color, opacity) along linear, Bezier curve, or custom paths. Subsequent calls with the same sessionId append/edit keyframes to build complex animations incrementally. When the user attaches an image, set imageUrl to 'reference' on the specific layers that should display it — the system will replace 'reference' with the actual image data automatically. Only mark layers that should show the user's image; leave imageUrl unset on layers that should use solid color fills. Do NOT search the web for image URLs.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -7688,7 +7688,7 @@
       "provider": "internal",
       "runtime": "SoundSynthesizerService"
     },
-    "description": "Generate creative audio/sound clips (in WAV format) natively in JavaScript. Use this to generate custom sounds, chiptunes, retro arcade effects, musical melodies/arpeggios, or full multi-track compositions. Returns a base64-encoded WAV audio clip. Features: FM synthesis, ADSR envelopes, additive harmonics, LFOs, filters (LP/HP/BP), distortion (soft clip/hard clip/bitcrush), Schroeder reverb, stereo panning, delay (tempo-synced with beat fractions like '1/8' or '1/4d'), per-note velocity and pitch bend, swing/humanize, track repeat/looping, chord notation (e.g. 'Cmaj7', 'Am', 'G7'), REST/SILENCE notes, time signatures, and 18 instrument presets (acoustic_guitar, electric_guitar, nylon_guitar, piano, electric_piano, organ, trumpet, violin, cello, flute, clarinet, synth_lead, synth_pad, synth_bass, bass_guitar, marimba, vibraphone, harmonica). ITERATIVE COMPOSITION: For multi-track compositions (2+ instruments), you MUST use the TRACKER workflow \u2014 call this tool multiple times, one step at a time: 1) action: 'init' to create a session (returns a sessionId), 2) action: 'add_channel' once per instrument (pass sessionId), 3) action: 'write_pattern' once per channel's note sequence (pass sessionId + channelId), 4) action: 'render' for the final output. Each tracker step auto-renders a live audio preview so the user hears progress. Between calls, describe what you just added and what comes next. NEVER cram an entire multi-track composition into a single call. For simple single-instrument sounds (sound effects, single melodies, presets), omit action for direct single-call synthesis.",
+    "description": "Generate creative audio/sound clips (in WAV format) natively in JavaScript. Use this to generate custom sounds, chiptunes, retro arcade effects, musical melodies/arpeggios, or full multi-track compositions. Returns a base64-encoded WAV audio clip. Features: FM synthesis, ADSR envelopes, additive harmonics, LFOs, filters (LP/HP/BP), distortion (soft clip/hard clip/bitcrush), Schroeder reverb, stereo panning, delay (tempo-synced with beat fractions like '1/8' or '1/4d'), per-note velocity and pitch bend, swing/humanize, track repeat/looping, chord notation (e.g. 'Cmaj7', 'Am', 'G7'), REST/SILENCE notes, time signatures, and 18 instrument presets (acoustic_guitar, electric_guitar, nylon_guitar, piano, electric_piano, organ, trumpet, violin, cello, flute, clarinet, synth_lead, synth_pad, synth_bass, bass_guitar, marimba, vibraphone, harmonica). ITERATIVE COMPOSITION: For multi-track compositions (2+ instruments), you MUST use the TRACKER workflow — call this tool multiple times, one step at a time: 1) action: 'init' to create a session (returns a sessionId), 2) action: 'add_channel' once per instrument (pass sessionId), 3) action: 'write_pattern' once per channel's note sequence (pass sessionId + channelId), 4) action: 'render' for the final output. Each tracker step auto-renders a live audio preview so the user hears progress. Between calls, describe what you just added and what comes next. NEVER cram an entire multi-track composition into a single call. For simple single-instrument sounds (sound effects, single melodies, presets), omit action for direct single-call synthesis.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -7712,7 +7712,7 @@
         },
         "volume": {
           "type": "number",
-          "description": "Channel volume (0.0\u20132.0) for add_channel. Default: 1.0."
+          "description": "Channel volume (0.0–2.0) for add_channel. Default: 1.0."
         },
         "effects": {
           "type": "object",
@@ -7723,7 +7723,7 @@
               "properties": {
                 "wet": {
                   "type": "number",
-                  "description": "Reverb mix (0.0\u20131.0). Default: 0.3."
+                  "description": "Reverb mix (0.0–1.0). Default: 0.3."
                 },
                 "decayTime": {
                   "type": "number",
@@ -7740,7 +7740,7 @@
                 },
                 "feedback": {
                   "type": "number",
-                  "description": "Feedback (0.0\u20130.95). Default: 0.3."
+                  "description": "Feedback (0.0–0.95). Default: 0.3."
                 },
                 "pingPong": {
                   "type": "boolean",
@@ -7804,7 +7804,7 @@
               },
               "velocity": {
                 "type": "number",
-                "description": "Note velocity (0.0\u20131.0). Default: 1.0."
+                "description": "Note velocity (0.0–1.0). Default: 1.0."
               }
             },
             "required": [
@@ -7939,7 +7939,7 @@
             "properties": {
               "note": {
                 "type": "string",
-                "description": "Note name (e.g. 'C4'), chord name (e.g. 'Cmaj7', 'Am', 'G7' \u2014 auto-expands to constituent notes), raw frequency in Hz, or 'REST'/'SILENCE' for a silent gap."
+                "description": "Note name (e.g. 'C4'), chord name (e.g. 'Cmaj7', 'Am', 'G7' — auto-expands to constituent notes), raw frequency in Hz, or 'REST'/'SILENCE' for a silent gap."
               },
               "duration": {
                 "type": "number",
@@ -7988,7 +7988,7 @@
         },
         "tracks": {
           "type": "array",
-          "description": "Timeline sequences for polyphonic multi-tracking. Each track has a nodeChain (referencing node names defined in 'nodes'), a notes list, optional volume (0.0\u20132.0), and optional repeat count. IMPORTANT: The 'nodes' parameter MUST be provided alongside 'tracks' \u2014 nodeChain names are NOT built-in keywords, they are user-defined keys that must exist in the 'nodes' object.",
+          "description": "Timeline sequences for polyphonic multi-tracking. Each track has a nodeChain (referencing node names defined in 'nodes'), a notes list, optional volume (0.0–2.0), and optional repeat count. IMPORTANT: The 'nodes' parameter MUST be provided alongside 'tracks' — nodeChain names are NOT built-in keywords, they are user-defined keys that must exist in the 'nodes' object.",
           "items": {
             "type": "object",
             "properties": {
@@ -7997,7 +7997,7 @@
                 "items": {
                   "type": "string"
                 },
-                "description": "Ordered array of node names from the 'nodes' object, forming the signal chain from generator \u2192 effects \u2192 'destination'. Every name except 'destination' must exist as a key in the 'nodes' parameter. Example: ['osc', 'env', 'filter', 'destination']."
+                "description": "Ordered array of node names from the 'nodes' object, forming the signal chain from generator → effects → 'destination'. Every name except 'destination' must exist as a key in the 'nodes' parameter. Example: ['osc', 'env', 'filter', 'destination']."
               },
               "notes": {
                 "type": "array",
@@ -8014,7 +8014,7 @@
                     },
                     "note": {
                       "type": "string",
-                      "description": "Note name (e.g. 'C4', 'Bb3'), chord name (e.g. 'Am7', 'Cmaj7' \u2014 auto-expands), raw frequency, drum trigger ('KICK', 'SNARE', 'HAT'), or 'REST'/'SILENCE'."
+                      "description": "Note name (e.g. 'C4', 'Bb3'), chord name (e.g. 'Am7', 'Cmaj7' — auto-expands), raw frequency, drum trigger ('KICK', 'SNARE', 'HAT'), or 'REST'/'SILENCE'."
                     },
                     "velocity": {
                       "type": "number",
@@ -8030,11 +8030,11 @@
                         },
                         "startTime": {
                           "type": "number",
-                          "description": "Fraction of note duration when bend starts (0.0\u20131.0, default: 0.0)."
+                          "description": "Fraction of note duration when bend starts (0.0–1.0, default: 0.0)."
                         },
                         "endTime": {
                           "type": "number",
-                          "description": "Fraction of note duration when bend reaches target (0.0\u20131.0, default: 1.0)."
+                          "description": "Fraction of note duration when bend reaches target (0.0–1.0, default: 1.0)."
                         }
                       },
                       "required": [
@@ -8051,7 +8051,7 @@
               },
               "volume": {
                 "type": "number",
-                "description": "Track volume multiplier (0.0\u20132.0, default: 1.0). Use to balance tracks in the mix."
+                "description": "Track volume multiplier (0.0–2.0, default: 1.0). Use to balance tracks in the mix."
               },
               "repeat": {
                 "type": "integer",
@@ -8090,11 +8090,11 @@
         },
         "swing": {
           "type": "number",
-          "description": "Groove swing amount (0.0\u20131.0). Shifts every other 16th note forward in time. 0.0 = straight timing, 0.5 = triplet shuffle, 1.0 = extreme swing. Only applies to modular mode."
+          "description": "Groove swing amount (0.0–1.0). Shifts every other 16th note forward in time. 0.0 = straight timing, 0.5 = triplet shuffle, 1.0 = extreme swing. Only applies to modular mode."
         },
         "humanize": {
           "type": "number",
-          "description": "Timing humanization amount (0.0\u20131.0). Adds random per-note timing jitter (\u00b120ms at max). Makes rigid grid timing feel more natural and organic. Only applies to modular mode."
+          "description": "Timing humanization amount (0.0–1.0). Adds random per-note timing jitter (±20ms at max). Makes rigid grid timing feel more natural and organic. Only applies to modular mode."
         },
         "timeSignature": {
           "type": "array",
@@ -8107,7 +8107,7 @@
     },
     "domain": "Creative",
     "domainKey": "creative",
-    "emoji": "\ud83d\udd0a",
+    "emoji": "🔊",
     "intelligenceTier": "frontier",
     "complexityScore": 177.7,
     "system": false
@@ -8119,7 +8119,7 @@
       "provider": "internal",
       "runtime": "ffmpeg"
     },
-    "description": "Remix, transform, and apply audio effects to an existing audio clip using an FFmpeg-based DSP pipeline. Accepts audio input from a URL (including Discord attachment URLs), base64 data URI, or local file path. Apply a composable chain of operations: pitch_shift (semitones), tempo (speed without pitch change), speed (tape-style), reverb, echo, lowpass/highpass/bandpass filters, equalizer, bass_boost, treble_boost, distortion, chorus, flanger, phaser, tremolo, vibrato, compressor, normalize, reverse, fade_in, fade_out, trim, volume, stereo_pan, bitcrush, and crystalizer. Also supports 12 fun presets: chipmunk, demon_voice, nightcore, vaporwave, slowed_reverb, underwater, radio, telephone, robot, cave, vinyl, megaphone. Presets can be combined with additional custom operations. Output formats: wav, mp3, ogg, opus. Use this when the user wants to modify, remix, or apply effects to existing audio \u2014 for generating audio from scratch (synthesis, melodies), use generate_audio instead.",
+    "description": "Remix, transform, and apply audio effects to an existing audio clip using an FFmpeg-based DSP pipeline. Accepts audio input from a URL (including Discord attachment URLs), base64 data URI, or local file path. Apply a composable chain of operations: pitch_shift (semitones), tempo (speed without pitch change), speed (tape-style), reverb, echo, lowpass/highpass/bandpass filters, equalizer, bass_boost, treble_boost, distortion, chorus, flanger, phaser, tremolo, vibrato, compressor, normalize, reverse, fade_in, fade_out, trim, volume, stereo_pan, bitcrush, and crystalizer. Also supports 12 fun presets: chipmunk, demon_voice, nightcore, vaporwave, slowed_reverb, underwater, radio, telephone, robot, cave, vinyl, megaphone. Presets can be combined with additional custom operations. Output formats: wav, mp3, ogg, opus. Use this when the user wants to modify, remix, or apply effects to existing audio — for generating audio from scratch (synthesis, melodies), use generate_audio instead.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -8129,7 +8129,7 @@
         },
         "operations": {
           "type": "array",
-          "description": "Ordered array of audio effects to apply sequentially. Each operation has a 'type' and type-specific parameters. Operations are applied in order, forming a DSP pipeline (e.g., pitch_shift \u2192 reverb \u2192 lowpass).",
+          "description": "Ordered array of audio effects to apply sequentially. Each operation has a 'type' and type-specific parameters. Operations are applied in order, forming a DSP pipeline (e.g., pitch_shift → reverb → lowpass).",
           "items": {
             "type": "object",
             "properties": {
@@ -8168,7 +8168,7 @@
               },
               "semitones": {
                 "type": "number",
-                "description": "pitch_shift: Number of semitones to shift (\u221224 to +24). +12 = one octave up (chipmunk), \u221212 = one octave down (demon)."
+                "description": "pitch_shift: Number of semitones to shift (−24 to +24). +12 = one octave up (chipmunk), −12 = one octave down (demon)."
               },
               "factor": {
                 "type": "number",
@@ -8206,7 +8206,7 @@
               },
               "gain": {
                 "type": "number",
-                "description": "equalizer/bass_boost/treble_boost: Gain in dB (\u221220 to +20). distortion: Overdrive gain (0 to 100)."
+                "description": "equalizer/bass_boost/treble_boost: Gain in dB (−20 to +20). distortion: Overdrive gain (0 to 100)."
               },
               "color": {
                 "type": "number",
@@ -8254,7 +8254,7 @@
               },
               "pan": {
                 "type": "number",
-                "description": "stereo_pan: Pan position (\u22121.0 left to +1.0 right)."
+                "description": "stereo_pan: Pan position (−1.0 left to +1.0 right)."
               },
               "bits": {
                 "type": "number",
@@ -8266,7 +8266,7 @@
               },
               "intensity": {
                 "type": "number",
-                "description": "crystalizer: Dynamic range expansion intensity (\u221210 to 10)."
+                "description": "crystalizer: Dynamic range expansion intensity (−10 to 10)."
               }
             },
             "required": [
@@ -8313,7 +8313,7 @@
     },
     "domain": "Creative",
     "domainKey": "creative",
-    "emoji": "\ud83c\udf9b\ufe0f",
+    "emoji": "🎛️",
     "intelligenceTier": "frontier",
     "complexityScore": 60.599999999999994,
     "system": false
@@ -8346,7 +8346,7 @@
         },
         "model": {
           "type": "string",
-          "description": "Model name (optional \u2014 uses provider default, e.g. 'whisper-1')"
+          "description": "Model name (optional — uses provider default, e.g. 'whisper-1')"
         },
         "language": {
           "type": "string",
@@ -8392,15 +8392,15 @@
         },
         "query": {
           "type": "string",
-          "description": "Text search query \u2014 matches against message content"
+          "description": "Text search query — matches against message content"
         },
         "before": {
           "type": "string",
-          "description": "ISO date string \u2014 only messages before this date (e.g. '2025-03-01')"
+          "description": "ISO date string — only messages before this date (e.g. '2025-03-01')"
         },
         "after": {
           "type": "string",
-          "description": "ISO date string \u2014 only messages after this date (e.g. '2025-01-01')"
+          "description": "ISO date string — only messages after this date (e.g. '2025-01-01')"
         },
         "limit": {
           "type": "number",
@@ -8413,7 +8413,7 @@
             "count",
             "compact"
           ],
-          "description": "Response mode. 'messages' (default) returns full message objects. 'count' returns only the total matching count \u2014 use for 'how many' questions. 'compact' returns minimal data (author name, first 120 chars, date) \u2014 use when scanning many messages without needing full detail."
+          "description": "Response mode. 'messages' (default) returns full message objects. 'count' returns only the total matching count — use for 'how many' questions. 'compact' returns minimal data (author name, first 120 chars, date) — use when scanning many messages without needing full detail."
         }
       },
       "required": [
@@ -8422,7 +8422,7 @@
     },
     "domain": "Discord",
     "domainKey": "discord",
-    "emoji": "\ud83d\udcac",
+    "emoji": "💬",
     "intelligenceTier": "high",
     "complexityScore": 13.1,
     "system": false
@@ -8455,15 +8455,15 @@
         },
         "query": {
           "type": "string",
-          "description": "Text filter \u2014 only count messages containing this text. Use this for questions like 'who says lmao the most?' or 'how often do people mention pizza?'"
+          "description": "Text filter — only count messages containing this text. Use this for questions like 'who says lmao the most?' or 'how often do people mention pizza?'"
         },
         "before": {
           "type": "string",
-          "description": "ISO date string \u2014 only messages before this date"
+          "description": "ISO date string — only messages before this date"
         },
         "after": {
           "type": "string",
-          "description": "ISO date string \u2014 only messages after this date"
+          "description": "ISO date string — only messages after this date"
         },
         "groupBy": {
           "type": "string",
@@ -8552,7 +8552,7 @@
     },
     "domain": "Discord",
     "domainKey": "discord",
-    "emoji": "\ud83d\udcc1",
+    "emoji": "📁",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": false
@@ -8578,7 +8578,7 @@
     },
     "domain": "Discord",
     "domainKey": "discord",
-    "emoji": "\ud83d\udc65",
+    "emoji": "👥",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": false
@@ -8640,7 +8640,7 @@
     },
     "domain": "Discord",
     "domainKey": "discord",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "low",
     "complexityScore": 0,
     "system": false
@@ -8870,7 +8870,7 @@
         },
         "emoji": {
           "type": "string",
-          "description": "The emoji to react with. Can be a standard Unicode emoji character (e.g. '\ud83d\udc4d') or a custom Discord emoji identifier in the format 'name:id' (e.g. 'luposLurk:1234567890')"
+          "description": "The emoji to react with. Can be a standard Unicode emoji character (e.g. '👍') or a custom Discord emoji identifier in the format 'name:id' (e.g. 'luposLurk:1234567890')"
         }
       },
       "required": [
@@ -8908,7 +8908,7 @@
     },
     "domain": "Discord",
     "domainKey": "discord",
-    "emoji": "\ud83d\udd0a",
+    "emoji": "🔊",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": false
@@ -8939,7 +8939,7 @@
     },
     "domain": "Discord",
     "domainKey": "discord",
-    "emoji": "\ud83d\udc64",
+    "emoji": "👤",
     "intelligenceTier": "medium",
     "complexityScore": 5,
     "system": false
@@ -8969,7 +8969,7 @@
     },
     "domain": "Discord",
     "domainKey": "discord",
-    "emoji": "\ud83d\udcc1",
+    "emoji": "📁",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -8993,7 +8993,7 @@
     },
     "domain": "Smart Home",
     "domainKey": "smart_home",
-    "emoji": "\ud83d\udca1",
+    "emoji": "💡",
     "intelligenceTier": "low",
     "complexityScore": 1,
     "system": false
@@ -9004,7 +9004,7 @@
       "type": "onDemand",
       "provider": "LIFX Cloud API"
     },
-    "description": "Set the state of LIFX lights \u2014 power, color, brightness, and color temperature. This is the primary control tool. Colors can be specified as: named colors ('red', 'blue', 'warm_white'), hex codes ('#FF5500'), HSBK ('hue:120 saturation:1.0 brightness:0.5'), kelvin ('kelvin:2700' for warm, 'kelvin:6500' for daylight), or RGB ('rgb:255,128,0'). Brightness ranges from 0.0 to 1.0. Duration controls transition time in seconds.",
+    "description": "Set the state of LIFX lights — power, color, brightness, and color temperature. This is the primary control tool. Colors can be specified as: named colors ('red', 'blue', 'warm_white'), hex codes ('#FF5500'), HSBK ('hue:120 saturation:1.0 brightness:0.5'), kelvin ('kelvin:2700' for warm, 'kelvin:6500' for daylight), or RGB ('rgb:255,128,0'). Brightness ranges from 0.0 to 1.0. Duration controls transition time in seconds.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9041,7 +9041,7 @@
     },
     "domain": "Smart Home",
     "domainKey": "smart_home",
-    "emoji": "\ud83c\udf9a\ufe0f",
+    "emoji": "🎚️",
     "intelligenceTier": "medium",
     "complexityScore": 8.4,
     "system": false
@@ -9052,7 +9052,7 @@
       "type": "onDemand",
       "provider": "LIFX Cloud API"
     },
-    "description": "Toggle LIFX light power \u2014 turns off lights that are on, or turns on lights that are off. All matched lights share the same power state after toggling.",
+    "description": "Toggle LIFX light power — turns off lights that are on, or turns on lights that are off. All matched lights share the same power state after toggling.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9080,7 +9080,7 @@
       "type": "onDemand",
       "provider": "LIFX Cloud API"
     },
-    "description": "Run a breathe effect \u2014 slowly fades between two colors in a smooth sine wave pattern. Perfect for ambient mood lighting, meditation, relaxation, sunrise simulation, or gentle notifications. The effect oscillates between the current color (or fromColor) and the target color.",
+    "description": "Run a breathe effect — slowly fades between two colors in a smooth sine wave pattern. Perfect for ambient mood lighting, meditation, relaxation, sunrise simulation, or gentle notifications. The effect oscillates between the current color (or fromColor) and the target color.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9134,7 +9134,7 @@
       "type": "onDemand",
       "provider": "LIFX Cloud API"
     },
-    "description": "Run a pulse effect \u2014 quickly flashes between two colors with a sharp square wave pattern. Great for alerts, notifications, party lighting, or attention-grabbing effects. More dramatic and abrupt than the breathe effect.",
+    "description": "Run a pulse effect — quickly flashes between two colors with a sharp square wave pattern. Great for alerts, notifications, party lighting, or attention-grabbing effects. More dramatic and abrupt than the breathe effect.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9201,7 +9201,7 @@
     },
     "domain": "Smart Home",
     "domainKey": "smart_home",
-    "emoji": "\u23f9\ufe0f",
+    "emoji": "⏹️",
     "intelligenceTier": "low",
     "complexityScore": 2,
     "system": false
@@ -9257,7 +9257,7 @@
     },
     "domain": "Smart Home",
     "domainKey": "smart_home",
-    "emoji": "\u25b6\ufe0f",
+    "emoji": "▶️",
     "intelligenceTier": "medium",
     "complexityScore": 7.5,
     "system": false
@@ -9268,7 +9268,7 @@
       "type": "onDemand",
       "provider": "LIFX Cloud API"
     },
-    "description": "Run a move effect \u2014 flowing color animation along LIFX strip products (Z, Beam). The existing color pattern moves forward or backward along the strip. Perfect for ambient flowing light effects. Only works on multizone strip products.",
+    "description": "Run a move effect — flowing color animation along LIFX strip products (Z, Beam). The existing color pattern moves forward or backward along the strip. Perfect for ambient flowing light effects. Only works on multizone strip products.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9301,7 +9301,7 @@
     },
     "domain": "Smart Home",
     "domainKey": "smart_home",
-    "emoji": "\ud83d\udd04",
+    "emoji": "🔄",
     "intelligenceTier": "medium",
     "complexityScore": 7.4,
     "system": false
@@ -9312,7 +9312,7 @@
       "type": "onDemand",
       "provider": "LIFX Cloud API"
     },
-    "description": "Run a flame effect \u2014 flickering fire animation that runs on LIFX matrix device firmware (Tile, Candle). Creates a realistic candle/fireplace simulation. Only works on matrix-capable products.",
+    "description": "Run a flame effect — flickering fire animation that runs on LIFX matrix device firmware (Tile, Candle). Creates a realistic candle/fireplace simulation. Only works on matrix-capable products.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9348,7 +9348,7 @@
       "type": "onDemand",
       "provider": "LIFX Cloud API"
     },
-    "description": "Run a morph effect \u2014 continuous color-blending animation on LIFX matrix devices (Tile, Candle). Smoothly transitions between provided palette colors. Great for ambient mood lighting with multiple colors. Only works on matrix-capable products.",
+    "description": "Run a morph effect — continuous color-blending animation on LIFX matrix devices (Tile, Candle). Smoothly transitions between provided palette colors. Great for ambient mood lighting with multiple colors. Only works on matrix-capable products.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9391,7 +9391,7 @@
       "type": "onDemand",
       "provider": "LIFX Cloud API"
     },
-    "description": "Set different states on multiple LIFX light selectors in a single API call. Allows setting up to 50 different light states simultaneously \u2014 each with its own selector, power, color, brightness, and duration. Much more efficient than calling set_light_state multiple times. Use 'defaults' to set common values across all entries.",
+    "description": "Set different states on multiple LIFX light selectors in a single API call. Allows setting up to 50 different light states simultaneously — each with its own selector, power, color, brightness, and duration. Much more efficient than calling set_light_state multiple times. Use 'defaults' to set common values across all entries.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9453,7 +9453,7 @@
       "type": "onDemand",
       "provider": "LIFX Cloud API"
     },
-    "description": "Make relative adjustments to the current state of LIFX lights \u2014 increase/decrease brightness, shift hue, adjust saturation, or change color temperature by a delta value. Unlike set_light_state (which sets absolute values), this adds or subtracts from the current state. Example: brightness +0.2 makes lights 20% brighter than they currently are.",
+    "description": "Make relative adjustments to the current state of LIFX lights — increase/decrease brightness, shift hue, adjust saturation, or change color temperature by a delta value. Unlike set_light_state (which sets absolute values), this adds or subtracts from the current state. Example: brightness +0.2 makes lights 20% brighter than they currently are.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9532,7 +9532,7 @@
       "type": "onDemand",
       "provider": "Lights Service"
     },
-    "description": "Get health and diagnostics from the smart lighting service \u2014 uptime, current automation phase (sleep/sunrise/daytime/sunset/nighttime), night lock status, LIFX API rate limit usage, sunrise/sunset times, and current weather conditions affecting lighting.",
+    "description": "Get health and diagnostics from the smart lighting service — uptime, current automation phase (sleep/sunrise/daytime/sunset/nighttime), night lock status, LIFX API rate limit usage, sunrise/sunset times, and current weather conditions affecting lighting.",
     "parameters": {
       "type": "object",
       "properties": {},
@@ -9585,7 +9585,7 @@
         },
         "identity": {
           "type": "string",
-          "description": "Core personality and role prompt \u2014 injected at the top of the system prompt. Example: 'You are a senior backend engineer specializing in distributed systems...'"
+          "description": "Core personality and role prompt — injected at the top of the system prompt. Example: 'You are a senior backend engineer specializing in distributed systems...'"
         },
         "guidelines": {
           "type": "string",
@@ -9637,7 +9637,7 @@
     },
     "domain": "Agent Management",
     "domainKey": "agents",
-    "emoji": "\ud83e\udd16",
+    "emoji": "🤖",
     "intelligenceTier": "low",
     "complexityScore": 0,
     "system": false
@@ -9656,7 +9656,7 @@
     },
     "domain": "Agent Management",
     "domainKey": "agents",
-    "emoji": "\ud83e\udd16",
+    "emoji": "🤖",
     "intelligenceTier": "low",
     "complexityScore": 0,
     "system": false
@@ -9667,7 +9667,7 @@
       "type": "onDemand",
       "provider": "Prism CustomAgentService"
     },
-    "description": "Update an existing custom agent persona. Accepts partial updates \u2014 only the fields you provide will be changed. Use list_custom_agents first to find the agent's ID. Common updates include modifying the enabledTools list, modifying the identity prompt, changing guidelines, or updating visual branding.",
+    "description": "Update an existing custom agent persona. Accepts partial updates — only the fields you provide will be changed. Use list_custom_agents first to find the agent's ID. Common updates include modifying the enabledTools list, modifying the identity prompt, changing guidelines, or updating visual branding.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9748,7 +9748,7 @@
       "type": "onDemand",
       "provider": "ToolSchemaService"
     },
-    "description": "Search the FULL tool catalog (272 tools) by keyword or domain. Returns matching tool names, descriptions, schemas, and an isEnabled flag. Use this whenever the user requests a capability you don't currently have \u2014 tools span: agent management (create_custom_agent, list_custom_agents, list_agents, update_custom_agent), browser (control_browser, execute_browser_script), calendar (get_calendar_events, create_calendar_event, get_free_busy), communication (send_sms, list_sms_messages, get_sms_account, lookup_phone_number, list_phone_numbers, send_push_notification, send_webhook), compute (execute_shell, convert_units, parse_datetime, transform_json, generate_csv, render_latex, generate_diagram, diff_text, generate_hash, test_regex, convert_encoding, convert_video_to_gif, parse_cron_expression, analyze_csv, compare_json, validate_json_schema), core discover tools (search_tools), core harness tools (read_url, evaluate_expression, execute_python, execute_javascript, think, sleep, emit_structured_output, search_web, save_memory), core schedule tools (create_cron, remote_trigger, create_cron_job, list_cron_jobs, delete_cron_job, trigger_cron_job), core task tools (create_task, get_task, list_tasks, update_task), core workspace tools (read_file, write_file, replace_in_file, replace_file_block, replace_file_regions, patch_file, read_files, get_file_info, diff_files, move_file, delete_file, list_directory, search_file_contents, find_files, summarize_project, execute_command, run_git, query_language_server, edit_notebook), creative (get_emoji_combination, get_emoji_combinations, generate_image, describe_image, synthesize_speech, synthesize_speech_local, generate_audio, remix_audio, create_vector_animation, transcribe_audio, generate_qr_code, convert_color, manipulate_image, convert_image_to_ascii, draw_turtle_graphics, create_3d_mesh, create_3d_scene, create_3d_model, create_3d_voxel), discord (search_discord_messages, get_discord_message_analytics, get_discord_server_activity, get_discord_guild_channels, get_discord_guild_members, get_discord_guild_emojis, get_bot_stats, get_bot_guilds, get_bot_activity_timeline, get_discord_user_heatmap_data, get_discord_mention_leaderboard, get_discord_message_leaderboard, get_discord_word_frequencies, react_to_discord_message, get_discord_voice_channel_members, get_discord_user_profile, get_discord_channel_activity_stats), energy (get_energy_indicators, get_energy_catalog, get_energy_facets, search_energy, get_electricity_retail_sales, get_petroleum_prices, get_natural_gas_prices), events (get_events), finance (get_stock, get_macro, get_market_news, get_earnings_calendar, get_historical_prices, get_technical_analysis, get_volatility, get_fear_greed_index, get_sec_filings, get_sector_performance), gaming (get_dota, get_steam_profile, create_bonfire), health (rank_foods_by_category, search_drugs, get_drug_adverse_events, get_drug_recalls, search_usda_nutrition, rank_foods_by_nutrient, compare_food_nutrition, get_food_categories, get_nutrient_types, list_category_nutrients, search_foods_by_taxonomy, get_food_taxonomy, get_nutritional_requirements, list_drug_dosage_forms, search_gym_exercises, get_gym_exercise_categories, get_gym_exercise_by_id, calculate_caloric_needs, analyze_nutrient_gaps, search_food_substitutes, estimate_exercise_calories, calculate_hydration_needs, build_meal_plan, check_drug_nutrient_interactions, get_pollen_forecast), infrastructure (get_infrastructure_status, get_container_diagnostics, get_container_logs), knowledge (search_books, get_country, get_element, get_exoplanet, get_anime, get_word_definition, search_papers, get_wikipedia_summary, get_on_this_day, list_development_indicators, search_youtube, get_youtube_video, download_video, trim_video, get_package_info, read_rss_feed, get_pypi_package, get_music, get_wayback_snapshot, get_stackoverflow_questions, search_patents), maritime (get_tracked_vessels, get_vessel_by_mmsi, search_vessels, get_vessels_in_area, get_ais_messages), markets & commodities (get_commodities), movies & tv (search_media, get_media_details, get_media_credits, get_trending_media, browse_media, get_media_genres, get_now_playing_media, get_media_recommendations, search_person, get_watch_providers), network intelligence (dns_lookup, whois_lookup, ssl_certificate_check, port_scan, http_headers, ping_host), products (search_products, get_trending_products, get_watchlist_availability, check_sku_availability, get_costco_us_products, get_costco_ca_products, search_amazon_products), reddit (search_reddit, search_reddit_subreddits, get_reddit_subreddit_info, get_reddit_subreddit_feed, get_reddit_subreddit_rules, get_reddit_subreddit_wiki_pages, get_reddit_subreddit_wiki_page, get_reddit_user_history, get_reddit_user_profile, download_reddit_video), security (check_breach), smart home (list_lights, set_light_state, toggle_light_power, start_light_breathe_effect, start_light_pulse_effect, start_light_move_effect, start_light_flame_effect, start_light_morph_effect, set_light_states, adjust_light_state, stop_light_effects, list_light_scenes, activate_light_scene, enable_light_night_lock, get_light_health), sports (get_live_scores, get_upcoming_matches, get_recent_results, get_league_standings, get_match_details, get_head_to_head, search_teams, search_players, get_team_squad, get_league_top_scorers), torrent (search_torrents, download_torrent, get_torrent_status), transit (get_next_bus, get_transit_stop_info, search_transit_stops_nearby, get_transit_route_info, get_flight_status), trends (get_trends, get_github_trending), utilities (search_airports, convert_currency, get_time_in_timezone, get_ip_info, search_nearby_places, search_places, generate_map, generate_chart, get_public_webcams), weather & environment (get_weather, get_local_environment, get_weather_forecast, get_avalanche_forecast, get_earthquakes, get_solar_activity, get_aurora_forecast, get_solar_wind, get_twilight, get_tides, get_wildfires, get_iss_location, get_near_earth_objects, get_space_launches, get_nasa_apod, get_weather_warnings, get_detailed_air_quality, get_weather_history, get_weather_marine, get_weather_astronomy, get_weather_alerts, get_moon_phase, get_satellite_imagery), web (read_web_page, read_pdf, read_docx, read_spreadsheet). If results show isEnabled: false, you MUST call enable_tools with those tool names before you can use them. This is a read-only discovery tool \u2014 it does not execute anything.",
+    "description": "Search the FULL tool catalog (272 tools) by keyword or domain. Returns matching tool names, descriptions, schemas, and an isEnabled flag. Use this whenever the user requests a capability you don't currently have — tools span: agent management (create_custom_agent, list_custom_agents, list_agents, update_custom_agent), browser (control_browser, execute_browser_script), calendar (get_calendar_events, create_calendar_event, get_free_busy), communication (send_sms, list_sms_messages, get_sms_account, lookup_phone_number, list_phone_numbers, send_push_notification, send_webhook), compute (execute_shell, convert_units, parse_datetime, transform_json, generate_csv, render_latex, generate_diagram, diff_text, generate_hash, test_regex, convert_encoding, convert_video_to_gif, parse_cron_expression, analyze_csv, compare_json, validate_json_schema), core discover tools (search_tools), core harness tools (read_url, evaluate_expression, execute_python, execute_javascript, think, sleep, emit_structured_output, search_web, save_memory), core schedule tools (create_cron, remote_trigger, create_cron_job, list_cron_jobs, delete_cron_job, trigger_cron_job), core task tools (create_task, get_task, list_tasks, update_task), core workspace tools (read_file, write_file, replace_in_file, replace_file_block, replace_file_regions, patch_file, read_files, get_file_info, diff_files, move_file, delete_file, list_directory, search_file_contents, find_files, summarize_project, execute_command, run_git, query_language_server, edit_notebook), creative (get_emoji_combination, get_emoji_combinations, generate_image, describe_image, synthesize_speech, synthesize_speech_local, generate_audio, remix_audio, create_vector_animation, transcribe_audio, generate_qr_code, convert_color, manipulate_image, convert_image_to_ascii, draw_turtle_graphics, create_3d_mesh, create_3d_scene, create_3d_model, create_3d_voxel), discord (search_discord_messages, get_discord_message_analytics, get_discord_server_activity, get_discord_guild_channels, get_discord_guild_members, get_discord_guild_emojis, get_bot_stats, get_bot_guilds, get_bot_activity_timeline, get_discord_user_heatmap_data, get_discord_mention_leaderboard, get_discord_message_leaderboard, get_discord_word_frequencies, react_to_discord_message, get_discord_voice_channel_members, get_discord_user_profile, get_discord_channel_activity_stats), energy (get_energy_indicators, get_energy_catalog, get_energy_facets, search_energy, get_electricity_retail_sales, get_petroleum_prices, get_natural_gas_prices), events (get_events), finance (get_stock, get_macro, get_market_news, get_earnings_calendar, get_historical_prices, get_technical_analysis, get_volatility, get_fear_greed_index, get_sec_filings, get_sector_performance), gaming (get_dota, get_steam_profile, create_bonfire), health (rank_foods_by_category, search_drugs, get_drug_adverse_events, get_drug_recalls, search_usda_nutrition, rank_foods_by_nutrient, compare_food_nutrition, get_food_categories, get_nutrient_types, list_category_nutrients, search_foods_by_taxonomy, get_food_taxonomy, get_nutritional_requirements, list_drug_dosage_forms, search_gym_exercises, get_gym_exercise_categories, get_gym_exercise_by_id, calculate_caloric_needs, analyze_nutrient_gaps, search_food_substitutes, estimate_exercise_calories, calculate_hydration_needs, build_meal_plan, check_drug_nutrient_interactions, get_pollen_forecast), infrastructure (get_infrastructure_status, get_container_diagnostics, get_container_logs), knowledge (search_books, get_country, get_element, get_exoplanet, get_anime, get_word_definition, search_papers, get_wikipedia_summary, get_on_this_day, list_development_indicators, search_youtube, get_youtube_video, download_video, trim_video, get_package_info, read_rss_feed, get_pypi_package, get_music, get_wayback_snapshot, get_stackoverflow_questions, search_patents), maritime (get_tracked_vessels, get_vessel_by_mmsi, search_vessels, get_vessels_in_area, get_ais_messages), markets & commodities (get_commodities), movies & tv (search_media, get_media_details, get_media_credits, get_trending_media, browse_media, get_media_genres, get_now_playing_media, get_media_recommendations, search_person, get_watch_providers), network intelligence (dns_lookup, whois_lookup, ssl_certificate_check, port_scan, http_headers, ping_host), products (search_products, get_trending_products, get_watchlist_availability, check_sku_availability, get_costco_us_products, get_costco_ca_products, search_amazon_products), reddit (search_reddit, search_reddit_subreddits, get_reddit_subreddit_info, get_reddit_subreddit_feed, get_reddit_subreddit_rules, get_reddit_subreddit_wiki_pages, get_reddit_subreddit_wiki_page, get_reddit_user_history, get_reddit_user_profile, download_reddit_video), security (check_breach), smart home (list_lights, set_light_state, toggle_light_power, start_light_breathe_effect, start_light_pulse_effect, start_light_move_effect, start_light_flame_effect, start_light_morph_effect, set_light_states, adjust_light_state, stop_light_effects, list_light_scenes, activate_light_scene, enable_light_night_lock, get_light_health), sports (get_live_scores, get_upcoming_matches, get_recent_results, get_league_standings, get_match_details, get_head_to_head, search_teams, search_players, get_team_squad, get_league_top_scorers), torrent (search_torrents, download_torrent, get_torrent_status), transit (get_next_bus, get_transit_stop_info, search_transit_stops_nearby, get_transit_route_info, get_flight_status), trends (get_trends, get_github_trending), utilities (search_airports, convert_currency, get_time_in_timezone, get_ip_info, search_nearby_places, search_places, generate_map, generate_chart, get_public_webcams), weather & environment (get_weather, get_local_environment, get_weather_forecast, get_avalanche_forecast, get_earthquakes, get_solar_activity, get_aurora_forecast, get_solar_wind, get_twilight, get_tides, get_wildfires, get_iss_location, get_near_earth_objects, get_space_launches, get_nasa_apod, get_weather_warnings, get_detailed_air_quality, get_weather_history, get_weather_marine, get_weather_astronomy, get_weather_alerts, get_moon_phase, get_satellite_imagery), web (read_web_page, read_pdf, read_docx, read_spreadsheet). If results show isEnabled: false, you MUST call enable_tools with those tool names before you can use them. This is a read-only discovery tool — it does not execute anything.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9762,14 +9762,14 @@
         },
         "limit": {
           "type": "number",
-          "description": "Maximum results to return (1\u201350). Default: 20."
+          "description": "Maximum results to return (1–50). Default: 20."
         }
       },
       "required": []
     },
     "domain": "Core Discover Tools",
     "domainKey": "core_discover",
-    "emoji": "\ud83d\udee0\ufe0f",
+    "emoji": "🛠️",
     "intelligenceTier": "low",
     "complexityScore": 3,
     "system": true
@@ -9790,7 +9790,7 @@
         },
         "prompt": {
           "type": "string",
-          "description": "The instruction prompt sent to the background agent that will execute this job. Write this as a directive telling the agent what to do \u2014 NOT as a message from the user's perspective. Example: 'Remind the user to eat bananas and suggest healthy snack options' instead of 'Time to eat some bananas!'. The prompt must be self-contained since there is no prior conversation context for the background run."
+          "description": "The instruction prompt sent to the background agent that will execute this job. Write this as a directive telling the agent what to do — NOT as a message from the user's perspective. Example: 'Remind the user to eat bananas and suggest healthy snack options' instead of 'Time to eat some bananas!'. The prompt must be self-contained since there is no prior conversation context for the background run."
         },
         "scheduleType": {
           "type": "string",
@@ -9841,7 +9841,7 @@
     },
     "domain": "Core Schedule Tools",
     "domainKey": "core_schedule",
-    "emoji": "\ud83d\uddd3\ufe0f",
+    "emoji": "🗓️",
     "intelligenceTier": "high",
     "complexityScore": 23.7,
     "system": true
@@ -9860,7 +9860,7 @@
     },
     "domain": "Core Schedule Tools",
     "domainKey": "core_schedule",
-    "emoji": "\u23f0",
+    "emoji": "⏰",
     "intelligenceTier": "low",
     "complexityScore": 0,
     "system": true
@@ -9927,7 +9927,7 @@
       "type": "onDemand",
       "provider": "AgenticNotebookService"
     },
-    "description": "Edit Jupyter Notebook (.ipynb) files. Supports structured cell operations: list_cells (enumerate all cells with previews), get_cell (read full cell content), insert_cell (add a new cell), replace_cell (update content/type), delete_cell (remove a cell). All operations work on the notebook's JSON structure \u2014 no raw text editing needed.",
+    "description": "Edit Jupyter Notebook (.ipynb) files. Supports structured cell operations: list_cells (enumerate all cells with previews), get_cell (read full cell content), insert_cell (add a new cell), replace_cell (update content/type), delete_cell (remove a cell). All operations work on the notebook's JSON structure — no raw text editing needed.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -9971,7 +9971,7 @@
     },
     "domain": "Core Workspace Tools",
     "domainKey": "core_workspace",
-    "emoji": "\ud83d\udcd3",
+    "emoji": "📓",
     "intelligenceTier": "high",
     "complexityScore": 13.6,
     "system": true
@@ -9983,13 +9983,13 @@
       "provider": "internal",
       "runtime": "echo"
     },
-    "description": "Use this tool to reason through complex problems step-by-step before acting. Write your private reasoning, analysis, or plan here \u2014 this content is NOT shown to the user. Use this when you need to: break down a multi-step task, weigh trade-offs between approaches, analyze information from previous tool calls, plan your next actions, or reason about ambiguous requirements. This tool does not execute anything \u2014 it simply records your thinking for context continuity.",
+    "description": "Use this tool to reason through complex problems step-by-step before acting. Write your private reasoning, analysis, or plan here — this content is NOT shown to the user. Use this when you need to: break down a multi-step task, weigh trade-offs between approaches, analyze information from previous tool calls, plan your next actions, or reason about ambiguous requirements. This tool does not execute anything — it simply records your thinking for context continuity.",
     "parameters": {
       "type": "object",
       "properties": {
         "thought": {
           "type": "string",
-          "description": "Your private reasoning, analysis, or plan. Be thorough \u2014 this is your scratchpad."
+          "description": "Your private reasoning, analysis, or plan. Be thorough — this is your scratchpad."
         }
       },
       "required": [
@@ -9998,7 +9998,7 @@
     },
     "domain": "Core Harness Tools",
     "domainKey": "core_harness",
-    "emoji": "\ud83e\udde0",
+    "emoji": "🧠",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": true
@@ -10010,13 +10010,13 @@
       "provider": "internal",
       "runtime": "timer"
     },
-    "description": "Pause execution for a specified duration. Use for polling workflows \u2014 e.g. wait for a build to finish, a server to restart, or a deployment to propagate before checking results. Maximum duration is 120 seconds. The pause can be cancelled if the user aborts the session.",
+    "description": "Pause execution for a specified duration. Use for polling workflows — e.g. wait for a build to finish, a server to restart, or a deployment to propagate before checking results. Maximum duration is 120 seconds. The pause can be cancelled if the user aborts the session.",
     "parameters": {
       "type": "object",
       "properties": {
         "duration_seconds": {
           "type": "number",
-          "description": "How long to wait in seconds (1\u2013120). Default: 5."
+          "description": "How long to wait in seconds (1–120). Default: 5."
         },
         "reason": {
           "type": "string",
@@ -10029,7 +10029,7 @@
     },
     "domain": "Core Harness Tools",
     "domainKey": "core_harness",
-    "emoji": "\ud83d\udca4",
+    "emoji": "💤",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": true
@@ -10064,7 +10064,7 @@
     },
     "domain": "Core Harness Tools",
     "domainKey": "core_harness",
-    "emoji": "\ud83d\udcdd",
+    "emoji": "📝",
     "intelligenceTier": "medium",
     "complexityScore": 9.5,
     "system": true
@@ -10099,7 +10099,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\u23f0",
+    "emoji": "⏰",
     "intelligenceTier": "medium",
     "complexityScore": 10.5,
     "system": false
@@ -10179,7 +10179,7 @@
       "type": "onDemand",
       "provider": "Steam Web API"
     },
-    "description": "Look up any Steam user's profile and gaming data via the Steam Web API. Supports multiple actions: profile (get profile summary including name, avatar, status, country, account creation date, currently playing game), owned_games (get list of owned games sorted by most played, with playtime in hours), recent_games (get games played in the last 2 weeks with recent and total playtime), bans (check VAC bans, game bans, community bans, trade bans), resolve_vanity (convert a custom vanity URL name to a Steam64 ID). Accepts either a Steam64 ID (17-digit number like 76561198...) or a vanity URL name (e.g. 'gabelogannewell') \u2014 auto-resolves as needed.",
+    "description": "Look up any Steam user's profile and gaming data via the Steam Web API. Supports multiple actions: profile (get profile summary including name, avatar, status, country, account creation date, currently playing game), owned_games (get list of owned games sorted by most played, with playtime in hours), recent_games (get games played in the last 2 weeks with recent and total playtime), bans (check VAC bans, game bans, community bans, trade bans), resolve_vanity (convert a custom vanity URL name to a Steam64 ID). Accepts either a Steam64 ID (17-digit number like 76561198...) or a vanity URL name (e.g. 'gabelogannewell') — auto-resolves as needed.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -10210,7 +10210,7 @@
     },
     "domain": "Gaming",
     "domainKey": "gaming",
-    "emoji": "\ud83c\udfae",
+    "emoji": "🎮",
     "intelligenceTier": "medium",
     "complexityScore": 9,
     "system": false
@@ -10290,7 +10290,7 @@
       "type": "onDemand",
       "provider": "MusicBrainz"
     },
-    "description": "Search and retrieve music metadata from MusicBrainz \u2014 the open music encyclopedia. Supports: search_artists (find artists by name), artist (get detailed artist info including discography, social links, tags), search_albums (find albums/release groups by title, optionally filtered by artist), album (get album details including track listing, cover art URL, tags), search_tracks (find recordings/tracks by title, optionally filtered by artist).",
+    "description": "Search and retrieve music metadata from MusicBrainz — the open music encyclopedia. Supports: search_artists (find artists by name), artist (get detailed artist info including discography, social links, tags), search_albums (find albums/release groups by title, optionally filtered by artist), album (get album details including track listing, cover art URL, tags), search_tracks (find recordings/tracks by title, optionally filtered by artist).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -10307,7 +10307,7 @@
         },
         "q": {
           "type": "string",
-          "description": "Search query \u2014 artist name, album title, or track title (for search actions)"
+          "description": "Search query — artist name, album title, or track title (for search actions)"
         },
         "mbid": {
           "type": "string",
@@ -10328,7 +10328,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83c\udfb5",
+    "emoji": "🎵",
     "intelligenceTier": "medium",
     "complexityScore": 9.5,
     "system": false
@@ -10422,7 +10422,7 @@
     },
     "domain": "Network Intelligence",
     "domainKey": "network_intelligence",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "medium",
     "complexityScore": 7.5,
     "system": false
@@ -10449,7 +10449,7 @@
     },
     "domain": "Network Intelligence",
     "domainKey": "network_intelligence",
-    "emoji": "\ud83c\udf10",
+    "emoji": "🌐",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": false
@@ -10480,7 +10480,7 @@
     },
     "domain": "Network Intelligence",
     "domainKey": "network_intelligence",
-    "emoji": "\ud83d\udd12",
+    "emoji": "🔒",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -10511,7 +10511,7 @@
     },
     "domain": "Network Intelligence",
     "domainKey": "network_intelligence",
-    "emoji": "\ud83d\udd0c",
+    "emoji": "🔌",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -10538,7 +10538,7 @@
     },
     "domain": "Network Intelligence",
     "domainKey": "network_intelligence",
-    "emoji": "\ud83d\udce1",
+    "emoji": "📡",
     "intelligenceTier": "low",
     "complexityScore": 2.5,
     "system": false
@@ -10569,7 +10569,7 @@
     },
     "domain": "Network Intelligence",
     "domainKey": "network_intelligence",
-    "emoji": "\ud83d\udcf6",
+    "emoji": "📶",
     "intelligenceTier": "low",
     "complexityScore": 3.5,
     "system": false
@@ -10604,7 +10604,7 @@
     },
     "domain": "Security",
     "domainKey": "security",
-    "emoji": "\ud83d\udd13",
+    "emoji": "🔓",
     "intelligenceTier": "medium",
     "complexityScore": 7.4,
     "system": false
@@ -10706,7 +10706,7 @@
     },
     "domain": "Communication",
     "domainKey": "communication",
-    "emoji": "\ud83e\ude9d",
+    "emoji": "🪝",
     "intelligenceTier": "medium",
     "complexityScore": 9.6,
     "system": false
@@ -10777,7 +10777,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udcca",
+    "emoji": "📊",
     "intelligenceTier": "medium",
     "complexityScore": 6.5,
     "system": false
@@ -10809,7 +10809,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\ud83d\udd00",
+    "emoji": "🔀",
     "intelligenceTier": "medium",
     "complexityScore": 5,
     "system": false
@@ -10841,7 +10841,7 @@
     },
     "domain": "Compute",
     "domainKey": "compute",
-    "emoji": "\u2705",
+    "emoji": "✅",
     "intelligenceTier": "medium",
     "complexityScore": 5,
     "system": false
@@ -10925,7 +10925,7 @@
     },
     "domain": "Knowledge",
     "domainKey": "knowledge",
-    "emoji": "\ud83d\udcdc",
+    "emoji": "📜",
     "intelligenceTier": "medium",
     "complexityScore": 5.5,
     "system": false
@@ -10972,7 +10972,7 @@
     },
     "domain": "Weather & Environment",
     "domainKey": "weather",
-    "emoji": "\ud83d\udef0\ufe0f",
+    "emoji": "🛰️",
     "intelligenceTier": "medium",
     "complexityScore": 10.4,
     "system": false
@@ -11014,7 +11014,7 @@
       "type": "onDemand",
       "provider": "Portal Service / Docker Engine API"
     },
-    "description": "Get Docker container resource usage and performance metrics across all hosts. Actions: 'stats' (live CPU%, memory, network bytes, block-IO, throttling, PIDs for all containers), 'metrics' (time-series history of container performance \u2014 configurable range and resolution), 'history' (recent ring-buffer snapshots from the last 5 minutes), 'system' (Docker host OS, kernel version, CPU count, total memory, disk usage).",
+    "description": "Get Docker container resource usage and performance metrics across all hosts. Actions: 'stats' (live CPU%, memory, network bytes, block-IO, throttling, PIDs for all containers), 'metrics' (time-series history of container performance — configurable range and resolution), 'history' (recent ring-buffer snapshots from the last 5 minutes), 'system' (Docker host OS, kernel version, CPU count, total memory, disk usage).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -11068,7 +11068,7 @@
       "type": "onDemand",
       "provider": "Portal Service / Docker Engine API"
     },
-    "description": "Retrieve recent log output from Docker containers with optional filtering. Returns log lines with timestamps and stream source (stdout/stderr). Supports filtering by severity level (cascading: 'warn' returns WARN + ERROR), substring search, and relative time window. When 'container' is provided, returns logs from that specific container. When 'container' is omitted, searches across ALL running containers simultaneously \u2014 results are merged chronologically and each line is tagged with its source container name. This is useful for cross-service debugging (e.g. finding all errors across the entire stack). Container names match the Docker container name (e.g. 'prism-service', 'tools-service').",
+    "description": "Retrieve recent log output from Docker containers with optional filtering. Returns log lines with timestamps and stream source (stdout/stderr). Supports filtering by severity level (cascading: 'warn' returns WARN + ERROR), substring search, and relative time window. When 'container' is provided, returns logs from that specific container. When 'container' is omitted, searches across ALL running containers simultaneously — results are merged chronologically and each line is tagged with its source container name. This is useful for cross-service debugging (e.g. finding all errors across the entire stack). Container names match the Docker container name (e.g. 'prism-service', 'tools-service').",
     "parameters": {
       "type": "object",
       "properties": {
@@ -11107,7 +11107,7 @@
     },
     "domain": "Infrastructure",
     "domainKey": "infrastructure",
-    "emoji": "\ud83d\udccb",
+    "emoji": "📋",
     "intelligenceTier": "medium",
     "complexityScore": 8.8,
     "system": false
@@ -11115,10 +11115,10 @@
   {
     "name": "enter_plan_mode",
     "emoji": [
-      "\ud83d\udcdd",
-      "\ud83e\udde0"
+      "📝",
+      "🧠"
     ],
-    "description": "Switch into planning mode. While in plan mode, you will not have access to any tools \u2014 you can only output text. Use this to produce a structured implementation plan before executing changes. Call exit_plan_mode when you are ready to resume tool execution. Use this when the task is complex and benefits from upfront planning.",
+    "description": "Switch into planning mode. While in plan mode, you will not have access to any tools — you can only output text. Use this to produce a structured implementation plan before executing changes. Call exit_plan_mode when you are ready to resume tool execution. Use this when the task is complex and benefits from upfront planning.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -11139,8 +11139,8 @@
   {
     "name": "exit_plan_mode",
     "emoji": [
-      "\ud83d\ude80",
-      "\ud83e\udde0"
+      "🚀",
+      "🧠"
     ],
     "description": "Exit planning mode and resume normal tool execution. Call this after you have produced your plan and are ready to execute it with tools.",
     "parameters": {
@@ -11163,8 +11163,8 @@
   {
     "name": "enable_tools",
     "emoji": [
-      "\ud83d\udd13",
-      "\ud83e\uddf0"
+      "🔓",
+      "🧰"
     ],
     "description": "Activate discovered tools so you can call them. Required after search_tools returns results with isEnabled: false. Accepts exact tool names (e.g. \"get_weather\") or domain prefixes (e.g. \"domain:Finance\", \"domainKey:health\") to enable an entire domain. Newly enabled tools become available on the NEXT iteration. Core cognitive tools (memory, tasks, planning) are always available.",
     "parameters": {
@@ -11194,8 +11194,8 @@
   {
     "name": "disable_tools",
     "emoji": [
-      "\ud83d\udd12",
-      "\ud83e\uddf0"
+      "🔒",
+      "🧰"
     ],
     "description": "Dynamically disable tools from this conversation to reduce token usage and tool interference. Accepts exact tool names or domain prefixes (e.g. \"domain:Finance\"). Core cognitive tools (memory, tasks, planning, orchestration) cannot be disabled.",
     "parameters": {
@@ -11225,10 +11225,10 @@
   {
     "name": "discover_and_enable_tools",
     "emoji": [
-      "\ud83d\udd0d",
-      "\ud83e\uddf0"
+      "🔍",
+      "🧰"
     ],
-    "description": "Search the FULL tool catalog (224 tools) AND automatically enable matches in one step. Combines search_tools and enable_tools \u2014 after calling this, discovered tools are immediately available on the next iteration without a separate enable_tools call. Use this when you know you want to use discovered tools right away. Covers all domains: agent management, browser, communication, compute, creative, discord, energy, events, finance, gaming, health, infrastructure, knowledge, markets & commodities, network intelligence, products, reddit, security, smart home, trends, utilities, weather & environment, web. Accepts the same parameters as search_tools (query, domain, limit).",
+    "description": "Search the FULL tool catalog (224 tools) AND automatically enable matches in one step. Combines search_tools and enable_tools — after calling this, discovered tools are immediately available on the next iteration without a separate enable_tools call. Use this when you know you want to use discovered tools right away. Covers all domains: agent management, browser, communication, compute, creative, discord, energy, events, finance, gaming, health, infrastructure, knowledge, markets & commodities, network intelligence, products, reddit, security, smart home, trends, utilities, weather & environment, web. Accepts the same parameters as search_tools (query, domain, limit).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -11242,7 +11242,7 @@
         },
         "limit": {
           "type": "number",
-          "description": "Maximum results to return (1\u201350). Default: 20."
+          "description": "Maximum results to return (1–50). Default: 20."
         }
       },
       "required": []
@@ -11260,10 +11260,10 @@
   {
     "name": "create_skill",
     "emoji": [
-      "\ud83e\ude84",
-      "\ud83d\udee0\ufe0f"
+      "🪄",
+      "🛠️"
     ],
-    "description": "Create a reusable workflow skill. Skills are stored prompt templates with variable interpolation ({{variable}}) that can be invoked by name. Use this to capture multi-step workflows (refactor\u2192test\u2192commit, analyze\u2192report, etc.) as reusable atomic operations. Skills persist across sessions and can be shared across agents.",
+    "description": "Create a reusable workflow skill. Skills are stored prompt templates with variable interpolation ({{variable}}) that can be invoked by name. Use this to capture multi-step workflows (refactor→test→commit, analyze→report, etc.) as reusable atomic operations. Skills persist across sessions and can be shared across agents.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -11273,7 +11273,7 @@
         },
         "description": {
           "type": "string",
-          "description": "What the skill does \u2014 shown when listing skills."
+          "description": "What the skill does — shown when listing skills."
         },
         "prompt": {
           "type": "string",
@@ -11318,8 +11318,8 @@
   {
     "name": "execute_skill",
     "emoji": [
-      "\u26a1",
-      "\ud83e\ude84"
+      "⚡",
+      "🪄"
     ],
     "description": "Execute a previously created skill by its ID. The skill's prompt template is interpolated with the provided variables and executed as an inline agentic task. Use list_skills to see available skills.",
     "parameters": {
@@ -11349,8 +11349,8 @@
   {
     "name": "list_skills",
     "emoji": [
-      "\ud83d\udccb",
-      "\ud83e\ude84"
+      "📋",
+      "🪄"
     ],
     "description": "List all available skills. Skills are reusable workflow templates created with create_skill.",
     "parameters": {
@@ -11374,8 +11374,8 @@
   {
     "name": "delete_skill",
     "emoji": [
-      "\ud83d\uddd1\ufe0f",
-      "\ud83e\ude84"
+      "🗑️",
+      "🪄"
     ],
     "description": "Delete a skill by its ID.",
     "parameters": {
@@ -11401,8 +11401,8 @@
   {
     "name": "enter_worktree",
     "emoji": [
-      "\ud83c\udf33",
-      "\ud83d\udcbb"
+      "🌳",
+      "💻"
     ],
     "description": "Enter an isolated git worktree for the current conversation. Creates a new branch and redirects all file/git/shell tool calls to the worktree directory. Use this to try risky refactors, experimental changes, or speculative edits without affecting the main branch. Your full conversation context is preserved. Call exit_worktree to merge or discard when done.",
     "parameters": {
@@ -11426,8 +11426,8 @@
   {
     "name": "exit_worktree",
     "emoji": [
-      "\ud83d\udeaa",
-      "\ud83c\udf33"
+      "🚪",
+      "🌳"
     ],
     "description": "Exit the current isolated worktree and return to the main workspace. Choose to 'merge' changes back to the main branch or 'discard' them entirely. If merging, changes are committed and merged automatically.",
     "parameters": {
@@ -11461,10 +11461,10 @@
   {
     "name": "write_todo",
     "emoji": [
-      "\ud83d\udcdd",
-      "\ud83d\udccc"
+      "📝",
+      "📌"
     ],
-    "description": "Write or update a persistent TODO checklist for the current project. Each item has status: 'pending', 'in_progress', or 'completed'. Call with the full updated list \u2014 replaces the previous state.",
+    "description": "Write or update a persistent TODO checklist for the current project. Each item has status: 'pending', 'in_progress', or 'completed'. Call with the full updated list — replaces the previous state.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -11517,10 +11517,10 @@
   {
     "name": "summarize_conversation",
     "emoji": [
-      "\ud83d\udcac",
-      "\ud83d\udcdd"
+      "💬",
+      "📝"
     ],
-    "description": "Compress the current conversation into a stored summary for future context recovery. Use when the conversation is long. Not shown to the user \u2014 private working memory.",
+    "description": "Compress the current conversation into a stored summary for future context recovery. Use when the conversation is long. Not shown to the user — private working memory.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -11557,8 +11557,8 @@
   {
     "name": "ask_user",
     "emoji": [
-      "\ud83d\udcac",
-      "\u2753"
+      "💬",
+      "❓"
     ],
     "description": "Ask the user one or more questions and wait for their responses before continuing. Use this when you need clarification, a decision between options, or explicit confirmation before proceeding with a potentially impactful action. The agent loop pauses until the user responds. You can batch up to 4 related questions in a single call to reduce round-trips.",
     "parameters": {
@@ -11630,8 +11630,8 @@
   {
     "name": "list_mcp_resources",
     "emoji": [
-      "\ud83d\udd0c",
-      "\ud83d\udccb"
+      "🔌",
+      "📋"
     ],
     "description": "List available resources from a connected MCP server.",
     "parameters": {
@@ -11655,8 +11655,8 @@
   {
     "name": "read_mcp_resource",
     "emoji": [
-      "\ud83d\udd0c",
-      "\ud83d\udcc4"
+      "🔌",
+      "📄"
     ],
     "description": "Read a specific resource from a connected MCP server by its URI.",
     "parameters": {
@@ -11687,8 +11687,8 @@
   {
     "name": "authenticate_mcp_server",
     "emoji": [
-      "\ud83d\udd0c",
-      "\ud83d\udd10"
+      "🔌",
+      "🔐"
     ],
     "description": "Authenticate with a connected MCP server by providing credentials.",
     "parameters": {
@@ -11730,8 +11730,8 @@
   {
     "name": "set_timer",
     "emoji": [
-      "\u23f0",
-      "\u23f3"
+      "⏰",
+      "⏳"
     ],
     "description": "Set a short one-shot timer to pause, wait, or defer execution within this conversation. Use when you need to wait for an asynchronous process, poll a build or deployment, retry after a transient failure, or yield briefly before continuing. The timer fires the provided prompt back into this conversation after the specified duration. Duration must be between 30 and 599 seconds (under 10 minutes). For user-facing reminders, alarms, or scheduled events, use create_cron_job instead.",
     "parameters": {
@@ -11743,7 +11743,7 @@
         },
         "durationSeconds": {
           "type": "number",
-          "description": "Number of seconds to wait before firing (30\u2013599). Must be under 10 minutes."
+          "description": "Number of seconds to wait before firing (30–599). Must be under 10 minutes."
         }
       },
       "required": [
@@ -11763,10 +11763,10 @@
   {
     "name": "list_timers",
     "emoji": [
-      "\u23f1\ufe0f",
-      "\ud83d\udccb"
+      "⏱️",
+      "📋"
     ],
-    "description": "List all active one-shot agent timers in the current conversation. Shows short-duration waits (30\u2013599 seconds) set by set_timer. To view user-facing scheduled reminders, alarms, and recurring events, use list_cron_jobs instead.",
+    "description": "List all active one-shot agent timers in the current conversation. Shows short-duration waits (30–599 seconds) set by set_timer. To view user-facing scheduled reminders, alarms, and recurring events, use list_cron_jobs instead.",
     "parameters": {
       "type": "object",
       "properties": {}
@@ -11782,8 +11782,8 @@
   {
     "name": "cancel_timer",
     "emoji": [
-      "\u23f0",
-      "\u274c"
+      "⏰",
+      "❌"
     ],
     "description": "Cancel an active one-shot agent timer in the current conversation. To delete a scheduled cron job, reminder, or alarm, use delete_cron_job instead.",
     "parameters": {
@@ -11809,8 +11809,8 @@
   {
     "name": "search_conversations",
     "emoji": [
-      "\ud83d\udd0d",
-      "\ud83d\udcac"
+      "🔍",
+      "💬"
     ],
     "description": "Search past agent conversations using a natural language query. Finds previous sessions by semantic similarity to the query text. Returns conversation titles, summaries, dates, and linked memory counts. Use this when the user references a past session, asks 'remember when we...', or when you need context from a previous coding session.",
     "parameters": {
@@ -11840,8 +11840,8 @@
   {
     "name": "create_team",
     "emoji": [
-      "\ud83d\udc65",
-      "\ud83e\udd16"
+      "👥",
+      "🤖"
     ],
     "description": "Spawn one or more sub-agents, each in an isolated git worktree. Sub-agents inherit the currently enabled tools and can dynamically enable more via enable_tools. Execution mode depends on topology: 'hierarchical' runs all members in parallel, 'hierarchical_aggregation' runs all members in parallel then merges results via a synthesis pass, 'sequential' runs members one-at-a-time passing each result to the next, 'peer_to_peer' (default) runs a turn-based discussion where members take turns seeing a shared thread, 'tournament' runs all members in parallel then has a judge select the best result, 'critic_loop' runs actor-critic refinement loop (either Council of Judges or Jury mode), 'divide_and_conquer' decomposes the task into subtasks and executes in parallel then synthesizes, 'mcts' runs Monte Carlo Tree Search guided parallel expansions and iterations. For a single task, provide one member. For parallel work, provide up to 10 members. Returns results from all members when execution completes. When recursive spawning is enabled, sub-agents may themselves call create_team to further decompose complex subtasks. Results include subtreeMetrics with descendant counts, aggregated costs, and child summaries for full tree visibility.",
     "parameters": {
@@ -11863,7 +11863,7 @@
             "divide_and_conquer",
             "mcts"
           ],
-          "description": "Optional: execution topology. 'hierarchical' \u2014 all members run in parallel. 'hierarchical_aggregation' \u2014 all members run in parallel, then a synthesis pass merges their outputs into a unified result. 'sequential' \u2014 members run one-at-a-time, each receiving the previous member's output. 'peer_to_peer (default)' \u2014 turn-based discussion where members take turns on a shared thread. 'tournament' \u2014 N actors run in parallel, judge selects best. 'critic_loop' \u2014 Actor-Critic refinement. Council of Judges (1 actor + N critics) or Jury mode (N actors + judge -> critic loop on winner). Config via topologyConfig: actorCount, maxRounds. 'divide_and_conquer' \u2014 Task decomposition into subtasks -> parallel execution -> synthesis. Config: maxSubtasks. 'mcts' \u2014 Monte Carlo Tree Search. Config: branchFactor, maxDepth. Omit to use the system default."
+          "description": "Optional: execution topology. 'hierarchical' — all members run in parallel. 'hierarchical_aggregation' — all members run in parallel, then a synthesis pass merges their outputs into a unified result. 'sequential' — members run one-at-a-time, each receiving the previous member's output. 'peer_to_peer (default)' — turn-based discussion where members take turns on a shared thread. 'tournament' — N actors run in parallel, judge selects best. 'critic_loop' — Actor-Critic refinement. Council of Judges (1 actor + N critics) or Jury mode (N actors + judge -> critic loop on winner). Config via topologyConfig: actorCount, maxRounds. 'divide_and_conquer' — Task decomposition into subtasks -> parallel execution -> synthesis. Config: maxSubtasks. 'mcts' — Monte Carlo Tree Search. Config: branchFactor, maxDepth. Omit to use the system default."
         },
         "topologyConfig": {
           "type": "object",
@@ -11941,8 +11941,8 @@
   {
     "name": "send_message",
     "emoji": [
-      "\ud83d\udcac",
-      "\ud83d\udce4"
+      "💬",
+      "📤"
     ],
     "description": "Send a follow-up message to a running or completed sub-agent. Use to continue work, provide corrections, or give new instructions.",
     "parameters": {
@@ -11969,8 +11969,8 @@
   {
     "name": "stop_agent",
     "emoji": [
-      "\u23f9\ufe0f",
-      "\ud83e\udd16"
+      "⏹️",
+      "🤖"
     ],
     "description": "Stop a running sub-agent. The sub-agent's worktree is cleaned up.",
     "parameters": {
@@ -11992,8 +11992,8 @@
   {
     "name": "get_task_output",
     "emoji": [
-      "\ud83d\udce5",
-      "\ud83e\udd16"
+      "📥",
+      "🤖"
     ],
     "description": "Read the output from a previously spawned sub-agent by its agent ID. Use this to check on a sub-agent's result after it has completed, or to read partial output from a still-running sub-agent. Returns the sub-agent's final text, tool usage stats, diff summary, and status.",
     "parameters": {
@@ -12015,8 +12015,8 @@
   {
     "name": "delete_team",
     "emoji": [
-      "\ud83d\uddd1\ufe0f",
-      "\ud83d\udc65"
+      "🗑️",
+      "👥"
     ],
     "description": "Stop and remove all sub-agents in a named team. Cleans up worktrees for all members.",
     "parameters": {
@@ -12361,7 +12361,7 @@
   },
   {
     "name": "run_playwright_script",
-    "description": "Write and execute a custom Python Playwright script. The script runs in a fresh subprocess with its own browser instance. Use this for complex multi-step browser automations like: scraping paginated data, filling multi-step forms, extracting tables, or any task that requires custom logic beyond simple navigate/click/type. The script MUST print its output to stdout (use print()). Playwright is already installed \u2014 import from playwright.sync_api.",
+    "description": "Write and execute a custom Python Playwright script. The script runs in a fresh subprocess with its own browser instance. Use this for complex multi-step browser automations like: scraping paginated data, filling multi-step forms, extracting tables, or any task that requires custom logic beyond simple navigate/click/type. The script MUST print its output to stdout (use print()). Playwright is already installed — import from playwright.sync_api.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -12399,46 +12399,6 @@
     },
     "domain": "General",
     "domainKey": "mcp",
-    "system": false
-  },
-  {
-    "name": "youtube_search",
-    "description": "Search YouTube for videos matching a query, or get latest videos from specific channel(s). Returns a list of video objects (video_id, title, channel, duration_secs, url, published_at).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "The search query (e.g. 'Bloomberg News Live'). Optional if channels is provided."
-        },
-        "channels": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Optional list of YouTube channel handles or IDs (e.g. ['@ThePrimeagen']) to fetch recent videos from directly."
-        },
-        "sort": {
-          "type": "string",
-          "enum": [
-            "relevance",
-            "date"
-          ],
-          "description": "Optional sort order for search: 'date' (default) or 'relevance'."
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Maximum number of results to return (default 5).",
-          "minimum": 1,
-          "maximum": 20
-        }
-      }
-    },
-    "domain": "General",
-    "domainKey": "mcp",
-    "labels": [
-      "tool"
-    ],
     "system": false
   },
   {
@@ -12535,7 +12495,7 @@
       "properties": {
         "content": {
           "type": "string",
-          "description": "The finding to share (e.g. 'RSI is at 28.5 \u2014 stock is oversold')."
+          "description": "The finding to share (e.g. 'RSI is at 28.5 — stock is oversold')."
         },
         "ticker": {
           "type": "string",
@@ -13412,7 +13372,7 @@
   },
   {
     "name": "get_cycle_context",
-    "description": "Expand a capsule source reference to get the full raw agent findings from a prior step. Use this when the compressed capsule summary is insufficient for your analysis. The ref_id is found in the '\u2192 Expand: ref:capsule:<id>' line of each capsule summary.",
+    "description": "Expand a capsule source reference to get the full raw agent findings from a prior step. Use this when the compressed capsule summary is insufficient for your analysis. The ref_id is found in the '→ Expand: ref:capsule:<id>' line of each capsule summary.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -13431,7 +13391,7 @@
   },
   {
     "name": "get_cycle_context_all",
-    "description": "Get ALL capsule summaries for the current cycle and ticker. Returns Layer 1 summaries from every agent that ran this cycle. Use this to re-ground yourself on what all agents found without needing individual ref_ids. Does NOT return full raw responses \u2014 use get_cycle_context(ref_id) for that.",
+    "description": "Get ALL capsule summaries for the current cycle and ticker. Returns Layer 1 summaries from every agent that ran this cycle. Use this to re-ground yourself on what all agents found without needing individual ref_ids. Does NOT return full raw responses — use get_cycle_context(ref_id) for that.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -13482,7 +13442,7 @@
   },
   {
     "name": "run_python_script",
-    "description": "[DEPRECATED \u2014 use execute_quant_script instead] Execute Python code in a restricted sandbox.",
+    "description": "[DEPRECATED — use execute_quant_script instead] Execute Python code in a restricted sandbox.",
     "parameters": {
       "type": "object",
       "properties": {},
@@ -14048,6 +14008,55 @@
     },
     "domain": "General",
     "domainKey": "mcp",
+    "system": false
+  },
+  {
+    "name": "html_notes_youtube_search",
+    "description": "Search YouTube for videos. Returns video titles and IDs.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query (e.g. video topic or channel name)"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default 5)",
+          "default": 5
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "domain": "Research & Intelligence",
+    "domainKey": "mcp",
+    "labels": [
+      "tool"
+    ],
+    "system": false
+  },
+  {
+    "name": "html_notes_add_youtube_widget",
+    "description": "Searches YouTube and immediately adds the first matching video to the dashboard canvas as a youtube_player widget.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query or video description"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "domain": "General",
+    "domainKey": "mcp",
+    "labels": [
+      "tool"
+    ],
     "system": false
   },
   {

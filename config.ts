@@ -105,7 +105,7 @@ const defaultPythonPath = isDocker
     ].join(process.platform === "win32" ? ";" : ":");
 
 export const LAZY_TOOL_SERVICE_PORT = Number(process.env.LAZY_TOOL_SERVICE_PORT || "7778");
-export const LAZY_TOOL_SERVICE_URL = process.env.LAZY_TOOL_SERVICE_URL || "http://localhost:7778";
+export const LAZY_TOOL_SERVICE_URL = process.env.LAZY_TOOL_SERVICE_URL || `http://localhost:${LAZY_TOOL_SERVICE_PORT}`;
 export const PYTHON_INTERPRETER = process.env.PYTHON_INTERPRETER || defaultInterpreter;
 export const PYTHON_EXEC_SCRIPT = process.env.PYTHON_EXEC_SCRIPT || defaultExecScript;
 export const PYTHON_CWD = process.env.PYTHON_CWD || defaultCwd;
