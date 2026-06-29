@@ -36,14 +36,14 @@ interface ModelResolutionResult {
 // ── Implementation ───────────────────────────────────────────
 
 /**
- * Regex to match GGUF quantization suffixes.
- * Captures the quant tag (e.g. "Q8_0", "IQ4_XS", "F16", "BF16").
+ * Regex to match quantization/precision suffixes including GGUF, AWQ, GPTQ, and FP/BF precision formats.
+ * Captures tags like "Q8_0", "IQ4_XS", "F16", "BF16", "AWQ", "AWQ-4bit", "GPTQ", "FP8", etc.
  */
-const GGUF_QUANT_SUFFIX_REGEX =
-  /[-_]((?:I?Q[0-9]+(?:_[A-Z0-9]+)*|[BF](?:16|32)))(?:\.gguf)?$/i;
+const QUANT_SUFFIX_REGEX =
+  /[-_]((?:I?Q[0-9]+(?:_[A-Z0-9]+)*|[BF](?:16|32)|AWQ(?:-[0-9]+bit)?|GPTQ(?:-[0-9]+bit)?|FP[0-9]+|BF[0-9]+|INT[0-9]+))(?:\.gguf)?$/i;
 
 /**
- * Extract the base model name from a GGUF model key by stripping the
+ * Extract the base model name from a GGUF/AWQ/FP model key by stripping the
  * quantization suffix. Handles both path-style and flat-style keys.
  *
  * Examples:
@@ -58,9 +58,9 @@ export function parseModelQuant(modelKey: string): ParsedQuant {
     return { base, quant: quant.toUpperCase() };
   }
 
-  // Handle GGUF path-style keys — strip .gguf, then match the quant suffix via regex
+  // Handle path-style keys — strip .gguf, then match the quant suffix via regex
   const stripped = modelKey.replace(/\.gguf$/i, "");
-  const match = stripped.match(GGUF_QUANT_SUFFIX_REGEX);
+  const match = stripped.match(QUANT_SUFFIX_REGEX);
   if (match) {
     const quant = match[1].toUpperCase();
     const base = stripped.slice(0, match.index);
