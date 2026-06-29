@@ -21,7 +21,11 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-export const executeTool = async (toolName: string, toolArguments: Record<string, unknown>): Promise<unknown> => {
+export const executeTool = async (
+  toolName: string, 
+  toolArguments: Record<string, unknown>,
+  context?: { agentName?: string; cycleId?: string; ticker?: string }
+): Promise<unknown> => {
   const argumentsJson = JSON.stringify(toolArguments);
   const cacheKey = crypto.createHash("sha256").update(toolName + argumentsJson).digest("hex");
 
@@ -44,6 +48,9 @@ export const executeTool = async (toolName: string, toolArguments: Record<string
     env.PYTHONPATH = CONFIG.PYTHONPATH;
     env.SKIP_TOOL_USAGE_LOG = "true";
     env.USE_LAZY_TOOL_SERVICE = "false";
+    if (context?.agentName) env.AGENT_NAME = context.agentName;
+    if (context?.cycleId) env.CYCLE_ID = context.cycleId;
+    if (context?.ticker) env.TICKER = context.ticker;
 
     const child = spawn(
       CONFIG.PYTHON_INTERPRETER,
@@ -223,7 +230,7 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
       }
       }
     } else {
-      result = await executeTool(tName, toolArguments);
+      result = await executeTool(tName, toolArguments, { agentName, cycleId, ticker });
     }
     
     const durationMs = Date.now() - startTime;
