@@ -76,6 +76,11 @@ export default class SystemPromptAssembler {
     const agentId = context.agent || AGENT_IDS.CODING;
     const persona = isDirectMode ? null : AgentPersonaRegistry.get(agentId);
     const isSubAgent = !!context.parentAgentConversationId;
+    if (!isSubAgent && context.enabledTools) {
+      context.enabledTools = Array.from(
+        new Set([...context.enabledTools, ...ORCHESTRATOR_ONLY_TOOLS]),
+      );
+    }
 
     const codingFallback =
       !isDirectMode && (!persona || persona.id === AGENT_IDS.CODING);
@@ -327,7 +332,7 @@ export default class SystemPromptAssembler {
     }
 
     // ── 5b. Orchestrator Mode Addendum (when orchestrator tools available) ──
-    if (!isDirectMode && (codingFallback || persona?.usesCodingGuidelines)) {
+    if (!isDirectMode) {
       const resolvedEnabledSet = (() => {
         if (!context.enabledTools) return null;
         const hasPrefixed = context.enabledTools.some(

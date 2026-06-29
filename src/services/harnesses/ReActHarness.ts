@@ -237,9 +237,7 @@ export default class ReActHarness extends BaseAgenticHarness {
             // Feed the identity prompt to providers as a first-class parameter
             // (Google → systemInstruction, Anthropic → payload.system, etc.)
             // so it never needs to exist in the messages array.
-            if (!options.systemPrompt) {
-              options.systemPrompt = assembledPrompt;
-            }
+            options.systemPrompt = assembledPrompt;
           }
 
           if (
@@ -275,7 +273,10 @@ export default class ReActHarness extends BaseAgenticHarness {
           );
         } else {
           passOptions.tools = this.tools.finalTools.filter(
-            (tool: ToolSchema) => tool.name === "describe_tools" || state.loadedTools.has(tool.name),
+            (tool: ToolSchema) => {
+              const cleanName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+              return tool.name === "describe_tools" || state.loadedTools.has(cleanName);
+            },
           );
         }
 

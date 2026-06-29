@@ -11,6 +11,7 @@ import {
   TOOL_NAMES,
   DEFAULT_TOPOLOGY,
   DOMAINS,
+  isCoreDomain,
 } from "@rodrigo-barraza/utilities-library/taxonomy";
 import { TYPES } from "../config.ts";
 import { resolveToolEntriesToSet } from "../utils/resolveToolEntriesToSet.ts";
@@ -263,11 +264,14 @@ export default class AgenticToolResolver {
 
       const shouldBypassOrchestratorTools = !options.isSubAgent;
       finalTools = finalTools.filter((tool) => {
-        if (clientDisabledSet?.has(tool.name)) return false;
-        if (enabledSet.has(tool.name)) return true;
+        const cleanToolName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+        if (clientDisabledSet?.has(tool.name) || clientDisabledSet?.has(cleanToolName)) return false;
+        if (enabledSet.has(tool.name) || enabledSet.has(cleanToolName)) return true;
         if (
           isCoreToolsLocked &&
-          (CORE_AGENTIC_TOOLS.has(tool.name) || systemTools.has(tool.name))
+          (CORE_AGENTIC_TOOLS.has(tool.name) ||
+            systemTools.has(tool.name) ||
+            isCoreDomain(tool.domain || ""))
         )
           return true;
         if (

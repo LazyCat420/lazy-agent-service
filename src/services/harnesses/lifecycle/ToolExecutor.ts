@@ -130,7 +130,8 @@ export async function executeToolBatch(
       if (toolCall.name === "describe_tools" && toolCall.args && Array.isArray(toolCall.args.tool_names)) {
         for (const name of toolCall.args.tool_names) {
           if (typeof name === "string") {
-            state.loadedTools.add(name);
+            const cleanName = name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+            state.loadedTools.add(cleanName);
           }
         }
       }

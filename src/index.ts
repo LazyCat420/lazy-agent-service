@@ -13,8 +13,8 @@ import { setupWebSocket } from "./websocket/index.ts";
 import { authMiddleware } from "./middleware/AuthMiddleware.ts";
 import { requestLoggerMiddleware } from "./middleware/RequestLoggerMiddleware.ts";
 import { COLLECTIONS, CORS_MAX_AGE_SECONDS } from "./constants.ts";
+const PORT = 7778;
 import {
-  PRISM_SERVICE_PORT as PORT,
   MONGO_URI,
   MONGO_DB_NAME,
   MINIO_ENDPOINT,
@@ -70,6 +70,8 @@ import workspacesRouter from "./routes/WorkspacesRoutes.ts";
 import scheduledTasksRouter from "./routes/ScheduledTasksRoutes.ts";
 import promptsRouter from "./routes/PromptsRoutes.ts";
 import webhookRouter from "./routes/WebhookRoutes.ts";
+import executeRouter from "./routes/ExecuteRoutes.ts";
+import { mountMcpRoutes } from "./services/McpAdapter.ts";
 
 const app = express();
 const server = http.createServer(app);
@@ -203,6 +205,11 @@ app.use("/workspaces", workspacesRouter);
 app.use("/scheduled-tasks", scheduledTasksRouter);
 app.use("/prompts", promptsRouter);
 app.use("/webhooks", webhookRouter);
+
+// Tool executor compatibility routes
+app.use("/execute", executeRouter);
+app.use("/charts", express.static("data/charts"));
+mountMcpRoutes(app);
 
 // Error handler (must be last)
 app.use(errorHandler);
@@ -378,72 +385,6 @@ setupWebSocket(wss);
   // Initialize Change Streams (requires replica set — graceful fallback)
   await ChangeStreamService.init();
 
-  // Auto-connect enabled MCP servers
-  try {
-    const { default: MCPClientService } =
-      await import("./services/MCPClientService.js");
-    const { default: AgentPersonaRegistryMCP } =
-      await import("./services/AgentPersonaRegistry.js");
-    const mcpDb = MongoWrapper.getDb(MONGO_DB_NAME);
-    const codingProject =
-      AgentPersonaRegistryMCP.get(AGENT_IDS.CODING)?.project || "coding";
-    if (mcpDb) {
-      // Seed default MCP servers from environment variable if provided
-      if (process.env.DEFAULT_MCP_SERVERS) {
-        try {
-          const defaults = JSON.parse(process.env.DEFAULT_MCP_SERVERS);
-          if (Array.isArray(defaults)) {
-            for (const serverConfig of defaults) {
-              const {
-                name,
-                displayName,
-                transport,
-                url,
-                command,
-                args,
-                env,
-                headers,
-                enabled,
-              } = serverConfig;
-              if (!name || !transport) continue;
-
-              await mcpDb.collection(COLLECTIONS.MCP_SERVERS).updateOne(
-                { project: codingProject, username: "admin", name },
-                {
-                  $setOnInsert: {
-                    createdAt: new Date(),
-                  },
-                  $set: {
-                    displayName: displayName || name,
-                    transport,
-                    url: url || "",
-                    command: command || "",
-                    args: args || [],
-                    env: env || {},
-                    headers: headers || {},
-                    enabled: enabled !== false,
-                    updatedAt: new Date(),
-                  },
-                },
-                { upsert: true },
-              );
-            }
-            logger.info(
-              `Seeded ${defaults.length} default MCP server(s) from environment`,
-            );
-          }
-        } catch (seedError: unknown) {
-          logger.warn(
-            `Failed to parse/seed DEFAULT_MCP_SERVERS: ${errorMessage(seedError)}`,
-          );
-        }
-      }
-
-      await MCPClientService.connectAllFromDB(mcpDb, codingProject, "admin");
-    }
-  } catch (error: unknown) {
-    logger.warn(`MCP auto-connect failed: ${errorMessage(error)}`);
-  }
 
   // ── Scheduled Memory Consolidation ─────────────────
   // Runs every 24 hours, consolidates memories for all active projects and agents.
@@ -594,7 +535,7 @@ setupWebSocket(wss);
     );
   }
 
-  server.listen(PORT, () => {
+  server.listen(PORT, async () => {
     logger.success(`Prism the AI Gateway is running on port ${PORT}`);
     logger.info("Available providers:", listProviders().join(", "));
     // Modality colors matching Prism Client's MODALITY_COLORS
@@ -618,6 +559,74 @@ setupWebSocket(wss);
     }
     for (const endpoint of ENDPOINTS.websocket) {
       logger.info(`  WS    →  ws://localhost:${PORT}${endpoint}`);
+    }
+
+    // Auto-connect enabled MCP servers (run after server is listening)
+    try {
+      const { default: MCPClientService } =
+        await import("./services/MCPClientService.js");
+      const { default: AgentPersonaRegistryMCP } =
+        await import("./services/AgentPersonaRegistry.js");
+      const mcpDb = MongoWrapper.getDb(MONGO_DB_NAME);
+      const codingProject =
+        AgentPersonaRegistryMCP.get(AGENT_IDS.CODING)?.project || "coding";
+      if (mcpDb) {
+        // Seed default MCP servers from environment variable if provided
+        if (process.env.DEFAULT_MCP_SERVERS) {
+          try {
+            const defaults = JSON.parse(process.env.DEFAULT_MCP_SERVERS);
+            if (Array.isArray(defaults)) {
+              for (const serverConfig of defaults) {
+                const {
+                  name,
+                  displayName,
+                  transport,
+                  url,
+                  command,
+                  args,
+                  env,
+                  headers,
+                  enabled,
+                } = serverConfig;
+                if (!name || !transport) continue;
+
+                await mcpDb.collection(COLLECTIONS.MCP_SERVERS).updateOne(
+                  { project: codingProject, username: "admin", name },
+                  {
+                    $setOnInsert: {
+                      createdAt: new Date(),
+                    },
+                    $set: {
+                      displayName: displayName || name,
+                      transport,
+                      url: url || "",
+                      command: command || "",
+                      args: args || [],
+                      env: env || {},
+                      headers: headers || {},
+                      enabled: enabled !== false,
+                      updatedAt: new Date(),
+                    },
+                  },
+                  { upsert: true },
+                );
+              }
+              logger.info(
+                `Seeded ${defaults.length} default MCP server(s) from environment`,
+              );
+            }
+          } catch (seedError: unknown) {
+            logger.warn(
+              `Failed to parse/seed DEFAULT_MCP_SERVERS: ${errorMessage(seedError)}`,
+            );
+          }
+        }
+
+        await MCPClientService.connectAllFromDB(mcpDb, codingProject, "admin");
+        await MCPClientService.connectAllFromDB(mcpDb, "coding", "admin");
+      }
+    } catch (error: unknown) {
+      logger.warn(`MCP auto-connect failed: ${errorMessage(error)}`);
     }
   });
 })();

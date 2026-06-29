@@ -37,7 +37,16 @@ export default {
     }
 
     const schemas = ToolOrchestratorService.getClientToolSchemas() || [];
-    const matched = schemas.filter((schema: { name: string }) => toolNames.includes(schema.name));
+    logger.info(`[describe_tools] Requested names: ${JSON.stringify(toolNames)}. Registered schemas: ${JSON.stringify(schemas.map((s) => s.name))}`);
+    const matched = schemas.filter((schema: { name: string }) => {
+      const cleanSchemaName = schema.name.toLowerCase().replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+      return toolNames.some((reqName) => {
+        const cleanReqName = reqName.toLowerCase().replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+        const isMatch = cleanSchemaName === cleanReqName;
+        logger.info(`[describe_tools] Compare cleanSchemaName: "${cleanSchemaName}" with cleanReqName: "${cleanReqName}" -> Match: ${isMatch}`);
+        return isMatch;
+      });
+    });
 
     logger.info(`[describe_tools] Described ${matched.length}/${toolNames.length} requested tool(s)`);
 

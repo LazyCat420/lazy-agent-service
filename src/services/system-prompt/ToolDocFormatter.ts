@@ -137,7 +137,8 @@ export class ToolDocFormatter {
         const fullDescription = tool.description || "";
 
         // In compact mode or meta list mode, truncate to first sentence only
-        const isLoaded = tool.name === "describe_tools" || loadedTools.has(tool.name);
+        const cleanName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+        const isLoaded = tool.name === "describe_tools" || loadedTools.has(cleanName);
         const description = (compact || !isLoaded)
           ? fullDescription.split(/(?<=[.!?])\s/)[0] || fullDescription
           : fullDescription;

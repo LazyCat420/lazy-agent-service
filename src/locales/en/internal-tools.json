@@ -141,5 +141,11 @@
       "query": "Natural language search query describing what you're looking for. Example: 'MCP connection debugging', 'the session where we fixed WebSocket drops'.",
       "limit": "Maximum number of results to return. Default: 10."
     }
+  },
+  "describe_tools": {
+    "description": "Fetch the full detailed JSON schemas (including parameter structures) for one or more tools. Call this tool when you need to know what arguments a specific tool expects before you invoke it.",
+    "parameters": {
+      "tool_names": "List of tool names to retrieve detailed schemas for."
+    }
   }
 }

@@ -1,7 +1,7 @@
 import { createLogger } from "@rodrigo-barraza/utilities-library/node";
 import { getRequestContext } from "./RequestContext.ts";
 
-const base = createLogger("prism");
+const base = createLogger("lazy-agent");
 
 function buildContextTags(
   project: string,

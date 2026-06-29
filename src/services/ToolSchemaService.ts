@@ -3,8 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import logger from "../logger.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const schemasPath = path.resolve(__dirname, "../../tool_schemas.json");
+const schemasPath = path.resolve(process.cwd(), "tool_schemas.json");
 
 export interface ToolParameterProperty {
   type: string;

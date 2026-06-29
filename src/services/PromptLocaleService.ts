@@ -149,6 +149,19 @@ function interpolateTemplate(
   return interpolatedResult;
 }
 
+function getValueCaseInsensitive(data: LocaleData | undefined, searchKey: string): string | undefined {
+  if (!data) return undefined;
+  if (searchKey in data) return data[searchKey] as string;
+  
+  const lowerSearchKey = searchKey.toLowerCase();
+  for (const [k, v] of Object.entries(data)) {
+    if (k.toLowerCase() === lowerSearchKey) {
+      return v as string;
+    }
+  }
+  return undefined;
+}
+
 const PromptLocaleService = {
   get(
     locale: string,
@@ -163,8 +176,8 @@ const PromptLocaleService = {
       : undefined;
 
     const rawValue =
-      (localeData?.[key] as string | undefined) ??
-      (fallbackData?.[key] as string | undefined);
+      getValueCaseInsensitive(localeData, key) ??
+      getValueCaseInsensitive(fallbackData, key);
 
     if (rawValue === undefined) {
       logger.warn(

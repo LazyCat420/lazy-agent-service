@@ -38,7 +38,7 @@ function parseProviderInstances(envPrefix: string): ProviderInstance[] {
 }
 
 // ── Server ─────────────────────────────────────────────────────
-export const PRISM_SERVICE_PORT = process.env.PRISM_SERVICE_PORT || 7777;
+export const PRISM_SERVICE_PORT = process.env.PRISM_SERVICE_PORT || 7778;
 
 // ── AI Provider API Keys ───────────────────────────────────────
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY;

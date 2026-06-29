@@ -231,11 +231,30 @@ export async function handleSseRequest(
     }
   });
 
+  const keepAliveInterval = setInterval(() => {
+    if (!connectionController.signal.aborted && !res.destroyed && !res.writableEnded) {
+      try {
+        res.write(": keepalive\n\n");
+        const responseWithFlush = res as Response & { flush?: () => void };
+        if (typeof responseWithFlush.flush === "function") {
+          responseWithFlush.flush();
+        } else if (res.socket && !res.socket.destroyed) {
+          res.socket.uncork?.();
+          res.socket.cork?.();
+          res.socket.uncork?.();
+        }
+      } catch (e) {
+        logger.debug(`[SSE] Failed writing keepalive: ${e}`);
+      }
+    }
+  }, 15_000);
+
   try {
     await handler(params, createSseEmitter(res, connectionController.signal), {
       signal: stopController.signal,
     });
   } finally {
+    clearInterval(keepAliveInterval);
     // Cleanup session registry entry
     if (persistOnDisconnect && conversationId) {
       AgentSessionRegistry.cleanup(conversationId);

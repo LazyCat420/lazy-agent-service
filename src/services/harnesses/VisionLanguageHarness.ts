@@ -186,9 +186,7 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
               ...(context.conversationMeta || {}),
               systemPrompt: assembledPrompt,
             };
-            if (!options.systemPrompt) {
-              options.systemPrompt = assembledPrompt;
-            }
+            options.systemPrompt = assembledPrompt;
           }
 
           if (
@@ -224,7 +222,10 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
           );
         } else {
           passOptions.tools = this.tools.finalTools.filter(
-            (tool: ToolSchema) => tool.name === "describe_tools" || state.loadedTools.has(tool.name),
+            (tool: ToolSchema) => {
+              const cleanName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+              return tool.name === "describe_tools" || state.loadedTools.has(cleanName);
+            },
           );
         }
 

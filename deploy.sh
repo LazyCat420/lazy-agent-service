@@ -12,8 +12,8 @@
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-IMAGE_NAME="lazy-tool-service"
-DISPLAY_NAME="Lazy Tool Service"
+IMAGE_NAME="$(basename "$SCRIPT_DIR")"
+DISPLAY_NAME="$(echo "$IMAGE_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++)sub(/./,toupper(substr($i,1,1)),$i)}1')"
 
 # Intercept exit to introduce a delay on successful build exit.
 # This prevents a filesystem race condition in deploy-all.sh

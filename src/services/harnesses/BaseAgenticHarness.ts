@@ -690,6 +690,15 @@ export default class BaseAgenticHarness {
 
     // ── Tool call ────────────────────────────────────────
     if (streamChunk?.type === "toolCall") {
+      if (streamChunk.name) {
+        const resolvedName = this._resolveToolName(streamChunk.name);
+        if (resolvedName && resolvedName !== streamChunk.name) {
+          logger.info(
+            `[AgenticLoop] Resolved raw tool call "${streamChunk.name}" to canonical "${resolvedName}"`,
+          );
+          streamChunk.name = resolvedName;
+        }
+      }
       this._recordFirstToken(pass);
       this._recordTiming(pass);
       if (pass.requestId) {
@@ -776,10 +785,18 @@ export default class BaseAgenticHarness {
       // Schema enforcement
       const toolName = streamChunk.name || "";
       if (!allowedToolNames.has(toolName)) {
-        logger.warn(
-          `[AgenticLoop] Dropped tool call "${toolName}" — not in schema: [${[...allowedToolNames].join(", ")}]`,
-        );
-        return { action: "skip" };
+        if (this.tools.finalTools.some((t) => t.name === toolName)) {
+          logger.info(
+            `[AgenticLoop] Auto-loading registered tool "${toolName}" called directly by LLM`,
+          );
+          this.state.loadedTools.add(toolName);
+          allowedToolNames.add(toolName);
+        } else {
+          logger.warn(
+            `[AgenticLoop] Dropped tool call "${toolName}" — not in schema: [${[...allowedToolNames].join(", ")}]`,
+          );
+          return { action: "skip" };
+        }
       }
 
       const standardToolCallId =
@@ -1324,6 +1341,34 @@ export default class BaseAgenticHarness {
       state.displaySegments.push({ type: "tools", toolIds: [toolCallId] });
       state.lastDisplaySegType = "tools";
     }
+  }
+
+  private _resolveToolName(toolName: string): string | undefined {
+    // 1. Direct match
+    if (this.tools.finalTools.some((t) => t.name === toolName)) {
+      return toolName;
+    }
+
+    const cleanName = toolName.toLowerCase().replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+
+    // 2. Exact match after stripping MCP prefixes
+    for (const t of this.tools.finalTools) {
+      const cleanT = t.name.toLowerCase().replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+      if (cleanT === cleanName) {
+        return t.name;
+      }
+    }
+
+    // 3. Match without "get_" or "post_" prefixes
+    const cleanWithoutGet = cleanName.replace(/^(get_|post_|execute_)/, "");
+    for (const t of this.tools.finalTools) {
+      const cleanT = t.name.toLowerCase().replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "").replace(/^(get_|post_|execute_)/, "");
+      if (cleanT === cleanWithoutGet) {
+        return t.name;
+      }
+    }
+
+    return undefined;
   }
 
   private async _handleImageChunk(
