@@ -21,7 +21,7 @@ import type { TokenUsage, ToolCallEntry } from "../types/admin.ts";
 // long-running LLM streaming connections.
 export const STREAMING_DISPATCHER = new Agent({
   bodyTimeout: 0,
-  headersTimeout: 300_000,
+  headersTimeout: 1_800_000,
   keepAliveTimeout: 30_000,
 });
 

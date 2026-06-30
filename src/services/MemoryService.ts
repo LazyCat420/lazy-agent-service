@@ -184,6 +184,7 @@ async function extractFactsFromConversation(
     result = await provider.generateText(aiMessages, extractionModel, {
       maxTokens: 1000,
       temperature: 0.1,
+      thinkingEnabled: false,
     });
   } catch (error: unknown) {
     success = false;

@@ -224,6 +224,7 @@ export default class CompactionService {
         {
           maxTokens: COMPACT_MAX_OUTPUT_TOKENS,
           temperature: 0.1,
+          thinkingEnabled: false,
         },
       );
     } catch (error: unknown) {
