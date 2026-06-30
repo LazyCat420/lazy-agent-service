@@ -10,12 +10,29 @@ import path from "path";
 import logger from "../utils/logger.ts";
 
 export default class McpAdapter {
-  private server: Server;
-  private transport: SSEServerTransport | null = null;
+  private sessions = new Map<
+    string,
+    { server: Server; transport: SSEServerTransport }
+  >();
   private toolsCache: any[] | null = null;
 
-  constructor() {
-    this.server = new Server(
+  constructor() {}
+
+  private async loadTools() {
+    if (this.toolsCache) return this.toolsCache;
+    try {
+      const schemaPath = path.resolve(process.cwd(), "tool_schemas.json");
+      const data = await fs.readFile(schemaPath, "utf-8");
+      this.toolsCache = JSON.parse(data);
+      return this.toolsCache || [];
+    } catch (e) {
+      logger.error(`[McpAdapter] Failed to load tool_schemas.json: ${e}`);
+      return [];
+    }
+  }
+
+  private createMcpServer(): Server {
+    const server = new Server(
       {
         name: "lazy-tool-service",
         version: "1.0.0",
@@ -27,25 +44,7 @@ export default class McpAdapter {
       }
     );
 
-    this.setupHandlers();
-  }
-
-  private async loadTools() {
-    if (this.toolsCache) return this.toolsCache;
-    try {
-      // tool_schemas.json is located in the root of the repo, or next to package.json
-      const schemaPath = path.resolve(process.cwd(), "tool_schemas.json");
-      const data = await fs.readFile(schemaPath, "utf-8");
-      this.toolsCache = JSON.parse(data);
-      return this.toolsCache || [];
-    } catch (e) {
-      logger.error(`[McpAdapter] Failed to load tool_schemas.json: ${e}`);
-      return [];
-    }
-  }
-
-  private setupHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
       const rawTools = await this.loadTools();
       const mcpTools = rawTools.map((t: any) => ({
         name: t.name,
@@ -58,10 +57,8 @@ export default class McpAdapter {
       };
     });
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
       logger.info(`[McpAdapter] Received tool call for ${request.params.name}`);
-      // The actual execution is handled dynamically by html-notes/app/main.py interception,
-      // so we just return a success placeholder if Prism tries to execute it directly.
       return {
         content: [
           {
@@ -71,20 +68,36 @@ export default class McpAdapter {
         ],
       };
     });
+
+    return server;
   }
 
   public async handleSse(req: Request, res: Response) {
-    logger.info("[McpAdapter] New SSE connection established");
-    this.transport = new SSEServerTransport("/mcp/messages", res);
-    await this.server.connect(this.transport);
+    logger.info("[McpAdapter] New SSE connection request received");
+    const transport = new SSEServerTransport("/mcp/messages", res);
+    const server = this.createMcpServer();
+
+    this.sessions.set(transport.sessionId, { server, transport });
+
+    res.on("close", () => {
+      logger.info(`[McpAdapter] SSE connection closed for session: ${transport.sessionId}`);
+      this.sessions.delete(transport.sessionId);
+      server.close().catch(() => {});
+    });
+
+    await server.connect(transport);
   }
 
   public async handleMessage(req: Request, res: Response) {
-    if (!this.transport) {
-      logger.error("[McpAdapter] Received message but no SSE transport is active");
-      res.status(500).json({ error: "No active SSE transport" });
+    const sessionId = req.query.sessionId as string;
+    const session = this.sessions.get(sessionId);
+
+    if (!session) {
+      logger.error(`[McpAdapter] Received message for invalid or expired session: ${sessionId}`);
+      res.status(400).json({ error: "Invalid or expired session" });
       return;
     }
-    await this.transport.handlePostMessage(req, res);
+
+    await session.transport.handlePostMessage(req, res, req.body);
   }
 }
