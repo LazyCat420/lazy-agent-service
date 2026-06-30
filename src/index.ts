@@ -1,5 +1,5 @@
 import { AGENT_IDS } from "@rodrigo-barraza/utilities-library/taxonomy";
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import http from "http";
 import { WebSocketServer } from "ws";
@@ -31,6 +31,9 @@ import {
   installShutdownHandlers,
   registerCleanup,
 } from "./utils/CleanupRegistry.ts";
+import McpAdapter from "./services/McpAdapter.ts";
+
+const mcpAdapter = new McpAdapter();
 
 // Install process-level shutdown handlers (SIGTERM, SIGINT → runCleanupFunctions)
 installShutdownHandlers();
@@ -206,8 +209,12 @@ app.use("/prompts", promptsRouter);
 app.use("/webhooks", webhookRouter);
 
 // Tool executor compatibility routes
-
-
+app.get("/mcp/sse", (req: Request, res: Response, next: NextFunction) => {
+  mcpAdapter.handleSse(req, res).catch(next);
+});
+app.post("/mcp/messages", (req: Request, res: Response, next: NextFunction) => {
+  mcpAdapter.handleMessage(req, res).catch(next);
+});
 import { PrismProxyService } from "./services/prism/PrismProxyService.js";
 app.use("/prism-proxy", async (req: Request, res: Response) => {
   await PrismProxyService.handle(req, res);

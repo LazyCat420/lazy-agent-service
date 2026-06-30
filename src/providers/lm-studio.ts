@@ -27,7 +27,7 @@ import {
 } from "../../config.ts";
 import { TYPES, getDefaultModels } from "../config.ts";
 // Default MCP server URL for ephemeral tool integrations (vault-resolved)
-const DEFAULT_MCP_SERVER_URL = TOOLS_SERVICE_URL;
+const DEFAULT_MCP_SERVER_URL = "http://lazy-tool-service:7778";
 import {
   convertToolsToOpenAI,
   buildPayloadParams,
