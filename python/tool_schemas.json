@@ -14036,28 +14036,7 @@
       "tool"
     ],
     "system": false
-  },
-  {
-    "name": "html_notes_add_youtube_widget",
-    "description": "Searches YouTube and immediately adds the first matching video to the dashboard canvas as a youtube_player widget.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "The search query or video description"
-        }
-      },
-      "required": [
-        "query"
-      ]
-    },
-    "domain": "General",
-    "domainKey": "mcp",
-    "labels": [
-      "tool"
-    ],
-    "system": false
+
   },
   {
     "name": "music_player_remove_node",
