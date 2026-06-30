@@ -47,10 +47,20 @@ PRE_BUILD() {
   cp "${SCRIPT_DIR}/tool_schemas.json" "${SCRIPT_DIR}/python/tool_schemas.json"
 }
 
+if [ "$IMAGE_NAME" = "lazy-tool-service" ]; then
+  PORT=5591
+else
+  PORT=7778
+fi
+
 EXTRA_SSH_SYNC() {
   info "Syncing projects.json..."
   cat "${SCRIPT_DIR}/projects.json" | ssh "$DEPLOY_SSH_HOST" "cat > '${DEPLOY_COMPOSE_DIR}/projects.json'"
   ok "projects.json synced"
+
+  info "Appending IMAGE_NAME and PORT to remote NAS .env..."
+  ssh "$DEPLOY_SSH_HOST" "echo 'IMAGE_NAME=${IMAGE_NAME}' >> '${DEPLOY_COMPOSE_DIR}/.env' && echo 'PORT=${PORT}' >> '${DEPLOY_COMPOSE_DIR}/.env'"
+  ok "remote NAS .env updated"
 }
 
 source "${SCRIPT_DIR}/../deploy-kit/lib.sh"
