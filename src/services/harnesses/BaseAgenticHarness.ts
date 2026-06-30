@@ -38,7 +38,7 @@ import {
 } from "@rodrigo-barraza/utilities-library/taxonomy";
 
 import ToolContext from "../ToolContext.ts";
-import InternalToolRegistry from "../local-tools/InternalToolRegistry.ts";
+
 
 import WebhookEventBus from "../WebhookEventBus.ts";
 import ToolOrchestratorService from "../ToolOrchestratorService.ts";
@@ -194,8 +194,7 @@ export default class BaseAgenticHarness {
           tool.name.startsWith("mcp__") ||
           BaseAgenticHarness.CORE_AGENTIC_SET.has(tool.name) ||
           (!isSubAgent &&
-            BaseAgenticHarness.CORE_ORCHESTRATOR_SET.has(tool.name)) ||
-          InternalToolRegistry.has(tool.name)
+            BaseAgenticHarness.CORE_ORCHESTRATOR_SET.has(tool.name))
         );
       },
     ) as unknown as ResolvedTools["finalTools"];
@@ -222,8 +221,7 @@ export default class BaseAgenticHarness {
       (tool) =>
         !previousToolNames.has(tool.name) &&
         !BaseAgenticHarness.CORE_AGENTIC_SET.has(tool.name) &&
-        !BaseAgenticHarness.CORE_ORCHESTRATOR_SET.has(tool.name) &&
-        !InternalToolRegistry.has(tool.name),
+        !BaseAgenticHarness.CORE_ORCHESTRATOR_SET.has(tool.name),
     );
 
     if (currentMessages && newlyAddedToolSchemas.length > 0) {

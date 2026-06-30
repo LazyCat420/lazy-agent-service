@@ -27,8 +27,8 @@ exit() {
 }
 
 PRE_BUILD() {
-  step "Running tool schema updater (add_schemas.cjs)"
-  node "${SCRIPT_DIR}/add_schemas.cjs"
+  step "Copying tool_schemas.json from lazy-tool-service"
+  cp "${SCRIPT_DIR}/../lazy-tool-service/tool_schemas.json" "${SCRIPT_DIR}/tool_schemas.json"
 
   step "Cleaning and staging Python files for Docker build..."
   rm -rf "${SCRIPT_DIR}/python"

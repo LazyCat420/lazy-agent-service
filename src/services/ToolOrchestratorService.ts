@@ -1,5 +1,5 @@
 import { TOOLS_SERVICE_URL } from "../../config.ts";
-import MCPClientService from "./MCPClientService.ts";
+
 import AgentPersonaRegistry from "./AgentPersonaRegistry.ts";
 import logger from "../utils/logger.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
@@ -21,14 +21,13 @@ import {
   TOOL_API_HEALTH_TIMEOUT_MS,
   FILE_CATEGORIES,
 } from "../constants.ts";
-import InternalToolRegistry from "./local-tools/InternalToolRegistry.ts";
+
 import SettingsService from "./SettingsService.ts";
 import PromptLocaleService from "./PromptLocaleService.ts";
 import {
   injectVoiceCatalog,
   TTS_VOICE_CATALOG_PLACEHOLDER,
 } from "../utils/VoiceCatalog.ts";
-import { Bm25ToolIndex } from "@rodrigo-barraza/utilities-library/search";
 import type { OrchestratorContext, TeamMember } from "../types/orchestrator.ts";
 
 // ────────────────────────────────────────────────────────────
@@ -914,7 +913,7 @@ export default class ToolOrchestratorService {
 
     return [
       ...resolvedSchemas,
-      ...InternalToolRegistry.getSchemas(activeLocale),
+
       ...getOrchestratorToolSchemas(defaultTopology, activeLocale),
     ];
   }
@@ -922,8 +921,7 @@ export default class ToolOrchestratorService {
   /** Client-facing schemas (with domain/domainKey/dataSource, no endpoint) — for Prism Client UI */
   static getClientToolSchemas(defaultTopology?: string, locale?: string): ToolSchemaFull[] {
     if (isResolvingClientSchemas) {
-      // Break recursion cycle when internal tool getters (e.g. discover_and_enable_tools)
-      // fetch schemas dynamically from this same catalog.
+      // Break recursion cycle when internal tool getters
       return cachedClientSchemas;
     }
     isResolvingClientSchemas = true;
@@ -957,16 +955,9 @@ export default class ToolOrchestratorService {
         domainKey: "core_orchestrator",
         system: true,
       }));
+      cachedClientSchemas.push(...orchestratorClient);
 
-      const internalClient = InternalToolRegistry.getClientSchemas(activeLocale).map(
-        (tool) => ({
-          ...tool,
-          domainKey: resolveDomainKey(
-            tool.domain || DOMAINS.CORE_HARNESS.displayName,
-          ),
-          system: isCoreDomain(tool.domain || DOMAINS.CORE_HARNESS.displayName),
-        }),
-      );
+
 
       const localeClientSchemas = (activeLocale && activeLocale !== "en" && localizedClientSchemasCache.has(activeLocale))
         ? localizedClientSchemasCache.get(activeLocale)!
@@ -996,9 +987,8 @@ export default class ToolOrchestratorService {
 
       return [
         ...clientSchemasEnriched,
-        ...internalClient,
         ...orchestratorClient,
-        ...mcpClient,
+
       ];
     } finally {
       isResolvingClientSchemas = false;
@@ -1218,15 +1208,7 @@ export default class ToolOrchestratorService {
     args: Record<string, unknown> = {},
     context: ToolExecutionContext = {},
   ) {
-    // ── Internal tools — delegated to InternalToolRegistry ──────
-    if (InternalToolRegistry.has(name)) {
-      return InternalToolRegistry.execute(name, args, {
-        ...context,
-        agentConversationId: context.agentConversationId || undefined,
-        project: context.project || undefined,
-        username: context.username || undefined,
-      });
-    }
+
 
     // Route orchestrator tools to OrchestratorService (Prism-local)
     if (ORCHESTRATOR_ONLY_TOOLS.includes(name)) {
@@ -1237,17 +1219,9 @@ export default class ToolOrchestratorService {
       );
     }
 
-    // Route MCP tools to MCPClientService
-    if (MCPClientService.isMCPTool(name)) {
-      return ToolOrchestratorService.executeMCPTool(name, args);
-    }
 
-    // Intercept search_tools to merge MCP tool results from connected servers.
-    // Tools-api only knows about its own catalog — MCP tools live in Prism's
-    // MCPClientService memory and must be merged locally.
-    if (name === TOOL_NAMES.SEARCH_TOOLS) {
-      return ToolOrchestratorService.executeSearchToolsWithMCP(args, context);
-    }
+
+
 
     // Inject reference images from conversation context into generate_image args.
     // The tools-api endpoint needs these as explicit args since it doesn't have
@@ -1570,119 +1544,13 @@ export default class ToolOrchestratorService {
     fullName: string,
     args: Record<string, unknown> = {},
   ) {
-    const parsed = MCPClientService.parseMCPToolName(fullName);
-    if (!parsed) {
-      return { error: `Invalid MCP tool name: ${fullName}` };
-    }
-    return MCPClientService.callTool(parsed.serverName, parsed.toolName, args);
+    return { error: "MCP support is disabled" };
   }
+
   static getMCPToolSchemas() {
-    return MCPClientService.getToolSchemas();
+    return [];
   }
 
-  /**
-   * Execute search_tools with MCP tool merging.
-   * Calls tools-api for the built-in catalog search, then scores connected
-   * MCP server tools locally using the same heuristics as AgenticToolSearchService
-   * and merges them into a unified result set.
-   */
-  static async executeSearchToolsWithMCP(
-    args: Record<string, unknown>,
-    context: ToolExecutionContext,
-  ): Promise<Record<string, unknown>> {
-    const toolsApiResult = (await executeToolGeneric(
-      TOOL_NAMES.SEARCH_TOOLS,
-      args,
-      context,
-    )) as Record<string, unknown>;
-
-    const mcpSchemas = MCPClientService.getToolSchemas();
-    if (mcpSchemas.length === 0) return toolsApiResult;
-
-    const queryText =
-      typeof args.query === "string" ? args.query.trim() : "";
-    const domainFilter =
-      typeof args.domain === "string" ? args.domain.toLowerCase() : null;
-    const limit =
-      typeof args.limit === "number"
-        ? Math.min(Math.max(1, args.limit), 50)
-        : 20;
-
-    if (!queryText && !domainFilter) return toolsApiResult;
-
-    // Filter MCP schemas by domain when a domain filter is specified
-    let candidateSchemas = mcpSchemas;
-    if (domainFilter) {
-      candidateSchemas = mcpSchemas.filter((schema) => {
-        const schemaDomain = (
-          schema.domain || `Model Context Protocol: ${schema._mcpServer}`
-        ).toLowerCase();
-        return (
-          schemaDomain === domainFilter || schemaDomain.includes(domainFilter)
-        );
-      });
-    }
-
-    // Score matches using BM25 over name + description + parameter names
-    const searchIndex = new Bm25ToolIndex(candidateSchemas);
-    const indexResults = searchIndex.search(queryText, limit);
-
-    if (indexResults.length === 0) return toolsApiResult;
-
-    // Build enabled set for isEnabled annotation (mirrors AgenticToolSearchService)
-    const enabledToolsArray = context.enabledTools;
-    const hasEnabledContext =
-      Array.isArray(enabledToolsArray) &&
-      enabledToolsArray.length > 0 &&
-      !enabledToolsArray.includes("*");
-    const enabledToolsSet = hasEnabledContext
-      ? new Set(enabledToolsArray)
-      : null;
-
-    const mcpMatches = indexResults.map((matchEntry) => ({
-      name: matchEntry.document.name,
-      description: matchEntry.document.description,
-      domain:
-        matchEntry.document.domain ||
-        `Model Context Protocol: ${(matchEntry.document as unknown as Record<string, unknown>)._mcpServer}`,
-      parameters: matchEntry.document.parameters || null,
-      ...(enabledToolsSet && {
-        isEnabled: enabledToolsSet.has(matchEntry.document.name),
-      }),
-    }));
-
-    // Merge with tools-api results
-    const existingMatches = Array.isArray(toolsApiResult.matches)
-      ? (toolsApiResult.matches as Record<string, unknown>[])
-      : [];
-    const existingTotal =
-      typeof toolsApiResult.total === "number"
-        ? toolsApiResult.total
-        : existingMatches.length;
-    const mergedMatches = [...existingMatches, ...mcpMatches].slice(0, limit);
-
-    const hasDisabledMcpMatches =
-      enabledToolsSet &&
-      mcpMatches.some((matchEntry) => !enabledToolsSet.has(matchEntry.name));
-
-    return {
-      ...toolsApiResult,
-      matches: mergedMatches,
-      total: existingTotal + indexResults.length,
-      ...(hasDisabledMcpMatches &&
-        !toolsApiResult.action_required &&
-        !toolsApiResult.actionRequired && (() => {
-          const nudgeText = PromptLocaleService.get(
-            PromptLocaleService.getDefaultLocale(),
-            "internal-tools-runtime.shared.searchActionNudgeDisabled",
-          );
-          return {
-            actionRequired: nudgeText,
-            action_required: nudgeText,
-          };
-        })()),
-    };
-  }
 
   /**
    * Map of tool names to their streaming SSE endpoint paths.

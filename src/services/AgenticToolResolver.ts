@@ -4,7 +4,7 @@ import logger from "../utils/logger.ts";
 import AgentPersonaRegistry from "./AgentPersonaRegistry.ts";
 import ToolContext from "./ToolContext.ts";
 
-import InternalToolRegistry from "./local-tools/InternalToolRegistry.ts";
+
 import {
   CORE_AGENTIC_TOOLS as CORE_AGENTIC_TOOLS_LIST,
   CORE_ORCHESTRATOR_TOOLS as CORE_ORCHESTRATOR_TOOLS_LIST,
@@ -63,12 +63,9 @@ const CORE_ORCHESTRATOR_TOOLS = new Set<string>(CORE_ORCHESTRATOR_TOOLS_LIST);
 /** Core agentic tools bypass the enabledTools filter (always available to all agents as part of the core cognitive architecture) */
 const CORE_AGENTIC_TOOLS = new Set<string>(CORE_AGENTIC_TOOLS_LIST);
 
-/** Prism-local tools bypass the enabledTools filter (always available to all agents) — derived from registry */
-let _prismLocalCache: Set<string> | null = null;
 const PRISM_LOCAL_TOOL_NAMES = {
   has(name: string): boolean {
-    if (!_prismLocalCache) _prismLocalCache = InternalToolRegistry.getNames();
-    return _prismLocalCache.has(name);
+    return false;
   },
 };
 
