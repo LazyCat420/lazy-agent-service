@@ -1,10 +1,6 @@
 import logging
 from bs4 import BeautifulSoup
 from typing import Dict, Any
-import httpx
-import urllib.parse
-import re
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -159,38 +155,3 @@ def render_component(component_type: str, title: str, data: Dict[str, Any] = Non
         "data": data or {},
         "rendered_html": rendered_html
     }
-
-def canvas_add_widget(widget_type: str, config: Dict[str, Any] = None, widget_id: str = "") -> Dict[str, Any]:
-    """
-    Dummy handler to satisfy MCP execution loop. The actual DOM insertion
-    is intercepted by the frontend's SSE stream handler.
-    """
-    return {
-        "success": True,
-        "message": f"Widget {widget_type} queued for injection."
-    }
-
-async def html_notes_youtube_search(query: str, limit: int = 5) -> Dict[str, Any]:
-    """Search YouTube and return a list of video dicts containing video_id and title."""
-    try:
-        url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
-            html = resp.text
-            matches = re.findall(r'"videoRenderer":\{.*?"videoId":"([a-zA-Z0-9_-]{11})",.*?"title":\{"runs":\[\{"text":"(.*?)"\}\]\}', html)
-            results = []
-            seen = set()
-            for vid, title in matches:
-                if vid not in seen:
-                    seen.add(vid)
-                    try:
-                        clean_title = json.loads('"' + title + '"')
-                    except Exception:
-                        clean_title = title.replace('\\"', '"')
-                    results.append({"video_id": vid, "title": clean_title})
-                if len(results) >= limit:
-                    break
-            return {"results": results, "count": len(results)}
-    except Exception as e:
-        logger.error(f"YouTube search error: {e}")
-        return {"error": str(e), "results": []}

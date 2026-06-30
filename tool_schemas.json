@@ -13910,8 +13910,7 @@
         }
       },
       "required": [
-        "widget_type",
-        "widget_id"
+        "widget_type"
       ]
     },
     "domain": "General",

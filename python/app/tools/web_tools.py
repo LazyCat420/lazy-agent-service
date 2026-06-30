@@ -1,9 +1,5 @@
 import logging
 import json
-import httpx
-import urllib.parse
-import re
-from typing import Dict, Any
 from app.tools.registry import registry
 from app.services.scraper_client import scraper_client
 
@@ -108,60 +104,3 @@ async def hermes_web_research(query: str) -> str:
     # Fallback/compatibility definition
     res = await search_web(query)
     return str(res)
-
-@registry.register(
-    name="canvas_add_widget",
-    description="Add a pre-built smart widget (Lego block) to the dashboard. The frontend already has the logic, you just configure the starting state.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "widget_type": {"type": "string"},
-            "widget_id": {"type": "string"},
-            "config": {"type": "object"}
-        },
-        "required": ["widget_type"]
-    }
-)
-async def canvas_add_widget(widget_type: str, config: Dict[str, Any] = None, widget_id: str = "") -> str:
-    """Dummy handler for widget addition - intercepted by frontend"""
-    return json.dumps({
-        "success": True,
-        "message": f"Widget {widget_type} queued for injection."
-    })
-
-@registry.register(
-    name="html_notes_youtube_search",
-    description="Search YouTube for videos. Returns video titles and IDs.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "The search query"},
-            "limit": {"type": "integer", "description": "Maximum number of results to return", "default": 5}
-        },
-        "required": ["query"]
-    }
-)
-async def html_notes_youtube_search(query: str, limit: int = 5) -> str:
-    """Search YouTube and return a list of video dicts containing video_id and title."""
-    try:
-        url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
-            html = resp.text
-            matches = re.findall(r'"videoRenderer":\{.*?"videoId":"([a-zA-Z0-9_-]{11})",.*?"title":\{"runs":\[\{"text":"(.*?)"\}\]\}', html)
-            results = []
-            seen = set()
-            for vid, title in matches:
-                if vid not in seen:
-                    seen.add(vid)
-                    try:
-                        clean_title = json.loads('"' + title + '"')
-                    except Exception:
-                        clean_title = title.replace('\\"', '"')
-                    results.append({"video_id": vid, "title": clean_title})
-                if len(results) >= limit:
-                    break
-            return json.dumps({"results": results, "count": len(results)})
-    except Exception as e:
-        logger.error(f"YouTube search error: {e}")
-        return json.dumps({"error": str(e), "results": []})
