@@ -3,5 +3,6 @@ from app.tools import finance_tools
 from app.tools import trading_tools
 from app.tools import whiteboard_tools
 from app.tools import web_tools
+from app.tools import vllm_vision_tools
 
 __all__ = ["registry", "PermissionLevel"]
