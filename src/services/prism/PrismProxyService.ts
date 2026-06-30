@@ -46,9 +46,13 @@ export class PrismProxyService {
         this.registerSession(conversationId, originalEnabledTools);
       }
 
-      // Bypass prism-service's internal filter by enabling ALL tools
-      const allTools = getToolSchemas().map((s) => s.name);
-      body.enabledTools = allTools;
+      // Bypass prism-service's internal filter by enabling ALL tools only if tools were requested
+      if (originalEnabledTools.length === 0) {
+        body.enabledTools = [];
+      } else {
+        const allTools = getToolSchemas().map((s) => s.name);
+        body.enabledTools = allTools;
+      }
     }
 
     // Apply Qwen non-leading system message rewrite patch (workaround for Qwen chat template constraint in vLLM)
