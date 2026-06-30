@@ -155,3 +155,66 @@ def render_component(component_type: str, title: str, data: Dict[str, Any] = Non
         "data": data or {},
         "rendered_html": rendered_html
     }
+
+from lazycat.tool_registry import registry, PermissionLevel
+import httpx
+import urllib.parse
+import json
+import re
+
+@registry.register(
+    name="html_notes_youtube_search",
+    description="Search YouTube for videos. Returns a list of video dictionaries containing video_id and title. Use this to find a video_id before adding a youtube_player widget.",
+    permission=PermissionLevel.READ_ONLY,
+    tier=0,
+    tags=["youtube", "video", "search", "html-notes"]
+)
+async def html_notes_youtube_search(query: str, limit: int = 5) -> Dict[str, Any]:
+    """Search YouTube and return a list of video dicts containing video_id and title."""
+    try:
+        url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+            html_text = resp.text
+            matches = re.findall(r'"videoRenderer":\{.*?"videoId":"([a-zA-Z0-9_-]{11})",.*?"title":\{"runs":\[\{"text":"(.*?)"\}\]\}', html_text)
+            
+            results = []
+            seen = set()
+            for vid, title in matches:
+                if vid not in seen:
+                    seen.add(vid)
+                    try:
+                        clean_title = json.loads('"' + title + '"')
+                    except Exception:
+                        clean_title = title
+                    results.append({"video_id": vid, "title": clean_title})
+                    if len(results) >= limit:
+                        break
+            
+            return {
+                "success": True,
+                "query": query,
+                "results": results,
+                "message": f"Found {len(results)} videos." if results else "No videos found."
+            }
+    except Exception as e:
+        logger.error(f"html_notes_youtube_search error: {e}")
+        return {"success": False, "error": str(e), "results": []}
+
+@registry.register(
+    name="canvas_add_widget",
+    description="Add a pre-built widget to the dashboard. Valid types: 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player', 'youtube_player'. Provide a unique widget_id and config.",
+    permission=PermissionLevel.WRITE_ONLY,
+    tier=0,
+    tags=["canvas", "widget", "html-notes"]
+)
+def canvas_add_widget(widget_type: str, widget_id: str, config: Dict[str, Any] = {}) -> Dict[str, Any]:
+    """
+    Called by the agent to add a new widget to the HTML-Notes dashboard.
+    The response is intercepted by the HTML-Notes backend which processes the widget injection via SSE stream.
+    """
+    return {
+        "success": True, 
+        "message": f"Successfully queued widget {widget_id} of type {widget_type} to be added."
+    }
+

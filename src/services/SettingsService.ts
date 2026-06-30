@@ -83,8 +83,8 @@ const DEFAULTS: SettingsData = {
   creative: {
     imageProvider: PROVIDERS.GOOGLE,
     imageModel: MODELS.GEMINI_3_PRO_IMAGE.name,
-    visionProvider: PROVIDERS.GOOGLE,
-    visionModel: MODELS.GEMINI_35_FLASH.name,
+    visionProvider: PROVIDERS.VLLM,
+    visionModel: "qwen3-vl-235b-a22b-instruct",
     textToSpeechProvider: PROVIDERS.ELEVENLABS,
     textToSpeechModel: "",
     speechToTextProvider: PROVIDERS.OPENAI,
@@ -141,7 +141,21 @@ const SettingsService = {
     section: K,
   ): Promise<SettingsData[K]> {
     const settings = await this.get();
-    return settings[section] || DEFAULTS[section];
+    const sectionData = settings[section] || DEFAULTS[section];
+
+    // Runtime migration: Override legacy LM Studio Qwen vision configs to VLLM
+    if (section === "creative" && sectionData) {
+      const creative = sectionData as unknown as NonNullable<SettingsData["creative"]>;
+      if (
+        creative.visionProvider === PROVIDERS.LM_STUDIO &&
+        creative.visionModel?.toLowerCase().includes("qwen")
+      ) {
+        creative.visionProvider = PROVIDERS.VLLM;
+        creative.visionModel = "qwen3-vl-235b-a22b-instruct";
+      }
+    }
+
+    return sectionData;
   },
   async update(data: Partial<SettingsData>) {
     const collection = MongoWrapper.getCollection(
