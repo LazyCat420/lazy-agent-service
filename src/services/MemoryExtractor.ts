@@ -1,6 +1,8 @@
 import { AGENT_IDS } from "@rodrigo-barraza/utilities-library/taxonomy";
 import crypto from "crypto";
 import { getProvider } from "../providers/index.ts";
+import { getInstancesByType } from "../providers/instance-registry.ts";
+import { resolveModelForInstances } from "../utils/ModelResolution.ts";
 import MemoryService, { CODING_MEMORY_TYPES } from "./MemoryService.ts";
 import MemoryConsolidationService from "./MemoryConsolidationService.ts";
 import PromptLocaleService from "./PromptLocaleService.ts";
@@ -158,7 +160,34 @@ export default class MemoryExtractor {
         return [];
       }
 
-      const provider = getProvider(extractionProvider);
+      let resolvedModel = extractionModel;
+      let targetProviderId = extractionProvider;
+
+      let siblings = getInstancesByType(extractionProvider);
+      let modelRes = await resolveModelForInstances(resolvedModel, siblings);
+      let usable = modelRes.usable;
+      let modelOverrides = modelRes.modelOverrides;
+
+      if (usable.length === 0 && extractionProvider.startsWith("vllm")) {
+        const otherProvider = extractionProvider === "vllm" ? "vllm-2" : "vllm";
+        const otherSiblings = getInstancesByType(otherProvider);
+        const otherRes = await resolveModelForInstances(resolvedModel, otherSiblings);
+        if (otherRes.usable.length > 0) {
+          usable = otherRes.usable;
+          modelOverrides = otherRes.modelOverrides;
+          targetProviderId = otherProvider;
+        }
+      }
+
+      if (usable.length > 0) {
+        targetProviderId = usable[0].id;
+        const override = modelOverrides.get(targetProviderId);
+        if (override) {
+          resolvedModel = override;
+        }
+      }
+
+      const provider = getProvider(targetProviderId);
 
       // Build conversation text (compact format to save tokens)
       const conversationText = messages
@@ -189,7 +218,7 @@ export default class MemoryExtractor {
       let extractionError: string | null = null;
 
       try {
-        result = await provider.generateText(aiMessages, extractionModel, {
+        result = await provider.generateText(aiMessages, resolvedModel, {
           maxTokens: 1000,
           temperature: 0.1,
           thinkingEnabled: false,

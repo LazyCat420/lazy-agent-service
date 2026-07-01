@@ -1,5 +1,7 @@
 import crypto from "crypto";
 import { getProvider } from "../../providers/index.ts";
+import { getInstancesByType } from "../../providers/instance-registry.ts";
+import { resolveModelForInstances } from "../../utils/ModelResolution.ts";
 import SettingsService from "../SettingsService.ts";
 import RequestLogger from "../RequestLogger.ts";
 import logger from "../../utils/logger.ts";
@@ -217,10 +219,37 @@ export default class CompactionService {
     let compactionError: string | null = null;
 
     try {
-      const provider = getProvider(compactionProvider);
+      let resolvedModel = compactionModel;
+      let targetProviderId = compactionProvider;
+
+      let siblings = getInstancesByType(compactionProvider);
+      let modelRes = await resolveModelForInstances(resolvedModel, siblings);
+      let usable = modelRes.usable;
+      let modelOverrides = modelRes.modelOverrides;
+
+      if (usable.length === 0 && compactionProvider.startsWith("vllm")) {
+        const otherProvider = compactionProvider === "vllm" ? "vllm-2" : "vllm";
+        const otherSiblings = getInstancesByType(otherProvider);
+        const otherRes = await resolveModelForInstances(resolvedModel, otherSiblings);
+        if (otherRes.usable.length > 0) {
+          usable = otherRes.usable;
+          modelOverrides = otherRes.modelOverrides;
+          targetProviderId = otherProvider;
+        }
+      }
+
+      if (usable.length > 0) {
+        targetProviderId = usable[0].id;
+        const override = modelOverrides.get(targetProviderId);
+        if (override) {
+          resolvedModel = override;
+        }
+      }
+
+      const provider = getProvider(targetProviderId);
       result = await provider.generateText(
         summarizationMessages,
-        compactionModel,
+        resolvedModel,
         {
           maxTokens: COMPACT_MAX_OUTPUT_TOKENS,
           temperature: 0.1,
