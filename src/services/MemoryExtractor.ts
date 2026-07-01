@@ -73,6 +73,8 @@ interface MemoryExtractionContext {
   agent?: string | null;
   toolCalls?: ToolCall[];
   emit?: EmitFunction | null;
+  activeProviderName?: string;
+  activeResolvedModel?: string;
 }
 
 interface MemorySettingsSection {
@@ -113,6 +115,8 @@ export default class MemoryExtractor {
     agent,
     toolCalls,
     emit,
+    activeProviderName,
+    activeResolvedModel,
   }: MemoryExtractionContext): Promise<StoredMemory[]> {
     if (!messages || messages.length < MIN_MESSAGES_FOR_EXTRACTION) {
       logger.info(
@@ -136,21 +140,24 @@ export default class MemoryExtractor {
     }
 
     try {
-      // ── Resolve extraction model from settings ────────────────
-      let extractionProvider: string | undefined;
-      let extractionModel: string | undefined;
-      try {
-        const memorySettings = (await SettingsService.getSection(
-          "memory",
-        )) as MemorySettingsSection;
-        extractionProvider = memorySettings.extractionProvider;
-        extractionModel = memorySettings.extractionModel;
-      } catch {
-        // Settings not configured — skip extraction silently
-        logger.info(
-          "[MemoryExtractor] Extraction model not configured in Settings → Memory Models. Skipping.",
-        );
-        return [];
+      // ── Resolve extraction model from active context or settings ────────────────
+      let extractionProvider: string | undefined = activeProviderName;
+      let extractionModel: string | undefined = activeResolvedModel;
+
+      if (!extractionProvider || !extractionModel) {
+        try {
+          const memorySettings = (await SettingsService.getSection(
+            "memory",
+          )) as MemorySettingsSection;
+          extractionProvider = extractionProvider || memorySettings.extractionProvider;
+          extractionModel = extractionModel || memorySettings.extractionModel;
+        } catch {
+          // Settings not configured — skip extraction silently
+          logger.info(
+            "[MemoryExtractor] Extraction model not configured in Settings → Memory Models. Skipping.",
+          );
+          return [];
+        }
       }
 
       if (!extractionProvider || !extractionModel) {
@@ -163,22 +170,23 @@ export default class MemoryExtractor {
       let resolvedModel = extractionModel;
       let targetProviderId = extractionProvider;
 
-      const baseType = getInstanceType(extractionProvider) || extractionProvider;
-      let siblings = getInstancesByType(baseType);
-      let modelRes = await resolveModelForInstances(resolvedModel, siblings);
-      let usable = modelRes.usable;
-      let modelOverrides = modelRes.modelOverrides;
+      const baseType = getInstanceType(extractionProvider);
+      if (baseType) {
+        let siblings = getInstancesByType(baseType);
+        let modelRes = await resolveModelForInstances(resolvedModel, siblings);
+        let usable = modelRes.usable;
+        let modelOverrides = modelRes.modelOverrides;
 
-      if (usable.length === 0) {
-        throw new Error(
-          `[MemoryExtractor] Model resolution failed: "${extractionModel}" is not loaded on any instances of provider type "${baseType}".`
-        );
-      }
-
-      targetProviderId = usable[0].id;
-      const override = modelOverrides.get(targetProviderId);
-      if (override) {
-        resolvedModel = override;
+        if (usable.length > 0) {
+          targetProviderId = usable[0].id;
+          const override = modelOverrides.get(targetProviderId);
+          if (override) {
+            resolvedModel = override;
+          }
+        } else {
+          // Fall back to configured target if siblings matching failed
+          logger.warn(`[MemoryExtractor] No active instances found for model "${extractionModel}" on provider type "${baseType}". Falling back to "${targetProviderId}".`);
+        }
       }
 
       const provider = getProvider(targetProviderId);
@@ -467,6 +475,8 @@ export default class MemoryExtractor {
         agent: context.agent || null,
         toolCalls: toolCalls || [],
         emit: context.emit || null,
+        activeProviderName: context.providerName,
+        activeResolvedModel: context.resolvedModel,
       })
         .then((stored) => {
           if (stored?.length > 0 && context.emit) {
