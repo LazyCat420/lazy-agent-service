@@ -196,12 +196,12 @@ export default class MemoryExtractor {
           if (content === "[tool-only turn]" || content === "[Component]") {
             return false;
           }
-          // Filter out system warning loop messages disguised as user messages
           if (
-            message.role === "user" &&
-            (content.startsWith("[System:") ||
-              content.includes("Your previous response contained only internal reasoning") ||
-              content.includes("Do not repeat your reasoning"))
+            message._isSystemWarning === true ||
+            (message.role === "user" &&
+              (content.startsWith("[System:") ||
+                content.includes("Your previous response contained only internal reasoning") ||
+                content.includes("Do not repeat your reasoning")))
           ) {
             return false;
           }

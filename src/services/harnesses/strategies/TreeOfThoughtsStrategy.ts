@@ -899,6 +899,7 @@ export async function runTreeOfThoughts(
             "without producing any visible output. Your thinking has been preserved. " +
             "Now respond concisely with your actual answer, analysis, or tool calls. " +
             "Do not repeat your reasoning — act on it.]",
+          _isSystemWarning: true,
         });
 
         harness.logIteration(selectedPass, currentMessages);
