@@ -12,8 +12,9 @@
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-IMAGE_NAME="$(basename "$SCRIPT_DIR")"
-DISPLAY_NAME="$(echo "$IMAGE_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++)sub(/./,toupper(substr($i,1,1)),$i)}1')"
+IMAGE_NAME="lazy-agent-service"
+DISPLAY_NAME="Lazy Agent Service"
+PORT=7778
 
 # Intercept exit to introduce a delay on successful build exit.
 # This prevents a filesystem race condition in deploy-all.sh
@@ -50,11 +51,7 @@ PRE_BUILD() {
   cp "${SCRIPT_DIR}/tool_schemas.json" "${SCRIPT_DIR}/python/tool_schemas.json"
 }
 
-if [ "$IMAGE_NAME" = "lazy-tool-service" ]; then
-  PORT=5591
-else
-  PORT=7778
-fi
+
 
 EXTRA_SSH_SYNC() {
   info "Syncing projects.json..."
