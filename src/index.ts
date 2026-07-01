@@ -526,6 +526,17 @@ setupWebSocket(wss);
     `[Housekeeping] Scheduled cleanup every ${HOUSEKEEPING_INTERVAL_MS / 3_600_000}h`,
   );
 
+  // ── vLLM Model Sync Background Daemon ──────────────────
+  try {
+    const { VllmModelSyncService } = await import("./services/VllmModelSyncService.ts");
+    await VllmModelSyncService.init();
+    registerCleanup(async () => VllmModelSyncService.destroy());
+  } catch (error: unknown) {
+    logger.error(
+      "Failed to initialize vLLM Model Sync daemon: " + errorMessage(error),
+    );
+  }
+
   // Initialize MinIO if all secrets are configured
   if (
     MINIO_ENDPOINT &&
