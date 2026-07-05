@@ -287,15 +287,28 @@ async def run_agent(
             "llm_client": prism_client,
             "project": settings.PROJECT_NAME
         }
-        if model_override:
-            kwargs["model"] = model_override
+        resolved_model = model_override
+        resolved_provider = None
+        if not resolved_model:
+            from app.services.prism_agent_caller import resolve_default_model_for_agent
+            try:
+                resolved_model, resolved_provider = resolve_default_model_for_agent(agent_name)
+                logger.info("[BaseAgent] Dynamically resolved default model for %s: %s (provider: %s)", agent_name, resolved_model, resolved_provider)
+            except Exception as e:
+                logger.warning("[BaseAgent] Failed to resolve default model for %s: %s. Using default fallback.", agent_name, e)
+        
+        if resolved_model:
+            kwargs["model"] = resolved_model
+        if resolved_provider:
+            kwargs["provider"] = resolved_provider
             
         agent = BaseAgent(**kwargs)
         if enable_tools and agent_tools:
             for t in agent_tools:
                 agent.add_tool(t)
 
-        session = ConversationSession(session_id=parent_agent_session_id or f"sess_{int(time.time())}")
+        import uuid
+        session = ConversationSession(session_id=parent_agent_session_id or f"sess_{int(time.time())}_{uuid.uuid4().hex[:6]}")
         
         from app.agents.inbox import inbox_manager
         inbox_manager.register_instance(session.session_id, agent_name, ticker)
