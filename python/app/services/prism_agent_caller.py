@@ -1,5 +1,6 @@
 import logging
 import time
+import json
 from typing import Any
 from datetime import datetime, timezone
 
@@ -194,9 +195,21 @@ async def call_prism_agent(
                 raise e
         
         try:
-            response_text = resp.json().get("text", "").strip()
+            resp_data = resp.json()
+            response_text = resp_data.get("text", "").strip()
+            tool_calls = resp_data.get("tool_calls", [])
+            
+            # If the response is empty text but has tool calls, format it so it's not silent
+            if not response_text and tool_calls:
+                response_text = f"<tool_calls>\n{json.dumps(tool_calls, indent=2)}\n</tool_calls>"
+                logger.info("[PrismAgentCaller] Agent returned tool calls: %s", tool_calls)
         except Exception:
             response_text = resp.text.strip()
+            tool_calls = []
+
+        if not response_text and not tool_calls:
+            logger.error("[PrismAgentCaller] Agent returned completely empty response (no text, no tools). Prompt length might be breaching context limits silently.")
+
         elapsed_ms = int((time.monotonic() - start) * 1000)
         tokens = len(response_text) // 4
         
@@ -209,7 +222,7 @@ async def call_prism_agent(
                 source="prism",
                 status="ok",
                 step="prism_agent_success",
-                detail=f"Completed {agent_id} in {elapsed_ms}ms"
+                detail=f"Completed {agent_id} in {elapsed_ms}ms (tools used: {len(tool_calls)})"
             ))
         except Exception:
             pass
