@@ -14520,6 +14520,560 @@
     ]
   },
   {
+    "name": "get_market_data",
+    "description": "Get recent price history, fundamentals, financials, and balance sheet for a stock from multiple reliable sources.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol (e.g., AAPL)"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "data_rotator",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "get_finnhub_news",
+    "description": "Get the latest news articles for a stock from Finnhub.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "finnhub",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "get_technical_indicators",
+    "description": "Get computed technical indicators (RSI, MACD, SMA, Bollinger Bands).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "computed",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "buy_stock",
+    "description": "Execute a buy order for a stock ticker. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol (e.g., AAPL)."
+        },
+        "size_pct": {
+          "type": "number",
+          "description": "The percentage of available cash to use (e.g., 0.10 for 10%, 1.0 for 100%). Default is 0.10."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "paper_trader",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ]
+  },
+  {
+    "name": "sell_stock",
+    "description": "Execute a sell order to close a position for a stock ticker. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol to sell (e.g., AAPL)."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "paper_trader",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ]
+  },
+  {
+    "name": "add_to_watchlist",
+    "description": "Add a stock ticker (e.g., from the Discovery list) to the user's active watchlist. Do NOT use this tool to add items TO discovery; discovery is automatic. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol to add (e.g., AAPL)."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "watchlist",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ]
+  },
+  {
+    "name": "remove_from_watchlist",
+    "description": "Remove a stock ticker from the user's active watchlist. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol to remove (e.g., AAPL)."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "watchlist",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ]
+  },
+  {
+    "name": "get_sec_filings",
+    "description": "Fetch recent SEC filings (10-K, 10-Q, 8-K) for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "sec",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "get_options_flow",
+    "description": "Fetch unusual options activity and flow for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "options",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "get_insider_trades",
+    "description": "Fetch recent insider trading activity for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "insider",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "get_congress_trades",
+    "description": "Fetch recent congressional trading activity for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "congress",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "get_earnings_data",
+    "description": "Fetch upcoming or recent earnings dates and estimates for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "earnings",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "get_finviz_fundamentals",
+    "description": "Fetch fundamental data from Finviz.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "finviz",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "get_polygon_price_history",
+    "description": "Fetch historical OHLCV price data from Polygon.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "polygon",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ]
+  },
+  {
+    "name": "whiteboard_write",
+    "description": "Write or overwrite a section of the team's shared whiteboard. Use this to post your final analysis or consensus for other agents to read. Writing will bump the version number of the section. Content should be valid JSON string.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker this relates to."
+        },
+        "section": {
+          "type": "string",
+          "description": "The section name to write to (e.g. 'consensus')."
+        },
+        "content": {
+          "type": "string",
+          "description": "The content to write (preferably a JSON string or clear text)."
+        }
+      },
+      "required": [
+        "ticker",
+        "section",
+        "content"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
+  },
+  {
+    "name": "whiteboard_read",
+    "description": "Read a specific section of the team's shared whiteboard for a given ticker. The whiteboard is a living document where agents collaborate. Sections include: 'market_context', 'risk_flags', 'signals', 'consensus', 'trade_plan'.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker to read from."
+        },
+        "section": {
+          "type": "string",
+          "description": "The section name to read."
+        }
+      },
+      "required": [
+        "ticker",
+        "section"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
+  },
+  {
+    "name": "whiteboard_annotate",
+    "description": "Add a note or comment to an existing whiteboard entry without overwriting it. Use this to highlight risks, disagree with a consensus, or add context.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "entry_id": {
+          "type": "integer",
+          "description": "The exact entry_id (from whiteboard_read) to annotate."
+        },
+        "note": {
+          "type": "string",
+          "description": "Your annotation/comment."
+        }
+      },
+      "required": [
+        "entry_id",
+        "note"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
+  },
+  {
+    "name": "whiteboard_summarize",
+    "description": "Get a full summary of all sections currently on the whiteboard. Provides a snapshot of the entire team's consensus and state.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker to summarize."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
+  },
+  {
+    "name": "search_web",
+    "description": "Perform a web search using DuckDuckGo. Returns results with titles, URLs, and snippets.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default: 5)."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "research",
+      "scraping",
+      "web-search"
+    ]
+  },
+  {
     "name": "web_search",
     "description": "Perform a web search using DuckDuckGo. Returns results with titles, URLs, and snippets.",
     "parameters": {
@@ -14536,6 +15090,35 @@
       },
       "required": [
         "query"
+      ]
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "research",
+      "scraping",
+      "web-search"
+    ]
+  },
+  {
+    "name": "scrape_url",
+    "description": "Scrape the main text content from a URL.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The URL to scrape."
+        }
+      },
+      "required": [
+        "url"
       ]
     },
     "tier": 0,
@@ -14576,312 +15159,5 @@
     "labels": [
       "tool"
     ]
-  },
-  {
-    "name": "run_async_task",
-    "emoji": [
-      "\u26a1",
-      "\ud83d\udd04"
-    ],
-    "description": "Dispatch a tool to run asynchronously in the background. Returns immediately with a task ID \u2014 the tool executes in the background while you continue other work. Use this for long-running operations like shell commands, web scraping, file operations, or API calls when you don't need to wait for the result before proceeding. Query task status with list_async_tasks. Cancel with cancel_async_task. You will be automatically notified when the task completes.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "toolName": {
-          "type": "string",
-          "description": "The name of the tool to execute asynchronously (e.g., 'execute_command', 'search_web', 'read_url')."
-        },
-        "toolArguments": {
-          "type": "object",
-          "description": "The arguments to pass to the tool, exactly as you would pass them in a direct tool call."
-        }
-      },
-      "required": [
-        "toolName",
-        "toolArguments"
-      ]
-    },
-    "domain": "Core Harness Tools",
-    "labels": [
-      "async",
-      "background",
-      "task"
-    ],
-    "domainKey": "core_harness",
-    "system": true
-  },
-  {
-    "name": "list_async_tasks",
-    "emoji": [
-      "\ud83d\udccb",
-      "\ud83d\udd04"
-    ],
-    "description": "List all async background tasks dispatched in this conversation. Shows task ID, tool name, status, duration, and results for completed tasks. Use this to check on the progress of tasks dispatched with run_async_task.",
-    "parameters": {
-      "type": "object",
-      "properties": {}
-    },
-    "domain": "Core Harness Tools",
-    "labels": [
-      "async",
-      "background",
-      "task"
-    ],
-    "domainKey": "core_harness",
-    "system": true
-  },
-  {
-    "name": "cancel_async_task",
-    "emoji": [
-      "\u23f9\ufe0f",
-      "\ud83d\udd04"
-    ],
-    "description": "Cancel a running async background task. The task's abort signal will be triggered, stopping execution if the tool supports cancellation. Use list_async_tasks to find the task ID.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "taskId": {
-          "type": "string",
-          "description": "The unique ID of the async task to cancel."
-        }
-      },
-      "required": [
-        "taskId"
-      ]
-    },
-    "domain": "Core Harness Tools",
-    "labels": [
-      "async",
-      "background",
-      "task"
-    ],
-    "domainKey": "core_harness",
-    "system": true
-  },
-  {
-    "name": "create_subagents",
-    "emoji": [
-      "\ud83d\udc65",
-      "\ud83e\udd16"
-    ],
-    "description": "Spawn one or more sub-agents, each in an isolated git worktree. Sub-agents inherit the currently enabled tools and can dynamically enable more via enable_tools. Execution mode depends on topology: 'hierarchical' runs all members in parallel, 'hierarchical_aggregation' runs all members in parallel then merges results via a synthesis pass, 'sequential' runs members one-at-a-time passing each result to the next, 'peer_to_peer' (default) runs a turn-based discussion where members take turns seeing a shared thread, 'tournament' runs all members in parallel then has a judge select the best result, 'critic_loop' runs actor-critic refinement loop (either Council of Judges or Jury mode), 'divide_and_conquer' decomposes the task into subtasks and executes in parallel then synthesizes, 'mcts' runs Monte Carlo Tree Search guided parallel expansions and iterations. For a single task, provide one member. For parallel work, provide up to 10 members. NON-BLOCKING: Returns immediately with agent IDs and status 'running'. You will be automatically notified with a [SUB-AGENT TEAM COMPLETED] message containing full results when all sub-agents finish \u2014 end your turn after calling this tool and do NOT poll get_subagent_output. When recursive spawning is enabled, sub-agents may themselves call create_subagents to further decompose complex subtasks. Results include subtreeMetrics with descendant counts, aggregated costs, and child summaries for full tree visibility.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Team name for identification (e.g. 'auth_refactor', 'research')."
-        },
-        "topology": {
-          "type": "string",
-          "enum": [
-            "hierarchical",
-            "hierarchical_aggregation",
-            "sequential",
-            "peer_to_peer",
-            "tournament",
-            "critic_loop",
-            "divide_and_conquer",
-            "mcts"
-          ],
-          "description": "Optional: execution topology. 'hierarchical' \u2014 all members run in parallel. 'hierarchical_aggregation' \u2014 all members run in parallel, then a synthesis pass merges their outputs into a unified result. 'sequential' \u2014 members run one-at-a-time, each receiving the previous member's output. 'peer_to_peer (default)' \u2014 turn-based discussion where members take turns on a shared thread. 'tournament' \u2014 N actors run in parallel, judge selects best. 'critic_loop' \u2014 Actor-Critic refinement. Council of Judges (1 actor + N critics) or Jury mode (N actors + judge -> critic loop on winner). Config via topologyConfig: actorCount, maxRounds. 'divide_and_conquer' \u2014 Task decomposition into subtasks -> parallel execution -> synthesis. Config: maxSubtasks. 'mcts' \u2014 Monte Carlo Tree Search. Config: branchFactor, maxDepth. Omit to use the system default."
-        },
-        "topologyConfig": {
-          "type": "object",
-          "description": "Optional topology configuration options depending on the topology type. For 'critic_loop': { actorCount: number, maxRounds: number }. For 'peer_to_peer': { maxRounds: number }. For 'mcts': { branchFactor: number, maxDepth: number }. For 'divide_and_conquer': { maxSubtasks: number }.",
-          "properties": {
-            "actorCount": {
-              "type": "integer",
-              "description": "Number of competing actors (for critic_loop Jury mode). Defaults to 1."
-            },
-            "maxRounds": {
-              "type": "integer",
-              "description": "Maximum evaluation/revision rounds or turns. Defaults to 3 for critic_loop, calculated based on members count for peer_to_peer."
-            },
-            "branchFactor": {
-              "type": "integer",
-              "description": "MCTS branch factor (number of expanded branches in parallel per depth level). Defaults to 3."
-            },
-            "maxDepth": {
-              "type": "integer",
-              "description": "MCTS max search depth. Defaults to 3."
-            },
-            "maxSubtasks": {
-              "type": "integer",
-              "description": "Divide and conquer maximum subtasks to decompose. Defaults to 6."
-            }
-          }
-        },
-        "members": {
-          "type": "array",
-          "maxItems": 10,
-          "description": "Array of sub-agent definitions (max 10). Each member runs autonomously in its own worktree.",
-          "items": {
-            "type": "object",
-            "properties": {
-              "description": {
-                "type": "string",
-                "description": "Short label for this sub-agent (shown in UI)."
-              },
-              "prompt": {
-                "type": "string",
-                "description": "Self-contained task prompt. Include file paths, line numbers, and exact instructions. Sub-agents cannot see the orchestrator's conversation."
-              },
-              "files": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Optional: file paths the sub-agent should focus on."
-              },
-              "model": {
-                "type": "string",
-                "description": "Do NOT set this unless the user explicitly requests a specific model for the sub-agent. Sub-agents inherit the orchestrator's model automatically. Omit this field by default."
-              },
-              "agent": {
-                "type": "string",
-                "description": "Optional: the agent type/persona to spawn (available: 'Omni', 'Coding', 'Image', 'Meta', 'Lupos', 'Clankerbox', 'Lights', 'Oog', 'Digest', 'Meepo', 'V3 Decision Synthesizer', 'V3 Portfolio Manager', 'V3 Regime Engine', 'V3 Quant Analyst', 'V3 Fundamental Analyst', 'V3 Junior Analyst', 'Test Junior Analyst', 'technical', 'sentiment', 'Some Random Agent', 'Test Agent', 'Custom V3 Decision Synthesizer', 'test', 'Custom V3 Fundamental Analyst', 'Custom V3 Quant Analyst', 'Custom V3 Junior Analyst', 'Custom V3 Portfolio Manager', 'V3 Board Of Directors', 'Custom V3 Regime Engine', 'V3 Bull Defense', 'V3 Bear Agent', 'V3 Bull Agent', 'Sector Comparison', 'Summarizer Agent', 'Janitor Agent', 'retriever', 'Debate Coordinator', 'planner', 'curator', 'Market Scout', 'Glance Detector', 'Morning Briefing Analyst', 'News Discovery', 'Ticker Validator', 'Bear Technical T4 Agent', 'Bear Macro Sentiment T4 Agent', 'Bear Fundamental T4 Agent', 'Bull Technical T3 Agent', 'Bull Macro Sentiment T3 Agent', 'Bull Fundamental T3 Agent', 'Bear Technical T2 Agent', 'Bear Macro Sentiment T2 Agent', 'Bear Fundamental T2 Agent', 'Bull Macro Sentiment T1 Agent', 'Bull Technical T1 Agent', 'Bull Fundamental T1 Agent', 'Tech Analyst Pro', 'Post Mortem', 'Technical Analyst Rsg', 'Technical Analyst Lite', 'Technical Analyst Asts', 'Technical Analyst Bitf', 'Technical Analyst Tx', 'Technical Analyst Mrvl', 'Technical Analyst Adp', 'Quant Research  Research ', 'Technical Analyst Rddt', 'Technical Analyst Fds', 'Technical Analyst Poet', 'Technical Analyst Nbis', 'Technical Analyst Rklb', 'Technical Analyst Chrw', 'Technical Analyst Lrmr', 'Technical Analyst Ufo', 'Self Improving Coordinator', 'Technical Analyst Crm', 'Technical Analyst Smmt', 'Technical Analyst Cdna', 'Technical Analyst Crcl', 'Technical Analyst Prqr', 'Technical Analyst Ymat', 'Technical Analyst Docn', 'Technical Analyst Coin', 'Technical Analyst Grab', 'Technical Analyst Arcb', 'Technical Analyst Cme', 'Technical Analyst Gen', 'Technical Analyst Mc', 'Technical Analyst Rolr', 'Technical Analyst Mu', 'Technical Analyst Belfb', 'Technical Analyst Love', 'Technical Analyst Keel', 'Technical Analyst Rga', 'Technical Analyst Sanm', 'Technical Analyst Cxai', 'Technical Analyst Rlay', 'Technical Analyst Cost', 'Technical Analyst Axon', 'Technical Analyst Cgon', 'Technical Analyst Ndaq', 'Technical Analyst Jbl', 'Technical Analyst Iren', 'Technical Analyst Oklo', 'Technical Analyst Hut', 'Technical Analyst Agm', 'Technical Analyst Rtx', 'Technical Analyst Crwv', 'Technical Analyst Br', 'Technical Analyst Fr', 'Technical Analyst Dash', 'Technical Analyst Tmo', 'Technical Analyst Tmc', 'Technical Analyst Cmpx', 'Technical Analyst Shls', 'Technical Analyst Mrk', 'Technical Analyst Uco', 'Technical Analyst Pfe', 'Technical Analyst Csco', 'Technical Analyst Jnj', 'Technical Analyst Pep', 'Technical Analyst Ionq', 'Technical Analyst Jkhy', 'Technical Analyst Msci', 'Technical Analyst Fslr', 'Technical Analyst Oc', 'Technical Analyst Pst', 'Technical Analyst Iii', 'Technical Analyst Flex', 'Technical Analyst Trv', 'Technical Analyst Syk', 'Technical Analyst Amp', 'Technical Analyst Aos', 'Technical Analyst Elf', 'Technical Analyst Csv', 'Technical Analyst Beke', 'Technical Analyst Wf', 'Technical Analyst Key', 'Technical Analyst Usar', 'Technical Analyst Npv', 'Technical Analyst Mdt', 'Technical Analyst Agnmf', 'Technical Analyst Mcd', 'Technical Analyst Asx', 'Technical Analyst Sono', 'Technical Analyst Hyln', 'Technical Analyst Usa', 'Technical Analyst Ppta', 'Technical Analyst Mdai', 'Technical Analyst Au', 'Technical Analyst Vc', 'Technical Analyst Ko', 'Technical Analyst Tap', 'Technical Analyst Pwr', 'Technical Analyst Osis', 'Technical Analyst Feim', 'Technical Analyst Tpg', 'Position Monitor Bce', 'Post Mortem Fcf', 'Technical Analyst Smci', 'Technical Analyst Con', 'Technical Analyst Msd', 'Technical Analyst Nxt', 'Technical Analyst Pnc', 'Technical Analyst Avxl', 'Technical Analyst Dks', 'Technical Analyst Otcm', 'Technical Analyst Cps', 'Technical Analyst Saia', 'Technical Analyst Acb', 'Technical Analyst Tjx', 'Technical Analyst Ever', 'Technical Analyst Arry', 'Technical Analyst Cohr', 'Technical Analyst Googl', 'Technical Analyst Peg', 'Technical Analyst Dhr', 'Technical Analyst Bce', 'Technical Analyst Asti', 'Technical Analyst Tmus', 'Technical Analyst Roc', 'Technical Analyst Mas', 'Technical Analyst Sgml', 'Technical Analyst Huma', 'Technical Analyst Lly', 'Technical Analyst Ulbi', 'Technical Analyst Auud', 'Technical Analyst Nvda', 'Technical Analyst Cdw', 'Technical Analyst Rl', 'Technical Analyst Bac', 'Technical Analyst Snap', 'Technical Analyst Crml', 'Technical Analyst Uber', 'Technical Analyst Arw', 'Technical Analyst Sna', 'Technical Analyst Bfs', 'Technical Analyst Ghm', 'Technical Analyst Cnc', 'Technical Analyst Eltp', 'Technical Analyst Rna', 'Technical Analyst Gtbif', 'Technical Analyst Ce', 'Technical Analyst Tdic', 'Technical Analyst Celh', 'Technical Analyst Clx', 'Technical Analyst Chmp', 'Technical Analyst Syy', 'Technical Analyst Wti', 'Technical Analyst Cah', 'Technical Analyst St', 'Technical Analyst Gm', 'Technical Analyst Cogt', 'Technical Analyst Orcl', 'Technical Analyst Hum', 'Technical Analyst Csx', 'Technical Analyst Vsat', 'Technical Analyst Aray', 'Technical Analyst Mpc', 'Technical Analyst Beta', 'Technical Analyst Pag', 'Technical Analyst Ip', 'Technical Analyst Cns', 'Technical Analyst Bdx', 'Technical Analyst Eml', 'Technical Analyst Cts', 'Technical Analyst Ampx', 'Technical Analyst Regn', 'Technical Analyst Met', 'Technical Analyst Gild', 'Technical Analyst Cron', 'Technical Analyst Lh', 'Technical Analyst Adnt', 'Technical Analyst Rxt', 'Technical Analyst Glow', 'Technical Analyst Cmg', 'Technical Analyst Yum', 'Technical Analyst Dnp', 'Technical Analyst Mkc', 'Technical Analyst El', 'Technical Analyst Mlp', 'Technical Analyst Cb', 'Technical Analyst Swks', 'Technical Analyst Curlf', 'Technical Analyst Prem', 'Technical Analyst Indi', 'Technical Analyst Expe', 'Technical Analyst Uuuu', 'Technical Analyst Corz', 'Technical Analyst Anet', 'Technical Analyst Pru', 'Technical Analyst Wpgcf', 'Technical Analyst Msos', 'Technical Analyst Ngtf', 'Technical Analyst Sabr', 'Technical Analyst Mbot', 'Technical Analyst Nuvb', 'Technical Analyst Kspi', 'Technical Analyst Aec', 'Technical Analyst Qh', 'Technical Analyst Cboe', 'Technical Analyst Rmd', 'Technical Analyst Dnply', 'Technical Analyst Virt', 'Technical Analyst Pam', 'Technical Analyst Spot', 'Technical Analyst Plug', 'Technical Analyst Didiy', 'Technical Analyst Msi', 'Technical Analyst Hca', 'Technical Analyst Rpgl', 'Technical Analyst Hcwb', 'Technical Analyst Cast', 'Technical Analyst Tpr', 'Technical Analyst Mch', 'Technical Analyst Duk', 'Technical Analyst Ame', 'Technical Analyst Lnai', 'Technical Analyst Amd', 'Technical Analyst Mrsh', 'Technical Analyst Gt', 'Technical Analyst Pbi', 'Technical Analyst Rkt', 'Technical Analyst Gs', 'Meta Audit  Audit ', 'Custom Quant Research  Research', 'Technical Analyst Acn', 'Technical Analyst Axp', 'Technical Analyst Blgo', 'Technical Analyst Ctas', 'Technical Analyst Gri', 'Technical Analyst Bess', 'Technical Analyst Xpev', 'Technical Analyst Amg', 'Technical Analyst Ganx', 'Technical Analyst Caba', 'Technical Analyst Vrdn', 'Technical Analyst Cntx', 'Technical Analyst Lunr', 'Technical Analyst Kn', 'Technical Analyst Cart', 'Technical Analyst Plab', 'Technical Analyst Voc', 'Technical Analyst Aa', 'Technical Analyst Aur', 'Technical Analyst Agi', 'Technical Analyst Wulf', 'Curation Pass', 'Technical Analyst Cw', 'Technical Analyst Goog', 'Position Monitor Adbe', 'Technical Analyst Hubc', 'Technical Analyst Scni', 'Position Monitor Kkr', 'Position Monitor Ubs', 'Technical Analyst Wfc', 'Technical Analyst Fix', 'Position Monitor Ltm', 'Position Monitor Hims', 'Technical Analyst Wwii', 'Position Monitor Sw', 'Position Monitor Hig', 'Technical Analyst Adbe', 'Position Monitor Fcf', 'Technical Analyst Kkr', 'Technical Analyst Ubs', 'Technical Analyst Hims', 'Technical Analyst Ltm', 'Technical Analyst Sw', 'Technical Analyst Fcf', 'Technical Analyst Hig', 'Macro Scout', 'Meta Audit', 'Quant Research', 'Technical Analyst', 'Position Monitor', 'Benchmark Agent', 'Music Player', 'V3 Debate Judge', 'User Chat'). Defaults to the parent agent's type. Do not set this to a speaker ID like 'agent-0'."
-              }
-            },
-            "required": [
-              "description",
-              "prompt"
-            ]
-          }
-        }
-      },
-      "required": [
-        "name",
-        "members"
-      ]
-    },
-    "domain": "Core Orchestrator Tools",
-    "domainKey": "core_orchestrator",
-    "system": true
-  },
-  {
-    "name": "send_subagent_message",
-    "emoji": [
-      "\ud83d\udcac",
-      "\ud83d\udce4"
-    ],
-    "description": "Send a follow-up message to a running or completed sub-agent. Use to continue work, provide corrections, or give new instructions.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "to": {
-          "type": "string",
-          "description": "Agent ID returned by create_subagents"
-        },
-        "message": {
-          "type": "string",
-          "description": "Follow-up instructions for the sub-agent"
-        }
-      },
-      "required": [
-        "to",
-        "message"
-      ]
-    },
-    "domain": "Core Orchestrator Tools",
-    "domainKey": "core_orchestrator",
-    "system": true
-  },
-  {
-    "name": "stop_subagent",
-    "emoji": [
-      "\u23f9\ufe0f",
-      "\ud83e\udd16"
-    ],
-    "description": "Stop a running sub-agent. The sub-agent's worktree is cleaned up.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "agent_id": {
-          "type": "string",
-          "description": "Agent ID to stop"
-        }
-      },
-      "required": [
-        "agent_id"
-      ]
-    },
-    "domain": "Core Orchestrator Tools",
-    "domainKey": "core_orchestrator",
-    "system": true
-  },
-  {
-    "name": "get_subagent_output",
-    "emoji": [
-      "\ud83d\udce5",
-      "\ud83e\udd16"
-    ],
-    "description": "Read the output from a previously spawned sub-agent by its agent ID. Only use this when the user explicitly asks for progress on a long-running sub-agent, or when you need to inspect a specific agent's partial output. Do NOT use this to poll for completion after create_subagents \u2014 you will be automatically notified via a [SUB-AGENT TEAM COMPLETED] message when all sub-agents finish. Returns the sub-agent's final text, tool usage stats, diff summary, and status.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "agent_id": {
-          "type": "string",
-          "description": "The agent ID returned by create_subagents."
-        }
-      },
-      "required": [
-        "agent_id"
-      ]
-    },
-    "domain": "Core Orchestrator Tools",
-    "domainKey": "core_orchestrator",
-    "system": true
-  },
-  {
-    "name": "delete_subagents",
-    "emoji": [
-      "\ud83d\uddd1\ufe0f",
-      "\ud83d\udc65"
-    ],
-    "description": "Stop and remove all sub-agents in a named team. Cleans up worktrees for all members.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "teamName": {
-          "type": "string",
-          "description": "The team name to delete (as provided to create_subagents)."
-        }
-      },
-      "required": [
-        "teamName"
-      ]
-    },
-    "domain": "Core Orchestrator Tools",
-    "domainKey": "core_orchestrator",
-    "system": true
-  },
-  {
-    "name": "resume_subagent",
-    "emoji": [
-      "\ud83d\udd04",
-      "\ud83e\udd16"
-    ],
-    "description": "Resume a completed sub-agent's session with a new follow-up task. Reuses the agent's full conversation history, worktree state, and context \u2014 no need to re-explain prior work. Use this when a sub-agent finished its initial task and you need it to do additional work in the same context (e.g., add tests after implementing a feature, fix review comments, extend the scope). The agent runs in the background and you will be notified when it completes.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "agent_id": {
-          "type": "string",
-          "description": "The ID of the completed sub-agent to resume (e.g., 'agent-1-abc1')."
-        },
-        "prompt": {
-          "type": "string",
-          "description": "The new task or follow-up instructions for the agent. The agent already has its full prior conversation history \u2014 reference prior work directly."
-        }
-      },
-      "required": [
-        "agent_id",
-        "prompt"
-      ]
-    },
-    "domain": "Core Orchestrator Tools",
-    "domainKey": "core_orchestrator",
-    "system": true
   }
 ]

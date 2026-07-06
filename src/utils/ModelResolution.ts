@@ -125,67 +125,85 @@ export async function resolveModelForInstances(
   modelKey: string,
   siblings: InstanceEntry[],
 ): Promise<ModelResolutionResult> {
-  const modelOverrides = new Map<string, string>();
+  const maxAttempts = 3;
+  const retryDelayMs = 2000;
 
-  try {
-    const checks = await Promise.allSettled(
-      siblings.map(async (inst) => {
-        const provider = getProvider(inst.id);
-        if (!provider?.listModels) return { exact: false, fallback: null };
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const modelOverrides = new Map<string, string>();
 
-        const result = await Promise.race([
-          provider.listModels(),
-          new Promise<never>((_, rej) =>
-            setTimeout(() => rej(new Error("timeout")), 3000),
-          ),
-        ]);
+    try {
+      const checks = await Promise.allSettled(
+        siblings.map(async (inst) => {
+          const provider = getProvider(inst.id);
+          if (!provider?.listModels) return { exact: false, fallback: null };
 
-        const models: AvailableModel[] = result?.models || result?.data || [];
-        const modelKeys = models.map((model) => model.key || model.id || "");
-        const exactMatch = modelKeys.includes(modelKey);
-        if (exactMatch) return { exact: true, fallback: null };
+          const result = await Promise.race([
+            provider.listModels(),
+            new Promise<never>((_, rej) =>
+              setTimeout(() => rej(new Error("timeout")), 3000),
+            ),
+          ]);
 
-        // No exact key match — find the best variant with the same base name
-        logger.info(
-          `[ModelResolution] ${inst.id}: no exact match for "${modelKey}" — available: [${modelKeys.join(", ")}]`,
-        );
-        const fallback = findBestQuantFallback(modelKey, models);
-        return { exact: false, fallback };
-      }),
-    );
+          const models: AvailableModel[] = result?.models || result?.data || [];
+          const modelKeys = models.map((model) => model.key || model.id || "");
+          const exactMatch = modelKeys.includes(modelKey);
+          if (exactMatch) return { exact: true, fallback: null };
 
-    // Build usable instances list
-    const usable: InstanceEntry[] = [];
-    for (let i = 0; i < siblings.length; i++) {
-      const check = checks[i];
-      if (check.status !== "fulfilled") continue;
-      const { exact, fallback } = check.value;
+          // No exact key match — find the best variant with the same base name
+          logger.info(
+            `[ModelResolution] ${inst.id}: no exact match for "${modelKey}" — available: [${modelKeys.join(", ")}]`,
+          );
+          const fallback = findBestQuantFallback(modelKey, models);
+          return { exact: false, fallback };
+        }),
+      );
 
-      if (exact) {
-        usable.push(siblings[i]);
-      } else if (fallback) {
-        modelOverrides.set(siblings[i].id, fallback);
-        usable.push(siblings[i]);
+      // Build usable instances list
+      const usable: InstanceEntry[] = [];
+      for (let i = 0; i < siblings.length; i++) {
+        const check = checks[i];
+        if (check.status !== "fulfilled") continue;
+        const { exact, fallback } = check.value;
+
+        if (exact) {
+          usable.push(siblings[i]);
+        } else if (fallback) {
+          modelOverrides.set(siblings[i].id, fallback);
+          usable.push(siblings[i]);
+        }
       }
+
+      const summary = usable
+        .map((instance) => {
+          const override = modelOverrides.get(instance.id);
+          return override
+            ? `${instance.id}→"${override}"`
+            : `${instance.id} (exact)`;
+        })
+        .join(", ");
+      logger.info(
+        `[ModelResolution] Model "${modelKey}": ${usable.length}/${siblings.length} instances usable [${summary}]`,
+      );
+
+      if (usable.length > 0 || attempt === maxAttempts) {
+        return { usable, modelOverrides };
+      }
+
+      logger.warn(
+        `[ModelResolution] Model "${modelKey}" not found on any instance. Attempt ${attempt}/${maxAttempts} failed. Retrying in ${retryDelayMs}ms...`,
+      );
+      await new Promise((res) => setTimeout(res, retryDelayMs));
+
+    } catch (error: unknown) {
+      logger.warn(
+        `[ModelResolution] Model availability check failed: ${getErrorMessage(error)}`,
+      );
+      if (attempt === maxAttempts) {
+        return { usable: siblings, modelOverrides };
+      }
+      await new Promise((res) => setTimeout(res, retryDelayMs));
     }
-
-    const summary = usable
-      .map((instance) => {
-        const override = modelOverrides.get(instance.id);
-        return override
-          ? `${instance.id}→"${override}"`
-          : `${instance.id} (exact)`;
-      })
-      .join(", ");
-    logger.info(
-      `[ModelResolution] Model "${modelKey}": ${usable.length}/${siblings.length} instances usable [${summary}]`,
-    );
-
-    return { usable, modelOverrides };
-  } catch (error: unknown) {
-    logger.warn(
-      `[ModelResolution] Model availability check failed: ${getErrorMessage(error)}`,
-    );
-    return { usable: siblings, modelOverrides };
   }
+
+  return { usable: siblings, modelOverrides: new Map() };
 }

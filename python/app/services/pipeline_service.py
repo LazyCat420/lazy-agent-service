@@ -66,7 +66,23 @@ class PipelineService:
     @classmethod
     async def _run_all_v3(cls, cycle_id: str, tickers: list[str], max_tickers: int = 5, **kwargs):
         try:
+            # ── Set prism_client.url ONCE for the entire cycle ──
+            # This prevents a race condition where concurrent agent calls
+            # stomp on the global singleton URL. All agents in a V3 cycle
+            # use the same harness_provider, so we resolve it here.
+            # Mirror the boot_service.py logic exactly:
+            #   PRISM_ENABLED=True  → PRISM_URL (which may include /prism-proxy)
+            #   PRISM_ENABLED=False → bare http://{host}:7778
+            from lazycat.llm import prism_client
+            from app.config.config import settings as _cfg
+            if _cfg.PRISM_ENABLED:
+                prism_client.url = _cfg.PRISM_URL
+            else:
+                prism_client.url = f"http://{_cfg.DEFAULT_HOST}:7778"
+            logger.info("[PipelineService] Cycle %s: prism_client.url set to %s (PRISM_ENABLED=%s)", cycle_id, prism_client.url, _cfg.PRISM_ENABLED)
+
             # 1. Run Gatekeeper
+
             try:
                 from app.trading.watchlist import get_active
                 from app.utils.batch_screener import get_watchlist_snapshots
@@ -96,14 +112,17 @@ class PipelineService:
                         logger.info(f"[{cycle_id}][discovery][{step}] {detail}")
                         PipelineStateDB.append_events(cycle_id, [event])
                         
-                    discovery_emit("scraper_start", "📡 Starting news scraper sweep to collect trending catalysts...", "running")
-                    try:
-                        from app.collectors.news_collector import collect_all
-                        total_scraped = await collect_all(limit_feeds=10, emit_cb=discovery_emit)
-                        discovery_emit("scraper_done", f"✅ News scraper sweep complete: collected {total_scraped} articles", "ok")
-                    except Exception as e:
-                        logger.error(f"[PipelineService] Discovery scraping failed: {e}")
-                        discovery_emit("scraper_err", f"❌ Scraper sweep failed: {e}", "error")
+                    async def run_scraper_bg():
+                        try:
+                            from app.collectors.news_collector import collect_all
+                            total_scraped = await collect_all(limit_feeds=10, emit_cb=discovery_emit)
+                            discovery_emit("scraper_done", f"✅ News scraper sweep complete: collected {total_scraped} articles", "ok")
+                        except Exception as e:
+                            logger.error(f"[PipelineService] Discovery scraping failed: {e}")
+                            discovery_emit("scraper_err", f"❌ Scraper sweep failed: {e}", "error")
+
+                    discovery_emit("scraper_start", "📡 Starting news scraper sweep in background...", "running")
+                    asyncio.create_task(run_scraper_bg())
                 # Find trending tickers from the last 24h (News, Reddit, YouTube) that aren't in the static watchlist
                 try:
                     from app.db.connection import get_db
@@ -416,6 +435,18 @@ class PipelineService:
 
             from app.v3.debate_coordinator import run_battle_royale
             await run_battle_royale(cycle_id=cycle_id, bot_id=active_bot_id)
+
+            # Fire and forget the post-cycle evolution and evaluation
+            try:
+                from app.cognition.evolution.evaluator import run_post_cycle_evaluation
+                from app.cognition.evolution.evolution_runner import run_evolution_loop
+                # Run the LLM reviewer
+                asyncio.create_task(run_post_cycle_evaluation(cycle_id))
+                # Run the quant strategy generator
+                asyncio.create_task(run_evolution_loop(data_path="data/latest_market_data.csv"))
+                logger.info("[PipelineService] Triggered post-cycle evolution tasks.")
+            except Exception as ev_err:
+                logger.error(f"[PipelineService] Failed to trigger evolution: {ev_err}")
 
             cls._state.update({
                 "status": "done",
