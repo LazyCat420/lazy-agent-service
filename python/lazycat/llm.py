@@ -118,6 +118,37 @@ class PrismClient:
     def arm_kill_switch(self):
         """Immediately aborts all active and future LLM requests."""
         self._kill_switch_armed = True
+        
+        import asyncio
+        if self._conversations:
+            active_convs = list(self._conversations.values())
+            
+            async def _send_prism_stops():
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as stop_client:
+                        for conv_id in active_convs:
+                            try:
+                                await stop_client.post(
+                                    f"{self.url}/agent/stop",
+                                    json={"conversationId": conv_id}
+                                )
+                                logger.debug(f"[PrismClient] Sent stop for conversation {conv_id}")
+                            except Exception as stop_e:
+                                logger.debug(f"[PrismClient] Failed to send stop for {conv_id}: {stop_e}")
+                except Exception as e:
+                    logger.debug(f"[PrismClient] Failed to execute stop loop: {e}")
+                    
+            try:
+                asyncio.create_task(_send_prism_stops())
+            except Exception as e:
+                logger.warning(f"[PrismClient] Failed to schedule stop requests: {e}")
+
+        if self._client is not None and not self._client.is_closed:
+            try:
+                asyncio.create_task(self._client.aclose())
+            except Exception as e:
+                logger.warning(f"[PrismClient] Failed to schedule client close: {e}")
+            self._client = None
         logger.warning("[PrismClient] Kill switch ARMED")
 
     def reset_kill_switch(self):
@@ -276,6 +307,7 @@ class PrismClient:
             "x-username": username,
         }
 
+        logger.info(f"[INSTRUMENTATION] prism.call_agent attempting to connect to: {url}")
         try:
             if stream:
                 req = client.build_request("POST", url, json=payload, headers=headers)
@@ -287,7 +319,7 @@ class PrismClient:
                 r.raise_for_status()
                 return r
         except Exception as e:
-            logger.error(f"Prism call failed: {e}")
+            logger.error(f"[INSTRUMENTATION] Prism call failed connecting to {url}. Error: {e.__class__.__name__} - {e}")
             raise
 
     async def _call_vllm_direct(
