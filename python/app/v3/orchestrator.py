@@ -128,11 +128,98 @@ async def run_v3_pipeline(
     except Exception as e:
         logger.warning("[V3] %s: Memory retrieval failed (non-fatal): %s", ticker, e)
 
+    # Retrieve the previous cycle's SharedDesk ("Manila Envelope")
+    # NOTE: Load ONCE and reuse for both envelope injection and triage gate
+    previous_desk = None
+    try:
+        from app.v3.desk_persistence import load_latest_desk_for_ticker
+        previous_desk = load_latest_desk_for_ticker(ticker)
+        if previous_desk:
+            prev_context = previous_desk.get_compressed_context(include_debate=True)
+            if prev_context and prev_context != "No artifacts on desk yet.":
+                desk.cycle_metadata["previous_desk_context"] = prev_context
+                
+                # Calculate days old for logging
+                dt_str = previous_desk.created_at
+                days_old = -1
+                if dt_str.endswith("Z"):
+                    dt_str = dt_str[:-1] + "+00:00"
+                try:
+                    dt = datetime.fromisoformat(dt_str)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    days_old = (datetime.now(timezone.utc) - dt).days
+                except ValueError:
+                    pass
+                
+                logger.info(
+                    "[V3] %s: Injected previous SharedDesk context from %d days ago (%d chars)",
+                    ticker, days_old, len(prev_context)
+                )
+    except Exception as e:
+        logger.warning("[V3] %s: Failed to load previous SharedDesk (non-fatal): %s", ticker, e)
+
     emit(
         "analyzing", f"v3_ctx_{ticker}",
         f"📋 {ticker}: SharedDesk created, cycle metadata & data report injected",
         status="ok",
     )
+
+    # ═══════════════════════════════════════════════════════════════════
+    # PHASE 0: Triage Gate
+    # ═══════════════════════════════════════════════════════════════════
+    from app.config import settings
+    triage_tier = "v3_full"
+    if settings.TRIAGE_ENABLED:
+        try:
+            from app.db.connection import get_db
+            with get_db() as db:
+                news_count = db.execute(
+                    "SELECT COUNT(*) FROM news_articles WHERE ticker = %s AND published_at >= NOW() - INTERVAL '24 hours'",
+                    [ticker]
+                ).fetchone()[0]
+        except Exception as e:
+            logger.warning("[V3] %s: Triage news_count query failed (defaulting to 0): %s", ticker, e)
+            news_count = 0
+
+        hours_old = 9999
+        if desk.cycle_metadata.get("previous_desk_context") and previous_desk:
+            try:
+                dt_str = previous_desk.created_at
+                if dt_str.endswith("Z"): dt_str = dt_str[:-1] + "+00:00"
+                dt = datetime.fromisoformat(dt_str)
+                if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+                hours_old = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+            except Exception as e:
+                logger.warning("[V3] %s: Triage hours_old calculation failed (defaulting to 9999): %s", ticker, e)
+
+        if hours_old >= settings.TRIAGE_DEEP_HOURS or news_count >= settings.TRIAGE_DEEP_NEWS_VOLUME:
+            triage_tier = "v3_deep"
+        elif hours_old <= settings.TRIAGE_GLANCE_HOURS and news_count < settings.TRIAGE_DEEP_NEWS_VOLUME:
+            triage_tier = "v3_glance"
+        else:
+            triage_tier = "v3_standard"
+
+        emit("analyzing", f"v3_triage_{ticker}", f"🚦 {ticker}: Triage Gate evaluated → {triage_tier} (News: {news_count}, Age: {int(hours_old)}h)", status="ok")
+        
+        if triage_tier == "v3_glance":
+            logger.info("[V3] %s: Skipped by Triage Gate (GLANCE tier)", ticker)
+            desk.append_artifact("final_decision", {
+                "action": "HOLD",
+                "confidence": 0,
+                "reasoning": f"Skipped by Triage Gate (Age: {int(hours_old)}h, News: {news_count}). No new catalysts.",
+                "persona_used": "Triage Gate"
+            })
+            # NOTE: Do NOT advance phase here. The only valid transitions from
+            # INIT are RESEARCH_DONE and ABORTED. A glance-skipped ticker never
+            # ran research/debate/decision so advancing to PM_DONE is invalid.
+            # The desk stays at INIT which is correct for a skipped ticker.
+            save_desk(desk)
+            elapsed_s = time.monotonic() - t_pipeline
+            result = _build_v1_compatible_result(desk, elapsed_s=elapsed_s)
+            result["triage_tier"] = triage_tier
+            result["escalated"] = False
+            return result
 
     from app.v3.agents import regime_engine
 
@@ -185,31 +272,12 @@ async def run_v3_pipeline(
         )
         ja_out, qa_out = await asyncio.gather(ja_task, qa_task)
 
-        # Check JA abort
-        if ja_out in (PhaseOutcome.TIMED_OUT,):
-            logger.error("[V3] %s: junior_analyst TIMED OUT — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, ja_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason="junior_analyst timed out")
-        if breaker.should_abort("junior_analyst", ja_out):
-            logger.error("[V3] %s: Circuit breaker tripped on junior_analyst — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, ja_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason=breaker.get_abort_reason("junior_analyst"))
-        breaker.record_outcome("junior_analyst", ja_out)
-
-        # Check QA abort
-        if qa_out in (PhaseOutcome.TIMED_OUT,):
-            logger.error("[V3] %s: quant_analyst TIMED OUT — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, qa_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason="quant_analyst timed out")
-        if breaker.should_abort("quant_analyst", qa_out):
-            logger.error("[V3] %s: Circuit breaker tripped on quant_analyst — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, qa_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason=breaker.get_abort_reason("quant_analyst"))
-        breaker.record_outcome("quant_analyst", qa_out)
+        abort = _check_abort(desk, breaker, "junior_analyst", ja_out)
+        if abort:
+            return abort
+        abort = _check_abort(desk, breaker, "quant_analyst", qa_out)
+        if abort:
+            return abort
         
         # Write dummy fundamental report to keep pipeline satisfied
         desk.append_artifact("fundamental_report", {
@@ -233,77 +301,33 @@ async def run_v3_pipeline(
             f"🔍 {ticker}: Running fundamental-focused research (Discount/Fundamental Topology)",
             status="running",
         )
-        ja_out = await _run_agent_with_circuit_breaker(
-            desk=desk, agent_module=junior_analyst, phase_name="junior_analyst",
-            breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
-        )
-        if ja_out in (PhaseOutcome.TIMED_OUT,):
-            logger.error("[V3] %s: junior_analyst TIMED OUT — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, ja_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason="junior_analyst timed out")
-        if breaker.should_abort("junior_analyst", ja_out):
-            logger.error("[V3] %s: Circuit breaker tripped on junior_analyst — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, ja_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason=breaker.get_abort_reason("junior_analyst"))
-        breaker.record_outcome("junior_analyst", ja_out)
-        
-        fa_out = await _run_agent_with_circuit_breaker(
-            desk=desk, agent_module=fundamental_analyst, phase_name="fundamental_analyst",
-            breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
-        )
-        if fa_out in (PhaseOutcome.TIMED_OUT,):
-            logger.error("[V3] %s: fundamental_analyst TIMED OUT — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, fa_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason="fundamental_analyst timed out")
-        if breaker.should_abort("fundamental_analyst", fa_out):
-            logger.error("[V3] %s: Circuit breaker tripped on fundamental_analyst — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, fa_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason=breaker.get_abort_reason("fundamental_analyst"))
-        breaker.record_outcome("fundamental_analyst", fa_out)
-            
-        qa_out = await _run_agent_with_circuit_breaker(
-            desk=desk, agent_module=quant_analyst, phase_name="quant_analyst",
-            breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
-        )
-        if qa_out in (PhaseOutcome.TIMED_OUT,):
-            logger.error("[V3] %s: quant_analyst TIMED OUT — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, qa_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason="quant_analyst timed out")
-        if breaker.should_abort("quant_analyst", qa_out):
-            logger.error("[V3] %s: Circuit breaker tripped on quant_analyst — aborting pipeline", ticker)
-            desk.advance_phase(DeskPhase.ABORTED, qa_out)
-            save_desk(desk)
-            return _build_noop_result(desk, reason=breaker.get_abort_reason("quant_analyst"))
-        breaker.record_outcome("quant_analyst", qa_out)
-
-    else:
-        # CONTRADICTORY (Default): Sequential JA -> FA -> QA
-        research_agents = [
+        for phase_name, agent_module in [
             ("junior_analyst", junior_analyst),
             ("fundamental_analyst", fundamental_analyst),
             ("quant_analyst", quant_analyst),
-        ]
-        for phase_name, agent_module in research_agents:
+        ]:
             outcome = await _run_agent_with_circuit_breaker(
                 desk=desk, agent_module=agent_module, phase_name=phase_name,
                 breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
             )
-            if outcome in (PhaseOutcome.TIMED_OUT,):
-                logger.error("[V3] %s: %s TIMED OUT — aborting pipeline", ticker, phase_name)
-                desk.advance_phase(DeskPhase.ABORTED, outcome)
-                save_desk(desk)
-                return _build_noop_result(desk, reason=f"{phase_name} timed out")
-            if breaker.should_abort(phase_name, outcome):
-                logger.error("[V3] %s: Circuit breaker tripped on %s — aborting pipeline", ticker, phase_name)
-                desk.advance_phase(DeskPhase.ABORTED, outcome)
-                save_desk(desk)
-                return _build_noop_result(desk, reason=breaker.get_abort_reason(phase_name))
-            breaker.record_outcome(phase_name, outcome)
+            abort = _check_abort(desk, breaker, phase_name, outcome)
+            if abort:
+                return abort
+
+    else:
+        # CONTRADICTORY (Default): Sequential JA -> FA -> QA
+        for phase_name, agent_module in [
+            ("junior_analyst", junior_analyst),
+            ("fundamental_analyst", fundamental_analyst),
+            ("quant_analyst", quant_analyst),
+        ]:
+            outcome = await _run_agent_with_circuit_breaker(
+                desk=desk, agent_module=agent_module, phase_name=phase_name,
+                breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
+            )
+            abort = _check_abort(desk, breaker, phase_name, outcome)
+            if abort:
+                return abort
 
     # Advance phase: INIT → RESEARCH_DONE
     desk.advance_phase(DeskPhase.RESEARCH_DONE)
@@ -347,6 +371,18 @@ async def run_v3_pipeline(
     breaker.record_outcome("bull_argument", bull_outcome)
     breaker.record_outcome("bear_rebuttal", bear_outcome)
 
+    # Abort check: if BOTH debate agents failed, skip the judge
+    if bull_outcome in (PhaseOutcome.TIMED_OUT,) and bear_outcome in (PhaseOutcome.TIMED_OUT,):
+        logger.error("[V3] %s: Both debate agents TIMED OUT — aborting pipeline", ticker)
+        desk.advance_phase(DeskPhase.ABORTED, bull_outcome)
+        save_desk(desk)
+        return _build_noop_result(desk, reason="Both debate agents timed out")
+    if breaker.should_abort("bull_argument", bull_outcome) and breaker.should_abort("bear_rebuttal", bear_outcome):
+        logger.error("[V3] %s: Circuit breaker tripped on BOTH debate agents — aborting pipeline", ticker)
+        desk.advance_phase(DeskPhase.ABORTED, bull_outcome)
+        save_desk(desk)
+        return _build_noop_result(desk, reason="Both debate agents failed")
+
     # Synthesis / Judge phase (replacing the linear bull defense)
     if desk.has_artifact("bull_argument") and desk.has_artifact("bear_rebuttal"):
         outcome = await _run_debate_judge(
@@ -372,9 +408,7 @@ async def run_v3_pipeline(
     # ═══════════════════════════════════════════════════════════════════
     # LAYER 4: Decision — Board of Directors
     # ═══════════════════════════════════════════════════════════════════
-    regime = "CONTRADICTORY"  # Default if regime engine failed
-    if desk.has_artifact("regime_classification"):
-        regime = desk.regime_classification.get("regime", "CONTRADICTORY")
+    # Reuse regime from Layer 2 (already extracted after regime engine ran)
 
     # Run Board of Directors with regime-swapped persona
     outcome = await _run_board_of_directors(
@@ -386,10 +420,6 @@ async def run_v3_pipeline(
         emit=emit,
     )
     breaker.record_outcome("board_of_directors", outcome)
-
-    # Advance phase: DEBATE_DONE → PM_DONE
-    desk.advance_phase(DeskPhase.PM_DONE)
-    save_desk(desk)
 
     # ═══════════════════════════════════════════════════════════════════
     # LAYER 5: Decision Synthesis — Structured trade verdict with signal weights
@@ -462,6 +492,8 @@ async def run_v3_pipeline(
             status="ok",
         )
 
+    # Advance phase to PM_DONE AFTER Layer 5 completes (not before)
+    desk.advance_phase(DeskPhase.PM_DONE)
     save_desk(desk)
 
     # Persist cycle outcome to episodic memory (non-fatal)
@@ -556,6 +588,35 @@ def _apply_policy_gates(desk: SharedDesk) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 # Helper functions
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+def _check_abort(
+    desk: SharedDesk,
+    breaker: CircuitBreaker,
+    phase_name: str,
+    outcome: PhaseOutcome,
+) -> dict[str, Any] | None:
+    """Check if a phase outcome should abort the pipeline.
+
+    Returns a noop result dict if aborting, or None if the pipeline should continue.
+    This deduplicates the 6-line abort-check pattern repeated across research topologies.
+    """
+    ticker = desk.ticker
+
+    if outcome in (PhaseOutcome.TIMED_OUT,):
+        logger.error("[V3] %s: %s TIMED OUT — aborting pipeline", ticker, phase_name)
+        desk.advance_phase(DeskPhase.ABORTED, outcome)
+        save_desk(desk)
+        return _build_noop_result(desk, reason=f"{phase_name} timed out")
+
+    if breaker.should_abort(phase_name, outcome):
+        logger.error("[V3] %s: Circuit breaker tripped on %s — aborting pipeline", ticker, phase_name)
+        desk.advance_phase(DeskPhase.ABORTED, outcome)
+        save_desk(desk)
+        return _build_noop_result(desk, reason=breaker.get_abort_reason(phase_name))
+
+    breaker.record_outcome(phase_name, outcome)
+    return None
 
 
 async def _run_agent_with_circuit_breaker(
@@ -755,11 +816,28 @@ def _build_v1_compatible_result(
     regime = decision.get("regime", "unknown")
     stop_loss = decision.get("stop_loss")
     take_profit = decision.get("take_profit")
+    dynamic_trigger = decision.get("dynamic_trigger")
 
     # Token sum from telemetry
     total_tokens = sum(
         entry.get("token_usage", 0) for entry in desk.agent_telemetry
     )
+
+    # Institutional conviction data (non-fatal — gracefully degrade)
+    institutional_conviction = {}
+    try:
+        from app.collectors.fund_scanner import get_institutional_signal
+        inst = get_institutional_signal(desk.ticker)
+        institutional_conviction = {
+            "fund_count": inst["fund_count"],
+            "total_value": inst["total_institutional_value"],
+            "has_top_performer": inst["has_top_performer"],
+            "top_performer_names": inst["top_performer_names"],
+            "momentum": inst["momentum"],
+            "has_new_position": inst["has_new_position"],
+        }
+    except Exception:
+        pass
 
     return {
         "ticker": desk.ticker,
@@ -772,7 +850,8 @@ def _build_v1_compatible_result(
         "agent_results": _extract_agent_results(desk),
         "estimate": {
             "stop_loss": stop_loss,
-            "take_profit": take_profit
+            "take_profit": take_profit,
+            "dynamic_trigger": dynamic_trigger
         },
         "c_result": {
             "action": action,
@@ -780,6 +859,7 @@ def _build_v1_compatible_result(
             "rationale": rationale,
         },
         "d_result": _extract_debate_result(desk),
+        "institutional_conviction": institutional_conviction,
         "human_review": False,
         "agent_tokens": total_tokens,
         "rlm_tokens": 0,
@@ -842,20 +922,28 @@ def _extract_agent_results(desk: SharedDesk) -> dict[str, Any]:
     """Extract agent results from SharedDesk for V1 compatibility."""
     results: dict[str, Any] = {}
 
+    # Build a lookup from agent telemetry for token counts
+    token_lookup: dict[str, int] = {}
+    for entry in desk.agent_telemetry:
+        name = entry.get("agent_name", "")
+        tokens = entry.get("token_usage", 0)
+        if name and tokens:
+            token_lookup[name] = token_lookup.get(name, 0) + tokens
+
     if desk.desk_note:
         results["junior_analyst"] = {
             "response": desk.desk_note.get("summary", ""),
-            "tokens": 0
+            "tokens": token_lookup.get("v3_junior_analyst", 0)
         }
     if desk.fundamental_report:
         results["fundamental_analyst"] = {
             "response": desk.fundamental_report.get("summary", ""),
-            "tokens": 0
+            "tokens": token_lookup.get("v3_fundamental_analyst", 0)
         }
     if desk.quant_report:
         results["quant_analyst"] = {
             "response": desk.quant_report.get("summary", ""),
-            "tokens": 0
+            "tokens": token_lookup.get("v3_quant_analyst", 0)
         }
 
     return results

@@ -27,9 +27,9 @@ _V3_AGENT_MODULES = [
     "app.v3.agents.portfolio_manager",
     "app.v3.agents.decision_agent",
     "app.v3.agents.debate_judge",
-    # Note: Bull, Bear, and Board of Directors are pure reasoning agents
-    # with no tools — they don't need Prism registration since they
-    # run with enable_tools=False through the standard LLM client.
+    "app.v3.agents.bull_agent",
+    "app.v3.agents.bear_agent",
+    "app.v3.agents.board_of_directors",
 ]
 
 # Common guidelines appended to all V3 agents
@@ -70,7 +70,7 @@ async def register_v3_agents() -> dict[str, bool]:
 
             agent_name = module.AGENT_NAME
             agent_id = f"CUSTOM_{agent_name.upper()}"
-            system_prompt = module.SYSTEM_PROMPT
+            system_prompt = getattr(module, "SYSTEM_PROMPT", "You are an autonomous V3 trading agent. Your identity will be provided dynamically at runtime.")
             tool_whitelist = module.TOOL_WHITELIST
 
             # Merge with Prism dynamic meta-tools

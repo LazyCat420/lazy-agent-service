@@ -4,5 +4,7 @@ from app.tools import trading_tools
 from app.tools import whiteboard_tools
 from app.tools import web_tools
 from . import notes_tools
+from . import charting_tools
+from . import search_tools
 
 __all__ = ["registry", "PermissionLevel"]

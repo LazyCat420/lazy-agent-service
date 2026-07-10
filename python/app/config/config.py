@@ -207,6 +207,13 @@ class Settings(BaseSettings):
     # ── Finnhub ──
     FINNHUB_API_KEY: str = ""
 
+    # ── Web Search Providers ──
+    TAVILY_API_KEY: str = ""
+    BING_API_KEY: str = ""
+    EXA_API_KEY: str = ""
+    GOOGLE_SEARCH_API_KEY: str = ""
+    GOOGLE_SEARCH_CX: str = ""
+
     # ── FRED (Federal Reserve) ──
     FRED_API_KEY: str = ""
 

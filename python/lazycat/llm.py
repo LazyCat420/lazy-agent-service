@@ -118,33 +118,9 @@ class PrismClient:
     def arm_kill_switch(self):
         """Immediately aborts all active and future LLM requests."""
         self._kill_switch_armed = True
-        
-        import asyncio
-        if self._conversations:
-            active_convs = list(self._conversations.values())
-            
-            async def _send_prism_stops():
-                try:
-                    async with httpx.AsyncClient(timeout=2.0) as stop_client:
-                        for conv_id in active_convs:
-                            try:
-                                await stop_client.post(
-                                    f"{self.url}/agent/stop",
-                                    json={"conversationId": conv_id}
-                                )
-                                logger.debug(f"[PrismClient] Sent stop for conversation {conv_id}")
-                            except Exception as stop_e:
-                                logger.debug(f"[PrismClient] Failed to send stop for {conv_id}: {stop_e}")
-                except Exception as e:
-                    logger.debug(f"[PrismClient] Failed to execute stop loop: {e}")
-                    
-            try:
-                asyncio.create_task(_send_prism_stops())
-            except Exception as e:
-                logger.warning(f"[PrismClient] Failed to schedule stop requests: {e}")
-
         if self._client is not None and not self._client.is_closed:
             try:
+                import asyncio
                 asyncio.create_task(self._client.aclose())
             except Exception as e:
                 logger.warning(f"[PrismClient] Failed to schedule client close: {e}")

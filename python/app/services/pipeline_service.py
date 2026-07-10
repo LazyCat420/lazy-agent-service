@@ -6,6 +6,7 @@ from typing import Any
 
 from app.services.pipeline_state import PipelineStateDB
 from app.v3.orchestrator import run_v3_pipeline
+from app.telemetry import send_system_log
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +34,28 @@ class PipelineService:
         db_state = PipelineStateDB.get_state(summary_only=True)
         db_status = db_state.get("status", "idle")
         if db_status in ("running", "starting", "stopping"):
-            return {"status": "deduplicated", "message": f"Cycle already {db_status}"}
+            # Orphan detection: DB says active but in-memory task is gone.
+            # This happens when the container restarts while a cycle is running,
+            # or when an exception kills the task without cleaning up state.
+            if cls._cycle_task is None or cls._cycle_task.done():
+                logger.warning(
+                    "[PipelineService] ORPHANED STATE DETECTED: DB says '%s' but "
+                    "no in-memory task exists. Use Force Reset to clear.",
+                    db_status,
+                )
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Pipeline state is stuck at '{db_status}' from a previous "
+                        f"crashed cycle (cycle_id={db_state.get('cycle_id', '?')}). "
+                        f"Error: {db_state.get('error', 'unknown')}. "
+                        f"Use Force Reset to clear the stuck state before starting a new cycle."
+                    ),
+                }
+            else:
+                return {"status": "deduplicated", "message": f"Cycle already {db_status}"}
         # Also check in-memory task to catch race where DB was reset but task is still running
-        if cls._cycle_task and not cls._cycle_task.done():
+        elif cls._cycle_task and not cls._cycle_task.done():
             return {"status": "deduplicated", "message": "Cycle task still running"}
 
         # Reset the SDK kill switch so requests can flow on the new cycle
@@ -111,6 +131,10 @@ class PipelineService:
                         }
                         logger.info(f"[{cycle_id}][discovery][{step}] {detail}")
                         PipelineStateDB.append_events(cycle_id, [event])
+                        try:
+                            send_system_log("AGENT", detail)
+                        except Exception as sys_log_err:
+                            logger.warning(f"[PipelineService] Failed to send system log: {sys_log_err}")
                         
                     async def run_scraper_bg():
                         try:
@@ -178,6 +202,38 @@ class PipelineService:
                                 "total_mentions": info["mentions"],
                             }
                         
+                        # Phase 4C: Institutional Discovery — tickers with hedge fund consensus
+                        try:
+                            from app.collectors.fund_scanner import get_top_conviction_tickers
+                            institutional_leads = get_top_conviction_tickers(min_funds=2, max_results=20)
+                            for lead in institutional_leads:
+                                tkr = lead["ticker"]
+                                if tkr in base_tickers:
+                                    continue  # already in watchlist
+                                if tkr not in source_tracker:
+                                    source_tracker[tkr] = {"sources": set(), "mentions": 0}
+                                source_tracker[tkr]["sources"].add("Institutional")
+                                source_tracker[tkr]["mentions"] += lead["fund_count"]
+                                # Also add to trending_discovered if not already there
+                                if tkr not in trending_discovered:
+                                    sc = len(source_tracker[tkr]["sources"])
+                                    src_label = f"Institutional ({lead['fund_count']} funds)"
+                                    if sc >= 2:
+                                        src_label = f"Trending {'+'.join(sorted(source_tracker[tkr]['sources']))} ({sc} sources)"
+                                    trending_discovered[tkr] = {
+                                        "label": src_label,
+                                        "source_count": sc,
+                                        "total_mentions": source_tracker[tkr]["mentions"],
+                                    }
+                            if institutional_leads:
+                                logger.info(
+                                    "[PipelineService] Institutional Discovery: %d conviction leads (top: %s)",
+                                    len(institutional_leads),
+                                    [l["ticker"] for l in institutional_leads[:5]],
+                                )
+                        except Exception as e:
+                            logger.warning("[PipelineService] Institutional discovery failed (non-fatal): %s", e)
+
                         all_pool = {t: {"label": "Watchlist", "source_count": 0, "total_mentions": 0} for t in base_tickers}
                         all_pool.update(trending_discovered)
                         
@@ -238,6 +294,16 @@ class PipelineService:
                         scored_results = []
                         # Build a lookup for source_count from active_ticker_dicts
                         source_count_map = {d["ticker"]: d.get("source_count", 0) for d in active_ticker_dicts}
+                        
+                        # Phase 4D: Pre-fetch institutional signals for scoring boost
+                        inst_signal_cache = {}
+                        try:
+                            from app.collectors.fund_scanner import get_institutional_signal
+                            for t, px, chg, rvol, sma, rsi, src, dsa in raw_results:
+                                inst_signal_cache[t] = get_institutional_signal(t)
+                        except Exception as e:
+                            logger.warning("[PipelineService] Institutional signal pre-fetch failed (non-fatal): %s", e)
+                        
                         # raw_results format: (t, px, chg, rvol, sma, rsi, src, dsa)
                         for t, px, chg, rvol, sma, rsi, src, dsa in raw_results:
                             score = rvol * 10.0
@@ -249,10 +315,23 @@ class PipelineService:
                             sc = source_count_map.get(t, 0)
                             if sc >= 2:
                                 score += (sc - 1) * 10.0  # +10 per additional source
+                            
+                            # Phase 4D: Institutional conviction boost
+                            inst = inst_signal_cache.get(t, {})
+                            inst_fund_count = inst.get("fund_count", 0)
+                            if inst_fund_count >= 3:
+                                score += 20.0  # Strong consensus
+                            elif inst_fund_count >= 2:
+                                score += 10.0  # Moderate consensus
+                            if inst.get("has_new_position"):
+                                score += 15.0  # Fresh institutional interest
+                            if inst.get("has_top_performer"):
+                                score += 10.0  # Top-performer conviction
                                 
                             scored_results.append({
                                 "ticker": t, "price": px, "chg": chg, "rvol": rvol, 
-                                "sma": sma, "rsi": rsi, "src": src, "dsa": dsa, "score": score
+                                "sma": sma, "rsi": rsi, "src": src, "dsa": dsa, "score": score,
+                                "inst_funds": inst_fund_count,
                             })
                             
                         # Sort by score descending and take top 20
@@ -261,14 +340,29 @@ class PipelineService:
                         
                         logger.info(f"[PipelineService] Scoring Engine top picks: {[s['ticker'] for s in top_scorers]}")
                         
-                        # Rebuild markdown table for Gatekeeper
+                        # Phase 4B: Fetch past verdicts for top 20
+                        placeholders = ','.join(['%s'] * len(top_scorers))
+                        with get_db() as db:
+                            past_results_rows = db.execute(f"""
+                                SELECT DISTINCT ON (ticker) ticker, action, confidence, reasoning, created_at
+                                FROM trade_results
+                                WHERE ticker IN ({placeholders})
+                                ORDER BY ticker, created_at DESC
+                            """, [s['ticker'] for s in top_scorers]).fetchall()
+                            past_results_map = {r[0]: {"action": r[1], "conf": r[2], "reason": r[3]} for r in past_results_rows}
+                        
+                        # Rebuild markdown table for Gatekeeper (now includes Inst. Funds column)
                         md_lines = [
-                            "| Ticker | Score | Source | Days Since Analysis | Price | Change % | Rel Volume | SMA-20 | RSI (14) |",
-                            "|--------|-------|--------|---------------------|-------|----------|------------|--------|----------|"
+                            "| Ticker | Score | Source | Days Since Analysis | Price | Change % | Rel Vol | SMA-20 | RSI | Inst. Funds | Past Verdict | Past Reason |",
+                            "|--------|-------|--------|---------------------|-------|----------|---------|--------|-----|-------------|--------------|-------------|"
                         ]
                         for s in top_scorers:
                             sma_rel = ((s["price"] - s["sma"]) / s["sma"]) * 100 if s["sma"] > 0 else 0
-                            md_lines.append(f"| {s['ticker']} | {s['score']:.1f} | {s['src']} | {s['dsa']} | ${s['price']:.2f} | {s['chg']:+.2f}% | {s['rvol']:.2f}x | {sma_rel:+.2f}% | {s['rsi']:.1f} |")
+                            past = past_results_map.get(s["ticker"])
+                            past_verdict = f"{past['action']} ({past['conf']}%)" if past else "N/A"
+                            past_reason = (past['reason'][:100] + "...").replace('|', '') if past and past.get('reason') else "N/A"
+                            inst_str = f"{s.get('inst_funds', 0)}" if s.get('inst_funds', 0) > 0 else "-"
+                            md_lines.append(f"| {s['ticker']} | {s['score']:.1f} | {s['src']} | {s['dsa']} | ${s['price']:.2f} | {s['chg']:+.2f}% | {s['rvol']:.2f}x | {sma_rel:+.2f}% | {s['rsi']:.1f} | {inst_str} | {past_verdict} | {past_reason} |")
                             
                         snapshot_table = "\n".join(md_lines)
                         # -----------------------
@@ -282,16 +376,26 @@ class PipelineService:
                     active_bot_id = get_active_bot_id()
                     
                     from app.utils.text_utils import parse_json_response
-                    result = await run_agent(
-                        agent_name=AGENT_NAME,
-                        ticker="WATCHLIST",
-                        cycle_id=cycle_id,
-                        bot_id=active_bot_id,
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        enable_tools=False, # DISABLED tools so it strictly outputs JSON!
-                        harness_provider=kwargs.get("harness_provider", "local"),
-                    )
+                    # Wrap gatekeeper in a timeout to prevent indefinite hangs
+                    try:
+                        result = await asyncio.wait_for(
+                            run_agent(
+                                agent_name=AGENT_NAME,
+                                ticker="WATCHLIST",
+                                cycle_id=cycle_id,
+                                bot_id=active_bot_id,
+                                system_prompt=system_prompt,
+                                user_prompt=user_prompt,
+                                enable_tools=False, # DISABLED tools so it strictly outputs JSON!
+                                harness_provider=kwargs.get("harness_provider", "local"),
+                            ),
+                            timeout=180.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error("[PipelineService] Gatekeeper LLM call timed out after 180s — falling back to top scorers")
+                        fallback_tickers = [s["ticker"] for s in top_scorers[:max_tickers]]
+                        logger.warning("[PipelineService] Timeout fallback: using top %d scorers: %s", len(fallback_tickers), fallback_tickers)
+                        result = {"response": json.dumps({"selected_tickers": fallback_tickers, "rationale": "Gatekeeper timed out — auto-selected by scoring engine"})}
                     
                     final_text = result.get("response", "{}")
                     logger.info("[PipelineService] Raw gatekeeper response: %s", final_text)
@@ -302,6 +406,14 @@ class PipelineService:
                         
                     selected = parsed.get("selected_tickers", [])
                     rationale = parsed.get("rationale", "")
+                    
+                    # Validate: drop any tickers not in the known pool
+                    if selected and all_pool:
+                        valid_selected = [t for t in selected if t in all_pool]
+                        invalid = set(selected) - set(valid_selected)
+                        if invalid:
+                            logger.warning("[PipelineService] Gatekeeper hallucinated tickers (dropped): %s", invalid)
+                        selected = valid_selected
                     
                     if selected:
                         tickers = selected
@@ -355,7 +467,18 @@ class PipelineService:
                 PipelineStateDB.append_events(cycle_id, [event])
                 
                 try:
+                    send_system_log("AGENT", detail)
+                except Exception as sys_log_err:
+                    logger.warning(f"[PipelineService] Failed to send system log: {sys_log_err}")
+                
+                try:
                     # Sync backend in-memory progress and status to DB to prevent stuck state false-positives
+                    # BUT: Do NOT overwrite terminal states (error/stopped/done/idle).
+                    # Ticker tasks may still be emitting events after the pipeline
+                    # manager has already caught an exception and set the error state.
+                    current_status = cls._state.get("status", "")
+                    if current_status in ("error", "stopped", "done", "idle"):
+                        return
                     cls._state.update({
                         "status": "running",
                         "progress": f"[{phase.upper()}] {detail}",
@@ -373,7 +496,7 @@ class PipelineService:
                     logger.info("[PipelineService] V3 Cycle stopped by user request (ticker=%s).", ticker_name)
                     return
                 
-                harness_provider = kwargs.get("harness_provider", "local") if "kwargs" in locals() else "local"
+                harness_provider = kwargs.get("harness_provider", "local")
                 result = await run_v3_pipeline(ticker=ticker_name, cycle_id=cycle_id, emit=emit_cb, harness_provider=harness_provider)
                 
                 # Save verdict to DB
@@ -412,20 +535,30 @@ class PipelineService:
                     decision = result.get("estimate", {})
                     stop_loss = decision.get("stop_loss")
                     take_profit = decision.get("take_profit")
-                    if stop_loss or take_profit:
+                    dynamic_trigger = decision.get("dynamic_trigger")
+                    if stop_loss or take_profit or dynamic_trigger:
                         from app.trading.order_triggers import create_trigger
                         if stop_loss:
                             await create_trigger(bot_id=active_bot_id, ticker=ticker_name, trigger_type="stop_loss", trigger_price=float(stop_loss), action="SELL", qty_pct=1.0, created_by="pipeline")
                         if take_profit:
                             await create_trigger(bot_id=active_bot_id, ticker=ticker_name, trigger_type="take_profit", trigger_price=float(take_profit), action="SELL", qty_pct=1.0, created_by="pipeline")
+                        if dynamic_trigger and isinstance(dynamic_trigger, dict):
+                            dt_type = dynamic_trigger.get("type")
+                            dt_val = dynamic_trigger.get("value")
+                            if dt_type:
+                                await create_trigger(bot_id=active_bot_id, ticker=ticker_name, trigger_type="dynamic", trigger_price=0.0, action="BUY", qty_pct=1.0, dynamic_trigger_type=dt_type, dynamic_trigger_value=dt_val, created_by="pipeline", reason=f"Dynamic Buy Trigger: {dt_type}")
                 except Exception as e:
                     logger.error("[PipelineService] Trade execution failed for %s: %s", ticker_name, e)
 
             # Build tasks and execute concurrently
             # We use standard asyncio.gather here because the underlying LLM calls
             # (inside _run_agent_with_circuit_breaker) are globally throttled by the AdaptiveConcurrencyController.
+            # return_exceptions=True ensures one crashed ticker doesn't kill the whole batch.
             tasks = [_process_ticker(i, t) for i, t in enumerate(tickers)]
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for t, r in zip(tickers, results):
+                if isinstance(r, Exception):
+                    logger.error("[PipelineService] Ticker %s failed: %s", t, r, exc_info=r)
 
             if cls._stop_requested:
                 raise asyncio.CancelledError("Cycle stopped by user")
@@ -482,8 +615,10 @@ class PipelineService:
         
         # Arm kill switch to instantly abort any running HTTP streams
         try:
-            from app.services.prism_agent_caller import prism_client
+            import asyncio
+            from app.services.prism_agent_caller import prism_client, llm
             prism_client.arm_kill_switch()
+            asyncio.create_task(llm.abort_active_requests())
         except Exception as e:
             logger.error("[PipelineService] Failed to arm kill switch: %s", e)
             
@@ -525,6 +660,11 @@ class PipelineService:
             except (Exception, asyncio.CancelledError):
                 pass
         # Nuclear kill: force-close all TCP connections to VLLM endpoints
+        try:
+            from app.services.prism_agent_caller import prism_client
+            prism_client.arm_kill_switch()
+        except Exception as e:
+            logger.error("[PipelineService] Failed to arm kill switch during force_reset: %s", e)
 
         # Reset all in-memory state
         cls._cycle_task = None

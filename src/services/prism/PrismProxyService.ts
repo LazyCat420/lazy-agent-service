@@ -46,13 +46,9 @@ export class PrismProxyService {
         this.registerSession(conversationId, originalEnabledTools);
       }
 
-      // Bypass prism-service's internal filter by enabling ALL tools only if tools were requested
-      if (originalEnabledTools.length === 0) {
-        body.enabledTools = [];
-      } else {
-        const allTools = getToolSchemas().map((s) => s.name);
-        body.enabledTools = allTools;
-      }
+      // Respect the client's explicit tool whitelist. Do not inject all tools, 
+      // as this overwhelms the LLM context window (~130k tokens).
+      body.enabledTools = originalEnabledTools;
     }
 
     // Apply Qwen non-leading system message rewrite patch (workaround for Qwen chat template constraint in vLLM)
