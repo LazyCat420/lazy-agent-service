@@ -113,9 +113,9 @@ export const PYTHONPATH = process.env.PYTHONPATH || defaultPythonPath;
 export const LAZY_TOOL_SERVICE_API_KEY = process.env.LAZY_TOOL_SERVICE_API_KEY;
 export const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || "30000");
 export const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || "60000");
-export const TRADING_SERVICE_URL = process.env.TRADING_SERVICE_URL || "http://10.0.0.16:3031";
+export const TRADING_SERVICE_URL = process.env.TRADING_SERVICE_URL || "http://localhost:3031";
 export const TRADING_SERVICE_API_KEY = process.env.TRADING_SERVICE_API_KEY;
-export const HTML_NOTES_URL = process.env.HTML_NOTES_URL || "http://10.0.0.16:8035";
+export const HTML_NOTES_URL = process.env.HTML_NOTES_URL || "http://localhost:8035";
 
 const CONFIG = {
   LAZY_TOOL_SERVICE_PORT,
