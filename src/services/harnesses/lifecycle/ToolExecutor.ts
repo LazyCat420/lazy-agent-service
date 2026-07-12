@@ -1,8 +1,20 @@
 import ToolOrchestratorService from "../../ToolOrchestratorService.ts";
 import ToolContext from "../../ToolContext.ts";
 import { SERVER_SENT_EVENT_TYPES } from "@rodrigo-barraza/utilities-library/taxonomy";
+import logger from "../../../logger.ts";
 
 import type AgenticLoopState from "../../AgenticLoopState.ts";
+
+function truncateResultIfNeeded(result: any, project?: string, toolName?: string): any {
+  if (project === "vllm-trading-bot" && result !== undefined && result !== null) {
+    const resultStr = typeof result === "string" ? result : JSON.stringify(result);
+    if (resultStr.length > 50000) {
+      logger.warn(`[ToolExecutor] Truncating huge tool result for ${toolName}: ${resultStr.length} chars`);
+      return resultStr.slice(0, 50000) + `\n\n[TRUNCATED: result was ${resultStr.length} chars, showing first 50,000]`;
+    }
+  }
+  return result;
+}
 import type AgentHooks from "../../AgentHooks.ts";
 import type {
   ToolCall,
@@ -89,7 +101,7 @@ export async function executeToolBatch(
         );
         const durationMs = Date.now() - startTime;
         await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result, durationMs };
+        return { name: toolCall.name, id: toolCall.id, result: truncateResultIfNeeded(result, project, toolCall.name), durationMs };
       }
 
       const startTime = Date.now();
@@ -146,7 +158,7 @@ export async function executeToolBatch(
         }
       }
 
-      return { name: toolCall.name, id: toolCall.id, result, durationMs };
+      return { name: toolCall.name, id: toolCall.id, result: truncateResultIfNeeded(result, project, toolCall.name), durationMs };
     }),
   );
 
