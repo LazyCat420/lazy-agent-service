@@ -28,6 +28,7 @@ Thumbs.db
 venv/
 __pycache__/
 *.pyc
+/*.py
 .pytest_cache/
 .deepeval/
 

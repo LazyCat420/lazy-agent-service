@@ -50,18 +50,16 @@ async def register_v3_agents() -> dict[str, bool]:
     Returns a dict mapping agent_id → success status.
     Failures are logged but non-fatal.
     """
-    from lazycat.llm import prism_client as PrismClient
+    from lazycat.llm import PrismClient as PrismClientClass
     from app.config import settings as app_settings
 
     results: dict[str, bool] = {}
 
-    # Target both the primary PRISM_URL (port 7777 via proxy/direct) and local runner port 7778 directly
+    # Target the primary PRISM_URL (port 5591 proxy)
     urls = {
-        app_settings.PRISM_URL,
-        f"http://{app_settings.DEFAULT_HOST}:7778"
+        app_settings.PRISM_URL
     }
     urls = {u for u in urls if u}
-    original_url = PrismClient.url
 
     for module_path in _V3_AGENT_MODULES:
         try:
@@ -88,8 +86,9 @@ async def register_v3_agents() -> dict[str, bool]:
             agent_success = True
             for target_url in urls:
                 try:
-                    PrismClient.url = target_url
-                    success = await PrismClient.register_or_update_custom_agent(
+                    temp_client = PrismClientClass()
+                    temp_client.url = target_url
+                    success = await temp_client.register_or_update_custom_agent(
                         name=agent_name,
                         identity=system_prompt,
                         guidelines=_V3_COMMON_GUIDELINES,
@@ -118,8 +117,6 @@ async def register_v3_agents() -> dict[str, bool]:
                 "[V3Prism] Error registering %s: %s", module_path, e,
             )
             results[module_path] = False
-
-    PrismClient.url = original_url
 
     logger.info(
         "[V3Prism] Registration complete: %d/%d agents registered",

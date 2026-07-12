@@ -27,7 +27,7 @@ AGENT_TOOL_WHITELISTS: dict[str, list[str]] = {
     # ── V3 Gatekeeper ──
     "v3_portfolio_manager": [
         "get_finnhub_news",
-        "search_web",
+        "lazy_web_search",
         "get_market_data",
         "whiteboard_write"
     ],
@@ -48,7 +48,7 @@ AGENT_TOOL_WHITELISTS: dict[str, list[str]] = {
         "get_sec_filings",
         "get_congress_trades",
         # Research
-        "search_web",
+        "lazy_web_search",
         "scrape_url",
         "search_internal_database",
         "search_trading_skills",
@@ -94,7 +94,7 @@ AGENT_TOOL_WHITELISTS: dict[str, list[str]] = {
     ],
     "v3_worker_news": [
         "get_finnhub_news",
-        "search_web",
+        "lazy_web_search",
         "scrape_url",
         "search_internal_database",
         "publish_event",
@@ -109,7 +109,7 @@ AGENT_TOOL_WHITELISTS: dict[str, list[str]] = {
     # ── V3 Pure Agentic Pipeline Agents ──
     "v3_junior_analyst": [
         "get_finnhub_news",
-        "search_web",
+        "lazy_web_search",
         "scrape_url",
         "get_market_data",
         "search_internal_database",
@@ -123,7 +123,7 @@ AGENT_TOOL_WHITELISTS: dict[str, list[str]] = {
         "get_finviz_fundamentals",
         "get_earnings_data",
         "query_financial_metrics",
-        "search_web",
+        "lazy_web_search",
         "scrape_url",
         "get_market_data",
         "post_finding",
@@ -170,7 +170,7 @@ AGENT_TOOL_WHITELISTS: dict[str, list[str]] = {
     "v3_regime_engine": [
         "get_market_data",
         "get_finnhub_news",
-        "search_web",
+        "lazy_web_search",
         "scrape_url",
         "get_technical_indicators",
         "whiteboard_read",
@@ -185,8 +185,15 @@ AGENT_TOOL_WHITELISTS: dict[str, list[str]] = {
 }
 
 
-def get_agent_tools(agent_name: str) -> Optional[list[dict]]:
+def get_agent_tools(agent_name: str, domain_blocklist: list[str] | None = None) -> Optional[list[dict]]:
     """Resolve tool schemas for a given agent from the whitelist.
+
+    Args:
+        agent_name: The agent's name key in AGENT_TOOL_WHITELISTS.
+        domain_blocklist: Optional list of tool domains to exclude from
+            the agent's available tools (e.g. ["Health", "Gaming"]).
+            Only affects dynamically discovered tools — whitelisted tools
+            are always included regardless of domain.
 
     Returns:
         A filtered list of tool schemas if the agent has a whitelist,
@@ -200,8 +207,18 @@ def get_agent_tools(agent_name: str) -> Optional[list[dict]]:
     tool_names = AGENT_TOOL_WHITELISTS[agent_name]
     schemas = registry.get_schemas_by_names(tool_names)
 
+    # Filter out blocked domains (only for non-whitelisted tools that
+    # were dynamically discovered — whitelisted tools pass through)
+    if domain_blocklist:
+        whitelisted_set = set(tool_names)
+        schemas = [
+            s for s in schemas
+            if s.get("name", s.get("function", {}).get("name", "")) in whitelisted_set
+            or s.get("domain", "") not in domain_blocklist
+        ]
+
     # Warn if any whitelisted tools don't exist in the registry
-    found_names = {s["function"]["name"] for s in schemas}
+    found_names = {s.get("name", s.get("function", {}).get("name", "")) for s in schemas}
     missing = set(tool_names) - found_names
     if missing:
         logger.warning(
@@ -212,10 +229,11 @@ def get_agent_tools(agent_name: str) -> Optional[list[dict]]:
         )
 
     logger.debug(
-        "[ToolWhitelist] Agent '%s' → %d/%d tools resolved",
+        "[ToolWhitelist] Agent '%s' → %d/%d tools resolved (blocklist=%d domains)",
         agent_name,
         len(schemas),
         len(tool_names),
+        len(domain_blocklist) if domain_blocklist else 0,
     )
     return schemas
 

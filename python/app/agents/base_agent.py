@@ -113,7 +113,7 @@ async def run_agent(
     parent_conversation_id: str | None = None,
     parent_agent_session_id: str | None = None,
     model_override: str | None = None,
-    harness_provider: str | None = None,
+    prism_overrides: dict | None = None,
 ) -> dict:
     """
     Generic agent runner:
@@ -136,15 +136,6 @@ async def run_agent(
     from app.config.context_budget import get_context_budget
 
     ctx_budget = get_context_budget()
-
-    # Inject shared whiteboard state before truncation
-    try:
-        from app.agents.whiteboard import whiteboard
-        board_context = await whiteboard.summarize(ticker, cycle_id)
-        if board_context:
-            data_context = f"{board_context}\n\n{data_context}" if data_context else board_context
-    except Exception as e:
-        logger.error("[BaseAgent] Failed to fetch whiteboard context: %s", e)
 
     if data_context and len(data_context) > ctx_budget.data_context_chars:
         original_len = len(data_context)
@@ -180,8 +171,12 @@ async def run_agent(
     async def _agent_llm_call():
         from app.agents.tool_whitelists import get_agent_tools, get_agent_budget_turns
 
+        # Extract overrides from Settings panel
+        overrides = prism_overrides or {}
+        domain_blocklist = overrides.get("tool_domain_blocklist", [])
+
         # Per-agent tool whitelist: only show tools relevant to this agent's role
-        agent_tools = get_agent_tools(agent_name) if enable_tools else []
+        agent_tools = get_agent_tools(agent_name, domain_blocklist=domain_blocklist) if enable_tools else []
 
         # Per-agent turn budget: reasoning-only agents get 1, tool agents get role-specific limits
         max_turns = get_agent_budget_turns(agent_name, enable_tools)
@@ -222,17 +217,48 @@ async def run_agent(
                 failed = True
                 error_msg = "None result"
 
+            final_tool_name = tool_name
+            provider = None
+            if tool_name == "lazy_web_search" and not failed:
+                try:
+                    import json
+                    res_dict = result if isinstance(result, dict) else json.loads(result)
+                    provider = res_dict.get("provider")
+                    if provider:
+                        final_tool_name = f"lazy_web_search_{provider.lower()}"
+                except Exception:
+                    pass
+
             try:
                 from app.v3.tool_telemetry import record_tool_call, _hash_args
                 record_tool_call(
                     cycle_id=cycle_id,
                     agent_name=agent_name,
-                    tool_name=tool_name,
+                    tool_name=final_tool_name,
                     args_hash=_hash_args(arguments),
                     success=not failed,
                     was_blocked=was_blocked,
                     error_message=error_msg,
                 )
+                
+                if provider:
+                    try:
+                        from app.telemetry.bus import publish_event
+                        from app.telemetry.schema import TelemetryEvent
+                        from datetime import datetime, timezone
+                        publish_event(TelemetryEvent(
+                            ts=datetime.now(timezone.utc).isoformat(),
+                            cycle_id=cycle_id,
+                            ticker=ticker,
+                            kind="pipeline",
+                            source="agent_tool",
+                            status="ok",
+                            step=f"{provider.lower()}_{ticker}",
+                            phase="collecting",
+                            detail=f"Web search via {provider}",
+                        ))
+                    except Exception as ev_err:
+                        logger.debug(f"Failed to emit web search telemetry: {ev_err}")
             except Exception as e:
                 logger.debug(f"Telemetry failed: {e}")
 
@@ -278,14 +304,15 @@ async def run_agent(
             "name": prism_agent_id, 
             "system_prompt": system_prompt,
             "llm_client": prism_client,
-            "project": settings.PROJECT_NAME
+            "project": settings.PROJECT_NAME,
+            "auto_approve": overrides.get("prism_auto_approve", True),
         }
         resolved_model = model_override
         resolved_provider = None
         if not resolved_model:
             from app.services.prism_agent_caller import resolve_default_model_for_agent
             try:
-                resolved_model, resolved_provider = resolve_default_model_for_agent(agent_name)
+                resolved_model, resolved_provider = await resolve_default_model_for_agent(agent_name)
                 logger.info("[BaseAgent] Dynamically resolved default model for %s: %s (provider: %s)", agent_name, resolved_model, resolved_provider)
             except Exception as e:
                 logger.warning("[BaseAgent] Failed to resolve default model for %s: %s. Using default fallback.", agent_name, e)
@@ -303,8 +330,7 @@ async def run_agent(
         import uuid
         session = ConversationSession(session_id=parent_agent_session_id or f"sess_{int(time.time())}_{uuid.uuid4().hex[:6]}")
         
-        from app.agents.inbox import inbox_manager
-        inbox_manager.register_instance(session.session_id, agent_name, ticker)
+        _active_agents.add(agent_name)
         
         try:
             harness = AgentHarness(
@@ -318,7 +344,7 @@ async def run_agent(
             final_text = await harness.run(full_prompt)
             elapsed_ms = int((time.time() - t0) * 1000)
         finally:
-            inbox_manager.unregister_instance(session.session_id)
+            _active_agents.discard(agent_name)
 
         return (
             final_text,

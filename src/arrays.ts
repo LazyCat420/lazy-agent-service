@@ -4,6 +4,10 @@
  *
  * Categories: text, code, vision, document, image (text-to-image), imageEdit, search
  * Each category maps model name → Arena ELO score.
+ * 
+ * NOTE: This is a static, manually updated leaderboard cache. Because it changes
+ * infrequently and only requires updates during new model releases (on deploy),
+ * it is intentionally kept in source code rather than a database.
  */
 
 export const ARENA_SCORES = {

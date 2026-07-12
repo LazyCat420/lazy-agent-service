@@ -19,6 +19,7 @@ from typing import Any, Callable
 from app.v3.shared_desk import SharedDesk, DeskPhase, PhaseOutcome
 from app.v3.guardrails import CircuitBreaker
 from app.services.adaptive_concurrency import concurrency_controller
+from app.v3.telemetry import persist_telemetry
 from app.v3.agent_runner import run_v3_agent
 from app.v3.desk_persistence import save_desk
 
@@ -39,7 +40,9 @@ async def run_v3_pipeline(
     research_focus: str = "",
     trigger_type: str = "manual",
     active_directives: list[dict] | None = None,
-    harness_provider: str = "local",
+
+    agent_locale: str = "default",
+    prism_overrides: dict | None = None,
 ) -> dict[str, Any]:
     """Run the full V3 Pure Agentic Linear Pipeline for a single ticker.
 
@@ -107,7 +110,9 @@ async def run_v3_pipeline(
         research_focus=research_focus,
         trigger_type=trigger_type,
     )
-    desk.cycle_metadata["harness_provider"] = harness_provider
+
+    desk.cycle_metadata["agent_locale"] = agent_locale
+    desk.cycle_metadata["prism_overrides"] = prism_overrides or {}
     
     # Store the pre-collected report
     desk.cycle_metadata["data_report"] = data_report
@@ -945,6 +950,9 @@ def _extract_agent_results(desk: SharedDesk) -> dict[str, Any]:
             "response": desk.quant_report.get("summary", ""),
             "tokens": token_lookup.get("v3_quant_analyst", 0)
         }
+
+    # IMPORTANT: Save telemetry and quality scores to DB
+    persist_telemetry(desk)
 
     return results
 

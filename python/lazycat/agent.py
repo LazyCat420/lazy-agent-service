@@ -100,6 +100,7 @@ class BaseAgent:
         provider: str = "vllm",
         project: str = "lazycat-sdk-app",
         llm_client: Any = None,
+        auto_approve: bool = True,
     ):
         self.name = name
         self.system_prompt = system_prompt
@@ -110,6 +111,7 @@ class BaseAgent:
         self.project = project
         self.tools: list[dict] = []
         self.llm_client = llm_client or prism_client
+        self.auto_approve = auto_approve
         
     def add_tool(self, tool_schema: dict):
         self.tools.append(tool_schema)
@@ -158,7 +160,8 @@ class AgentHarness:
                 tools=self.agent.tools if self.agent.tools else None,
                 provider=self.agent.provider,
                 stream=True,
-                session_id=self.session.session_id
+                session_id=self.session.session_id,
+                auto_approve=self.agent.auto_approve,
             )
             
             content = ""

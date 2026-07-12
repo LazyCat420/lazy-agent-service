@@ -159,7 +159,7 @@ class Settings(BaseSettings):
 
     # ── Smart Ticker Triage ──
     TRIAGE_ENABLED: bool = True  # toggle triage on/off (flat list if disabled)
-    TRIAGE_GLANCE_HOURS: int = 24  # analyzed within N hours → Glance tier
+    TRIAGE_GLANCE_HOURS: int = 48  # analyzed within N hours → Glance tier
     TRIAGE_DEEP_HOURS: int = 72  # not analyzed in N hours → Deep tier
     TRIAGE_NEGLECT_MAX_DAYS: int = 5  # flag neglected after N days
     TRIAGE_MAX_CONSECUTIVE_GLANCE: int = 5  # force Standard after N Glance skips
@@ -207,13 +207,6 @@ class Settings(BaseSettings):
     # ── Finnhub ──
     FINNHUB_API_KEY: str = ""
 
-    # ── Web Search Providers ──
-    TAVILY_API_KEY: str = ""
-    BING_API_KEY: str = ""
-    EXA_API_KEY: str = ""
-    GOOGLE_SEARCH_API_KEY: str = ""
-    GOOGLE_SEARCH_CX: str = ""
-
     # ── FRED (Federal Reserve) ──
     FRED_API_KEY: str = ""
 
@@ -260,12 +253,10 @@ class Settings(BaseSettings):
     PRISM_SKIP_CONVERSATION: bool = False
     PRISM_AUTO_APPROVE: bool = True
     PRISM_WORKSPACE_ENABLED: bool = False
-    PRISM_THINKING_ENABLED: bool = True
     PRISM_MAX_ITERATIONS: int = 100
     PRISM_MAX_SUB_AGENT_ITERATIONS: int = 100
     PRISM_MAX_RECURSION_DEPTH: int = 2
     PRISM_THOUGHT_STRUCTURE: str = "chain_of_thought"
-    PRISM_TOPOLOGY: str = "peer_to_peer"
 
     # ── SEC 13F Tracking ──
     SEC_USER_AGENT: str = "vllm-trading-bot LazyCat420@users.noreply.github.com"
@@ -276,10 +267,6 @@ class Settings(BaseSettings):
 
     # ── Tool Calling Bypass ──
     USE_TOOL_CALLING: bool = False
-
-    # ── Fallback LLM ──
-    FALLBACK_TO_PRISM_CLOUD: bool = True
-    PRISM_FALLBACK_MODEL: str = "gemini-3.5-flash"
 
     API_SERVER_KEY: str = "change-me-local-dev"
 
