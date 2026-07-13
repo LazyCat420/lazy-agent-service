@@ -200,7 +200,7 @@ async function callPrismAgent(
     max_tokens: maxTokens,
     temperature,
     stream: false,
-    chat_template_kwargs: { enable_thinking: false },
+    thinkingEnabled: false,
     enabledTools: tools && tools.length > 0 ? tools.map(t => t.name) : [],
   };
   if (tools && tools.length > 0) {
