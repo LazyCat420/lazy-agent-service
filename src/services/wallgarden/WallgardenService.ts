@@ -201,6 +201,7 @@ async function callPrismAgent(
     temperature,
     stream: false,
     chat_template_kwargs: { enable_thinking: false },
+    enabledTools: tools && tools.length > 0 ? tools.map(t => t.name) : [],
   };
   if (tools && tools.length > 0) {
     body.tools = tools;
