@@ -1,7 +1,7 @@
 services:
   lazy-service:
-    image: ${IMAGE_NAME:-lazy-agent-service}:latest
-    container_name: ${IMAGE_NAME:-lazy-agent-service}
+    image: ${IMAGE_NAME:-lazy-tool-service}:latest
+    container_name: ${IMAGE_NAME:-lazy-tool-service}
     restart: unless-stopped
     ports:
       - "${PORT:-7778}:7778"

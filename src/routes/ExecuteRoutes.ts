@@ -179,7 +179,7 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
 
     if (tName.startsWith("music_player_")) {
       const musicApiUrl = "http://10.0.0.16:8002";
-      let musicApiResponse: Response | null = null;
+      let musicApiResponse: globalThis.Response | null = null;
       if (tName === "music_player_suggest_artists") {
         result = { artists: toolArguments.artists || [] };
       } else if (tName === "music_player_add_node") {
