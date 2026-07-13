@@ -151,6 +151,38 @@ class PipelineService:
                 prism_client.url = f"http://{_cfg.DEFAULT_HOST}:7778"
             logger.info("[PipelineService] Cycle %s: prism_client.url set to %s (PRISM_ENABLED=%s)", cycle_id, prism_client.url, _cfg.PRISM_ENABLED)
 
+            def emit(phase: str, step: str, detail: str, **kwargs):
+                event = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "phase": phase,
+                    "step": step,
+                    "detail": detail,
+                    "status": kwargs.pop("status", "running"),
+                    "data": kwargs.pop("data", {}),
+                    "elapsed_ms": kwargs.pop("elapsed_ms", 0),
+                }
+                event.update(kwargs)
+                logger.info(f"[{cycle_id}][{phase}][{step}] {detail}")
+                PipelineStateDB.append_events(cycle_id, [event])
+                
+                try:
+                    send_system_log("AGENT", detail)
+                except Exception as sys_log_err:
+                    logger.warning(f"[PipelineService] Failed to send system log: {sys_log_err}")
+                
+                try:
+                    current_status = cls._state.get("status", "")
+                    if current_status in ("error", "stopped", "done", "idle"):
+                        return
+                    cls._state.update({
+                        "status": "running",
+                        "progress": f"[{phase.upper()}] {detail}",
+                        "phase": phase
+                    })
+                    cls.save_state()
+                except Exception as db_sync_err:
+                    logger.warning("[PipelineService] Failed to sync progress to DB: %s", db_sync_err)
+
             # 1. Run Gatekeeper
 
             try:
@@ -418,18 +450,61 @@ class PipelineService:
                             """, [s['ticker'] for s in top_scorers]).fetchall()
                             past_results_map = {r[0]: {"action": r[1], "conf": r[2], "reason": r[3]} for r in past_results_rows}
                         
-                        # Rebuild markdown table for Gatekeeper (now includes Inst. Funds column)
+                        # ── FRESHNESS GATE: classify stocks as NEW/CHANGED/STALE ──
+                        from app.services.freshness_gate import run_freshness_gate
+                        gate_result = run_freshness_gate(
+                            top_scorers=top_scorers,
+                            last_analysis_map=last_analysis_map,
+                            emit=emit,
+                        )
+                        eligible_stocks = gate_result["eligible"]
+                        stale_stocks = gate_result["stale"]
+
+                        # Log stale skips to pipeline events
+                        if stale_stocks:
+                            PipelineStateDB.append_events(cycle_id, [{
+                                "ts": datetime.now(timezone.utc).isoformat(),
+                                "phase": "freshness_gate",
+                                "step": "STALE_SKIPPED",
+                                "detail": f"Auto-skipped {len(stale_stocks)} stale stocks: {[s['ticker'] for s in stale_stocks]}",
+                                "status": "filtered",
+                                "data": {t["ticker"]: {"delta": t.get("delta_score", 0), "reason": t.get("skip_reason", "")} for t in stale_stocks},
+                            }])
+
+                        # ── DISCOVERY MODE: if < 3 eligible, find new leads ──
+                        if len(eligible_stocks) < 3:
+                            logger.info("[PipelineService] Only %d eligible stocks — triggering Discovery Mode", len(eligible_stocks))
+                            from app.services.discovery_mode import run_discovery
+                            discoveries = await run_discovery(
+                                existing_tickers=[s["ticker"] for s in top_scorers],
+                                emit=emit,
+                            )
+                            if discoveries:
+                                eligible_stocks.extend(discoveries)
+                                logger.info("[PipelineService] Discovery Mode added %d leads: %s",
+                                            len(discoveries), [d["ticker"] for d in discoveries])
+                                PipelineStateDB.append_events(cycle_id, [{
+                                    "ts": datetime.now(timezone.utc).isoformat(),
+                                    "phase": "discovery_mode",
+                                    "step": "NEW_LEADS",
+                                    "detail": f"Discovery Mode found {len(discoveries)} new leads: {[d['ticker'] for d in discoveries]}",
+                                    "status": "discovered",
+                                }])
+
+                        # Build markdown table for Gatekeeper with ONLY eligible stocks
+                        pm_stocks = eligible_stocks if eligible_stocks else top_scorers[:5]  # Fallback: top 5 if nothing eligible
                         md_lines = [
-                            "| Ticker | Score | Source | Days Since Analysis | Price | Change % | Rel Vol | SMA-20 | RSI | Inst. Funds | Past Verdict | Past Reason |",
-                            "|--------|-------|--------|---------------------|-------|----------|---------|--------|-----|-------------|--------------|-------------|"
+                            "| Ticker | Score | Source | Freshness | Price | Change % | Rel Vol | SMA-20 | RSI | Inst. Funds | Past Verdict | Past Reason |",
+                            "|--------|-------|--------|-----------|-------|----------|---------|--------|-----|-------------|--------------|-------------|"
                         ]
-                        for s in top_scorers:
-                            sma_rel = ((s["price"] - s["sma"]) / s["sma"]) * 100 if s["sma"] > 0 else 0
+                        for s in pm_stocks:
+                            sma_rel = ((s["price"] - s["sma"]) / s["sma"]) * 100 if s.get("sma", 0) > 0 else 0
                             past = past_results_map.get(s["ticker"])
                             past_verdict = f"{past['action']} ({past['conf']}%)" if past else "N/A"
                             past_reason = (past['reason'][:100] + "...").replace('|', '') if past and past.get('reason') else "N/A"
                             inst_str = f"{s.get('inst_funds', 0)}" if s.get('inst_funds', 0) > 0 else "-"
-                            md_lines.append(f"| {s['ticker']} | {s['score']:.1f} | {s['src']} | {s['dsa']} | ${s['price']:.2f} | {s['chg']:+.2f}% | {s['rvol']:.2f}x | {sma_rel:+.2f}% | {s['rsi']:.1f} | {inst_str} | {past_verdict} | {past_reason} |")
+                            freshness_str = s.get("freshness", "NEW")
+                            md_lines.append(f"| {s['ticker']} | {s.get('score', 0):.1f} | {s.get('src', 'N/A')} | {freshness_str} | ${s.get('price', 0):.2f} | {s.get('chg', 0):+.2f}% | {s.get('rvol', 0):.2f}x | {sma_rel:+.2f}% | {s.get('rsi', 50):.1f} | {inst_str} | {past_verdict} | {past_reason} |")
                             
                         snapshot_table = "\n".join(md_lines)
                         # -----------------------
@@ -437,7 +512,8 @@ class PipelineService:
                     min_tickers = 5
                     max_tickers = 15
                     system_prompt = SYSTEM_PROMPT.replace("{min_tickers}", str(min_tickers)).replace("{max_tickers}", str(max_tickers))
-                    user_prompt = f"Here is the active watchlist snapshot (Top 20):\n\n{snapshot_table}\n\nIMPORTANT: You must output ONLY a valid JSON object. Do NOT output any conversational text or formatting blocks. Your response must begin with {{ and end with }}."
+                    stock_count = len(pm_stocks)
+                    user_prompt = f"Here are {stock_count} stocks that passed our Freshness Gate (all have new data or material changes):\n\n{snapshot_table}\n\nIMPORTANT: You must output ONLY a valid JSON object. Do NOT output any conversational text or formatting blocks. Your response must begin with {{ and end with }}."
                     
                     from app.services.bot_manager import get_active_bot_id
                     active_bot_id = get_active_bot_id()
@@ -513,6 +589,18 @@ class PipelineService:
                 logger.error("[PipelineService] Portfolio screener failed, falling back to AAPL: %s", e)
                 tickers = ["AAPL"]
 
+            # Build snapshot map for Freshness Gate baselines
+            _ticker_snapshot_map = {}
+            try:
+                for sr in scored_results:
+                    _ticker_snapshot_map[sr["ticker"]] = {
+                        "price": sr.get("price", 0),
+                        "rsi": sr.get("rsi", 0),
+                        "fund_count": sr.get("inst_funds", 0),
+                    }
+            except NameError:
+                pass  # scored_results not defined (e.g. fallback path)
+
             # Set status to running now that gatekeeper is done
             cls._state.update({
                 "status": "running",
@@ -528,42 +616,6 @@ class PipelineService:
             if cls._stop_requested:
                 raise asyncio.CancelledError()
 
-            def emit_cb(phase: str, step: str, detail: str, **kwargs):
-                event = {
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "phase": phase,
-                    "step": step,
-                    "detail": detail,
-                    "status": kwargs.pop("status", "running"),
-                    "data": kwargs.pop("data", {}),
-                    "elapsed_ms": kwargs.pop("elapsed_ms", 0),
-                }
-                event.update(kwargs)
-                logger.info(f"[{cycle_id}][{phase}][{step}] {detail}")
-                PipelineStateDB.append_events(cycle_id, [event])
-                
-                try:
-                    send_system_log("AGENT", detail)
-                except Exception as sys_log_err:
-                    logger.warning(f"[PipelineService] Failed to send system log: {sys_log_err}")
-                
-                try:
-                    # Sync backend in-memory progress and status to DB to prevent stuck state false-positives
-                    # BUT: Do NOT overwrite terminal states (error/stopped/done/idle).
-                    # Ticker tasks may still be emitting events after the pipeline
-                    # manager has already caught an exception and set the error state.
-                    current_status = cls._state.get("status", "")
-                    if current_status in ("error", "stopped", "done", "idle"):
-                        return
-                    cls._state.update({
-                        "status": "running",
-                        "progress": f"[{phase.upper()}] {detail}",
-                        "phase": phase
-                    })
-                    cls.save_state()
-                except Exception as db_sync_err:
-                    logger.warning("[PipelineService] Failed to sync progress to DB: %s", db_sync_err)
-
             cls._state["progress"] = f"Processing {len(tickers)} tickers concurrently"
             cls.save_state()
 
@@ -574,11 +626,14 @@ class PipelineService:
                 
                 agent_locale = cls._state.get("agent_locale", "default")
                 prism_overrides = cls._state.get("prism_overrides", {})
-                result = await run_v3_pipeline(ticker=ticker_name, cycle_id=cycle_id, emit=emit_cb, agent_locale=agent_locale, prism_overrides=prism_overrides)
+                result = await run_v3_pipeline(ticker=ticker_name, cycle_id=cycle_id, emit=emit, agent_locale=agent_locale, prism_overrides=prism_overrides)
                 
                 # Save verdict to DB
                 from app.services.result_saver import save_analysis_result
-                save_analysis_result(ticker_name, cycle_id, result)
+                save_analysis_result(
+                    ticker_name, cycle_id, result,
+                    snapshot=_ticker_snapshot_map.get(ticker_name),
+                )
                 
                 # Execute Trade — gated by confidence threshold
                 action = result.get("action", "HOLD")
@@ -631,7 +686,10 @@ class PipelineService:
 
                 if trade_failed:
                     result["trade_failed"] = True
-                    save_analysis_result(ticker_name, cycle_id, result)
+                    save_analysis_result(
+                        ticker_name, cycle_id, result,
+                        snapshot=_ticker_snapshot_map.get(ticker_name),
+                    )
 
             # Build tasks and execute concurrently
             # We use standard asyncio.gather here because the underlying LLM calls

@@ -71,17 +71,17 @@ async def register_v3_agents() -> dict[str, bool]:
             system_prompt = getattr(module, "SYSTEM_PROMPT", "You are an autonomous V3 trading agent. Your identity will be provided dynamically at runtime.")
             tool_whitelist = module.TOOL_WHITELIST
 
-            # Merge with Prism dynamic meta-tools
-            from app.agents.dynamic_tool_prompt import PRISM_DYNAMIC_META_TOOLS
-            
+            # V3 agents get ONLY their strict role-specific whitelists.
+            # No dynamic tool discovery — discover_and_enable_tools caused
+            # agents to pull in 766 tools and blow the 262k context limit.
             prefixed_whitelist = []
             for t in tool_whitelist:
-                if t.startswith("mcp__") or t.startswith("domain:") or t in ("search_web", "discover_and_enable_tools", "enable_tools", "disable_tools", "search_tools"):
+                if t.startswith("mcp__") or t.startswith("domain:"):
                     prefixed_whitelist.append(t)
                 else:
                     prefixed_whitelist.append(f"mcp__lazy-tool-service__{t}")
             
-            enabled_tools = prefixed_whitelist + list(PRISM_DYNAMIC_META_TOOLS)
+            enabled_tools = prefixed_whitelist
 
             agent_success = True
             for target_url in urls:
@@ -117,6 +117,30 @@ async def register_v3_agents() -> dict[str, bool]:
                 "[V3Prism] Error registering %s: %s", module_path, e,
             )
             results[module_path] = False
+
+    # Register fallback agent
+    fallback_agent_id = "CUSTOM_SYSTEM_JANITOR_AGENT"
+    try:
+        agent_success = True
+        for target_url in urls:
+            try:
+                temp_client = PrismClientClass()
+                temp_client.url = target_url
+                success = await temp_client.register_or_update_custom_agent(
+                    name="SYSTEM_JANITOR_AGENT",
+                    identity="You are a system fallback agent handling triage.",
+                    guidelines=_V3_COMMON_GUIDELINES,
+                    enabled_tools=["mcp__lazy-tool-service__lazy_web_search"],
+                )
+                if not success:
+                    agent_success = False
+                    logger.warning("[V3Prism] Failed to register fallback agent %s at %s", fallback_agent_id, target_url)
+            except Exception as ex:
+                agent_success = False
+                logger.error("[V3Prism] Exception registering fallback agent %s at %s: %s", fallback_agent_id, target_url, ex)
+        results[fallback_agent_id] = agent_success
+    except Exception as e:
+        logger.error("[V3Prism] Error registering fallback agent %s: %s", fallback_agent_id, e)
 
     logger.info(
         "[V3Prism] Registration complete: %d/%d agents registered",

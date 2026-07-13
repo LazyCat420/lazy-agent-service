@@ -221,6 +221,10 @@ app.use("/prism-proxy", async (req: Request, res: Response) => {
 });
 app.use("/charts", express.static("data/charts"));
 
+// Wallgarden LLM backend routes
+import wallgardenRouter from "./routes/WallgardenRoutes.js";
+app.use("/wallgarden", wallgardenRouter);
+
 // Error handler (must be last)
 app.use(errorHandler);
 

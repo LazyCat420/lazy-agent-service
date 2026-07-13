@@ -226,233 +226,245 @@ async def run_v3_pipeline(
             result["escalated"] = False
             return result
 
+    # ═══════════════════════════════════════════════════════════════════
+    # DYNAMIC BLACKBOARD / P2P COORDINATOR
+    # ═══════════════════════════════════════════════════════════════════
     from app.v3.agents import regime_engine
-
-    # Run Regime Engine (macro state classification) at start
-    emit(
-        "analyzing", f"v3_regime_engine_start_{ticker}",
-        f"🌐 {ticker}: Running Market Regime Engine to classify global macro state...",
-        status="running",
-    )
-    outcome = await _run_agent_with_circuit_breaker(
-        desk=desk,
-        agent_module=regime_engine,
-        phase_name="regime_engine",
-        breaker=breaker,
-        cycle_id=cycle_id,
-        bot_id=bot_id,
-        emit=emit,
-    )
-    breaker.record_outcome("regime_engine", outcome)
-
-    # ═══════════════════════════════════════════════════════════════════
-    # LAYER 2: Research — Dynamic Topology based on Regime
-    # ═══════════════════════════════════════════════════════════════════
     from app.v3.agents import junior_analyst, fundamental_analyst, quant_analyst
-
-    regime = "CONTRADICTORY"
-    if desk.has_artifact("regime_classification"):
-        regime = desk.regime_classification.get("regime", "CONTRADICTORY")
-
-    emit(
-        "analyzing", f"v3_research_topology_{ticker}",
-        f"📊 {ticker}: Selected research topology for regime {regime}",
-        status="running",
-    )
-
-    if regime == "HIGH_VOLATILITY":
-        # Volatility = Quant focus. Run JA and QA in parallel. Skip FA to avoid timeout.
-        emit(
-            "analyzing", f"v3_research_parallel_{ticker}",
-            f"⚡ {ticker}: Running Junior & Quant Analysts in parallel (Volatility Topology)",
-            status="running",
-        )
-        ja_task = _run_agent_with_circuit_breaker(
-            desk=desk, agent_module=junior_analyst, phase_name="junior_analyst",
-            breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
-        )
-        qa_task = _run_agent_with_circuit_breaker(
-            desk=desk, agent_module=quant_analyst, phase_name="quant_analyst",
-            breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
-        )
-        ja_out, qa_out = await asyncio.gather(ja_task, qa_task)
-
-        abort = _check_abort(desk, breaker, "junior_analyst", ja_out)
-        if abort:
-            return abort
-        abort = _check_abort(desk, breaker, "quant_analyst", qa_out)
-        if abort:
-            return abort
-        
-        # Write dummy fundamental report to keep pipeline satisfied
-        desk.append_artifact("fundamental_report", {
-            "summary": "Skipped detailed fundamental analysis due to High Volatility regime. Quantitative metrics prioritized.",
-            "pillars": {
-                "revenue_growth": "Not analyzed", "profitability": "Not analyzed",
-                "moat": "Not analyzed", "management": "Not analyzed", "valuation": "Not analyzed"
-            },
-            "thesis_direction": "NEUTRAL",
-            "confidence": 50,
-            "data_gaps": ["DataGap: Fundamental analysis bypassed"],
-            "catalysts": [],
-            "risks": []
-        })
-        breaker.record_outcome("fundamental_analyst", PhaseOutcome.SUCCESS)
-
-    elif regime == "DEEP_DISCOUNT":
-        # Deep Discount = Fundamental focus. Run JA first, then run FA (hierarchical Map-Reduce/P2P).
-        emit(
-            "analyzing", f"v3_research_discount_{ticker}",
-            f"🔍 {ticker}: Running fundamental-focused research (Discount/Fundamental Topology)",
-            status="running",
-        )
-        for phase_name, agent_module in [
-            ("junior_analyst", junior_analyst),
-            ("fundamental_analyst", fundamental_analyst),
-            ("quant_analyst", quant_analyst),
-        ]:
-            outcome = await _run_agent_with_circuit_breaker(
-                desk=desk, agent_module=agent_module, phase_name=phase_name,
-                breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
-            )
-            abort = _check_abort(desk, breaker, phase_name, outcome)
-            if abort:
-                return abort
-
-    else:
-        # CONTRADICTORY (Default): Sequential JA -> FA -> QA
-        for phase_name, agent_module in [
-            ("junior_analyst", junior_analyst),
-            ("fundamental_analyst", fundamental_analyst),
-            ("quant_analyst", quant_analyst),
-        ]:
-            outcome = await _run_agent_with_circuit_breaker(
-                desk=desk, agent_module=agent_module, phase_name=phase_name,
-                breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
-            )
-            abort = _check_abort(desk, breaker, phase_name, outcome)
-            if abort:
-                return abort
-
-    # Advance phase: INIT → RESEARCH_DONE
-    desk.advance_phase(DeskPhase.RESEARCH_DONE)
-    save_desk(desk)
-
-    emit(
-        "analyzing", f"v3_research_done_{ticker}",
-        f"📊 {ticker}: Research layer complete "
-        f"({len(desk.get_research_artifacts())}/3 artifacts)",
-        status="ok",
-    )
-
-    # ═══════════════════════════════════════════════════════════════════
-    # LAYER 3: Debate — Parallel Execution: Bull & Bear → Judge
-    # ═══════════════════════════════════════════════════════════════════
-    from app.v3.agents import bull_agent, bear_agent
-
-    # Run Bull and Bear concurrently
-    bull_task = _run_agent_with_circuit_breaker(
-        desk=desk,
-        agent_module=bull_agent,
-        phase_name="bull_argument",
-        breaker=breaker,
-        cycle_id=cycle_id,
-        bot_id=bot_id,
-        emit=emit,
-        include_debate_context=False,
-    )
-    bear_task = _run_agent_with_circuit_breaker(
-        desk=desk,
-        agent_module=bear_agent,
-        phase_name="bear_rebuttal",
-        breaker=breaker,
-        cycle_id=cycle_id,
-        bot_id=bot_id,
-        emit=emit,
-        include_debate_context=False,
-    )
-    
-    bull_outcome, bear_outcome = await asyncio.gather(bull_task, bear_task)
-    breaker.record_outcome("bull_argument", bull_outcome)
-    breaker.record_outcome("bear_rebuttal", bear_outcome)
-
-    # Abort check: if BOTH debate agents failed, skip the judge
-    if bull_outcome in (PhaseOutcome.TIMED_OUT,) and bear_outcome in (PhaseOutcome.TIMED_OUT,):
-        logger.error("[V3] %s: Both debate agents TIMED OUT — aborting pipeline", ticker)
-        desk.advance_phase(DeskPhase.ABORTED, bull_outcome)
-        save_desk(desk)
-        return _build_noop_result(desk, reason="Both debate agents timed out")
-    if breaker.should_abort("bull_argument", bull_outcome) and breaker.should_abort("bear_rebuttal", bear_outcome):
-        logger.error("[V3] %s: Circuit breaker tripped on BOTH debate agents — aborting pipeline", ticker)
-        desk.advance_phase(DeskPhase.ABORTED, bull_outcome)
-        save_desk(desk)
-        return _build_noop_result(desk, reason="Both debate agents failed")
-
-    # Synthesis / Judge phase (replacing the linear bull defense)
-    if desk.has_artifact("bull_argument") and desk.has_artifact("bear_rebuttal"):
-        outcome = await _run_debate_judge(
-            desk=desk,
-            breaker=breaker,
-            cycle_id=cycle_id,
-            bot_id=bot_id,
-            emit=emit,
-        )
-        breaker.record_outcome("debate_judge", outcome)
-
-    # Advance phase: RESEARCH_DONE → DEBATE_DONE
-    desk.advance_phase(DeskPhase.DEBATE_DONE)
-    save_desk(desk)
-
-    emit(
-        "analyzing", f"v3_debate_done_{ticker}",
-        f"⚔️ {ticker}: Debate layer complete "
-        f"({len(desk.get_debate_artifacts())}/3 artifacts)",
-        status="ok",
-    )
-
-    # ═══════════════════════════════════════════════════════════════════
-    # LAYER 4: Decision — Board of Directors
-    # ═══════════════════════════════════════════════════════════════════
-    # Reuse regime from Layer 2 (already extracted after regime engine ran)
-
-    # Run Board of Directors with regime-swapped persona
-    outcome = await _run_board_of_directors(
-        desk=desk,
-        regime=regime,
-        breaker=breaker,
-        cycle_id=cycle_id,
-        bot_id=bot_id,
-        emit=emit,
-    )
-    breaker.record_outcome("board_of_directors", outcome)
-
-    # ═══════════════════════════════════════════════════════════════════
-    # LAYER 5: Decision Synthesis — Structured trade verdict with signal weights
-    # ═══════════════════════════════════════════════════════════════════
+    from app.v3.agents import bull_agent, bear_agent, debate_judge
+    from app.config.config_cognition import cognition_settings as _cog_settings
     from app.config import settings as _settings
 
-    if _settings.DECISION_AGENT_ENABLED:
-        from app.v3.agents import decision_agent
+    tasks_to_run = []
+    
+    # Track execution counts to prevent infinite cascades / loops
+    MAX_RUNS_PER_AGENT = 3
+    run_counts = {
+        "regime_engine": 0,
+        "junior_analyst": 0,
+        "fundamental_analyst": 0,
+        "quant_analyst": 0,
+        "bull_argument": 0,
+        "bear_rebuttal": 0,
+        "debate_judge": 0,
+        "board_of_directors": 0,
+        "decision_synthesizer": 0,
+        "tournament_debate": 0,
+    }
 
-        outcome = await _run_agent_with_circuit_breaker(
-            desk=desk,
-            agent_module=decision_agent,
-            phase_name="decision_synthesizer",
-            breaker=breaker,
-            cycle_id=cycle_id,
-            bot_id=bot_id,
-            emit=emit,
-            include_debate_context=True,
+    regime = "CONTRADICTORY"
+
+    def _queue_agent(name: str, module: Any, query: str = "", parent: str = ""):
+        if run_counts.get(name, 0) >= MAX_RUNS_PER_AGENT:
+            logger.warning("[V3] Max runs reached for %s. Skipping trigger to prevent loops.", name)
+            return
+        
+        # Check if already pending to prevent duplicate queue entries
+        if any(t["name"] == name and t["query"] == query for t in tasks_to_run):
+            return
+            
+        tasks_to_run.append({
+            "name": name,
+            "module": module,
+            "query": query,
+            "parent": parent
+        })
+        logger.info("[V3] Queued dynamic task: %s (query='%s', parent='%s')", name, query, parent)
+
+    async def whiteboard_subscriber(event):
+        nonlocal regime
+        sec = event.get("section")
+        auth = event.get("author")
+        logger.info("[V3] Whiteboard event trigger: section '%s' updated by '%s'", sec, auth)
+        
+        if sec == "regime_classification":
+            content = event.get("content") or {}
+            regime = content.get("regime", "CONTRADICTORY")
+            
+            if regime == "HIGH_VOLATILITY":
+                logger.info("[V3] High Volatility regime detected. Running JA & QA. Bypassing FA.")
+                desk.append_artifact("fundamental_report", {
+                    "summary": "Skipped detailed fundamental analysis due to High Volatility regime. Quantitative metrics prioritized.",
+                    "pillars": {
+                        "revenue_growth": "Not analyzed", "profitability": "Not analyzed",
+                        "moat": "Not analyzed", "management": "Not analyzed", "valuation": "Not analyzed"
+                    },
+                    "thesis_direction": "NEUTRAL",
+                    "confidence": 50,
+                    "data_gaps": ["DataGap: Fundamental analysis bypassed"],
+                    "catalysts": [],
+                    "risks": []
+                })
+                breaker.record_outcome("fundamental_analyst", PhaseOutcome.SUCCESS)
+                
+                _queue_agent("junior_analyst", junior_analyst, parent="regime_engine")
+                _queue_agent("quant_analyst", quant_analyst, parent="regime_engine")
+            else:
+                _queue_agent("junior_analyst", junior_analyst, parent="regime_engine")
+                
+        elif sec == "desk_note":  # junior_analyst completed
+            if regime != "HIGH_VOLATILITY":
+                _queue_agent("fundamental_analyst", fundamental_analyst, parent="junior_analyst")
+                _queue_agent("quant_analyst", quant_analyst, parent="junior_analyst")
+                
+        elif sec in ("fundamental_report", "quant_report"):
+            # Check if research tier is fully complete
+            if regime == "HIGH_VOLATILITY":
+                if desk.has_artifact("desk_note") and desk.has_artifact("quant_report"):
+                    _queue_debate_phase()
+            else:
+                if desk.has_artifact("desk_note") and desk.has_artifact("fundamental_report") and desk.has_artifact("quant_report"):
+                    _queue_debate_phase()
+                    
+        elif sec in ("bull_argument", "bear_rebuttal"):
+            if desk.has_artifact("bull_argument") and desk.has_artifact("bear_rebuttal"):
+                _queue_agent("debate_judge", debate_judge, parent="bull_argument")
+                
+        elif sec in ("debate_judge", "tournament_result"):
+            _queue_agent("board_of_directors", None, parent="debate_judge")
+            
+        elif sec == "final_decision":
+            if _settings.DECISION_AGENT_ENABLED:
+                _queue_agent("decision_synthesizer", decision_agent, parent="board_of_directors")
+
+    def _queue_debate_phase():
+        if desk.phase == DeskPhase.INIT:
+            desk.advance_phase(DeskPhase.RESEARCH_DONE)
+            save_desk(desk)
+            emit("analyzing", f"v3_research_done_{ticker}", f"📊 {ticker}: Research layer complete", status="ok")
+            
+        if _cog_settings.TOURNAMENT_MODE:
+            _queue_agent("tournament_debate", None, parent="quant_analyst")
+        else:
+            _queue_agent("bull_argument", bull_agent, parent="quant_analyst")
+            _queue_agent("bear_rebuttal", bear_agent, parent="quant_analyst")
+
+    async def _has_pending_peer_requests() -> bool:
+        try:
+            task_section = await whiteboard.get_section(ticker=ticker, cycle_id=cycle_id, section="task_queue")
+            if task_section and isinstance(task_section.get("content"), dict):
+                tasks_list = task_section["content"].get("tasks", [])
+                return any(t.get("status") == "pending" for t in tasks_list)
+        except Exception as e:
+            logger.warning("[V3] Error checking pending peer requests: %s", e)
+        return False
+
+    async def _process_peer_requests():
+        try:
+            task_section = await whiteboard.get_section(ticker=ticker, cycle_id=cycle_id, section="task_queue")
+            if task_section and isinstance(task_section.get("content"), dict):
+                tasks_list = task_section["content"].get("tasks", [])
+                updated = False
+                for t in tasks_list:
+                    if t.get("status") == "pending":
+                        target = t.get("target_agent")
+                        query_text = t.get("query")
+                        requester = t.get("requested_by")
+                        
+                        target_mod = {
+                            "junior_analyst": junior_analyst,
+                            "fundamental_analyst": fundamental_analyst,
+                            "quant_analyst": quant_analyst
+                        }.get(target)
+                        
+                        if target_mod:
+                            _queue_agent(target, target_mod, query=query_text, parent=requester)
+                            t["status"] = "running"
+                            updated = True
+                        else:
+                            logger.warning("[V3] Peer request target agent '%s' not recognized.", target)
+                            t["status"] = "failed"
+                            updated = True
+                            
+                if updated:
+                    await whiteboard.write_section(
+                        ticker=ticker,
+                        cycle_id=cycle_id,
+                        section="task_queue",
+                        content={"tasks": tasks_list},
+                        author_agent="system"
+                    )
+        except Exception as e:
+            logger.warning("[V3] Process peer requests failed: %s", e)
+
+    async def _execute_tournament_debate(parent: str):
+        emit(
+            "analyzing", f"v3_tournament_{ticker}",
+            f"🏆 {ticker}: Tournament Debate starting (4-stage pipeline)",
+            status="running",
+            data={"parent": parent} if parent else None
         )
-        breaker.record_outcome("decision_synthesizer", outcome)
+        try:
+            from app.cognition.debate.tournament import run_tournament_debate
+            from app.cognition.contracts.evidence import EvidencePacket
+            from app.cognition.contracts.retrieval import StructuredFact
 
-        # Persist trade verdict to trade_results table
+            facts = []
+            for artifact_name in ("desk_note", "fundamental_report", "quant_report"):
+                artifact = getattr(desk, artifact_name, None)
+                if artifact and isinstance(artifact, dict):
+                    summary = artifact.get("summary", "")
+                    if summary:
+                        facts.append(
+                            StructuredFact(
+                                fact_type=artifact_name,
+                                value=summary[:2000],
+                                timestamp=datetime.now(timezone.utc),
+                            )
+                        )
+
+            packet = EvidencePacket(
+                entity_id=ticker,
+                structured_facts=facts,
+                claims=[],
+            )
+
+            tournament_result = await run_tournament_debate(
+                ticker=ticker,
+                packet=packet,
+                cycle_id=cycle_id,
+                bot_id=bot_id,
+                position_context=None,
+            )
+
+            desk.append_artifact("tournament_result", {
+                "summary": tournament_result.get("rationale", "Tournament complete"),
+                "action": tournament_result.get("action", "HOLD"),
+                "confidence": tournament_result.get("confidence", 0),
+                "winning_side": tournament_result.get("winning_side", "split"),
+                "pitches": tournament_result.get("pitches", []),
+                "survivors": tournament_result.get("survivors", []),
+                "jury_verdict": tournament_result.get("jury_verdict", {}),
+                "vetoed": tournament_result.get("jury_verdict", {}).get("vetoed", False),
+                "total_tokens": tournament_result.get("total_tokens", 0),
+            })
+
+            desk.append_artifact("debate_judge", {
+                "summary": tournament_result.get("rationale", ""),
+                "action": tournament_result.get("action", "HOLD"),
+                "confidence": tournament_result.get("confidence", 0),
+                "winning_side": tournament_result.get("winning_side", "split"),
+                "source": "tournament_debate",
+            })
+
+            emit(
+                "analyzing", f"v3_tournament_done_{ticker}",
+                f"🏆 {ticker}: Tournament complete → {tournament_result.get('action', 'HOLD')} "
+                f"@ {tournament_result.get('confidence', 0)}% "
+                f"(winner: {tournament_result.get('winning_side', 'split')})",
+                status="ok",
+            )
+        except Exception as tournament_err:
+            logger.error("[V3] %s: Tournament debate failed: %s", ticker, tournament_err, exc_info=True)
+            logger.info("[V3] Falling back to classic debate agents (Bull/Bear).")
+            _queue_agent("bull_argument", bull_agent, parent="tournament_debate")
+            _queue_agent("bear_rebuttal", bear_agent, parent="tournament_debate")
+
+    async def _persist_trade_verdict():
         if desk.has_artifact("trade_decision"):
             try:
                 from app.services.trade_result_saver import save_trade_result
-
                 trade_decision = desk.trade_decision or {}
-                # Inject regime/persona from Layer 4 if not already set
                 if not trade_decision.get("regime"):
                     trade_decision["regime"] = regime
                 if not trade_decision.get("persona_used"):
@@ -462,7 +474,6 @@ async def run_v3_pipeline(
                     )
                 save_trade_result(ticker, cycle_id, trade_decision)
 
-                # Record strategy for P&L tracking (non-fatal)
                 try:
                     from app.trading.strategy_tracker import record_strategy
                     action = trade_decision.get("action", "HOLD")
@@ -477,31 +488,152 @@ async def run_v3_pipeline(
                 except Exception as st_err:
                     logger.warning("[V3] %s: Strategy tracking failed (non-fatal): %s", ticker, st_err)
             except Exception as e:
-                logger.error(
-                    "[V3] %s: Failed to persist trade result: %s",
-                    ticker, e,
-                )
-                desk.record_agent_telemetry({
-                    "agent_name": "system",
-                    "ticker": ticker,
-                    "elapsed_ms": 0,
-                    "loops_used": 0,
-                    "token_usage": 0,
-                    "outcome": "DB_PERSISTENCE_FAILED",
-                    "phase": desk.phase.value,
-                })
+                logger.error("[V3] %s: Failed to persist trade result: %s", ticker, e)
 
+    # Subscribe live whiteboard triggers
+    from app.agents.whiteboard import whiteboard
+    whiteboard.subscribe(whiteboard_subscriber)
+
+    try:
+        # Run Regime Engine first to kick off the whiteboard triggers
         emit(
-            "analyzing", f"v3_decision_{ticker}",
-            f"📝 {ticker}: Decision Synthesis complete",
-            status="ok",
+            "analyzing", f"v3_regime_engine_start_{ticker}",
+            f"🌐 {ticker}: Running Market Regime Engine to classify global macro state...",
+            status="running",
         )
+        run_counts["regime_engine"] += 1
+        outcome = await _run_agent_with_circuit_breaker(
+            desk=desk,
+            agent_module=regime_engine,
+            phase_name="regime_engine",
+            breaker=breaker,
+            cycle_id=cycle_id,
+            bot_id=bot_id,
+            emit=emit,
+        )
+        breaker.record_outcome("regime_engine", outcome)
+        if outcome in (PhaseOutcome.TIMED_OUT,):
+            whiteboard.unsubscribe(whiteboard_subscriber)
+            return _build_noop_result(desk, reason="Regime engine timed out")
 
-    # Advance phase to PM_DONE AFTER Layer 5 completes (not before)
-    desk.advance_phase(DeskPhase.PM_DONE)
-    save_desk(desk)
+        if outcome == PhaseOutcome.SUCCESS and desk.regime_classification:
+            await whiteboard.write_section(
+                ticker=ticker,
+                cycle_id=cycle_id,
+                section="regime_classification",
+                content=desk.regime_classification,
+                author_agent="regime_engine"
+            )
 
-    # Persist cycle outcome to episodic memory (non-fatal)
+        # Scheduler task processing loop
+        loop_counter = 0
+        MAX_LOOP_ITERATIONS = 20
+        
+        while (tasks_to_run or await _has_pending_peer_requests()) and loop_counter < MAX_LOOP_ITERATIONS:
+            loop_counter += 1
+            await _process_peer_requests()
+            
+            if not tasks_to_run:
+                break
+                
+            task = tasks_to_run.pop(0)
+            name = task["name"]
+            module = task["module"]
+            query = task["query"]
+            parent = task["parent"]
+            
+            run_counts[name] += 1
+            logger.info("[V3] Executing dynamic task: %s (run %d)", name, run_counts[name])
+            
+            if name == "junior_analyst":
+                outcome = await _run_agent_with_circuit_breaker(
+                    desk=desk, agent_module=module, phase_name="junior_analyst",
+                    breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
+                    custom_instructions=query, parent_agent=parent
+                )
+                abort = _check_abort(desk, breaker, "junior_analyst", outcome)
+                if abort:
+                    whiteboard.unsubscribe(whiteboard_subscriber)
+                    return abort
+                
+            elif name == "fundamental_analyst":
+                outcome = await _run_agent_with_circuit_breaker(
+                    desk=desk, agent_module=module, phase_name="fundamental_analyst",
+                    breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
+                    custom_instructions=query, parent_agent=parent
+                )
+                abort = _check_abort(desk, breaker, "fundamental_analyst", outcome)
+                if abort:
+                    whiteboard.unsubscribe(whiteboard_subscriber)
+                    return abort
+                
+            elif name == "quant_analyst":
+                outcome = await _run_agent_with_circuit_breaker(
+                    desk=desk, agent_module=module, phase_name="quant_analyst",
+                    breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
+                    custom_instructions=query, parent_agent=parent
+                )
+                abort = _check_abort(desk, breaker, "quant_analyst", outcome)
+                if abort:
+                    whiteboard.unsubscribe(whiteboard_subscriber)
+                    return abort
+
+            elif name == "bull_argument":
+                outcome = await _run_agent_with_circuit_breaker(
+                    desk=desk, agent_module=module, phase_name="bull_argument",
+                    breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
+                    custom_instructions=query, parent_agent=parent
+                )
+                breaker.record_outcome("bull_argument", outcome)
+
+            elif name == "bear_rebuttal":
+                outcome = await _run_agent_with_circuit_breaker(
+                    desk=desk, agent_module=module, phase_name="bear_rebuttal",
+                    breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
+                    custom_instructions=query, parent_agent=parent
+                )
+                breaker.record_outcome("bear_rebuttal", outcome)
+
+            elif name == "debate_judge":
+                outcome = await _run_debate_judge(
+                    desk=desk, breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
+                )
+                breaker.record_outcome("debate_judge", outcome)
+                
+            elif name == "tournament_debate":
+                await _execute_tournament_debate(parent=parent)
+                
+            elif name == "board_of_directors":
+                if desk.phase == DeskPhase.RESEARCH_DONE:
+                    desk.advance_phase(DeskPhase.DEBATE_DONE)
+                    save_desk(desk)
+                    emit("analyzing", f"v3_debate_done_{ticker}", f"⚔️ {ticker}: Debate layer complete", status="ok")
+                    
+                outcome = await _run_board_of_directors(
+                    desk=desk, regime=regime, breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
+                )
+                breaker.record_outcome("board_of_directors", outcome)
+
+            elif name == "decision_synthesizer":
+                outcome = await _run_agent_with_circuit_breaker(
+                    desk=desk, agent_module=module, phase_name="decision_synthesizer",
+                    breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
+                    include_debate_context=True, custom_instructions=query, parent_agent=parent
+                )
+                breaker.record_outcome("decision_synthesizer", outcome)
+                await _persist_trade_verdict()
+
+        if loop_counter >= MAX_LOOP_ITERATIONS:
+            logger.warning("[V3] DynamicOrchestrator hit MAX_LOOP_ITERATIONS safeguard for %s.", ticker)
+
+    finally:
+        whiteboard.unsubscribe(whiteboard_subscriber)
+
+    try:
+        desk.advance_phase(DeskPhase.PM_DONE)
+        save_desk(desk)
+    except ValueError as e:
+        logger.error("[V3] %s: Pipeline failed before reaching PM_DONE. Status: %s. Error: %s", ticker, desk.phase, e)
     try:
         from app.services.memory.store import MemoryStore
         decision = desk.trade_decision or desk.final_decision or {}
@@ -633,6 +765,8 @@ async def _run_agent_with_circuit_breaker(
     bot_id: str,
     emit: Any,
     include_debate_context: bool = False,
+    custom_instructions: str = "",
+    parent_agent: str = "",
 ) -> PhaseOutcome:
     """Run an agent with circuit breaker retry logic.
 
@@ -652,6 +786,8 @@ async def _run_agent_with_circuit_breaker(
             emit=emit,
             include_debate_context=include_debate_context,
             timeout_seconds=timeout,
+            custom_instructions=custom_instructions,
+            parent_agent=parent_agent,
         )
 
         # If failed and retryable, try once more
@@ -669,6 +805,8 @@ async def _run_agent_with_circuit_breaker(
                     emit=emit,
                     include_debate_context=include_debate_context,
                     timeout_seconds=timeout,
+                    custom_instructions=custom_instructions,
+                    parent_agent=parent_agent,
                 )
 
     return outcome
