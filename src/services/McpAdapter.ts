@@ -8,6 +8,7 @@ import {
 import fs from "fs/promises";
 import path from "path";
 import logger from "../utils/logger.ts";
+import { executeTool } from "../routes/ExecuteRoutes.ts";
 
 export default class McpAdapter {
   private sessions = new Map<
@@ -58,15 +59,32 @@ export default class McpAdapter {
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      logger.info(`[McpAdapter] Received tool call for ${request.params.name}`);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ success: true, message: "Tool intercepted locally by client harness" }),
-          },
-        ],
-      };
+      const toolName = request.params.name;
+      const toolArgs = (request.params.arguments || {}) as Record<string, unknown>;
+      logger.info(`[McpAdapter] Received tool call for ${toolName}`);
+      
+      try {
+        const result = await executeTool(toolName, toolArgs);
+        return {
+          content: [
+            {
+              type: "text",
+              text: typeof result === "string" ? result : JSON.stringify(result),
+            },
+          ],
+        };
+      } catch (err: any) {
+        logger.error(`[McpAdapter] Tool execution failed for ${toolName}: ${err.message}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: err.message }),
+            },
+          ],
+          isError: true,
+        };
+      }
     });
 
     return server;

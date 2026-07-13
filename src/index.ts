@@ -73,6 +73,7 @@ import workspacesRouter from "./routes/WorkspacesRoutes.ts";
 import scheduledTasksRouter from "./routes/ScheduledTasksRoutes.ts";
 import promptsRouter from "./routes/PromptsRoutes.ts";
 import webhookRouter from "./routes/WebhookRoutes.ts";
+import executeRouter from "./routes/ExecuteRoutes.ts";
 
 
 
@@ -207,6 +208,7 @@ app.use("/workspaces", workspacesRouter);
 app.use("/scheduled-tasks", scheduledTasksRouter);
 app.use("/prompts", promptsRouter);
 app.use("/webhooks", webhookRouter);
+app.use("/execute", executeRouter);
 
 // Tool executor compatibility routes
 app.get("/mcp/sse", (req: Request, res: Response, next: NextFunction) => {
