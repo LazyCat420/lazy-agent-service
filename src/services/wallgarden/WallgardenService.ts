@@ -20,27 +20,24 @@ const MODEL_CACHE_TTL_MS = 60_000;
 
 // ── Tool Definition ─────────────────────────────────────────
 const TOPIC_TOOL_DEFINITION = {
-  type: "function",
-  function: {
-    name: "suggest_topics",
-    description:
-      "Suggest new topics related to the user's interest graph. Each topic should be 1-3 words.",
-    parameters: {
-      type: "object",
-      properties: {
-        topics: {
-          type: "array",
-          items: {
-            type: "string",
-            description:
-              "A 1-3 word topic phrase, representing a broader genre, theme, or tangential subject.",
-          },
-          minItems: 5,
-          maxItems: 100,
+  name: "suggest_topics",
+  description:
+    "Suggest new topics related to the user's interest graph. Each topic should be 1-3 words.",
+  parameters: {
+    type: "object",
+    properties: {
+      topics: {
+        type: "array",
+        items: {
+          type: "string",
+          description:
+            "A 1-3 word topic phrase, representing a broader genre, theme, or tangential subject.",
         },
+        minItems: 5,
+        maxItems: 100,
       },
-      required: ["topics"],
     },
+    required: ["topics"],
   },
 };
 
