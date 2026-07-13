@@ -43,21 +43,21 @@ const TOPIC_TOOL_DEFINITION = {
 
 // ── System Prompts ──────────────────────────────────────────
 const BRAINSTORM_SYSTEM_PROMPT = `/no_think
-You are a creative topic brainstorming discovery engine. You must call the suggest_topics tool to provide exactly 50 to 100 new topics related to the user's interests.
+You are a creative topic brainstorming discovery engine. You must return a JSON object with a 'topics' array containing exactly 50 to 100 new topics related to the user's interests.
 CRITICAL INSTRUCTIONS:
 1. Act as a lateral-thinking discovery algorithm. We want to find interesting YouTube videos.
 2. Provide a balanced mix: roughly 30% Similar Media, 40% Broader Genres/Themes, and 30% Intellectual Tangents.
 3. ABSOLUTELY DO NOT generate narrow subcategories, specific character names, episode titles, or cast members. (e.g., If the user likes "The Simpsons", DO NOT suggest "Homer Simpson". DO suggest "90s Sitcoms", "Adult Animation").
 4. Expand broadly from what is provided.
-5. YOU MUST RETURN VALID JSON matching the suggest_topics schema. Do not return markdown. Do not return plain text.`;
+5. YOU MUST RETURN VALID JSON in the format: {"topics": ["topic 1", "topic 2", ...]}. Do not return markdown. Do not return plain text.`;
 
 const SIMILAR_SYSTEM_PROMPT = `/no_think
-You are a creative topic brainstorming discovery engine. You must call the suggest_topics tool to provide exactly 50 to 100 topics related to the user's search query.
+You are a creative topic brainstorming discovery engine. You must return a JSON object with a 'topics' array containing exactly 50 to 100 topics related to the user's search query.
 CRITICAL INSTRUCTIONS:
 1. Act as a lateral-thinking discovery algorithm. We want to find interesting YouTube videos.
 2. Provide a balanced mix: roughly 30% Similar Media, 40% Broader Genres/Themes, and 30% Intellectual Tangents.
 3. ABSOLUTELY DO NOT generate narrow subcategories, specific character names, episode titles, or cast members. (e.g., If the user searches "The Simpsons", DO NOT suggest "Homer Simpson". DO suggest "90s Sitcoms", "Adult Animation").
-4. YOU MUST RETURN VALID JSON matching the suggest_topics schema. Do not return markdown. Do not return plain text.`;
+4. YOU MUST RETURN VALID JSON in the format: {"topics": ["topic 1", "topic 2", ...]}. Do not return markdown. Do not return plain text.`;
 
 // ── Context interface ───────────────────────────────────────
 export interface BrainstormContext {
@@ -183,12 +183,11 @@ async function resolveProviderAndModel(
   throw new Error("No vLLM boxes are online with loaded models");
 }
 
-/** Call prism /agent endpoint (non-streaming) */
+/** Call prism /agent endpoint (non-streaming) with no tools */
 async function callPrismAgent(
   model: string,
   provider: string,
   messages: Array<{ role: string; content: string }>,
-  tools?: any[],
   temperature: number = 0.1,
   maxTokens: number = 2500,
 ): Promise<any> {
@@ -201,12 +200,8 @@ async function callPrismAgent(
     temperature,
     stream: false,
     thinkingEnabled: false,
-    enabledTools: tools && tools.length > 0 ? tools.map(t => t.name) : [],
+    enabledTools: [], // Restrict/disable all tools for single-roundtrip JSON text completion
   };
-  if (tools && tools.length > 0) {
-    body.tools = tools;
-    body.tool_choice = { type: "function", function: { name: "suggest_topics" } };
-  }
 
   const resp = await fetch(url, {
     method: "POST",
@@ -303,7 +298,6 @@ Suggest ${numTopics} new topics.`;
           { role: "system", content: BRAINSTORM_SYSTEM_PROMPT },
           { role: "user", content: userMessage },
         ],
-        [TOPIC_TOOL_DEFINITION],
         temperature,
       );
 
@@ -357,7 +351,6 @@ Suggest ${numTopics} topics related to "${ctx.query}".`;
           { role: "system", content: SIMILAR_SYSTEM_PROMPT },
           { role: "user", content: userMessage },
         ],
-        [TOPIC_TOOL_DEFINITION],
         temperature,
       );
 
