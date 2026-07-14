@@ -2037,6 +2037,101 @@
     "source": "html-notes"
   },
   {
+    "name": "html_notes_web_search",
+    "description": "Search the web and return real, current results as [{title, url, snippet}]. This is the ONLY working web search tool \u2014 use it for any factual, historical, news, recipe, or 'what/when/who/which is' question before answering. Takes 20-60s to return; that is normal, wait for it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Plain-language search query, e.g. 'oldest cannabis video on youtube'"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default 6)"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "html_notes_read_page",
+    "description": "Fetch the readable text of a web page by URL. Use after html_notes_web_search when a result's snippet is not enough to answer the question.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Absolute URL to read"
+        },
+        "max_chars": {
+          "type": "integer",
+          "description": "Truncate the page text to this many characters (default 6000)"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "html_notes_stock_history",
+    "description": "Full snapshot for a stock/ETF/crypto ticker (e.g. NVDA, AAPL, BTC-USD): price series PLUS technicals (RSI, SMA 20/50/200, volatility, 52-week range, volume, trend) and fundamentals (market cap, P/E, EPS, beta, dividend yield, revenue, margin, analyst target, sector). Answers in under a second. Pass the ENTIRE result straight to canvas_add_widget(widget_type='stock_card') \u2014 do not pick out fields and do not use widget_type='chart'. Never web-search for prices.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Ticker symbol, e.g. 'NVDA', 'AAPL', 'BTC-USD'"
+        },
+        "range": {
+          "type": "string",
+          "enum": [
+            "1d",
+            "5d",
+            "1mo",
+            "3mo",
+            "6mo",
+            "1y",
+            "5y",
+            "10y",
+            "max"
+          ],
+          "description": "How far back to fetch (default '1mo')"
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
     "name": "canvas_read_dom",
     "description": "Read the current live canvas DOM and return a structured summary of all visible elements. Use this to understand what is currently displayed before making modifications. Returns element count, component types, text summaries, and optionally the HTML of a specific element matched by CSS selector.",
     "parameters": {
@@ -2101,7 +2196,7 @@
   },
   {
     "name": "canvas_add_widget",
-    "description": "Spawn a pre-built widget on the canvas dashboard grid. Available widget types: 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player', 'youtube_player'. For youtube_player, first call html_notes_youtube_search and pass the chosen video_id in config.",
+    "description": "Spawn a pre-built widget on the canvas dashboard grid. Widget types: 'data_card' (THE DEFAULT for showing any fetched data \u2014 news, recipes, search results, weather, lists; supports images per item), 'chart' (line/bar/pie from labels+values), 'image' (display picture URLs), 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player', 'youtube_player'. For youtube_player, first call html_notes_youtube_search and pass the chosen video_id in config. For data_card/chart/image, fetch the data FIRST with other tools, then bake the results into config \u2014 the widget renders server-side.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2113,7 +2208,11 @@
             "notes",
             "iframe_app",
             "mini_music_player",
-            "youtube_player"
+            "youtube_player",
+            "data_card",
+            "image",
+            "chart",
+            "stock_card"
           ],
           "description": "The pre-built widget type to spawn"
         },
@@ -2123,7 +2222,7 @@
         },
         "config": {
           "type": "object",
-          "description": "Widget configuration. clock: {timezone}. checklist: {items:[str]}. notes: {content}. iframe_app: {url, height}. youtube_player: {video_id, title}. mini_music_player: {}."
+          "description": "Widget configuration. data_card: {title, subtitle?, icon?, image?, content?, items:[{title, description?, image?, url?, badge?, meta?}]} \u2014 use items for lists (news headlines, recipes, results), content for prose. chart: {title, type:'line'|'bar'|'pie', labels:[str], values:[num]} or {title, chart:<full Chart.js config>}. image: {title, url, caption?} or {title, images:[{url, caption?}]}. clock: {timezone}. checklist: {title, items:[str]}. notes: {title, content}. iframe_app: {url, title}. youtube_player: {video_id, title}. mini_music_player: {genre, autoplay}."
         }
       },
       "required": [
