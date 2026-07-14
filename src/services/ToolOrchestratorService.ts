@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve as pathResolve } from "node:path";
 import { TOOLS_SERVICE_URL } from "../../config.ts";
 
 import AgentPersonaRegistry from "./AgentPersonaRegistry.ts";
@@ -144,6 +146,19 @@ let cachedWorkspaceRoots: string[] = [];
 
 /** @type {string[]} Static roots from config.js (immutable, for "pinned" UI) */
 let cachedStaticRoots: string[] = [];
+
+/** Namespace prefix for this service's own local tool catalog on /agent */
+const LOCAL_MCP_PREFIX = "mcp__lazy-tool-service__";
+
+/** Cached MCP-namespaced subset of tool_schemas.json (loaded once) */
+let cachedLocalMcpSchemas: Array<{
+  name: string;
+  description?: string;
+  parameters?: unknown;
+  domain?: string;
+  _mcpServer?: string;
+  _mcpOriginalName?: string;
+}> | null = null;
 
 /** @type {boolean} Whether initial fetch has completed */
 let initialized = false;
@@ -1226,6 +1241,12 @@ export default class ToolOrchestratorService {
       );
     }
 
+    // Route this service's own MCP-namespaced local catalog (widget /
+    // html_notes / canvas tools) through the LocalToolRouter.
+    if (name.startsWith("mcp__")) {
+      return ToolOrchestratorService.executeMCPTool(name, args, context);
+    }
+
 
 
 
@@ -1544,18 +1565,91 @@ export default class ToolOrchestratorService {
   }
 
   /**
-   * Execute a tool on an MCP server.
-   * Parses the namespaced tool name and delegates to MCPClientService.
+   * Execute a tool from this service's own local catalog, addressed by its
+   * MCP-namespaced name (mcp__lazy-tool-service__<tool>). No MCP transport
+   * is involved — the LocalToolRouter routes widget / html_notes / canvas
+   * tools to HTML-Notes and everything else to the Python bridge.
    */
   static async executeMCPTool(
     fullName: string,
     args: Record<string, unknown> = {},
+    context: ToolExecutionContext = {},
   ) {
-    return { error: "MCP support is disabled" };
+    if (!fullName.startsWith(LOCAL_MCP_PREFIX)) {
+      return { error: `MCP server for tool "${fullName}" is not connected. Only ${LOCAL_MCP_PREFIX}* tools are available.` };
+    }
+    const { routeLocalTool } = await import("./LocalToolRouter.js");
+    try {
+      return await routeLocalTool(fullName, args, {
+        agentName: context.agent || context.username || undefined,
+        cycleId:
+          context.agentConversationId || context.conversationId || undefined,
+      });
+    } catch (error: unknown) {
+      return { error: getErrorMessage(error) };
+    }
   }
 
-  static getMCPToolSchemas() {
-    return [];
+  /**
+   * Expose the HTML-Notes-facing subset of the local tool_schemas.json
+   * catalog under the mcp__lazy-tool-service__ namespace, so clients like
+   * HTML-Notes can enable them by their namespaced names on /agent.
+   * Scoped to widget/canvas/notes tools — trading tools stay off the
+   * agent pool (they are served via /execute and the MCP SSE server).
+   */
+  static getMCPToolSchemas(): Array<{
+    name: string;
+    description?: string;
+    parameters?: unknown;
+    domain?: string;
+    _mcpServer?: string;
+    _mcpOriginalName?: string;
+  }> {
+    if (cachedLocalMcpSchemas) return cachedLocalMcpSchemas;
+    try {
+      const raw = readFileSync(
+        pathResolve(process.cwd(), "tool_schemas.json"),
+        "utf-8",
+      );
+      const catalog = JSON.parse(raw) as Array<{
+        name: string;
+        description?: string;
+        parameters?: unknown;
+        domain?: string;
+      }>;
+      const WIDGET_TOOLS = new Set([
+        "create_widget",
+        "update_widget",
+        "validate_widget_html",
+        "list_widget_types",
+        "plan_widget",
+      ]);
+      cachedLocalMcpSchemas = catalog
+        .filter(
+          (tool) =>
+            WIDGET_TOOLS.has(tool.name) ||
+            tool.name.startsWith("html_notes_") ||
+            tool.name.startsWith("canvas_") ||
+            tool.name === "render_component",
+        )
+        .map((tool) => ({
+          name: `${LOCAL_MCP_PREFIX}${tool.name}`,
+          description: tool.description,
+          parameters: tool.parameters,
+          domain: tool.domain || "HTML Notes",
+          _mcpServer: "lazy-tool-service",
+          _mcpOriginalName: tool.name,
+        }));
+      logger.info(
+        `[ToolOrchestrator] Loaded ${cachedLocalMcpSchemas.length} local MCP tool schemas (${LOCAL_MCP_PREFIX}*)`,
+      );
+    } catch (error: unknown) {
+      logger.error(
+        `[ToolOrchestrator] Failed to load local MCP tool schemas: ${getErrorMessage(error)}`,
+      );
+      cachedLocalMcpSchemas = [];
+    }
+    return cachedLocalMcpSchemas;
   }
 
 

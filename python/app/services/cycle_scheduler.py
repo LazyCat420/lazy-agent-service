@@ -440,6 +440,20 @@ class SchedulerService:
     @staticmethod
     def start():
         if not scheduler.running:
+            # v3_system_commands is created by trading-service's migrations —
+            # this service only reads/writes it. Fail loudly if it's absent,
+            # otherwise every cycle dispatch dies silently in per-job handlers.
+            try:
+                from app.db.connection import get_db
+                with get_db() as db:
+                    db.execute("SELECT 1 FROM v3_system_commands LIMIT 1")
+            except Exception as e:
+                logger.error(
+                    "[SCHEDULER] v3_system_commands table unavailable — cycle "
+                    "dispatch WILL FAIL. Run trading-service migrations first. (%s)",
+                    e,
+                )
+
             # Load existing schedules and start engine FIRST
             SchedulerService.load_all_schedules()
             scheduler.start()

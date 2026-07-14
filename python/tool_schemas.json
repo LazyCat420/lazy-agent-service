@@ -2013,6 +2013,14 @@
         "limit": {
           "type": "integer",
           "description": "Maximum number of results to return (default 5)"
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "relevance",
+            "date"
+          ],
+          "description": "Sort order: 'relevance' (default) or 'date' for newest uploads first \u2014 use 'date' when the user asks for the latest/most recent video from a channel."
         }
       },
       "required": [

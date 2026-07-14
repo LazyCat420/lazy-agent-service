@@ -87,6 +87,25 @@ export default class AgenticLoopService {
       planModeActive: !!options.planFirst,
     });
 
+    // When the client explicitly enumerated its enabledTools (e.g. HTML-Notes
+    // enabling the mcp__lazy-tool-service__* widget tools), pre-load them so
+    // they are sent to the provider natively from iteration 1 — the
+    // describe_tools lazy-loading dance is for catalog browsing, not for
+    // small explicit tool sets the client already committed to.
+    if (Array.isArray(options.enabledTools) && options.enabledTools.length > 0) {
+      const explicitlyEnabled = new Set(
+        options.enabledTools.map((name: string) =>
+          name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, ""),
+        ),
+      );
+      for (const tool of resolvedTools.finalTools) {
+        const cleanName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+        if (explicitlyEnabled.has(cleanName)) {
+          state.loadedTools.add(cleanName);
+        }
+      }
+    }
+
     // 3. Select harness, topology, and thought structure
     let harnessId = options.harness;
     let topologyId = options.topology;
