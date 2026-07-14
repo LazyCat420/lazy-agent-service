@@ -6,7 +6,7 @@
   "main": "dist/boot.js",
   "scripts": {
     "start": "node dist/boot.js",
-    "dev": "tsx watch src/boot.ts",
+    "dev": "tsx watch boot.ts",
     "build": "tsc && mkdir -p dist/src && cp -r src/locales dist/src/locales",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
