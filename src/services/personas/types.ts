@@ -64,6 +64,15 @@ export interface Persona {
   blockedTools?: string[];
   /** Controls whether core tools are locked (always-on, non-toggleable) in the client UI. Default: true. */
   coreToolsLocked?: boolean;
+  /**
+   * Per-persona default for chain-of-thought thinking mode (<think> blocks on
+   * local models). An explicit thinkingEnabled on the request always wins;
+   * this only replaces the blanket "agents always think" gateway default.
+   * Router-style personas (pick a tool, fill the args) set false — on
+   * Qwen-class thinking models the <think> stream is most of their latency.
+   * Leave undefined for deliberative/analyst personas.
+   */
+  thinkingDefault?: boolean;
   /** Declarative tool call policies (serialized for custom agents). */
   policies?: PolicyRule[];
   capabilities: string;

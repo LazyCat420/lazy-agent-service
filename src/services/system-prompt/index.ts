@@ -76,7 +76,14 @@ export default class SystemPromptAssembler {
     const agentId = context.agent || AGENT_IDS.CODING;
     const persona = isDirectMode ? null : AgentPersonaRegistry.get(agentId);
     const isSubAgent = !!context.parentAgentConversationId;
-    if (!isSubAgent && context.enabledTools) {
+    // Lean personas (coreToolsLocked: false) asked for exactly their own tool
+    // set — don't graft the orchestrator tools onto it, or the orchestrator
+    // addendum below fires and re-bloats the prompt they opted out of.
+    if (
+      !isSubAgent &&
+      context.enabledTools &&
+      persona?.coreToolsLocked !== false
+    ) {
       context.enabledTools = Array.from(
         new Set([...context.enabledTools, ...ORCHESTRATOR_ONLY_TOOLS]),
       );
@@ -346,11 +353,17 @@ export default class SystemPromptAssembler {
         }
         return new Set(context.enabledTools);
       })();
-      const orchestratorAvailable = resolvedEnabledSet
-        ? ORCHESTRATOR_ONLY_TOOLS.some((toolName: string) =>
-            resolvedEnabledSet.has(toolName),
-          )
-        : true;
+      // Persona-only callers have no context.enabledTools, which used to
+      // default this to "orchestrator available" — a lean persona would get
+      // the whole team-spawning addendum it never asked for.
+      const orchestratorAvailable =
+        persona?.coreToolsLocked === false
+          ? false
+          : resolvedEnabledSet
+            ? ORCHESTRATOR_ONLY_TOOLS.some((toolName: string) =>
+                resolvedEnabledSet.has(toolName),
+              )
+            : true;
 
       if (orchestratorAvailable) {
         const allSchemas =

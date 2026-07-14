@@ -10,6 +10,11 @@ import { MetaPersona } from "./MetaPersona.ts";
 import { OmniPersona } from "./OmniPersona.ts";
 import { ImagePersona } from "./ImagePersona.ts";
 import { MeepoPersona } from "./MeepoPersona.ts";
+// Client personas: one tailor-made agent per consuming repo, so each caller
+// runs with exactly its own tool set and prompt instead of the generic Omni
+// identity + forced core tools. Add new client agents under ./clients/.
+import { HtmlNotesPersona } from "./clients/HtmlNotesPersona.ts";
+import { MusicResearchPersona } from "./clients/MusicResearchPersona.ts";
 
 export * from "./types.ts";
 export * from "./utils.ts";
@@ -25,4 +30,6 @@ export const BUILT_IN_PERSONAS = new Map<string, Persona>([
   [AGENT_IDS.OMNI, OmniPersona],
   [AGENT_IDS.IMAGE, ImagePersona],
   [AGENT_IDS.MEEPO, MeepoPersona],
+  [HtmlNotesPersona.id, HtmlNotesPersona],
+  [MusicResearchPersona.id, MusicResearchPersona],
 ]);

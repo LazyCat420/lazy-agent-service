@@ -259,7 +259,11 @@ export default class AgenticToolResolver {
           ? new Set<string>(options.disabledTools)
           : null;
 
-      const shouldBypassOrchestratorTools = !options.isSubAgent;
+      // A persona that unlocks core tools (coreToolsLocked: false) has opted
+      // out of every forced inclusion — orchestrator tools too. It can still
+      // list them in availableTools explicitly if it wants team-spawning.
+      const shouldBypassOrchestratorTools =
+        !options.isSubAgent && isCoreToolsLocked;
       finalTools = finalTools.filter((tool) => {
         const cleanToolName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
         if (clientDisabledSet?.has(tool.name) || clientDisabledSet?.has(cleanToolName)) return false;

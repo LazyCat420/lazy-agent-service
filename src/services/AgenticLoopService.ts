@@ -87,14 +87,25 @@ export default class AgenticLoopService {
       planModeActive: !!options.planFirst,
     });
 
-    // When the client explicitly enumerated its enabledTools (e.g. HTML-Notes
-    // enabling the mcp__lazy-tool-service__* widget tools), pre-load them so
-    // they are sent to the provider natively from iteration 1 — the
-    // describe_tools lazy-loading dance is for catalog browsing, not for
-    // small explicit tool sets the client already committed to.
-    if (Array.isArray(options.enabledTools) && options.enabledTools.length > 0) {
+    // When the request carries an explicit tool set, pre-load it so the tools
+    // are sent to the provider natively from iteration 1 — the describe_tools
+    // lazy-loading dance is for catalog browsing, not for small explicit sets
+    // the caller already committed to. "Explicit" means either enabledTools on
+    // the request (e.g. HTML-Notes' mcp__lazy-tool-service__* widget tools) or
+    // a persona's non-wildcard availableTools (resolvedEnabledTools) — a
+    // tailor-made client persona is exactly as committed as a request list,
+    // and without this a persona-only caller regresses into the discovery
+    // dance that small local models never complete.
+    const explicitToolList: string[] | null =
+      Array.isArray(options.enabledTools) && options.enabledTools.length > 0
+        ? (options.enabledTools as string[])
+        : Array.isArray(resolvedTools.resolvedEnabledTools) &&
+            resolvedTools.resolvedEnabledTools.length > 0
+          ? resolvedTools.resolvedEnabledTools
+          : null;
+    if (explicitToolList) {
       const explicitlyEnabled = new Set(
-        options.enabledTools.map((name: string) =>
+        explicitToolList.map((name: string) =>
           name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, ""),
         ),
       );

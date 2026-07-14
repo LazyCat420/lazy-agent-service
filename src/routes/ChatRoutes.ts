@@ -342,10 +342,24 @@ async function prepareGenerationContext(
   // Apply agent-optimized defaults for parameters not explicitly set by client.
   // Agent sessions benefit from deterministic, high-output defaults
   // (e.g., temperature=0, maxTokens=16384, reasoningEffort="high").
+  let personaThinkingDefault: boolean | undefined;
   if (agent) {
     const { default: AgentPersonaRegistry } = await import("../services/AgentPersonaRegistry.ts");
     if (!AgentPersonaRegistry.has(agent)) {
       throw new ProviderError("server", `Unknown agent: "${agent}"`, 400);
+    }
+    // A persona can declare its own thinking default (router personas set
+    // false — the <think> stream is most of their latency on Qwen-class
+    // models). It fills the same "client sent nothing" gap as the blanket
+    // agent default below, so it must be applied first; an explicit
+    // thinkingEnabled on the request still wins over both.
+    personaThinkingDefault =
+      AgentPersonaRegistry.get(agent)?.thinkingDefault;
+    if (
+      personaThinkingDefault !== undefined &&
+      (thinkingEnabled === undefined || thinkingEnabled === null)
+    ) {
+      options.thinkingEnabled = personaThinkingDefault;
     }
     const agentDefaultValues = getAgentDefaults();
     for (const [parameterKey, defaultValue] of Object.entries(
@@ -363,9 +377,11 @@ async function prepareGenerationContext(
   // Local models emit thinking tokens (<think> tags) by default. Default
   // thinkingEnabled ON only when the client didn't send a value (undefined).
   // When the client explicitly sends false (thinking toggle off), respect it
-  // — models can use tools without thinking.
+  // — models can use tools without thinking. The persona default counts as
+  // "a value" here, otherwise this would re-force thinking on for local
+  // providers and silently undo the persona's choice.
   LocalProviderGateway.applyLocalDefaults(providerName, options, {
-    thinkingEnabled: thinkingEnabled ?? undefined,
+    thinkingEnabled: thinkingEnabled ?? personaThinkingDefault ?? undefined,
   });
 
   // ── Strip soft-deleted messages ──────────────────────────────

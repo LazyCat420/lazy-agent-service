@@ -133,6 +133,24 @@ const AgentPersonaRegistry = {
       enabledByDefaultTools: Array.isArray(doc.enabledByDefaultTools)
         ? (doc.enabledByDefaultTools as string[])
         : undefined,
+      // Lean-agent fields. These were silently dropped before, which meant a
+      // custom agent could never opt out of the 30 force-included core tools
+      // or the always-on thinking default — only built-in personas could.
+      blockedTools: Array.isArray(doc.blockedTools)
+        ? (doc.blockedTools as string[])
+        : undefined,
+      coreToolsLocked:
+        typeof doc.coreToolsLocked === "boolean"
+          ? doc.coreToolsLocked
+          : undefined,
+      compactToolDocs:
+        typeof doc.compactToolDocs === "boolean"
+          ? doc.compactToolDocs
+          : undefined,
+      thinkingDefault:
+        typeof doc.thinkingDefault === "boolean"
+          ? doc.thinkingDefault
+          : undefined,
       policies: policies.length > 0 ? policies : undefined,
       capabilities: "",
       platformRules:
