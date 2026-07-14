@@ -1630,7 +1630,11 @@ export default class ToolOrchestratorService {
             WIDGET_TOOLS.has(tool.name) ||
             tool.name.startsWith("html_notes_") ||
             tool.name.startsWith("canvas_") ||
-            tool.name === "render_component",
+            tool.name === "render_component" ||
+            // Keyless DDG search for research agents (e.g. music-player's
+            // CUSTOM_MUSIC_PLAYER) — tools-api's search_web needs Brave/CSE
+            // keys that are not configured, so this is the working fallback.
+            tool.name === "lazy_web_search",
         )
         .map((tool) => ({
           name: `${LOCAL_MCP_PREFIX}${tool.name}`,

@@ -1,9 +1,11 @@
-import { bootstrapLocalEnvironment } from "../bootstrap.ts";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { bootstrapLocalEnvironment } from "../../bootstrap.ts";
+
 bootstrapLocalEnvironment();
 
-const { VllmModelSyncService } = await import("./VllmModelSyncService.ts");
-const { default: SettingsService } = await import("./SettingsService.ts");
-type SettingsData = import("./SettingsService.ts").SettingsData;
+const { VllmModelSyncService } = await import("../VllmModelSyncService.ts");
+const { default: SettingsService } = await import("../SettingsService.ts");
+type SettingsData = import("../SettingsService.ts").SettingsData;
 
 // ── Mock Settings Data ───────────────────────────────────────
 let mockSettings: SettingsData = {
@@ -30,7 +32,7 @@ let mockSettings: SettingsData = {
   security: {
     allowEnvFiles: false,
   },
-};
+} as SettingsData;
 
 // Override SettingsService methods to use mock data
 SettingsService.get = async () => {
@@ -49,11 +51,10 @@ SettingsService.update = async (data: Partial<SettingsData>) => {
 
 // ── Mock Global Fetch ────────────────────────────────────────
 let lastPutPayload: any = null;
-
 const originalFetch = globalThis.fetch;
+
 const mockFetch = async (url: string | URL | Request, options?: RequestInit): Promise<Response> => {
   const urlStr = typeof url === "string" ? url : (url instanceof Request ? url.url : String(url));
-  console.log("[MOCK FETCH]", urlStr);
 
   if (urlStr.includes("/settings") && options?.method === "PUT") {
     lastPutPayload = JSON.parse(options.body as string);
@@ -67,7 +68,7 @@ const mockFetch = async (url: string | URL | Request, options?: RequestInit): Pr
         object: "list",
         data: [{ id: "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit" }],
       }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
+      { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }
 
@@ -78,77 +79,44 @@ const mockFetch = async (url: string | URL | Request, options?: RequestInit): Pr
         object: "list",
         data: [{ id: "google/gemma-4-26B-A4B-it" }],
       }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
+      { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }
 
   return new Response(JSON.stringify({}), { status: 404 });
 };
-globalThis.fetch = mockFetch as any;
 
-// ── Main Test Runner ─────────────────────────────────────────
-async function runTests() {
-  console.log("=== VllmModelSyncService Unit Tests ===");
-
-  try {
-    // 1. Initial State assertions
-    console.log("Initial settings state check...");
-    if ((mockSettings.memory.extractionProvider as string) !== "vllm-2") {
-      throw new Error("Initial state mismatch");
-    }
-
-    // 2. Trigger checkAndSync()
-    console.log("Triggering checkAndSync()...");
+describe("VllmModelSyncService — auto-healing of stale provider/model settings", () => {
+  beforeAll(async () => {
+    globalThis.fetch = mockFetch as any;
     await VllmModelSyncService.checkAndSync();
+  });
 
-    // 3. Verify auto-healing outcomes
-    console.log("Verifying outcomes...");
-    
-    // extractionProvider should be healed to "vllm" (Jetson) to match the Qwen model
-    if ((mockSettings.memory.extractionProvider as string) !== "vllm") {
-      throw new Error(`Expected extractionProvider to be healed to "vllm", but got: ${mockSettings.memory.extractionProvider}`);
-    }
-    console.log("✓ extractionProvider successfully healed to 'vllm' (Jetson)");
-
-    // consolidationModel (Qwen/Qwen3.6-35B-A3B-FP8) not loaded anywhere, should choose the best loaded candidate:
-    // the scorer prefers Qwen models: "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit" on "vllm"
-    if ((mockSettings.memory.consolidationModel as string) !== "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit") {
-      throw new Error(`Expected consolidationModel to choose 'cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit', but got: ${mockSettings.memory.consolidationModel}`);
-    }
-    if ((mockSettings.memory.consolidationProvider as string) !== "vllm") {
-      throw new Error(`Expected consolidationProvider to be 'vllm', but got: ${mockSettings.memory.consolidationProvider}`);
-    }
-    console.log("✓ consolidationModel successfully auto-resolved to loaded Qwen model");
-
-    // subAgentModel (cyankiwi/MiniMax-M2.7-AWQ-4bit) not loaded anywhere, should fall back to general model preference scorer.
-    // Score order: minimax > gemma > qwen. The loaded model on vllm-2 is "google/gemma-4-26B-A4B-it".
-    // "google/gemma-4-26B-A4B-it" should be selected as the sub-agent fallback.
-    if ((mockSettings.agents.subAgentModel as string) !== "google/gemma-4-26B-A4B-it") {
-      throw new Error(`Expected subAgentModel to fall back to 'google/gemma-4-26B-A4B-it', but got: ${mockSettings.agents.subAgentModel}`);
-    }
-    if ((mockSettings.agents.subAgentProvider as string) !== "vllm-2") {
-      throw new Error(`Expected subAgentProvider to be 'vllm-2', but got: ${mockSettings.agents.subAgentProvider}`);
-    }
-    console.log("✓ subAgentModel successfully auto-resolved to loaded Gemma model on 'vllm-2'");
-
-    // 4. Verify PUT payload sent to prism-service
-    if (!lastPutPayload) {
-      throw new Error("Expected PUT /settings request to be sent, but got none");
-    }
-    if ((lastPutPayload.memory.extractionProvider as string) !== "vllm" || (lastPutPayload.agents.subAgentModel as string) !== "google/gemma-4-26B-A4B-it") {
-      throw new Error(`PUT /settings payload is incorrect: ${JSON.stringify(lastPutPayload)}`);
-    }
-    console.log("✓ PUT /settings payload contains correctly healed configuration values");
-
-    console.log("=========================================");
-    console.log("ALL TESTS PASSED SUCCESSFULLY! Green TDD.");
-    console.log("=========================================");
-  } catch (error) {
-    console.error("❌ TEST FAILED:", error instanceof Error ? error.message : error);
-    process.exit(1);
-  } finally {
+  afterAll(() => {
     globalThis.fetch = originalFetch;
-  }
-}
+  });
 
-runTests();
+  it("heals extractionProvider to 'vllm' (Jetson) to match the loaded Qwen model", () => {
+    expect(mockSettings.memory.extractionProvider).toBe("vllm");
+  });
+
+  it("resolves consolidation to the loaded Qwen model on 'vllm'", () => {
+    // Qwen/Qwen3.6-35B-A3B-FP8 is not loaded anywhere; the scorer prefers Qwen
+    // models, so the loaded AWQ build on the Jetson should be selected.
+    expect(mockSettings.memory.consolidationModel).toBe("cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit");
+    expect(mockSettings.memory.consolidationProvider).toBe("vllm");
+  });
+
+  it("falls back subAgentModel to the loaded Gemma model on 'vllm-2'", () => {
+    // MiniMax isn't loaded on either endpoint. Preference order: minimax > gemma > qwen,
+    // and the loaded model on vllm-2 is the Gemma build.
+    expect(mockSettings.agents.subAgentModel).toBe("google/gemma-4-26B-A4B-it");
+    expect(mockSettings.agents.subAgentProvider).toBe("vllm-2");
+  });
+
+  it("sends the healed configuration to prism-service via PUT /settings", () => {
+    expect(lastPutPayload).not.toBeNull();
+    expect(lastPutPayload.memory.extractionProvider).toBe("vllm");
+    expect(lastPutPayload.agents.subAgentModel).toBe("google/gemma-4-26B-A4B-it");
+  });
+});

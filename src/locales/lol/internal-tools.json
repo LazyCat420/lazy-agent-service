@@ -141,5 +141,11 @@
       "query": "natural lang search query describing what ur looking 4. example: 'MCP connection debugging', 'the session where we fixed WebSocket drops'.",
       "limit": "max # of results 2 return. default: 10."
     }
+  },
+  "describe_tools": {
+    "description": "fetch the full detailed json schemas (incl param structures) 4 one or more tools. call this when u need 2 know what args a specific tool expects b4 u invoke it.",
+    "parameters": {
+      "tool_names": "list of tool names 2 grab detailed schemas 4."
+    }
   }
 }

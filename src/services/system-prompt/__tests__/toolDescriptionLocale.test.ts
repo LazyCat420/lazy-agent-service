@@ -330,8 +330,10 @@ describe("Tool Description Locale Threading", () => {
 
     it("should use caveman required label '(required)' when locale is 'caveman'", () => {
       const formatter = new ToolDocFormatter();
+      // Parameter docs only render for loaded tools; unloaded tools defer to describe_tools
       const output = formatter.buildToolDescriptions(
         undefined, null, undefined, undefined, undefined, false, "caveman",
+        new Set(["write_todo", "ask_user"]),
       );
 
       // write_todo.items and ask_user.questions are required
@@ -342,6 +344,7 @@ describe("Tool Description Locale Threading", () => {
       const formatter = new ToolDocFormatter();
       const output = formatter.buildToolDescriptions(
         undefined, null, undefined, undefined, undefined, false, "en",
+        new Set(["write_todo", "ask_user"]),
       );
 
       expect(output).toContain(ENGLISH_REQUIRED_LABEL);
@@ -455,6 +458,9 @@ describe("Tool Description Locale Threading", () => {
         resolvedToolNames: [],
         workspaceEnabled: false,
         locale: localeOverride,
+        // Mark the mocked tool as loaded so parameter docs (and their
+        // localized required labels) render instead of the describe_tools deferral
+        loadedTools: new Set(["write_todo"]),
       };
     }
 
@@ -616,6 +622,9 @@ describe("Tool Description Locale Threading", () => {
         resolvedToolNames: [],
         workspaceEnabled: false,
         locale,
+        // Mark the mocked tool as loaded so parameter docs (and their
+        // localized required labels) render instead of the describe_tools deferral
+        loadedTools: new Set(["summarize_conversation"]),
       };
     }
 

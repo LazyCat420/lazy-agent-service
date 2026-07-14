@@ -141,5 +141,11 @@
       "query": "Search term. e.g. 'MCP debug', 'WebSocket drop fix'.",
       "limit": "Max result. Default: 10."
     }
+  },
+  "describe_tools": {
+    "description": "Get full detail map (JSON schema) for one or many tools. Use when cave-brain need know what arguments tool want before calling tool.",
+    "parameters": {
+      "tool_names": "List of tool names cave-brain want detail maps for."
+    }
   }
 }
