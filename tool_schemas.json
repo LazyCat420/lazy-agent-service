@@ -80,6 +80,10 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
     ]
   },
   {
@@ -108,6 +112,13 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_worker_fundamental",
+      "v3_worker_insider"
     ]
   },
   {
@@ -136,6 +147,18 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager",
+      "v3_quant_analyst",
+      "v3_regime_engine",
+      "v3_worker_fundamental",
+      "v3_worker_quant"
     ]
   },
   {
@@ -164,6 +187,16 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager",
+      "v3_regime_engine",
+      "v3_worker_news"
     ]
   },
   {
@@ -192,6 +225,14 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst",
+      "v3_regime_engine",
+      "v3_worker_quant"
     ]
   },
   {
@@ -222,7 +263,11 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
   },
   {
     "name": "read_memory_note",
@@ -247,7 +292,11 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
   },
   {
     "name": "scrape_url",
@@ -276,6 +325,14 @@
       "research",
       "scraping",
       "web-search"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_worker_news"
     ]
   },
   {
@@ -305,7 +362,14 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_junior_analyst",
+      "v3_worker_news"
+    ]
   },
   {
     "name": "check_hallucination",
@@ -335,7 +399,11 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
   },
   {
     "name": "search_trading_skills",
@@ -360,7 +428,11 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
   },
   {
     "name": "start_trading_cycle",
@@ -397,7 +469,11 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
   },
   {
     "name": "post_finding",
@@ -442,7 +518,12 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "v3_junior_analyst",
+      "v3_quant_analyst"
+    ]
   },
   {
     "name": "publish_event",
@@ -476,7 +557,14 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "v3_worker_fundamental",
+      "v3_worker_insider",
+      "v3_worker_news",
+      "v3_worker_quant"
+    ]
   },
   {
     "name": "whiteboard_read",
@@ -508,6 +596,18 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_bear_agent",
+      "v3_board_of_directors",
+      "v3_bull_agent",
+      "v3_bull_defense",
+      "v3_debate_judge",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_quant_analyst",
+      "v3_regime_engine"
     ]
   },
   {
@@ -545,6 +645,19 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_bear_agent",
+      "v3_board_of_directors",
+      "v3_bull_agent",
+      "v3_bull_defense",
+      "v3_debate_judge",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager",
+      "v3_quant_analyst",
+      "v3_regime_engine"
     ]
   },
   {
@@ -577,6 +690,14 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_bear_agent",
+      "v3_board_of_directors",
+      "v3_bull_agent",
+      "v3_bull_defense",
+      "v3_debate_judge"
     ]
   },
   {
@@ -604,6 +725,13 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_board_of_directors",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_quant_analyst"
     ]
   },
   {
@@ -637,7 +765,9 @@
       "trading",
       "execution",
       "portfolio"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "sell_stock",
@@ -670,7 +800,9 @@
       "trading",
       "execution",
       "portfolio"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "add_to_watchlist",
@@ -699,7 +831,9 @@
       "trading",
       "execution",
       "portfolio"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "remove_from_watchlist",
@@ -728,7 +862,9 @@
       "trading",
       "execution",
       "portfolio"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "get_options_flow",
@@ -755,6 +891,13 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst",
+      "v3_worker_quant"
     ]
   },
   {
@@ -782,6 +925,11 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider"
     ]
   },
   {
@@ -809,6 +957,11 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider"
     ]
   },
   {
@@ -836,6 +989,12 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_worker_fundamental"
     ]
   },
   {
@@ -863,6 +1022,12 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_worker_fundamental"
     ]
   },
   {
@@ -890,6 +1055,13 @@
     "labels": [
       "market-data",
       "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst",
+      "v3_worker_quant"
     ]
   },
   {
@@ -908,7 +1080,12 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_quant_analyst"
+    ]
   },
   {
     "name": "get_position_pnl",
@@ -933,7 +1110,12 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_quant_analyst"
+    ]
   },
   {
     "name": "get_performance_metrics",
@@ -956,7 +1138,11 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
   },
   {
     "name": "calculate_position_size",
@@ -996,7 +1182,13 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst"
+    ]
   },
   {
     "name": "calculate_stop_loss",
@@ -1030,7 +1222,13 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst"
+    ]
   },
   {
     "name": "calculate_risk_reward",
@@ -1068,7 +1266,13 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst"
+    ]
   },
   {
     "name": "calculate_portfolio_allocation",
@@ -1105,7 +1309,11 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
   },
   {
     "name": "get_cycle_context",
@@ -1130,7 +1338,11 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
   },
   {
     "name": "query_financial_metrics",
@@ -1167,7 +1379,9 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "query_technical_indicator",
@@ -1201,7 +1415,9 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "query_brain_graph",
@@ -1229,7 +1445,11 @@
     "max_result_chars": 50000,
     "tags": [],
     "domain": "General",
-    "labels": []
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
   },
   {
     "name": "save_trading_chart",
@@ -1265,6 +1485,10 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_quant_analyst"
     ]
   },
   {
@@ -1292,6 +1516,11 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_regime_engine"
     ]
   },
   {
@@ -1319,6 +1548,16 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager",
+      "v3_regime_engine",
+      "v3_worker_news"
     ]
   },
   {
@@ -1356,7 +1595,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "escalate_to_pm",
@@ -1388,7 +1629,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "read_user_notes",
@@ -1413,7 +1656,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "get_market_map_data",
@@ -1433,7 +1678,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "search_equations",
@@ -1462,6 +1709,10 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch"
     ]
   },
   {
@@ -1503,6 +1754,10 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch"
     ]
   },
   {
@@ -1542,6 +1797,10 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch"
     ]
   },
   {
@@ -1578,6 +1837,10 @@
     "domain": "General",
     "labels": [
       "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch"
     ]
   },
   {
@@ -1644,7 +1907,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "update_widget",
@@ -1699,7 +1964,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "validate_widget_html",
@@ -1734,7 +2001,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "plan_widget",
@@ -1785,7 +2054,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "list_widget_types",
@@ -1807,7 +2078,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_create_note",
@@ -1850,7 +2123,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_update_note",
@@ -1896,7 +2171,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_get_note",
@@ -1920,7 +2197,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_search_notes",
@@ -1944,7 +2223,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_link_notes",
@@ -1973,7 +2254,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_youtube_search",
@@ -2010,7 +2293,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_web_search",
@@ -2038,7 +2323,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_read_page",
@@ -2066,7 +2353,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_stock_history",
@@ -2105,7 +2394,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "html_notes_sports_scores",
@@ -2129,7 +2420,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "canvas_read_dom",
@@ -2151,7 +2444,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "canvas_modify_dom",
@@ -2192,7 +2487,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "canvas_add_widget",
@@ -2238,7 +2535,9 @@
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "get_ticker_summary",
@@ -2265,7 +2564,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
     "name": "strain_search",
@@ -2302,7 +2603,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_detail",
@@ -2335,7 +2638,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_terpene_profile",
@@ -2364,7 +2669,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_forum_posts",
@@ -2401,7 +2708,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_images",
@@ -2434,7 +2743,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_neighbors",
@@ -2467,7 +2778,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_import",
@@ -2500,7 +2813,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_import_status",
@@ -2529,6 +2844,8 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   }
 ]
