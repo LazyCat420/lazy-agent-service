@@ -115,7 +115,9 @@ export const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || "
 export const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || "60000");
 export const TRADING_SERVICE_URL = process.env.TRADING_SERVICE_URL || "http://localhost:3031";
 export const TRADING_SERVICE_API_KEY = process.env.TRADING_SERVICE_API_KEY;
-export const HTML_NOTES_URL = process.env.HTML_NOTES_URL || "http://localhost:8035";
+// html-notes runs as a separate container — "localhost" inside this container
+// never reaches it; default to the NAS host IP.
+export const HTML_NOTES_URL = process.env.HTML_NOTES_URL || "http://10.0.0.16:8035";
 
 const CONFIG = {
   LAZY_TOOL_SERVICE_PORT,
