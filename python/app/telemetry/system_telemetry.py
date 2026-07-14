@@ -44,7 +44,7 @@ def send_system_log(subsystem: str, message: str, level: str = "info"):
         for base in bases:
             url = f"{base}/api/v1/system/log-event"
             try:
-                async with httpx.AsyncClient(timeout=1.0) as client:
+                async with httpx.AsyncClient(timeout=3.0) as client:
                     resp = await client.post(url, json=payload)
                     if resp.status_code == 200:
                         _working_base = base
