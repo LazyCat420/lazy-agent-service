@@ -121,6 +121,9 @@ export const TRADING_SERVICE_API_KEY = process.env.TRADING_SERVICE_API_KEY;
 // html-notes runs as a separate container — "localhost" inside this container
 // never reaches it; default to the NAS host IP.
 export const HTML_NOTES_URL = process.env.HTML_NOTES_URL || "http://10.0.0.16:8035";
+// treesearch-service (cannabis strain / genomics / forum warehouse) runs as a separate
+// container — same reasoning as above, default to the NAS host IP.
+export const TREESEARCH_SERVICE_URL = process.env.TREESEARCH_SERVICE_URL || "http://10.0.0.16:8005";
 
 const CONFIG = {
   LAZY_TOOL_SERVICE_PORT,
@@ -136,5 +139,6 @@ const CONFIG = {
   TRADING_SERVICE_URL,
   TRADING_SERVICE_API_KEY,
   HTML_NOTES_URL,
+  TREESEARCH_SERVICE_URL,
 };
 export default CONFIG;

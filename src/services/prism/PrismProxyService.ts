@@ -106,17 +106,33 @@ export class PrismProxyService {
         return res.status(response.status).json({ error: errText });
       }
 
-      if (isStream && basePath === "/agent") {
+      // Stream whenever the upstream response is SSE — not just for /agent.
+      // GET /webhooks/requests/stream is an infinite event-stream; awaiting
+      // response.json() on it hangs forever and the client sees a silent
+      // connection (this is what starved the office's prism event feed).
+      const upstreamContentType = response.headers.get("content-type") || "";
+      const respondAsStream =
+        upstreamContentType.includes("text/event-stream") ||
+        (isStream && basePath === "/agent");
+
+      if (respondAsStream) {
         res.setHeader("Content-Type", "text/event-stream");
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("Connection", "keep-alive");
-        
+        res.setHeader("X-Accel-Buffering", "no");
+        res.flushHeaders?.();
+
         if (response.body) {
           const reader = (response.body as any).getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              res.write(value);
+            }
+          } finally {
+            // Client disconnects mid-stream shouldn't leak the upstream reader
+            reader.cancel?.().catch(() => {});
           }
         }
         res.end();

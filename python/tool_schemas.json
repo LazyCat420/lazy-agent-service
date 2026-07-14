@@ -84,42 +84,17 @@
   },
   {
     "name": "get_sec_filings",
-    "description": "Access SEC EDGAR for institutional 13F filings (hedge fund holdings), 10-K/10-Q reports, 8-K events, insider transactions, and XBRL financial facts. Actions: 'filings' (by CIK), 'search' (find filers), 'facts' (XBRL financials).",
+    "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
     "parameters": {
       "type": "object",
       "properties": {
-        "action": {
+        "ticker": {
           "type": "string",
-          "description": "Query mode",
-          "enum": [
-            "filings",
-            "search",
-            "facts"
-          ]
-        },
-        "cik": {
-          "type": "string",
-          "description": "SEC CIK number (action=filings or facts). e.g. '1067983' for Berkshire Hathaway"
-        },
-        "q": {
-          "type": "string",
-          "description": "Search query for finding filers (action=search). e.g. 'Berkshire', 'Renaissance'"
-        },
-        "filingType": {
-          "type": "string",
-          "description": "Filter by filing type (action=filings). e.g. '13-F', '10-K', '10-Q', '8-K'"
-        },
-        "limit": {
-          "type": "number",
-          "description": "Max filings to return (default: 20)"
-        },
-        "fields": {
-          "type": "string",
-          "description": "Comma-separated list of fields to return. Available: filer, filings, count"
+          "description": "Stock ticker symbol, e.g. 'AAPL'"
         }
       },
       "required": [
-        "action"
+        "ticker"
       ]
     },
     "tier": 0,
@@ -2018,9 +1993,10 @@
           "type": "string",
           "enum": [
             "relevance",
-            "date"
+            "date",
+            "live"
           ],
-          "description": "Sort order: 'relevance' (default) or 'date' for newest uploads first \u2014 use 'date' when the user asks for the latest/most recent video from a channel."
+          "description": "'relevance' (default), 'date' for newest uploads first, or 'live' to find an actual LIVE STREAM. Use order='live' for any 'X live' / 'live news' / 'watch X live' request \u2014 a plain search returns recorded clips, not the stream."
         }
       },
       "required": [
@@ -2264,6 +2240,270 @@
     "domain": "General",
     "labels": [
       "tool"
+    ]
+  },
+  {
+    "name": "strain_search",
+    "description": "Search the cannabis strain database by name. Returns matching strains with breeder, type, whether a genomic/chemical sample exists, and dominant terpenes. Use this FIRST to resolve a user's fuzzy strain name into a canonical name before calling any other strain_* tool. If it returns no results, the strain is not in the database yet \u2014 use strain_import to fetch it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Strain name or partial name, e.g. 'blue dream'."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max results. Default 20."
+        },
+        "complete_only": {
+          "type": "boolean",
+          "description": "Only strains that have a complete genomic/chemical sample. Default false."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ]
+  },
+  {
+    "name": "strain_detail",
+    "description": "Get full metadata for one strain: breeder, type, description, lineage/parents, cannabinoids, terpenes and genetic neighbors. Does NOT include forum posts or images by default \u2014 use strain_forum_posts and strain_images for those.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "strain_name": {
+          "type": "string",
+          "description": "Canonical strain name, as returned by strain_search."
+        },
+        "include_observations": {
+          "type": "boolean",
+          "description": "Inline the forum observations too. Default false \u2014 they are large."
+        }
+      },
+      "required": [
+        "strain_name"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ]
+  },
+  {
+    "name": "strain_terpene_profile",
+    "description": "Get the terpene profile for a strain: each terpene with its value, plus the dominant terpene. Terpenes drive a strain's aroma and effect (myrcene = sedating/earthy, limonene = citrus/uplifting, caryophyllene = peppery). Returns an error if no chemical assay exists for the strain.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "strain_name": {
+          "type": "string",
+          "description": "Canonical strain name, as returned by strain_search."
+        }
+      },
+      "required": [
+        "strain_name"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ]
+  },
+  {
+    "name": "strain_forum_posts",
+    "description": "Get community forum posts and grow-journal excerpts about a strain, collected from Overgrow, Rollitup, THCFarmer, ICMag and Reddit. Each post has its source, author, URL and text. Use this for real grower experience: yield, difficulty, flowering time, taste.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "strain_name": {
+          "type": "string",
+          "description": "Canonical strain name, as returned by strain_search."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max posts. Default 25."
+        },
+        "source": {
+          "type": "string",
+          "description": "Optional filter by forum: overgrow, rollitup, thcfarmer, icmag or reddit."
+        }
+      },
+      "required": [
+        "strain_name"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ]
+  },
+  {
+    "name": "strain_images",
+    "description": "Get URLs of photographs of a strain \u2014 bud shots and grow photos harvested from forum posts and filtered by a vision model down to actual plant imagery. Returns the image URL plus the post it came from.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "strain_name": {
+          "type": "string",
+          "description": "Canonical strain name, as returned by strain_search."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max images. Default 20."
+        }
+      },
+      "required": [
+        "strain_name"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ]
+  },
+  {
+    "name": "strain_neighbors",
+    "description": "Get the k nearest strains to a given strain by genetic and chemical distance, with their distances. Use this to answer 'what is similar to X?'.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "strain_name": {
+          "type": "string",
+          "description": "Canonical strain name, as returned by strain_search."
+        },
+        "k": {
+          "type": "integer",
+          "description": "Number of neighbors. Default 10."
+        }
+      },
+      "required": [
+        "strain_name"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ]
+  },
+  {
+    "name": "strain_import",
+    "description": "Start a background import of a strain that is not yet in the database. Scrapes SeedFinder for lineage, Kannapedia and Leafly for chemistry, and four forums plus Reddit for posts and photos. Returns immediately with a job_id \u2014 the import takes SEVERAL MINUTES. Poll strain_import_status with that job_id until status is 'done', then read the data with the other strain_* tools. Only call this after strain_search has come back empty.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "strain_name": {
+          "type": "string",
+          "description": "Name of the strain to import, e.g. 'Blue Dream'."
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Re-scrape and replace existing forum observations. Default false."
+        }
+      },
+      "required": [
+        "strain_name"
+      ]
+    },
+    "permission": "write",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ]
+  },
+  {
+    "name": "strain_import_status",
+    "description": "Check an import started by strain_import. Returns status (queued, running, done or failed), percent complete, a human-readable message, how many posts and images have been saved, and \u2014 once done \u2014 the imported strain's detail.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "description": "The job_id returned by strain_import."
+        }
+      },
+      "required": [
+        "job_id"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
     ]
   }
 ]

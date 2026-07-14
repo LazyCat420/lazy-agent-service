@@ -1634,7 +1634,10 @@ export default class ToolOrchestratorService {
             // Keyless DDG search for research agents (e.g. music-player's
             // CUSTOM_MUSIC_PLAYER) — tools-api's search_web needs Brave/CSE
             // keys that are not configured, so this is the working fallback.
-            tool.name === "lazy_web_search",
+            tool.name === "lazy_web_search" ||
+            // Cannabis strain research, backed by treesearch-service: strain names,
+            // forum posts, photos and terpene data.
+            tool.name.startsWith("strain_"),
         )
         .map((tool) => ({
           name: `${LOCAL_MCP_PREFIX}${tool.name}`,

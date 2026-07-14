@@ -214,6 +214,112 @@ async function forwardToHtmlNotes(
  * Never throws for widget/html-notes routing errors (returns {error} objects);
  * the python bridge path can reject like before.
  */
+/**
+ * Cannabis strain research tools, backed by treesearch-service.
+ *
+ * Every tool is a thin, bounded GET against an endpoint that already paginates and
+ * truncates, so a response cannot blow the agent's context. The one write —
+ * strain_import — kicks off a multi-minute scrape and returns a job_id immediately,
+ * because a tool call is aborted long before that job finishes; the agent polls
+ * strain_import_status.
+ *
+ * Never throws: a failure is returned as { error, is_error } so the agent can recover.
+ */
+async function routeStrainTool(
+  tName: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const baseUrl = CONFIG.TREESEARCH_SERVICE_URL;
+  const name = () => encodeURIComponent(String(args.strain_name ?? ""));
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CONFIG.EXECUTION_TIMEOUT_MS);
+
+  try {
+    let response: globalThis.Response;
+
+    switch (tName) {
+      case "strain_search": {
+        const params = new URLSearchParams({
+          search: String(args.query ?? ""),
+          limit: String(args.limit ?? 20),
+        });
+        if (args.complete_only) params.set("complete_only", "true");
+        response = await fetch(`${baseUrl}/api/strains?${params}`, { signal: controller.signal });
+        break;
+      }
+      case "strain_detail": {
+        const params = new URLSearchParams({
+          include_observations: String(args.include_observations ?? false),
+        });
+        response = await fetch(`${baseUrl}/api/strains/${name()}/detail?${params}`, { signal: controller.signal });
+        break;
+      }
+      case "strain_terpene_profile":
+        response = await fetch(`${baseUrl}/api/strains/${name()}/terpene-profile`, { signal: controller.signal });
+        break;
+      case "strain_forum_posts": {
+        const params = new URLSearchParams({ limit: String(args.limit ?? 25) });
+        if (args.source) params.set("source", String(args.source));
+        response = await fetch(`${baseUrl}/api/strains/${name()}/observations?${params}`, { signal: controller.signal });
+        break;
+      }
+      case "strain_images": {
+        const params = new URLSearchParams({ limit: String(args.limit ?? 20) });
+        response = await fetch(`${baseUrl}/api/strains/${name()}/images?${params}`, { signal: controller.signal });
+        break;
+      }
+      case "strain_neighbors": {
+        const params = new URLSearchParams({ k: String(args.k ?? 10) });
+        response = await fetch(`${baseUrl}/api/strains/${name()}/neighbors?${params}`, { signal: controller.signal });
+        break;
+      }
+      case "strain_import":
+        response = await fetch(`${baseUrl}/api/strains/import`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: String(args.strain_name ?? ""),
+            force: Boolean(args.force ?? false),
+            stream: false, // return a job_id; do not hold the tool call open for minutes
+          }),
+          signal: controller.signal,
+        });
+        break;
+      case "strain_import_status":
+        response = await fetch(
+          `${baseUrl}/api/import-jobs/${encodeURIComponent(String(args.job_id ?? ""))}`,
+          { signal: controller.signal }
+        );
+        break;
+      default:
+        return { error: `Unknown strain tool: ${tName}`, is_error: true };
+    }
+
+    const body = await response.text();
+    if (!response.ok) {
+      return { error: `treesearch-service ${response.status}: ${body.slice(0, 500)}`, is_error: true };
+    }
+    try {
+      return JSON.parse(body);
+    } catch {
+      return { error: `treesearch-service returned non-JSON: ${body.slice(0, 200)}`, is_error: true };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const timedOut = err instanceof Error && err.name === "AbortError";
+    logger.error(`[strain tools] ${tName} failed: ${message}`);
+    return {
+      error: timedOut
+        ? `treesearch-service timed out after ${CONFIG.EXECUTION_TIMEOUT_MS}ms`
+        : `treesearch-service unreachable at ${baseUrl}: ${message}`,
+      is_error: true,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function routeLocalTool(
   toolName: string,
   toolArguments: Record<string, unknown>,
@@ -277,6 +383,10 @@ export async function routeLocalTool(
       }
     }
     return result;
+  }
+
+  if (tName.startsWith("strain_")) {
+    return await routeStrainTool(tName, toolArguments);
   }
 
   if (
