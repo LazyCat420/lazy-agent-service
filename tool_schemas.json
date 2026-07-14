@@ -2070,7 +2070,7 @@
   },
   {
     "name": "html_notes_stock_history",
-    "description": "Full snapshot for a stock/ETF/crypto ticker (e.g. NVDA, AAPL, BTC-USD): price series PLUS technicals (RSI, SMA 20/50/200, volatility, 52-week range, volume, trend) and fundamentals (market cap, P/E, EPS, beta, dividend yield, revenue, margin, analyst target, sector). Answers in under a second. Pass the ENTIRE result straight to canvas_add_widget(widget_type='stock_card') \u2014 do not pick out fields and do not use widget_type='chart'. Never web-search for prices.",
+    "description": "Full snapshot for a stock/ETF/crypto ticker (NVDA, AAPL, BTC-USD): price series plus technicals (RSI, SMA 20/50/200, volatility, 52-week range, trend) and fundamentals (market cap, P/E, EPS, beta, dividend yield, revenue, margin, analyst target, sector). Sub-second. Then call canvas_add_widget(widget_type='stock_card', config={\"symbol\": \"<SYM>\"}) \u2014 config is JUST the symbol. Do NOT copy the returned data into the config; the server already has it and fills the widget in. Re-typing it wastes about a minute per turn. Never use widget_type='chart' for a ticker, and never web-search for prices.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2109,7 +2109,7 @@
   },
   {
     "name": "html_notes_sports_scores",
-    "description": "Live scores, fixtures, results and standings for any major league \u2014 soccer (FIFA World Cup, Premier League, Champions League, La Liga, MLS), UFC/MMA, NBA, NFL, MLB, NHL, college. Returns {league, title, season, events:[{home, away, state, detail}]} where home/away carry name, logo, score, record and winner (fighters for UFC, teams otherwise). Sub-second. Pass the ENTIRE result to canvas_add_widget(widget_type='scoreboard'). NEVER web-search for scores and never render them as a data_card.",
+    "description": "Live scores, fixtures and results for any major league \u2014 soccer (FIFA World Cup, Premier League, Champions League, La Liga, MLS), UFC/MMA, NBA, NFL, MLB, NHL, college. Sub-second. Then call canvas_add_widget(widget_type='scoreboard', config={\"league\": \"<league>\"}) \u2014 config is JUST the league. Do NOT copy the returned events into the config; the server fills them in. Never web-search for scores and never render them as a data_card.",
     "parameters": {
       "type": "object",
       "properties": {
