@@ -8,7 +8,7 @@ import {
 import fs from "fs/promises";
 import path from "path";
 import logger from "../utils/logger.ts";
-import { executeTool } from "../routes/ExecuteRoutes.ts";
+import { routeLocalTool } from "./LocalToolRouter.ts";
 
 export default class McpAdapter {
   private sessions = new Map<
@@ -64,7 +64,10 @@ export default class McpAdapter {
       logger.info(`[McpAdapter] Received tool call for ${toolName}`);
       
       try {
-        const result = await executeTool(toolName, toolArgs);
+        // Route through the shared LocalToolRouter so widget / html_notes /
+        // canvas / music tools reach their HTTP targets instead of the
+        // trading-service Python bridge.
+        const result = await routeLocalTool(toolName, toolArgs);
         return {
           content: [
             {

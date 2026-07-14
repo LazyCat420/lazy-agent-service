@@ -83,168 +83,24 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
   try {
     logger.info(JSON.stringify({ event: "tool_start", toolName, args: toolArguments }));
 
-    let result: unknown;
-    let tName = toolName as string;
+    const result = await routeLocalTool(
+      toolName as string,
+      toolArguments,
+      { agentName, cycleId, ticker }
+    );
 
-    if (tName.startsWith("mcp__lazy-tool-service__")) {
-      tName = tName.replace("mcp__lazy-tool-service__", "");
-    }
-
-    if (tName.startsWith("music_player_")) {
-      const musicApiUrl = "http://10.0.0.16:8002";
-      let musicApiResponse: globalThis.Response | null = null;
-      if (tName === "music_player_suggest_artists") {
-        result = { artists: toolArguments.artists || [] };
-      } else if (tName === "music_player_add_node") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/artists/add-node`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: toolArguments.name, type: toolArguments.type })
-        });
-      } else if (tName === "music_player_remove_node") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/graph/discovered/${encodeURIComponent(toolArguments.node_id as string)}`, { method: "DELETE" });
-      } else if (tName === "music_player_add_edge") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/graph/edge`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source: toolArguments.source, target: toolArguments.target, relationship: toolArguments.relationship || "related" })
-        });
-      } else if (tName === "music_player_remove_edge") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/graph/edge?source=${encodeURIComponent(toolArguments.source as string)}&target=${encodeURIComponent(toolArguments.target as string)}`, { method: "DELETE" });
-      } else if (tName === "music_player_override_node_type") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/graph/override-type`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ node_id: toolArguments.node_id, group_type: toolArguments.group_type })
-        });
-      } else if (tName === "music_player_expand_artist") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/graph/expand/${encodeURIComponent(toolArguments.artist as string)}?count=${toolArguments.count || 8}`);
-      } else if (tName === "music_player_expand_genre") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/graph/expand/genre/${encodeURIComponent(toolArguments.genre as string)}?count=${toolArguments.count || 8}`);
-      } else if (tName === "music_player_get_graph_state") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/graph/discovered`);
-      } else if (tName === "music_player_search_artists") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/artists`);
-      } else if (tName === "music_player_get_artist_info") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/artist/info/${encodeURIComponent(toolArguments.name as string)}`);
-      } else if (tName === "music_player_list_genres") {
-        musicApiResponse = await fetch(`${musicApiUrl}/api/genres`);
-      } else {
-        result = { success: true };
-      }
-
-      if (musicApiResponse !== null) {
-        if (musicApiResponse.ok) {
-          result = await musicApiResponse.json();
-        } else {
-          result = { error: await musicApiResponse.text() };
-        }
-      }
-    } else if (
-      tName === "create_widget" ||
-      tName === "update_widget" ||
-      tName === "validate_widget_html" ||
-      tName === "list_widget_types" ||
-      tName === "plan_widget"
-    ) {
-      const { WidgetTemplateRegistry } = await import("../services/WidgetTemplateRegistry.ts");
-      const { default: ToolContext } = await import("../services/ToolContext.ts");
-      
-      if (tName === "plan_widget") {
-        if (cycleId) {
-          ToolContext.set(cycleId, "widgetPlanApproved", true);
-        }
-        result = {
-          success: true,
-          message: "Widget plan registered and approved. You are now authorized to call create_widget."
-        };
-      } else if (tName === "validate_widget_html") {
-        const htmlContent = (toolArguments.htmlContent || "") as string;
-        const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
-        result = {
-          valid: validation.valid,
-          errors: validation.errors
-        };
-      } else if (tName === "list_widget_types") {
-        result = {
-          success: true,
-          types: WidgetTemplateRegistry.list()
-        };
-      } else {
-        if (tName === "create_widget") {
-          const isApproved = cycleId ? ToolContext.get<boolean>(cycleId, "widgetPlanApproved") : false;
-          if (!isApproved) {
-            result = {
-              success: false,
-              error: "PLANNING_REQUIRED",
-              message: "You must first call plan_widget with a structured design plan before calling create_widget."
-            };
-            response.json(result);
-            return;
-          }
-        }
-        
-        const htmlContent = (toolArguments.htmlContent || "") as string;
-        if (tName === "create_widget" || (tName === "update_widget" && htmlContent)) {
-          const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
-          if (!validation.valid) {
-            result = {
-              success: false,
-              error: "VALIDATION_FAILED",
-              message: `Widget HTML validation failed: ${validation.errors.join("; ")}`
-            };
-            response.json(result);
-            return;
-          }
-        }
-        const htmlNotesUrl = CONFIG.HTML_NOTES_URL || "http://10.0.0.16:8035";
-        try {
-          const apiResponse = await fetch(`${htmlNotesUrl}/internal/execute`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tool: tName, args: toolArguments })
-          });
-          if (apiResponse.ok) {
-            result = await apiResponse.json();
-          } else {
-            result = { error: await apiResponse.text(), is_error: true };
-          }
-        } catch (fetchError: unknown) {
-          result = {
-            error: `Failed to connect to html-notes service at ${htmlNotesUrl}. Is the service down? Details: ${(fetchError as Error).message}`,
-            is_error: true
-          };
-        }
-      }
-    } else if (
-      tName.startsWith("html_notes_") ||
-      tName === "render_component" ||
-      tName.startsWith("canvas_")
-    ) {
-      if (tName === "canvas_modify_dom" && !toolArguments.canvas_html) {
-         result = { success: true, message: "Handled natively by HTML-Notes client" };
-      } else {
-        const htmlNotesUrl = CONFIG.HTML_NOTES_URL || "http://10.0.0.16:8035";
-        try {
-          const apiResponse = await fetch(`${htmlNotesUrl}/internal/execute`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tool: tName, args: toolArguments })
-          });
-          if (apiResponse.ok) {
-            result = await apiResponse.json();
-          } else {
-            result = { error: await apiResponse.text(), is_error: true };
-          }
-        } catch (fetchError: unknown) {
-          result = {
-            error: `Failed to connect to html-notes service at ${htmlNotesUrl}. Is the service down? Details: ${(fetchError as Error).message}`,
-            is_error: true
-          };
-        }
-      }
-    } else {
-      result = await executeTool(tName, toolArguments, { agentName, cycleId, ticker });
+    // Preserve pre-refactor telemetry semantics: gated widget failures were
+    // returned before the success report fired.
+    const gated =
+      typeof result === "object" &&
+      result !== null &&
+      (result as { success?: boolean }).success === false &&
+      ["PLANNING_REQUIRED", "VALIDATION_FAILED"].includes(
+        String((result as { error?: string }).error)
+      );
+    if (gated) {
+      response.json(result);
+      return;
     }
 
     const durationMs = Date.now() - startTime;
