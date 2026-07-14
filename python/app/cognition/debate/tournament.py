@@ -226,8 +226,13 @@ async def _run_pitch_agent(
         evidence_data=evidence_header + eq_results_text,
     )
 
+    # Persona name in the user message keeps each pitch in its own Prism
+    # conversation — the SDK groups conversations by (agent, first-user-msg
+    # hash), and identical messages made the 4 concurrent pitches collide
+    # on one conversation (Prism 409s all but the first).
     user_message = (
-        f"Generate your best mathematically testable pitch for {ticker}. "
+        f"As the {persona_name.replace('_', ' ')} persona, generate your best "
+        f"mathematically testable pitch for {ticker}. "
         f"Use the pre-computed equation results and evidence data above. "
         f"Output your response as the required JSON format."
     )
@@ -500,10 +505,13 @@ async def _run_jury_scoring(
 
     async def run_juror(juror_name, juror_config):
         agent_name = f"tournament_jury_{juror_name.lower()}"
+        # Unique first line per juror → separate Prism conversations for the
+        # concurrent jury calls (identical prompts collide → 409, see pitches).
+        juror_prompt = f"[Juror: {juror_name.replace('_', ' ')}]\n{user_prompt}"
         try:
             response, tokens, ms = await llm.chat(
                 system=juror_config["system_prompt"],
-                user=user_prompt,
+                user=juror_prompt,
                 temperature=0.3,
                 max_tokens=1024,
                 priority=Priority.NORMAL,
@@ -734,6 +742,63 @@ async def run_tournament_debate(
             f.write(json.dumps(audit_entry, indent=2, default=str) + "\n")
     except Exception as audit_err:
         logger.error("[TOURNAMENT] Audit log failed: %s", audit_err)
+
+    # ── Log tournament to debate_history so the UI/history shows it ──
+    try:
+        from app.db.connection import get_db
+        import uuid as _uuid
+
+        persona_outcomes = {
+            "mode": "tournament",
+            "pitches": [
+                {"persona": p.get("persona"), "claim": p.get("claim")} for p in pitches
+            ],
+            "survivors": [
+                {"persona": s.get("persona"), "backtest_pnl": s.get("backtest_pnl", 0)}
+                for s in survivors
+            ],
+            "jury": jury_verdict.get("jury_results", {}),
+            "vetoed": vetoed,
+            "tokens": total_tokens,
+        }
+        with get_db() as db:
+            db.execute(
+                """
+                INSERT INTO debate_history
+                (id, ticker, cycle_id, pro_argument, con_argument, winner, final_action, final_confidence, persona_name, persona_outcomes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ticker, cycle_id) DO UPDATE SET
+                pro_argument = EXCLUDED.pro_argument,
+                con_argument = EXCLUDED.con_argument,
+                winner = EXCLUDED.winner,
+                final_action = EXCLUDED.final_action,
+                final_confidence = EXCLUDED.final_confidence,
+                persona_name = EXCLUDED.persona_name,
+                persona_outcomes = EXCLUDED.persona_outcomes
+                """,
+                [
+                    f"dh-{_uuid.uuid4().hex[:12]}",
+                    ticker,
+                    cycle_id or "manual",
+                    json.dumps({
+                        "persona": debated_a.get("persona"),
+                        "claim": debated_a.get("claim"),
+                        "attack_points": debated_a.get("attack_points", []),
+                    }),
+                    json.dumps({
+                        "persona": debated_b.get("persona"),
+                        "claim": debated_b.get("claim"),
+                        "attack_points": debated_b.get("attack_points", []),
+                    }),
+                    winning_side,
+                    action,
+                    confidence,
+                    "tournament",
+                    json.dumps(persona_outcomes),
+                ],
+            )
+    except Exception as db_err:
+        logger.error("[TOURNAMENT] Failed to log debate history: %s", db_err)
 
     # ── Build Result ─────────────────────────────────────────────────
     return {
