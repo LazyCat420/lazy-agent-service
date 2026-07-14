@@ -28,6 +28,9 @@ exit() {
 }
 
 PRE_BUILD() {
+  step "Building flat tool_schemas.json from tool_schemas/ split sources"
+  python3 "${SCRIPT_DIR}/../trading-service/scripts/build_tool_schemas.py"
+
   step "Copying tool_schemas.json from lazy-tool-service"
   cp "${SCRIPT_DIR}/../lazy-tool-service/tool_schemas.json" "${SCRIPT_DIR}/tool_schemas.json"
 

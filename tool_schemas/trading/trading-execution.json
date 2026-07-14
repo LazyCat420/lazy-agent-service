@@ -1,0 +1,134 @@
+[
+  {
+    "name": "add_to_watchlist",
+    "description": "Add a stock ticker (e.g., from the Discovery list) to the user's active watchlist. Do NOT use this tool to add items TO discovery; discovery is automatic. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol to add (e.g., AAPL)."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "watchlist",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  },
+  {
+    "name": "buy_stock",
+    "description": "Execute a buy order for a stock ticker. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol (e.g., AAPL)."
+        },
+        "size_pct": {
+          "type": "number",
+          "description": "The percentage of available cash to use (e.g., 0.10 for 10%, 1.0 for 100%). Default is 0.10."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "paper_trader",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  },
+  {
+    "name": "remove_from_watchlist",
+    "description": "Remove a stock ticker from the user's active watchlist. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol to remove (e.g., AAPL)."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "watchlist",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  },
+  {
+    "name": "sell_stock",
+    "description": "Execute a sell order to close a position for a stock ticker. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol to sell (e.g., AAPL)."
+        },
+        "qty_pct": {
+          "type": "number",
+          "description": "The percentage of the position to sell (e.g., 1.0 for 100%, 0.5 for 50%). Default is 1.0."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "paper_trader",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  }
+]

@@ -1,0 +1,459 @@
+[
+  {
+    "name": "canvas_add_widget",
+    "description": "Spawn a pre-built widget on the canvas dashboard grid. Fetch the data FIRST with the matching data tool, then pass the result into config \u2014 the widget renders server-side, so config IS the finished content. Choosing widget_type:\n\n\u2022 'stock_card' \u2014 ANY stock, share price, crypto or ticker ('chart AAPL', 'how is TSLA doing', 'bitcoin price'). Renders the price header, range tabs, chart, technicals and fundamentals together. Call html_notes_stock_history(symbol) first, then pass config={\"symbol\": \"AAPL\"} \u2014 just the symbol; the server fills in everything else. Do NOT use 'chart' for a ticker: 'chart' has no price header, no technicals and no fundamentals, and is the wrong widget for a stock.\n\u2022 'scoreboard' \u2014 ANY sports scores, fixtures, results or standings. Call html_notes_sports_scores(league) first, then pass config={\"league\": \"nba\"} \u2014 just the league. Do NOT render scores as a data_card; a scoreboard has to show who is playing whom.\n\u2022 'data_card' \u2014 the default for fetched text data: news, recipes, search results, weather, facts, lists. Every item needs a 'description' with the actual text; a title+url alone renders as a bare link the user has to click, which is a failure.\n\u2022 'chart' \u2014 generic numbers only (line/bar/pie from labels+values): populations, poll results, revenue by quarter. NOT for tickers \u2014 use 'stock_card'.\n\u2022 'image' \u2014 display picture URLs. 'youtube_player' \u2014 call html_notes_youtube_search first and pass the chosen video_id.\n\u2022 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player' \u2014 utility widgets, no data fetch needed.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "widget_type": {
+          "type": "string",
+          "enum": [
+            "checklist",
+            "clock",
+            "notes",
+            "iframe_app",
+            "mini_music_player",
+            "youtube_player",
+            "data_card",
+            "image",
+            "chart",
+            "stock_card",
+            "scoreboard"
+          ],
+          "description": "The pre-built widget type to spawn"
+        },
+        "widget_id": {
+          "type": "string",
+          "description": "A unique ID for the new widget, e.g. 'clock-1' or 'yt-lofi'"
+        },
+        "config": {
+          "type": "object",
+          "description": "Widget configuration, by widget_type. stock_card: {symbol} \u2014 ONLY the symbol, e.g. {\"symbol\": \"AAPL\"}; do not copy labels/values/technicals/fundamentals back, the server already has them from html_notes_stock_history. scoreboard: {league} \u2014 ONLY the league, e.g. {\"league\": \"nba\"}. data_card: {title, subtitle?, icon?, image?, content?, items:[{title, description, url?, image?, badge?, meta?}]} \u2014 use items for lists (news headlines, recipes, results), content for prose; 'description' carries the actual text of each item and is REQUIRED \u2014 copy the snippet from the search result into it, and if a snippet is empty call html_notes_read_page on that url to get real text. A data_card whose items have only a title and url renders as a naked hyperlink and is useless. chart: {title, type:'line'|'bar'|'pie', labels:[str], values:[num]} or {title, chart:<full Chart.js config>}. image: {title, url, caption?} or {title, images:[{url, caption?}]}. clock: {timezone}. checklist: {title, items:[str]}. notes: {title, content}. iframe_app: {url, title}. youtube_player: {video_id, title}. mini_music_player: {genre, autoplay}."
+        }
+      },
+      "required": [
+        "widget_type",
+        "widget_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "canvas_modify_dom",
+    "description": "Modify an element on the live canvas dashboard using a CSS selector. Use this to update, append to, or remove existing widgets/components without replacing the entire canvas.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "css_selector": {
+          "type": "string",
+          "description": "CSS selector to locate the target element (e.g., '#widget-abc123', '.glass-card:first-child', 'h3')"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "append",
+            "prepend",
+            "replace",
+            "remove",
+            "insert_after",
+            "insert_before"
+          ],
+          "description": "The DOM operation: append/prepend add inside the element, replace swaps it, remove deletes it, insert_before/after add as siblings."
+        },
+        "html_snippet": {
+          "type": "string",
+          "description": "The HTML to insert. Not required for 'remove' action."
+        }
+      },
+      "required": [
+        "css_selector",
+        "action"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "canvas_read_dom",
+    "description": "Read the current live canvas DOM and return a structured summary of all visible elements. Use this to understand what is currently displayed before making modifications. Returns element count, component types, text summaries, and optionally the HTML of a specific element matched by CSS selector.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "css_selector": {
+          "type": "string",
+          "description": "Optional CSS selector to read a specific element. If omitted, returns full canvas summary."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_create_note",
+    "description": "Create a new note in the HTML Notes database with a title, sanitized HTML fragment, tags, and optional backlinks.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Title of the note"
+        },
+        "rendered_html": {
+          "type": "string",
+          "description": "HTML note content using approved subset tags: article, section, p, ul, ol, li, blockquote, hr, strong, em, code, pre, a"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of tags to categorize the note"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional list of note IDs to link to"
+        }
+      },
+      "required": [
+        "title",
+        "rendered_html"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_get_note",
+    "description": "Retrieve the details and full HTML content of a specific note by its ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "description": "The note ID to fetch"
+        }
+      },
+      "required": [
+        "note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_link_notes",
+    "description": "Establish a hyperlink connection between a source note and a target note.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "source_note_id": {
+          "type": "string",
+          "description": "ID of the source note"
+        },
+        "target_note_id": {
+          "type": "string",
+          "description": "ID of the target note to connect to"
+        }
+      },
+      "required": [
+        "source_note_id",
+        "target_note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_read_page",
+    "description": "Fetch the readable text of a web page by URL. Use after html_notes_web_search when a result's snippet is not enough to answer the question.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Absolute URL to read"
+        },
+        "max_chars": {
+          "type": "integer",
+          "description": "Truncate the page text to this many characters (default 6000)"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_search_notes",
+    "description": "Search notes in the HTML Notes database matching a specific query term.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search keyword or tag name"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_sports_scores",
+    "description": "Live scores, fixtures and results for any major league \u2014 soccer (FIFA World Cup, Premier League, Champions League, La Liga, MLS), UFC/MMA, NBA, NFL, MLB, NHL, college. Sub-second. Then call canvas_add_widget(widget_type='scoreboard', config={\"league\": \"<league>\"}) \u2014 config is JUST the league. Do NOT copy the returned events into the config; the server fills them in. Never web-search for scores and never render them as a data_card.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "league": {
+          "type": "string",
+          "description": "Friendly league name: fifa, world cup, premier league, champions league, la liga, serie a, bundesliga, mls, soccer, ufc, mma, nba, wnba, nfl, mlb, nhl, college football, college basketball"
+        }
+      },
+      "required": [
+        "league"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_stock_history",
+    "description": "Full snapshot for a stock/ETF/crypto ticker (NVDA, AAPL, BTC-USD): price series plus technicals (RSI, SMA 20/50/200, volatility, 52-week range, trend) and fundamentals (market cap, P/E, EPS, beta, dividend yield, revenue, margin, analyst target, sector). Sub-second. Then call canvas_add_widget(widget_type='stock_card', config={\"symbol\": \"<SYM>\"}) \u2014 config is JUST the symbol. Do NOT copy the returned data into the config; the server already has it and fills the widget in. Re-typing it wastes about a minute per turn. Never use widget_type='chart' for a ticker, and never web-search for prices.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Ticker symbol, e.g. 'NVDA', 'AAPL', 'BTC-USD'"
+        },
+        "range": {
+          "type": "string",
+          "enum": [
+            "1d",
+            "5d",
+            "1mo",
+            "3mo",
+            "6mo",
+            "1y",
+            "5y",
+            "10y",
+            "max"
+          ],
+          "description": "How far back to fetch (default '1mo')"
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_update_note",
+    "description": "Update the content, title, tags, or links of an existing note in the HTML Notes database.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "description": "The unique note ID to update (e.g., 'note_123')"
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional updated title"
+        },
+        "rendered_html": {
+          "type": "string",
+          "description": "Optional updated HTML content fragment"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional updated list of tags"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional updated list of target link note IDs"
+        }
+      },
+      "required": [
+        "note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_web_search",
+    "description": "Search the web and return real, current results as [{title, url, snippet}]. This is the ONLY working web search tool \u2014 use it for any factual, historical, news, recipe, or 'what/when/who/which is' question before answering. Takes 20-60s to return; that is normal, wait for it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Plain-language search query, e.g. 'oldest cannabis video on youtube'"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default 6)"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_youtube_search",
+    "description": "Search YouTube for videos matching a query. Returns a list of results with video_id, title, and channel. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "YouTube search query, e.g. 'lofi hip hop radio' or 'latest video from <channel name>'"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default 5)"
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "relevance",
+            "date",
+            "live"
+          ],
+          "description": "'relevance' (default), 'date' for newest uploads first, or 'live' to find an actual LIVE STREAM. Use order='live' for any 'X live' / 'live news' / 'watch X live' request \u2014 a plain search returns recorded clips, not the stream."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  }
+]

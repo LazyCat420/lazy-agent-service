@@ -1,0 +1,349 @@
+[
+  {
+    "name": "get_congress_trades",
+    "description": "Fetch recent congressional trading activity for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "congress",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider"
+    ]
+  },
+  {
+    "name": "get_earnings_data",
+    "description": "Fetch upcoming or recent earnings dates and estimates for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "earnings",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_worker_fundamental"
+    ]
+  },
+  {
+    "name": "get_finnhub_news",
+    "description": "Get the latest news articles for a stock from Finnhub.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "finnhub",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager",
+      "v3_regime_engine",
+      "v3_worker_news"
+    ]
+  },
+  {
+    "name": "get_finviz_fundamentals",
+    "description": "Fetch fundamental data from Finviz.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "finviz",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_worker_fundamental"
+    ]
+  },
+  {
+    "name": "get_insider_trades",
+    "description": "Fetch recent insider trading activity for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "insider",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider"
+    ]
+  },
+  {
+    "name": "get_market_data",
+    "description": "Get recent price history, fundamentals, financials, and balance sheet for a stock from multiple reliable sources.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol (e.g., AAPL)"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "data_rotator",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager",
+      "v3_quant_analyst",
+      "v3_regime_engine",
+      "v3_worker_fundamental",
+      "v3_worker_quant"
+    ]
+  },
+  {
+    "name": "get_options_flow",
+    "description": "Fetch unusual options activity and flow for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "options",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst",
+      "v3_worker_quant"
+    ]
+  },
+  {
+    "name": "get_polygon_price_history",
+    "description": "Fetch historical OHLCV price data from Polygon.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "polygon",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst",
+      "v3_worker_quant"
+    ]
+  },
+  {
+    "name": "get_sec_filings",
+    "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Stock ticker symbol, e.g. 'AAPL'"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "sec",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_worker_fundamental",
+      "v3_worker_insider"
+    ]
+  },
+  {
+    "name": "get_technical_indicators",
+    "description": "Get computed technical indicators (RSI, MACD, SMA, Bollinger Bands).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "computed",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst",
+      "v3_regime_engine",
+      "v3_worker_quant"
+    ]
+  }
+]

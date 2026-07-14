@@ -1,0 +1,241 @@
+[
+  {
+    "name": "create_widget",
+    "description": "Create a new visual widget on the canvas dashboard grid. Standard widget types: checklist, clock, notes, iframe_app, mini_music_player, youtube_player, custom.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "widgetType": {
+          "type": "string",
+          "enum": [
+            "checklist",
+            "clock",
+            "notes",
+            "iframe_app",
+            "mini_music_player",
+            "youtube_player",
+            "custom"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "htmlContent": {
+          "type": "string",
+          "description": "Raw HTML for the widget interface"
+        },
+        "cssContent": {
+          "type": "string",
+          "description": "Widget-specific styling. Will be isolated to the widget container."
+        },
+        "jsContent": {
+          "type": "string",
+          "description": "Widget-specific scripting. Avoid globally scoped assignments."
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "CDN script or stylesheet URLs"
+        },
+        "renderTarget": {
+          "type": "string",
+          "description": "CSS selector to append the widget to, e.g. #dashboard-grid"
+        }
+      },
+      "required": [
+        "widgetType",
+        "title",
+        "htmlContent"
+      ]
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "list_widget_types",
+    "description": "Retrieve a list of canonical widget types currently supported by the template registry, along with their parameters schema templates.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "plan_widget",
+    "description": "Propose a structured design plan for creating or updating a widget on the canvas dashboard grid. Must be called and approved before create_widget can be executed.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "widgetType": {
+          "type": "string",
+          "enum": [
+            "checklist",
+            "clock",
+            "notes",
+            "iframe_app",
+            "mini_music_player",
+            "youtube_player",
+            "custom"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string",
+          "description": "A short summary of how the widget will behave and style"
+        },
+        "proposedLayout": {
+          "type": "string",
+          "description": "Placement or grid configuration details"
+        }
+      },
+      "required": [
+        "widgetType",
+        "title",
+        "description"
+      ]
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "update_widget",
+    "description": "Update/Patch an existing visual widget on the canvas dashboard grid using its unique widget ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "widgetId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "htmlContent": {
+          "type": "string"
+        },
+        "cssContent": {
+          "type": "string"
+        },
+        "jsContent": {
+          "type": "string"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "renderPhase": {
+          "type": "string",
+          "enum": [
+            "loading",
+            "ready",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "widgetId"
+      ]
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "validate_widget_html",
+    "description": "Validate a widget's HTML/CSS/JS content before committing it, ensuring HTML tags are closed, CSS rules are safely scoped, and JS has no syntax errors.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "htmlContent": {
+          "type": "string"
+        },
+        "cssContent": {
+          "type": "string"
+        },
+        "jsContent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "htmlContent"
+      ]
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "html-notes",
+    "agents": []
+  }
+]
