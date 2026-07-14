@@ -2139,5 +2139,32 @@
       "tool"
     ],
     "source": "html-notes"
+  },
+  {
+    "name": "get_ticker_summary",
+    "description": "Get a one-call fundamentals snapshot for a ticker: name, sector/industry, market cap, P/E and forward P/E, 52-week range, average volume, dividend yield, analyst price target, and next earnings date.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol (e.g., AAPL)"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "yfinance",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
   }
 ]
