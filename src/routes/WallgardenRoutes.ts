@@ -4,6 +4,7 @@ import {
   discoverModels,
   brainstormTopics,
   generateSimilarTopics,
+  rateTopics,
   type BrainstormContext,
   type SimilarContext,
 } from "../services/wallgarden/WallgardenService.js";
@@ -44,7 +45,7 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "interests array is required and must be non-empty" });
     }
 
-    const topics = await brainstormTopics({
+    const raw = await brainstormTopics({
       interests,
       disliked,
       recentUsed,
@@ -57,7 +58,18 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
       provider,
     });
 
-    res.json({ topics, count: topics.length });
+    // Grade for domain-anchoring, drop the floating abstractions, and hand the
+    // client a starting weight per topic so specific topics outrank broad ones
+    // in the feed queue and the suggestion chips.
+    const rated = await rateTopics(raw, model, provider);
+
+    res.json({
+      // `topics` stays a plain string[] so older clients keep working.
+      topics: rated.map(r => r.topic),
+      rated,
+      count: rated.length,
+      generated: raw.length,
+    });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /brainstorm error: ${err.message}`);
     res.status(500).json({ error: err.message });

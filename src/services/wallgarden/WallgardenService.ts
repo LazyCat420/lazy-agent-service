@@ -58,6 +58,21 @@ HOW TO THINK:
 4. NAME THE NICHE, NOT THE CATEGORY. "cozy game devlogs" beats "video games". "desert homestead build" beats "construction". A great topic names a specific YouTube subculture, scene, or format that a real fan would type into search.
 5. MOODS AND FORMATS ARE TOPICS TOO: "ambient coding sessions", "silent workshop asmr", "engineering disasters explained", "one man sawmill" are excellent suggestions.
 
+THE ANCHOR TEST — apply to EVERY topic before you emit it:
+Strip away all context and look at the phrase alone. Ask: "how many different industries could this phrase belong to?"
+- ONE field, naming a specific process/object/scene inside it -> KEEP. ("trichome degradation", "raku kiln reduction", "one man sawmill")
+- ONE field but enormous -> keep at most a few. ("chemical reactions", "plant health")
+- ANY field — a floating abstraction that could be aviation, finance, or baking -> DELETE IT. It returns algorithmic slop on YouTube.
+
+Floating abstractions are the #1 failure. They look smart and are worthless. Banned shapes:
+- "<abstract noun> analysis/studies/methods/techniques/systems/protocols/principles/management/theory/development/optimization/control/science"
+  e.g. "hazard analysis", "validation studies", "research methodology", "product development", "recovery protocols", "quality control", "thermal processing science", "material degradation studies"
+- Wellness slop: "self care", "slow living", "chakra balancing", "mindfulness practices", "healing energy"
+- Vague temporals: "long term aging", "environmental stressors"
+A topic must name a THING — an object, an organism, a named process, a place, a scene, a technique with a practitioner. NEVER merely the ACT OF STUDYING a thing.
+
+Your LATERAL and WILDCARD leaps must stay recognisably the same PERSON's taste. A leap that lands in a different personality (a cannabis grower does not become a wellness influencer) is a failed leap, not a bold one.
+
 HARD RULES:
 - NEVER suggest: individual people, character names, episode titles, cast members, or channel names.
 - NEVER suggest anything in the disliked, recently-used, or failed-query lists, nor trivial rewordings of the user's existing interests.
@@ -78,6 +93,11 @@ HOW TO THINK:
    - ~30% WILDCARD: a bold but taste-consistent leap they'd never search themselves
 3. NAME THE NICHE, NOT THE CATEGORY. Suggest specific YouTube subcultures, scenes, and formats a real fan would type — "cab view train rides" beats "trains".
 4. MOODS AND FORMATS ARE TOPICS TOO: "night drive pov", "process documentaries", "restoration timelapse" are excellent suggestions.
+
+THE ANCHOR TEST — apply to EVERY topic before you emit it:
+Strip away all context and look at the phrase alone. Ask: "how many different industries could this phrase belong to?" If the answer is "any of them", DELETE IT — it returns algorithmic slop on YouTube.
+Banned shapes: "<abstract noun> analysis/studies/methods/techniques/systems/protocols/principles/management/development/control/science" ("hazard analysis", "validation studies", "research methodology", "quality control"); wellness slop ("self care", "slow living", "chakra balancing"); vague temporals ("long term aging", "environmental stressors").
+A topic must name a THING — an object, an organism, a named process, a place, a scene, a technique with a practitioner. NEVER merely the ACT OF STUDYING a thing.
 
 HARD RULES:
 - NEVER suggest: individual people, character names, episode titles, cast members, or channel names.
@@ -125,7 +145,7 @@ async function queryVllmBox(url: string): Promise<string | null> {
 }
 
 /** Extract topics from a prism /agent response */
-function extractTopicsFromResponse(data: any): string[] {
+export function extractTopicsFromResponse(data: any): string[] {
   // The /agent response is { text, thinking, provider, model, usage, ... }
   // Tool calls may be in the response depending on prism's agentic loop
   const text = data?.text || "";
@@ -174,6 +194,32 @@ function extractTopicsFromResponse(data: any): string[] {
     } catch { /* ignore */ }
   }
 
+  // Last resort: salvage a TRUNCATED array. When the model is asked for many
+  // topics it can run past max_tokens and get cut mid-array, leaving no closing
+  // "]" — every JSON.parse above then fails and we used to drop the whole
+  // response on the floor even though it held dozens of perfectly good topics.
+  // Scrape the complete quoted strings that follow the "topics" key instead.
+  const topicsKey = text.indexOf('"topics"');
+  if (topicsKey !== -1) {
+    const salvaged = (text.slice(topicsKey).match(/"((?:[^"\\]|\\.)*)"/g) || [])
+      .slice(1) // drop the "topics" key itself
+      .map((s: string) => {
+        try {
+          return JSON.parse(s.replace(/\\+"/g, '\\"'));
+        } catch {
+          return "";
+        }
+      })
+      .map((s: any) => (typeof s === "string" ? s.trim().toLowerCase() : ""))
+      .filter((s: string) => s.length > 1 && s.length < 60);
+    if (salvaged.length > 0) {
+      logger.warn(
+        `[WallgardenService] Response was malformed/truncated; salvaged ${salvaged.length} topics`
+      );
+      return salvaged;
+    }
+  }
+
   logger.warn("[WallgardenService] Could not extract topics from response text");
   return [];
 }
@@ -218,7 +264,7 @@ async function callPrismAgent(
   provider: string,
   messages: Array<{ role: string; content: string }>,
   temperature: number = 0.1,
-  maxTokens: number = 2500,
+  maxTokens: number = 4000,
 ): Promise<any> {
   const url = `${PRISM_URL}/agent?stream=false`;
   const body: any = {
@@ -292,9 +338,16 @@ export async function discoverModels(): Promise<VllmBoxInfo[]> {
   return results;
 }
 
+// Asking for more than ~25 topics in one call overruns the token budget and the
+// reply gets cut off mid-array. Measured against Gold Spark: 25 topics returns
+// cleanly every time, while 50/75/100 yielded ZERO usable topics across every
+// trial. So we fan out in batches of 25 and merge, which is both reliable and
+// faster than the single doomed call it replaces.
+const BRAINSTORM_BATCH_SIZE = 25;
+
 export async function brainstormTopics(ctx: BrainstormContext): Promise<string[]> {
   const { model, provider } = await resolveProviderAndModel(ctx.model, ctx.provider);
-  
+
   const liked = ctx.interests.slice(0, 15).join(", ");
   const disliked = ctx.disliked.slice(0, 10).join(", ");
   const searches = (ctx.searches || []).slice(-10).join(", ");
@@ -304,7 +357,7 @@ export async function brainstormTopics(ctx: BrainstormContext): Promise<string[]
   const burnedList = ctx.burnedQueries.slice(-30).join(", ");
   const numTopics = ctx.numTopics || 100;
 
-  const userMessage = `My interest topics: [${liked}]
+  const buildMessage = (n: number) => `My interest topics: [${liked}]
 Videos I actually liked (strongest signal): [${likedVideos}]
 Videos I saved to watch later (strong signal): [${watchlist}]
 Recent searches: [${searches}]
@@ -312,44 +365,166 @@ Disliked: [${disliked}]
 Recently used (avoid these): [${recentUsed}]
 Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]
 
-Suggest ${numTopics} new topics.`;
+Suggest ${n} new topics.`;
 
-  const MAX_RETRIES = 2;
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      if (attempt > 0) {
-        logger.info(`[WallgardenService] Brainstorm retry ${attempt + 1}/${MAX_RETRIES + 1}`);
+  /** One batch, with its own retry ladder. Resolves to [] rather than throwing. */
+  const runBatch = async (size: number, batchIndex: number): Promise<string[]> => {
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        // Start hot for creative variety; cool down on retries so a model that
+        // failed to produce valid JSON becomes more deterministic. Nudge the
+        // temperature per batch so parallel batches don't collapse onto the
+        // same suggestions.
+        const temperature = Math.max(
+          0.4,
+          0.9 + batchIndex * 0.05 - attempt * 0.25
+        );
+        const data = await callPrismAgent(
+          model,
+          provider,
+          [
+            { role: "system", content: BRAINSTORM_SYSTEM_PROMPT },
+            { role: "user", content: buildMessage(size) },
+          ],
+          temperature,
+        );
+        const topics = extractTopicsFromResponse(data);
+        if (topics.length > 0) return topics;
+        throw new Error("No topics extracted from response");
+      } catch (err: any) {
+        logger.warn(
+          `[WallgardenService] Brainstorm batch ${batchIndex + 1} attempt ${attempt + 1} failed: ${err.message}`
+        );
       }
+    }
+    return [];
+  };
 
-      // Start hot for creative variety; cool down on retries so a model
-      // that failed to produce valid JSON becomes more deterministic.
-      const temperature = Math.max(0.4, 0.9 - attempt * 0.25);
+  const batchCount = Math.max(1, Math.ceil(numTopics / BRAINSTORM_BATCH_SIZE));
+  const batches = Array.from({ length: batchCount }, (_, i) =>
+    runBatch(
+      Math.min(BRAINSTORM_BATCH_SIZE, numTopics - i * BRAINSTORM_BATCH_SIZE),
+      i
+    )
+  );
+  const settled = await Promise.all(batches);
+
+  // Merge, dedupe (batches run blind to each other and will overlap).
+  const seen = new Set<string>();
+  const topics: string[] = [];
+  for (const batch of settled) {
+    for (const t of batch) {
+      if (!seen.has(t)) {
+        seen.add(t);
+        topics.push(t);
+      }
+    }
+  }
+
+  if (topics.length === 0) {
+    throw new Error("Brainstorm failed: every batch returned no topics");
+  }
+
+  const okBatches = settled.filter(b => b.length > 0).length;
+  logger.info(
+    `[WallgardenService] Brainstorm returned ${topics.length} unique topics ` +
+    `from ${okBatches}/${batchCount} batches via ${provider}/${model}`
+  );
+  return topics;
+}
+
+// ── Topic rating ────────────────────────────────────────────
+// The brainstormer's failure mode is not randomness, it is BLANDNESS: phrases
+// like "hazard analysis" or "research methodology" that belong to no field in
+// particular and so return algorithmic filler on YouTube. We grade every topic
+// on how tightly it pins down a search space, then let the caller weight (or
+// drop) accordingly. A tiny model pass beats a keyword blacklist here — tried
+// both, and keyword rules kept killing good topics like "ceramic glaze science"
+// purely for containing the word "science".
+const RATE_SYSTEM_PROMPT = `/no_think
+You rate YouTube search topics on DOMAIN ANCHORING.
+
+Ask one question about each topic: if I showed you ONLY this phrase, with no context, how many different industries or fields could it belong to?
+
+A = ONE field, and it names a specific process, object, or scene inside it. Typing it into YouTube returns focused, expert content. ("trichome degradation", "raku kiln reduction", "one man sawmill")
+B = ONE field, but a huge one. A real subject, just broad. ("chemical reactions", "plant health", "fermentation")
+C = ANY field. A floating abstraction, a corporate/academic process word, or a wellness-slop category. Typing it into YouTube returns generic algorithmic filler. ("hazard analysis", "validation studies", "research methodology", "self care", "long term aging")
+
+Rate EVERY topic you are given. Output ONLY the raw JSON object {"ratings":[{"t":"topic","tier":"A"}]}. No markdown, no commentary.`;
+
+export type TopicTier = "A" | "B" | "C";
+export interface RatedTopic {
+  topic: string;
+  tier: TopicTier;
+  weight: number;
+}
+
+// Tier -> starting weight in the client's topic pool. Tier C is not returned at
+// all. Tier B is deliberately kept, just outranked: broad topics like "chemical
+// reactions" are worth watching, they simply must not crowd out the specific
+// ones.
+const TIER_WEIGHT: Record<TopicTier, number> = { A: 8, B: 4, C: 0 };
+const RATE_BATCH_SIZE = 25;
+
+/** Grade topics by domain-anchoring. Unrated topics fall back to tier B. */
+export async function rateTopics(
+  topics: string[],
+  modelHint?: string,
+  providerHint?: string
+): Promise<RatedTopic[]> {
+  if (topics.length === 0) return [];
+  const { model, provider } = await resolveProviderAndModel(modelHint, providerHint);
+
+  const rateBatch = async (chunk: string[]): Promise<Record<string, TopicTier>> => {
+    try {
       const data = await callPrismAgent(
         model,
         provider,
         [
-          { role: "system", content: BRAINSTORM_SYSTEM_PROMPT },
-          { role: "user", content: userMessage },
+          { role: "system", content: RATE_SYSTEM_PROMPT },
+          { role: "user", content: JSON.stringify(chunk) },
         ],
-        temperature,
+        0.1, // grading, not brainstorming — keep it deterministic
       );
-
-      const topics = extractTopicsFromResponse(data);
-      if (topics.length > 0) {
-        logger.info(`[WallgardenService] Brainstorm returned ${topics.length} topics via ${provider}/${model}`);
-        return topics;
+      const text = data?.text || "";
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) return {};
+      const parsed = JSON.parse(match[0]);
+      const out: Record<string, TopicTier> = {};
+      for (const r of parsed?.ratings || []) {
+        const t = typeof r?.t === "string" ? r.t.trim().toLowerCase() : "";
+        if (t && (r.tier === "A" || r.tier === "B" || r.tier === "C")) {
+          out[t] = r.tier;
+        }
       }
-
-      throw new Error("No topics extracted from response");
+      return out;
     } catch (err: any) {
-      lastError = err;
-      logger.error(`[WallgardenService] Brainstorm attempt ${attempt + 1} failed: ${err.message}`);
+      logger.warn(`[WallgardenService] Topic rating batch failed: ${err.message}`);
+      return {};
     }
-  }
+  };
 
-  throw lastError || new Error("Brainstorm failed after all retries");
+  const chunks: string[][] = [];
+  for (let i = 0; i < topics.length; i += RATE_BATCH_SIZE) {
+    chunks.push(topics.slice(i, i + RATE_BATCH_SIZE));
+  }
+  const results = await Promise.all(chunks.map(rateBatch));
+  const ratings: Record<string, TopicTier> = Object.assign({}, ...results);
+
+  // A topic the rater skipped is treated as B: keep it, but never let an
+  // unrated topic outrank one that actually earned an A.
+  const rated = topics.map(t => {
+    const tier: TopicTier = ratings[t.toLowerCase()] || "B";
+    return { topic: t, tier, weight: TIER_WEIGHT[tier] };
+  });
+  const dropped = rated.filter(r => r.tier === "C").length;
+  logger.info(
+    `[WallgardenService] Rated ${topics.length} topics: ` +
+    `${rated.filter(r => r.tier === "A").length}A ` +
+    `${rated.filter(r => r.tier === "B").length}B ${dropped}C(dropped)`
+  );
+  return rated.filter(r => r.tier !== "C");
 }
 
 export async function generateSimilarTopics(ctx: SimilarContext): Promise<string[]> {
