@@ -1604,5 +1604,532 @@
     "labels": [
       "tool"
     ]
+  },
+  {
+    "name": "create_widget",
+    "description": "Create a new visual widget on the canvas dashboard grid. Standard widget types: checklist, clock, notes, iframe_app, mini_music_player, youtube_player, custom.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "widgetType": {
+          "type": "string",
+          "enum": [
+            "checklist",
+            "clock",
+            "notes",
+            "iframe_app",
+            "mini_music_player",
+            "youtube_player",
+            "custom"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "htmlContent": {
+          "type": "string",
+          "description": "Raw HTML for the widget interface"
+        },
+        "cssContent": {
+          "type": "string",
+          "description": "Widget-specific styling. Will be isolated to the widget container."
+        },
+        "jsContent": {
+          "type": "string",
+          "description": "Widget-specific scripting. Avoid globally scoped assignments."
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "CDN script or stylesheet URLs"
+        },
+        "renderTarget": {
+          "type": "string",
+          "description": "CSS selector to append the widget to, e.g. #dashboard-grid"
+        }
+      },
+      "required": [
+        "widgetType",
+        "title",
+        "htmlContent"
+      ]
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
+  },
+  {
+    "name": "update_widget",
+    "description": "Update/Patch an existing visual widget on the canvas dashboard grid using its unique widget ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "widgetId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "htmlContent": {
+          "type": "string"
+        },
+        "cssContent": {
+          "type": "string"
+        },
+        "jsContent": {
+          "type": "string"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "renderPhase": {
+          "type": "string",
+          "enum": [
+            "loading",
+            "ready",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "widgetId"
+      ]
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
+  },
+  {
+    "name": "validate_widget_html",
+    "description": "Validate a widget's HTML/CSS/JS content before committing it, ensuring HTML tags are closed, CSS rules are safely scoped, and JS has no syntax errors.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "htmlContent": {
+          "type": "string"
+        },
+        "cssContent": {
+          "type": "string"
+        },
+        "jsContent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "htmlContent"
+      ]
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
+  },
+  {
+    "name": "plan_widget",
+    "description": "Propose a structured design plan for creating or updating a widget on the canvas dashboard grid. Must be called and approved before create_widget can be executed.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "widgetType": {
+          "type": "string",
+          "enum": [
+            "checklist",
+            "clock",
+            "notes",
+            "iframe_app",
+            "mini_music_player",
+            "youtube_player",
+            "custom"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string",
+          "description": "A short summary of how the widget will behave and style"
+        },
+        "proposedLayout": {
+          "type": "string",
+          "description": "Placement or grid configuration details"
+        }
+      },
+      "required": [
+        "widgetType",
+        "title",
+        "description"
+      ]
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
+  },
+  {
+    "name": "list_widget_types",
+    "description": "Retrieve a list of canonical widget types currently supported by the template registry, along with their parameters schema templates.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ]
+  },
+  {
+    "name": "html_notes_create_note",
+    "description": "Create a new note in the HTML Notes database with a title, sanitized HTML fragment, tags, and optional backlinks.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Title of the note"
+        },
+        "rendered_html": {
+          "type": "string",
+          "description": "HTML note content using approved subset tags: article, section, p, ul, ol, li, blockquote, hr, strong, em, code, pre, a"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of tags to categorize the note"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional list of note IDs to link to"
+        }
+      },
+      "required": [
+        "title",
+        "rendered_html"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "html_notes_update_note",
+    "description": "Update the content, title, tags, or links of an existing note in the HTML Notes database.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "description": "The unique note ID to update (e.g., 'note_123')"
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional updated title"
+        },
+        "rendered_html": {
+          "type": "string",
+          "description": "Optional updated HTML content fragment"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional updated list of tags"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional updated list of target link note IDs"
+        }
+      },
+      "required": [
+        "note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "html_notes_get_note",
+    "description": "Retrieve the details and full HTML content of a specific note by its ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "description": "The note ID to fetch"
+        }
+      },
+      "required": [
+        "note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "html_notes_search_notes",
+    "description": "Search notes in the HTML Notes database matching a specific query term.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search keyword or tag name"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "html_notes_link_notes",
+    "description": "Establish a hyperlink connection between a source note and a target note.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "source_note_id": {
+          "type": "string",
+          "description": "ID of the source note"
+        },
+        "target_note_id": {
+          "type": "string",
+          "description": "ID of the target note to connect to"
+        }
+      },
+      "required": [
+        "source_note_id",
+        "target_note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "html_notes_youtube_search",
+    "description": "Search YouTube for videos matching a query. Returns a list of results with video_id, title, and channel. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "YouTube search query, e.g. 'lofi hip hop radio' or 'latest video from <channel name>'"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default 5)"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "canvas_read_dom",
+    "description": "Read the current live canvas DOM and return a structured summary of all visible elements. Use this to understand what is currently displayed before making modifications. Returns element count, component types, text summaries, and optionally the HTML of a specific element matched by CSS selector.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "css_selector": {
+          "type": "string",
+          "description": "Optional CSS selector to read a specific element. If omitted, returns full canvas summary."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "canvas_modify_dom",
+    "description": "Modify an element on the live canvas dashboard using a CSS selector. Use this to update, append to, or remove existing widgets/components without replacing the entire canvas.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "css_selector": {
+          "type": "string",
+          "description": "CSS selector to locate the target element (e.g., '#widget-abc123', '.glass-card:first-child', 'h3')"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "append",
+            "prepend",
+            "replace",
+            "remove",
+            "insert_after",
+            "insert_before"
+          ],
+          "description": "The DOM operation: append/prepend add inside the element, replace swaps it, remove deletes it, insert_before/after add as siblings."
+        },
+        "html_snippet": {
+          "type": "string",
+          "description": "The HTML to insert. Not required for 'remove' action."
+        }
+      },
+      "required": [
+        "css_selector",
+        "action"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
+    "name": "canvas_add_widget",
+    "description": "Spawn a pre-built widget on the canvas dashboard grid. Available widget types: 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player', 'youtube_player'. For youtube_player, first call html_notes_youtube_search and pass the chosen video_id in config.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "widget_type": {
+          "type": "string",
+          "enum": [
+            "checklist",
+            "clock",
+            "notes",
+            "iframe_app",
+            "mini_music_player",
+            "youtube_player"
+          ],
+          "description": "The pre-built widget type to spawn"
+        },
+        "widget_id": {
+          "type": "string",
+          "description": "A unique ID for the new widget, e.g. 'clock-1' or 'yt-lofi'"
+        },
+        "config": {
+          "type": "object",
+          "description": "Widget configuration. clock: {timezone}. checklist: {items:[str]}. notes: {content}. iframe_app: {url, height}. youtube_player: {video_id, title}. mini_music_player: {}."
+        }
+      },
+      "required": [
+        "widget_type",
+        "widget_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
   }
 ]

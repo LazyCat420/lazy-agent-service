@@ -91,3 +91,10 @@ The following categories of code must live in `trading-service`:
 3. **No cognition** — if it involves memory, ontology, or evolution, it goes in `trading-service`
 4. **Tools are stateless executors** — they receive a request, execute, return a result
 5. **Shared code goes in `lazycat-sdk`** — once built, logging, config, and prism client will come from the SDK
+
+## HTML-Notes Widget System
+
+The service has been extended to manage the widget lifecycle for `HTML-Notes`. This includes:
+* **Tool Schema Enforcement**: Custom widget schemas (`plan_widget`, `create_widget`, `update_widget`, `validate_widget_html`, `list_widget_types`) are registered in `tool_schemas.json`.
+* **Execution Interception**: These widget tools are intercepted in `ExecuteRoutes.ts` and validated inside `WidgetTemplateRegistry.ts` (doing HTML matching validation and CSS rule scoping) before forwarding layout payloads to `html-notes`.
+

@@ -143,3 +143,6 @@ export type {
   WorkflowDefinition,
   ResolvedModalities,
 } from "./workflow.ts";
+
+export type { Widget } from "./widget.ts";
+

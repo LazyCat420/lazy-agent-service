@@ -155,7 +155,6 @@ def run_migrations(conn):
     _safe_add_column(conn, "youtube_transcripts", "max_analyses", "INTEGER DEFAULT 5")
 
     # ── Analysis Results: Thesis storage ──
-    _safe_add_column(conn, "analysis_results", "triage_tier", "TEXT")
     _safe_add_column(conn, "analysis_results", "thesis_verdict", "TEXT")
     _safe_add_column(conn, "analysis_results", "thesis_confidence", "INTEGER")
     _safe_add_column(conn, "analysis_results", "thesis_summary", "TEXT")
@@ -219,9 +218,6 @@ def run_migrations(conn):
             conn.rollback()
         except Exception:
             pass
-
-    # ── Triage tier audit column on analysis_results ──
-    _safe_add_column(conn, "analysis_results", "triage_tier", "TEXT")
 
     # ── Maintenance agent retry tracking ──
     _safe_add_column(
@@ -2941,6 +2937,16 @@ def _fix_eth_cagr_data(conn):
     # --- Auto-synced missing tables from schema_pg.sql ---
     try:
         with conn.cursor() as cur:
+            cur.execute("CREATE SCHEMA IF NOT EXISTS global")
+            conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+    try:
+        with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS global.energy_reports (
                     id              TEXT PRIMARY KEY,
@@ -3174,8 +3180,12 @@ def _fix_eth_cagr_data(conn):
                     elapsed_ms          INTEGER DEFAULT 0,
                     error_message       TEXT,
                     was_blocked         BOOLEAN NOT NULL DEFAULT FALSE,
+                    ticker              TEXT,
                     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+            """)
+            cur.execute("""
+                ALTER TABLE agent_tool_telemetry ADD COLUMN IF NOT EXISTS ticker TEXT;
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_agent_tool_telemetry_cycle

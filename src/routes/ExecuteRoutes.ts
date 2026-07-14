@@ -1,20 +1,12 @@
 import { Router, Request, Response, RequestHandler } from "express";
-import { spawn } from "node:child_process";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import path from "node:path";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { PrismProxyService } from "../services/prism/PrismProxyService.ts";
+import { executePythonTool, routeLocalTool } from "../services/LocalToolRouter.ts";
 
 const router = Router();
-
-// Cache structure for tool executions
-interface CacheEntry {
-  result: unknown;
-  expiresAt: number;
-}
-const cache = new Map<string, CacheEntry>();
 
 // Ensure data directory exists for Dead Letter Queue
 const dataDir = path.resolve("data");
@@ -22,87 +14,8 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-/**
- * Executes a tool by launching the execute_tool.py Python script.
- */
-export const executeTool = async (
-  toolName: string,
-  toolArguments: Record<string, unknown>,
-  context?: { agentName?: string; cycleId?: string; ticker?: string }
-): Promise<unknown> => {
-  const argumentsJson = JSON.stringify(toolArguments);
-  const cacheKey = crypto.createHash("sha256").update(toolName + argumentsJson).digest("hex");
-
-  // Check cache first
-  const cached = cache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    logger.info(JSON.stringify({ event: "cache_hit", toolName, args: toolArguments }));
-    return cached.result;
-  }
-
-  return new Promise((resolve, reject) => {
-    // Set up environment, stripping empty strings to avoid Pydantic conversion errors
-    const env: Record<string, string> = {};
-    for (const key of Object.keys(process.env)) {
-      const val = process.env[key];
-      if (val !== undefined && val !== "") {
-        env[key] = val;
-      }
-    }
-    env.PYTHONPATH = CONFIG.PYTHONPATH;
-    env.SKIP_TOOL_USAGE_LOG = "true";
-    env.USE_LAZY_TOOL_SERVICE = "false";
-    if (context?.agentName) env.AGENT_NAME = context.agentName;
-    if (context?.cycleId) env.CYCLE_ID = context.cycleId;
-    if (context?.ticker) env.TICKER = context.ticker;
-
-    const child = spawn(
-      CONFIG.PYTHON_INTERPRETER,
-      [CONFIG.PYTHON_EXEC_SCRIPT, toolName, argumentsJson],
-      {
-        cwd: CONFIG.PYTHON_CWD,
-        env
-      }
-    );
-
-    let stdout = "";
-    let stderr = "";
-    let isTimeout = false;
-
-    const timeoutId = setTimeout(() => {
-      isTimeout = true;
-      child.kill("SIGKILL");
-      reject(new Error(`Execution timed out after ${CONFIG.EXECUTION_TIMEOUT_MS} ms`));
-    }, CONFIG.EXECUTION_TIMEOUT_MS);
-
-    child.stdout.on("data", (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timeoutId);
-      if (isTimeout) return; // already rejected
-
-      if (code !== 0) {
-        reject(new Error(`Tool execution failed (exit code ${code}): ${stderr || stdout}`));
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(stdout.trim());
-        // Save to cache
-        cache.set(cacheKey, { result: parsed, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
-        resolve(parsed);
-      } catch (error: unknown) {
-        reject(new Error(`Invalid JSON output from tool: ${stdout}`));
-      }
-    });
-  });
-};
+/** Python-bridge executor (moved to LocalToolRouter; re-exported for compat). */
+export const executeTool = executePythonTool;
 
 /**
  * Fire-and-forget telemetry reporting back to trading-service.
@@ -225,6 +138,82 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
           result = await musicApiResponse.json();
         } else {
           result = { error: await musicApiResponse.text() };
+        }
+      }
+    } else if (
+      tName === "create_widget" ||
+      tName === "update_widget" ||
+      tName === "validate_widget_html" ||
+      tName === "list_widget_types" ||
+      tName === "plan_widget"
+    ) {
+      const { WidgetTemplateRegistry } = await import("../services/WidgetTemplateRegistry.ts");
+      const { default: ToolContext } = await import("../services/ToolContext.ts");
+      
+      if (tName === "plan_widget") {
+        if (cycleId) {
+          ToolContext.set(cycleId, "widgetPlanApproved", true);
+        }
+        result = {
+          success: true,
+          message: "Widget plan registered and approved. You are now authorized to call create_widget."
+        };
+      } else if (tName === "validate_widget_html") {
+        const htmlContent = (toolArguments.htmlContent || "") as string;
+        const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
+        result = {
+          valid: validation.valid,
+          errors: validation.errors
+        };
+      } else if (tName === "list_widget_types") {
+        result = {
+          success: true,
+          types: WidgetTemplateRegistry.list()
+        };
+      } else {
+        if (tName === "create_widget") {
+          const isApproved = cycleId ? ToolContext.get<boolean>(cycleId, "widgetPlanApproved") : false;
+          if (!isApproved) {
+            result = {
+              success: false,
+              error: "PLANNING_REQUIRED",
+              message: "You must first call plan_widget with a structured design plan before calling create_widget."
+            };
+            response.json(result);
+            return;
+          }
+        }
+        
+        const htmlContent = (toolArguments.htmlContent || "") as string;
+        if (tName === "create_widget" || (tName === "update_widget" && htmlContent)) {
+          const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
+          if (!validation.valid) {
+            result = {
+              success: false,
+              error: "VALIDATION_FAILED",
+              message: `Widget HTML validation failed: ${validation.errors.join("; ")}`
+            };
+            response.json(result);
+            return;
+          }
+        }
+        const htmlNotesUrl = CONFIG.HTML_NOTES_URL || "http://10.0.0.16:8035";
+        try {
+          const apiResponse = await fetch(`${htmlNotesUrl}/internal/execute`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tool: tName, args: toolArguments })
+          });
+          if (apiResponse.ok) {
+            result = await apiResponse.json();
+          } else {
+            result = { error: await apiResponse.text(), is_error: true };
+          }
+        } catch (fetchError: unknown) {
+          result = {
+            error: `Failed to connect to html-notes service at ${htmlNotesUrl}. Is the service down? Details: ${(fetchError as Error).message}`,
+            is_error: true
+          };
         }
       }
     } else if (

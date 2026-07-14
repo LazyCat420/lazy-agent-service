@@ -43,21 +43,48 @@ const TOPIC_TOOL_DEFINITION = {
 
 // ── System Prompts ──────────────────────────────────────────
 const BRAINSTORM_SYSTEM_PROMPT = `/no_think
-You are a creative topic brainstorming discovery engine. You must return a JSON object with a 'topics' array containing exactly 50 to 100 new topics related to the user's interests.
-CRITICAL INSTRUCTIONS:
-1. Act as a lateral-thinking discovery algorithm. We want to find interesting YouTube videos.
-2. Provide a balanced mix: roughly 30% Similar Media, 40% Broader Genres/Themes, and 30% Intellectual Tangents.
-3. ABSOLUTELY DO NOT generate narrow subcategories, specific character names, episode titles, or cast members. (e.g., If the user likes "The Simpsons", DO NOT suggest "Homer Simpson". DO suggest "90s Sitcoms", "Adult Animation").
-4. Expand broadly from what is provided.
-5. YOU MUST RETURN VALID JSON in the format: {"topics": ["topic 1", "topic 2", ...]}. Do not return markdown. Do not return plain text.`;
+You are the discovery engine for a personal YouTube curator. Your job: figure out what this person would LOVE to watch next but would never think to search for themselves.
+
+You receive their taste profile: interest topics, titles of videos they actually liked, videos they saved to watch later, recent searches, plus things they dislike and phrases to avoid.
+
+HOW TO THINK:
+1. INFER THE PERSON, NOT THE LIST. Ask yourself: what kind of person likes these things? What underlying tastes connect them — aesthetics, eras, moods, level of depth, sense of humor? Generate topics for THAT person, not word-associations on the list.
+2. WEIGHT THE SIGNALS. Liked videos and watchlist saves are the strongest evidence of real taste — read their titles carefully and reverse-engineer what hooked the user. Interest topics are broader hints. Searches show current curiosity.
+3. SPREAD ACROSS THE LADDER OF DISTANCE:
+   - ~25% ADJACENT: same scene, new angle (likes "restoring old bikes" → "barn find restoration")
+   - ~40% LATERAL: same spirit, different domain (→ "antique tool restoration", "japanese joinery")
+   - ~25% WILDCARD: a bold leap that shares a deeper taste (→ "urban exploration", "industrial archaeology")
+   - ~10% TIME/CULTURE SHIFT: the same taste in another decade or country (→ "70s custom van culture", "soviet engineering")
+4. NAME THE NICHE, NOT THE CATEGORY. "cozy game devlogs" beats "video games". "desert homestead build" beats "construction". A great topic names a specific YouTube subculture, scene, or format that a real fan would type into search.
+5. MOODS AND FORMATS ARE TOPICS TOO: "ambient coding sessions", "silent workshop asmr", "engineering disasters explained", "one man sawmill" are excellent suggestions.
+
+HARD RULES:
+- NEVER suggest: individual people, character names, episode titles, cast members, or channel names.
+- NEVER suggest anything in the disliked, recently-used, or failed-query lists, nor trivial rewordings of the user's existing interests.
+- NEVER suggest single generic words ("music", "gaming", "history") — too broad returns algorithmic slop.
+- Every topic: lowercase, 1-4 words, and must work as a real YouTube search query.
+- Output format: ONLY the raw JSON object {"topics": ["topic one", "topic two", ...]}. No markdown, no commentary, no explanations.`;
 
 const SIMILAR_SYSTEM_PROMPT = `/no_think
-You are a creative topic brainstorming discovery engine. You must return a JSON object with a 'topics' array containing exactly 50 to 100 topics related to the user's search query.
-CRITICAL INSTRUCTIONS:
-1. Act as a lateral-thinking discovery algorithm. We want to find interesting YouTube videos.
-2. Provide a balanced mix: roughly 30% Similar Media, 40% Broader Genres/Themes, and 30% Intellectual Tangents.
-3. ABSOLUTELY DO NOT generate narrow subcategories, specific character names, episode titles, or cast members. (e.g., If the user searches "The Simpsons", DO NOT suggest "Homer Simpson". DO suggest "90s Sitcoms", "Adult Animation").
-4. YOU MUST RETURN VALID JSON in the format: {"topics": ["topic 1", "topic 2", ...]}. Do not return markdown. Do not return plain text.`;
+You are the discovery engine for a personal YouTube curator. The user just searched for something — treat that query as a doorway and map the interesting rooms behind it.
+
+You receive the search query plus their taste profile: interest topics, titles of videos they liked, watch-later saves, and things they dislike or to avoid.
+
+HOW TO THINK:
+1. ASK WHY they searched this, given their taste profile. The same query means different things to different people — use their liked videos and watchlist to pick the right interpretation, then expand in THAT direction.
+2. SPREAD ACROSS THE LADDER OF DISTANCE from the query:
+   - ~30% ADJACENT: same subject, different angle, era, or format
+   - ~40% LATERAL: the same underlying appeal in a neighboring domain
+   - ~30% WILDCARD: a bold but taste-consistent leap they'd never search themselves
+3. NAME THE NICHE, NOT THE CATEGORY. Suggest specific YouTube subcultures, scenes, and formats a real fan would type — "cab view train rides" beats "trains".
+4. MOODS AND FORMATS ARE TOPICS TOO: "night drive pov", "process documentaries", "restoration timelapse" are excellent suggestions.
+
+HARD RULES:
+- NEVER suggest: individual people, character names, episode titles, cast members, or channel names.
+- NEVER suggest anything in the disliked, recently-used, or failed-query lists, nor trivial rewordings of the query itself.
+- NEVER suggest single generic words ("music", "gaming", "history").
+- Every topic: lowercase, 1-4 words, and must work as a real YouTube search query.
+- Output format: ONLY the raw JSON object {"topics": ["topic one", "topic two", ...]}. No markdown, no commentary, no explanations.`;
 
 // ── Context interface ───────────────────────────────────────
 export interface BrainstormContext {
@@ -66,6 +93,8 @@ export interface BrainstormContext {
   recentUsed: string[];
   burnedQueries: string[];
   searches?: string[];
+  likedVideos?: string[]; // "title (channel)" of videos the user liked
+  watchlist?: string[];   // "title (channel)" of watch-later saves
   numTopics?: number;
   model?: string;
   provider?: string;
@@ -269,13 +298,17 @@ export async function brainstormTopics(ctx: BrainstormContext): Promise<string[]
   const liked = ctx.interests.slice(0, 15).join(", ");
   const disliked = ctx.disliked.slice(0, 10).join(", ");
   const searches = (ctx.searches || []).slice(-10).join(", ");
+  const likedVideos = (ctx.likedVideos || []).slice(-15).join("; ");
+  const watchlist = (ctx.watchlist || []).slice(-15).join("; ");
   const recentUsed = ctx.recentUsed.slice(-20).join(", ");
   const burnedList = ctx.burnedQueries.slice(-30).join(", ");
   const numTopics = ctx.numTopics || 100;
 
-  const userMessage = `My interests: [${liked}]
-Disliked: [${disliked}]
+  const userMessage = `My interest topics: [${liked}]
+Videos I actually liked (strongest signal): [${likedVideos}]
+Videos I saved to watch later (strong signal): [${watchlist}]
 Recent searches: [${searches}]
+Disliked: [${disliked}]
 Recently used (avoid these): [${recentUsed}]
 Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]
 
@@ -290,7 +323,9 @@ Suggest ${numTopics} new topics.`;
         logger.info(`[WallgardenService] Brainstorm retry ${attempt + 1}/${MAX_RETRIES + 1}`);
       }
 
-      const temperature = 0.1 + attempt * 0.15;
+      // Start hot for creative variety; cool down on retries so a model
+      // that failed to produce valid JSON becomes more deterministic.
+      const temperature = Math.max(0.4, 0.9 - attempt * 0.25);
       const data = await callPrismAgent(
         model,
         provider,
@@ -322,12 +357,16 @@ export async function generateSimilarTopics(ctx: SimilarContext): Promise<string
 
   const liked = ctx.interests.slice(0, 15).join(", ");
   const disliked = ctx.disliked.slice(0, 10).join(", ");
+  const likedVideos = (ctx.likedVideos || []).slice(-15).join("; ");
+  const watchlist = (ctx.watchlist || []).slice(-15).join("; ");
   const recentUsed = ctx.recentUsed.slice(-20).join(", ");
   const burnedList = ctx.burnedQueries.slice(-30).join(", ");
   const numTopics = ctx.numTopics || 10;
 
   const userMessage = `Search query: "${ctx.query}"
-My interests: [${liked}]
+My interest topics: [${liked}]
+Videos I actually liked (strongest signal): [${likedVideos}]
+Videos I saved to watch later (strong signal): [${watchlist}]
 Disliked: [${disliked}]
 Recently used (avoid these): [${recentUsed}]
 Failed queries (don't reuse these exact phrases): [${burnedList}]
@@ -343,7 +382,7 @@ Suggest ${numTopics} topics related to "${ctx.query}".`;
         logger.info(`[WallgardenService] Similar retry ${attempt + 1}/${MAX_RETRIES + 1}`);
       }
 
-      const temperature = 0.1 + attempt * 0.15;
+      const temperature = Math.max(0.4, 0.9 - attempt * 0.25);
       const data = await callPrismAgent(
         model,
         provider,
