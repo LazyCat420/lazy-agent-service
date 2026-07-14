@@ -1226,6 +1226,8 @@
     "owner_app": "trading",
     "agents": [
       "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_quant_analyst",
       "v3_regime_engine"
     ]
   },
@@ -1406,6 +1408,7 @@
     "owner_app": "trading",
     "agents": [
       "user_chat",
+      "v3_board_of_directors",
       "v3_quant_analyst"
     ]
   },
@@ -2112,7 +2115,8 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch"
+      "tournament_pitch",
+      "v3_quant_analyst"
     ]
   },
   {
@@ -2399,10 +2403,6 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "v3_bear_agent",
-      "v3_board_of_directors",
-      "v3_bull_agent",
-      "v3_bull_defense",
       "v3_debate_judge"
     ]
   },
@@ -2439,15 +2439,7 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "v3_bear_agent",
-      "v3_board_of_directors",
-      "v3_bull_agent",
-      "v3_bull_defense",
-      "v3_debate_judge",
-      "v3_fundamental_analyst",
-      "v3_junior_analyst",
-      "v3_quant_analyst",
-      "v3_regime_engine"
+      "v3_debate_judge"
     ]
   },
   {
@@ -2477,12 +2469,7 @@
       "tool"
     ],
     "owner_app": "trading",
-    "agents": [
-      "v3_board_of_directors",
-      "v3_fundamental_analyst",
-      "v3_junior_analyst",
-      "v3_quant_analyst"
-    ]
+    "agents": []
   },
   {
     "name": "whiteboard_write",
@@ -2522,16 +2509,9 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "v3_bear_agent",
-      "v3_board_of_directors",
-      "v3_bull_agent",
-      "v3_bull_defense",
       "v3_debate_judge",
-      "v3_fundamental_analyst",
       "v3_junior_analyst",
-      "v3_portfolio_manager",
-      "v3_quant_analyst",
-      "v3_regime_engine"
+      "v3_quant_analyst"
     ]
   },
   {
