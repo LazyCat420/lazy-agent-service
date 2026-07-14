@@ -190,7 +190,10 @@ def is_cycle_running() -> bool:
         from app.services.pipeline_service import PipelineService
 
         status = PipelineService.get_status()
+        # V3 pipeline reports status="running" with the stage in "phase";
+        # the stage names below are the legacy (v1) status vocabulary.
         return status.get("status") in (
+            "running",
             "collecting",
             "analyzing",
             "trading",

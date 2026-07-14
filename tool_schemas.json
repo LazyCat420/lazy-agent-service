@@ -2108,6 +2108,30 @@
     "source": "html-notes"
   },
   {
+    "name": "html_notes_sports_scores",
+    "description": "Live scores, fixtures, results and standings for any major league \u2014 soccer (FIFA World Cup, Premier League, Champions League, La Liga, MLS), UFC/MMA, NBA, NFL, MLB, NHL, college. Returns {league, title, season, events:[{home, away, state, detail}]} where home/away carry name, logo, score, record and winner (fighters for UFC, teams otherwise). Sub-second. Pass the ENTIRE result to canvas_add_widget(widget_type='scoreboard'). NEVER web-search for scores and never render them as a data_card.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "league": {
+          "type": "string",
+          "description": "Friendly league name: fifa, world cup, premier league, champions league, la liga, serie a, bundesliga, mls, soccer, ufc, mma, nba, wnba, nfl, mlb, nhl, college football, college basketball"
+        }
+      },
+      "required": [
+        "league"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes"
+  },
+  {
     "name": "canvas_read_dom",
     "description": "Read the current live canvas DOM and return a structured summary of all visible elements. Use this to understand what is currently displayed before making modifications. Returns element count, component types, text summaries, and optionally the HTML of a specific element matched by CSS selector.",
     "parameters": {
@@ -2188,7 +2212,8 @@
             "data_card",
             "image",
             "chart",
-            "stock_card"
+            "stock_card",
+            "scoreboard"
           ],
           "description": "The pre-built widget type to spawn"
         },
