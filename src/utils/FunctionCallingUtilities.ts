@@ -152,7 +152,7 @@ export function expandMessagesForFunctionCall(
         .map((toolCall: ToolCallEntry) => {
           let finalResult = toolCall.result;
           if (
-            (toolCall.name === TOOL_NAMES.CREATE_TEAM ||
+            (toolCall.name === TOOL_NAMES.CREATE_SUBAGENT ||
               toolCall.name === "team_create") &&
             Array.isArray(toolCall.result)
           ) {

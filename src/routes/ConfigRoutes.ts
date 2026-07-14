@@ -477,7 +477,7 @@ router.get(
         enabledByDefaultToolNames: finalEnabledByDefaultToolNames,
         coreToolsLocked: persona?.coreToolsLocked ?? true,
         canSpawnSubAgents: ORCHESTRATOR_ONLY_TOOLS.includes(
-          TOOL_NAMES.CREATE_TEAM,
+          TOOL_NAMES.CREATE_SUBAGENT,
         ),
         usesDirectoryTree: persona?.usesDirectoryTree || false,
         usesCodingGuidelines: persona?.usesCodingGuidelines || false,

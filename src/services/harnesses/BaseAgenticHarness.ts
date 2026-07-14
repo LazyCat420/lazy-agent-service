@@ -1222,7 +1222,7 @@ export default class BaseAgenticHarness {
     // Persist sub-agent snapshots for orchestrator conversations
     if (
       state.streamedToolCalls.some(
-        (toolCall) => toolCall.name === TOOL_NAMES.CREATE_TEAM,
+        (toolCall) => toolCall.name === TOOL_NAMES.CREATE_SUBAGENT,
       ) &&
       conversationId
     ) {

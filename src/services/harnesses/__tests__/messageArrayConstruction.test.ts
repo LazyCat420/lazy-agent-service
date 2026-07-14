@@ -3961,7 +3961,7 @@ describe("Message Array Construction", () => {
         toolCalls: [
           {
             id: "call_team_1",
-            name: "create_team",
+            name: "create_subagents",
             args: {
               name: "auth-team",
               members: [

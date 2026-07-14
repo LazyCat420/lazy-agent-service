@@ -684,7 +684,7 @@ function getOrchestratorToolSchemas(
 
   return [
     {
-      name: TOOL_NAMES.CREATE_TEAM,
+      name: TOOL_NAMES.CREATE_SUBAGENT,
       emoji: ["👥", "🤖"],
       description: PromptLocaleService.get(activeLocale, "orchestrator.tools.create_team.description", {
         hierarchicalDesc,
@@ -789,7 +789,7 @@ function getOrchestratorToolSchemas(
       },
     },
     {
-      name: TOOL_NAMES.SEND_MESSAGE,
+      name: TOOL_NAMES.SEND_SUBAGENT_MESSAGE,
       emoji: ["💬", "📤"],
       description: PromptLocaleService.get(activeLocale, "orchestrator.tools.send_message.description"),
       parameters: {
@@ -808,7 +808,7 @@ function getOrchestratorToolSchemas(
       },
     },
     {
-      name: TOOL_NAMES.STOP_AGENT,
+      name: TOOL_NAMES.STOP_SUBAGENT,
       emoji: ["⏹️", "🤖"],
       description: PromptLocaleService.get(activeLocale, "orchestrator.tools.stop_agent.description"),
       parameters: {
@@ -823,7 +823,7 @@ function getOrchestratorToolSchemas(
       },
     },
     {
-      name: TOOL_NAMES.GET_TASK_OUTPUT,
+      name: TOOL_NAMES.GET_SUBAGENT_OUTPUT,
       emoji: ["📥", "🤖"],
       description: PromptLocaleService.get(activeLocale, "orchestrator.tools.get_task_output.description"),
       parameters: {
@@ -838,7 +838,7 @@ function getOrchestratorToolSchemas(
       },
     },
     {
-      name: TOOL_NAMES.DELETE_TEAM,
+      name: TOOL_NAMES.DELETE_SUBAGENTS,
       emoji: ["🗑️", "👥"],
       description: PromptLocaleService.get(activeLocale, "orchestrator.tools.delete_team.description"),
       parameters: {
@@ -1534,26 +1534,26 @@ export default class ToolOrchestratorService {
     };
 
     switch (name) {
-      case TOOL_NAMES.CREATE_TEAM:
+      case TOOL_NAMES.CREATE_SUBAGENT:
         return OrchestratorService.createTeam(
           args as { name: string; members: TeamMember[]; topology?: string },
           orchestratorContext as OrchestratorContext,
         );
 
-      case TOOL_NAMES.SEND_MESSAGE:
+      case TOOL_NAMES.SEND_SUBAGENT_MESSAGE:
         return OrchestratorService.sendMessage(
           args.to as string,
           args.message as string,
           orchestratorContext as OrchestratorContext,
         );
 
-      case TOOL_NAMES.STOP_AGENT:
+      case TOOL_NAMES.STOP_SUBAGENT:
         return OrchestratorService.stopAgent(args.agent_id as string);
 
-      case TOOL_NAMES.GET_TASK_OUTPUT:
+      case TOOL_NAMES.GET_SUBAGENT_OUTPUT:
         return OrchestratorService.getTaskOutput(args.agent_id as string);
 
-      case TOOL_NAMES.DELETE_TEAM:
+      case TOOL_NAMES.DELETE_SUBAGENTS:
         return OrchestratorService.deleteTeam(
           args.teamName as string,
           orchestratorContext as OrchestratorContext,

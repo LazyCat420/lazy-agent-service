@@ -359,7 +359,7 @@ export function extractSubtreeMetrics(
     // This is the primary format used by our ReActHarness.
     if (message.role === "assistant" && Array.isArray(message.toolCalls)) {
       for (const toolCall of message.toolCalls) {
-        if (toolCall.name !== "create_team" || !toolCall.result) continue;
+        if ((toolCall.name !== "create_subagents" && toolCall.name !== "create_subagent") || !toolCall.result) continue;
 
         // toolCall.result is the raw return value from OrchestratorService.createTeam(),
         // which is SubAgentResult[] — already a parsed object, not a JSON string.

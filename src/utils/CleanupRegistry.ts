@@ -10,4 +10,4 @@ export {
   runCleanupFunctions,
   installShutdownHandlers,
   cleanupCount,
-} from "@rodrigo-barraza/service-library/shutdown";
+} from "@rodrigo-barraza/utilities-library/service/shutdown";
