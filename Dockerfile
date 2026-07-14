@@ -10,6 +10,11 @@ RUN npm install -g pnpm
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY .npmrc ./
+# Rod's utilities-library is vendored as a local tarball rather than fetched
+# from GitHub at build time — a private/renamed repo or a deleted commit would
+# otherwise 404 here and break every deploy. Must be copied BEFORE the install
+# so the file: dependency resolves. See vendor/README.md to refresh it.
+COPY vendor ./vendor
 RUN pnpm install --frozen-lockfile
 
 COPY . .

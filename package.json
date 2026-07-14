@@ -21,7 +21,7 @@
     "@anthropic-ai/sdk": "^0.103.0",
     "@google/genai": "^2.4.0",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@rodrigo-barraza/utilities-library": "https://codeload.github.com/rodrigo-barraza/utilities-library/tar.gz/c27b5796b79d8fe763253b9271bfaaec97a2e9df",
+    "@rodrigo-barraza/utilities-library": "file:vendor/rodrigo-barraza-utilities-library-0.4.0.tgz",
     "cors": "^2.8.6",
     "express": "5.2.1",
     "express-rate-limit": "^8.5.2",
