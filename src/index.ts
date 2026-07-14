@@ -13,7 +13,9 @@ import { setupWebSocket } from "./websocket/index.ts";
 import { authMiddleware } from "./middleware/AuthMiddleware.ts";
 import { requestLoggerMiddleware } from "./middleware/RequestLoggerMiddleware.ts";
 import { COLLECTIONS, CORS_MAX_AGE_SECONDS } from "./constants.ts";
-const PORT = 7778;
+// Container-internal bind port; the NAS maps host 5591 → container 7778.
+// LAZY_TOOL_SERVICE_PORT overrides for non-default setups.
+const PORT = Number(process.env.LAZY_TOOL_SERVICE_PORT) || 7778;
 import {
   MONGO_URI,
   MONGO_DB_NAME,
@@ -563,7 +565,7 @@ setupWebSocket(wss);
   }
 
   server.listen(PORT, async () => {
-    logger.success(`Prism the AI Gateway is running on port ${PORT}`);
+    logger.success(`lazy-tool-service is running on port ${PORT}`);
     logger.info("Available providers:", listProviders().join(", "));
     // Modality colors matching Prism Client's MODALITY_COLORS
     const MODALITY_COLORS: Record<string, number[]> = {
