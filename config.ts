@@ -113,7 +113,10 @@ export const PYTHONPATH = process.env.PYTHONPATH || defaultPythonPath;
 export const LAZY_TOOL_SERVICE_API_KEY = process.env.LAZY_TOOL_SERVICE_API_KEY;
 export const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || "30000");
 export const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || "60000");
-export const TRADING_SERVICE_URL = process.env.TRADING_SERVICE_URL || "http://localhost:3031";
+// trading-service runs as a separate container — "localhost" inside this
+// container never reaches it; default to the NAS host IP (same as HTML_NOTES_URL).
+export const TRADING_SERVICE_URL = process.env.TRADING_SERVICE_URL
+  || (isDocker ? "http://10.0.0.16:3031" : "http://localhost:3031");
 export const TRADING_SERVICE_API_KEY = process.env.TRADING_SERVICE_API_KEY;
 // html-notes runs as a separate container — "localhost" inside this container
 // never reaches it; default to the NAS host IP.

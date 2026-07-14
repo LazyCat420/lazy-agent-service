@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 
@@ -86,6 +87,14 @@ export const executePythonTool = async (
       reject(new Error(`Execution timed out after ${CONFIG.EXECUTION_TIMEOUT_MS} ms`));
     }, CONFIG.EXECUTION_TIMEOUT_MS);
 
+    // Without this handler a spawn failure (e.g. missing interpreter) emits an
+    // unhandled 'error' event that crashes the entire Node process — this took
+    // down the container in a restart loop on 2026-07-14 (98 restarts).
+    child.on("error", (spawnError) => {
+      clearTimeout(timeoutId);
+      reject(new Error(`Failed to spawn python bridge (${CONFIG.PYTHON_INTERPRETER}): ${spawnError.message}`));
+    });
+
     child.stdout.on("data", (data) => {
       stdout += data.toString();
     });
@@ -113,6 +122,67 @@ export const executePythonTool = async (
       }
     });
   });
+};
+
+// The container image is Node-only (no Python interpreter), so the spawn
+// bridge can never work there — python-bridge tools go to trading-service's
+// HTTP executor instead. Local dev keeps the spawn path (venv exists).
+const hasLocalPython = fs.existsSync(CONFIG.PYTHON_INTERPRETER);
+
+/**
+ * Execute a python-bridge tool via trading-service's HTTP endpoint
+ * (POST /api/v1/agent-tools/execute). Returns {error, is_error} instead of
+ * throwing so MCP callers get a structured failure, not a dropped session.
+ */
+export const executeToolViaTradingService = async (
+  toolName: string,
+  toolArguments: Record<string, unknown>,
+  context?: LocalToolContext
+): Promise<unknown> => {
+  const argumentsJson = JSON.stringify(toolArguments);
+  const cacheKey = crypto.createHash("sha256").update(toolName + argumentsJson).digest("hex");
+
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    logger.info(JSON.stringify({ event: "cache_hit", toolName, args: toolArguments }));
+    return cached.result;
+  }
+
+  const url = `${CONFIG.TRADING_SERVICE_URL}/api/v1/agent-tools/execute`;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONFIG.EXECUTION_TIMEOUT_MS);
+    const apiResponse = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${CONFIG.TRADING_SERVICE_API_KEY || ""}`
+      },
+      body: JSON.stringify({
+        tool_name: toolName,
+        arguments: toolArguments,
+        agent_name: context?.agentName || "",
+        ticker: context?.ticker || "",
+        cycle_id: context?.cycleId || ""
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (!apiResponse.ok) {
+      const errText = await apiResponse.text();
+      logger.error(`[LocalToolRouter] trading-service execute ${toolName} → ${apiResponse.status}: ${errText.slice(0, 300)}`);
+      return { error: `trading-service tool execution failed (${apiResponse.status}): ${errText.slice(0, 500)}`, is_error: true };
+    }
+
+    const result = await apiResponse.json();
+    cache.set(cacheKey, { result, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
+    return result;
+  } catch (fetchError: unknown) {
+    const message = (fetchError as Error).message || String(fetchError);
+    logger.error(`[LocalToolRouter] trading-service execute ${toolName} unreachable: ${message}`);
+    return { error: `Failed to reach trading-service at ${url}: ${message}`, is_error: true };
+  }
 };
 
 /** Forward a tool call to the HTML-Notes internal dispatcher. */
@@ -284,5 +354,8 @@ export async function routeLocalTool(
     return forwardToHtmlNotes(tName, toolArguments);
   }
 
+  if (!hasLocalPython) {
+    return executeToolViaTradingService(tName, toolArguments, context);
+  }
   return executePythonTool(tName, toolArguments, context);
 }

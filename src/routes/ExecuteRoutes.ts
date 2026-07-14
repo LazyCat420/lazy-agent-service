@@ -23,14 +23,17 @@ export const executeTool = executePythonTool;
 async function reportUsage(payload: Record<string, unknown>) {
   const tradingServiceUrl = CONFIG.TRADING_SERVICE_URL || "http://localhost:3031";
   const apiKey = CONFIG.TRADING_SERVICE_API_KEY || "change-me-local-dev";
-  const url = `${tradingServiceUrl}/api/telemetry/tool-usage`;
+  // trading-service's usage endpoint lives under /api/v1/agent-tools and
+  // authenticates with a Bearer token (the old /api/telemetry/tool-usage
+  // path never existed — reports were 404ing silently).
+  const url = `${tradingServiceUrl}/api/v1/agent-tools/usage`;
 
   try {
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": apiKey
+        Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify(payload)
     });
