@@ -340,6 +340,36 @@
     "agents": []
   },
   {
+    "name": "html_notes_stock_news",
+    "description": "Stock/company/market news headlines plus ticker discovery for a free-text query (a ticker, company name, or topic like 'AI chip stocks'). Returns 'news' (title, publisher, date, url, related tickers) and 'matches' (ticker symbols with names) \u2014 use 'matches' to find symbols when the user says 'find me stocks' without naming one, then feed each symbol into html_notes_stock_history for the stock_card. Use THIS for any stock/market news; do NOT use html_notes_stock_history for news (it returns prices only) and do NOT use html_notes_web_search for stock news (this returns cleaner structured headlines). Present headlines with canvas_add_widget(widget_type='data_card') \u2014 every item needs a 'description' with the actual headline text.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Ticker, company name, or market topic, e.g. 'NVDA', 'Apple', 'semiconductor stocks'"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max headlines to return (default 8, max 15)"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
     "name": "html_notes_update_note",
     "description": "Update the content, title, tags, or links of an existing note in the HTML Notes database.",
     "parameters": {
