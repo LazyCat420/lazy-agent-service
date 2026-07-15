@@ -483,6 +483,32 @@
     "agents": []
   },
   {
+    "name": "html_notes_news",
+    "description": "Get current news as a ready-to-render data_card of stories, each with a real photo, a tightened headline and a written 2-3 sentence summary. Sourced from live news feeds (GDELT / Google News), so it returns TODAY'S stories with images — unlike html_notes_web_search, which returns news-site homepages and no photos. Use THIS for any 'news', 'headlines', 'latest on X', or 'top stories' request. Pass topic='' for general top stories, or a subject like topic='artificial intelligence'. Then render it with canvas_add_widget(widget_type='data_card', config={'news_topic': '<the same topic>'}) — the server rehydrates the stories, so do NOT re-type the items.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "News subject, e.g. 'artificial intelligence', 'ukraine', 'nba'. Use an empty string '' for general top stories."
+        }
+      },
+      "required": [
+        "topic"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
     "name": "html_notes_youtube_search",
     "description": "Search YouTube for videos matching a query. Returns a list of results with video_id, title, and channel. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget.",
     "parameters": {
