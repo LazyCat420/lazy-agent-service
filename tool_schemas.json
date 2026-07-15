@@ -1,7 +1,7 @@
 [
   {
     "name": "canvas_add_widget",
-    "description": "Spawn a pre-built widget on the canvas dashboard grid. Fetch the data FIRST with the matching data tool, then pass the result into config \u2014 the widget renders server-side, so config IS the finished content. Choosing widget_type:\n\n\u2022 'clock' \u2014 clocks AND timers. config={\"mode\": \"clock\"|\"stopwatch\"|\"countdown\", \"duration_seconds\": N, \"timezone\": \"America/New_York\"}. A TIMER or COUNTDOWN request ('set a timer for 5 minutes', 'pomodoro') is mode='countdown' with duration_seconds (5 minutes \u2192 300) \u2014 NOT a plain clock; it starts automatically with Pause/Reset controls. A STOPWATCH request ('time my run') is mode='stopwatch'. A world/city clock ('time in Tokyo') is mode='clock' with an IANA timezone. Multiple timers/clocks can coexist \u2014 spawn one widget each.\n\n\u2022 'stock_card' \u2014 ANY stock, share price, crypto or ticker ('chart AAPL', 'how is TSLA doing', 'bitcoin price'). Renders the price header, range tabs, chart, technicals and fundamentals together. Call html_notes_stock_history(symbol) first, then pass config={\"symbol\": \"AAPL\"} \u2014 just the symbol; the server fills in everything else. Do NOT use 'chart' for a ticker: 'chart' has no price header, no technicals and no fundamentals, and is the wrong widget for a stock.\n\u2022 'scoreboard' \u2014 ANY sports scores, fixtures, results or standings. Call html_notes_sports_scores(league) first, then pass config={\"league\": \"nba\"} \u2014 just the league. Do NOT render scores as a data_card; a scoreboard has to show who is playing whom.\n\u2022 'data_card' \u2014 the default for fetched text data: news, recipes, search results, weather, facts, lists. Every item needs a 'description' with the actual text; a title+url alone renders as a bare link the user has to click, which is a failure.\n\u2022 'chart' \u2014 generic numbers only (line/bar/pie from labels+values): populations, poll results, revenue by quarter. NOT for tickers \u2014 use 'stock_card'.\n\u2022 'image' \u2014 display picture URLs. 'youtube_player' \u2014 call html_notes_youtube_search first and pass the chosen video_id.\n\u2022 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player' \u2014 utility widgets, no data fetch needed.\n\nEDITING: to change an existing widget (retime a timer, restyle a clock's timezone, swap a stock, refresh a chart) call this AGAIN with the SAME widget_id and the full updated config \u2014 it re-renders that widget in place instead of adding a duplicate. This is the correct way to edit a clock/timer/countdown; do NOT use canvas_modify_dom on these server-rendered widgets, it cannot rebuild them.",
+    "description": "Spawn a pre-built widget on the canvas dashboard grid. Fetch the data FIRST with the matching data tool, then pass the result into config \u2014 the widget renders server-side, so config IS the finished content. Choosing widget_type:\n\n\u2022 'clock' \u2014 clocks AND timers. config={\"mode\": \"clock\"|\"stopwatch\"|\"countdown\", \"duration_seconds\": N, \"timezone\": \"America/New_York\"}. A TIMER or COUNTDOWN request ('set a timer for 5 minutes', 'pomodoro') is mode='countdown' with duration_seconds (5 minutes \u2192 300) \u2014 NOT a plain clock; it starts automatically with Pause/Reset controls. A STOPWATCH request ('time my run') is mode='stopwatch'. A world/city clock ('time in Tokyo') is mode='clock' with an IANA timezone. Multiple timers/clocks can coexist \u2014 spawn one widget each.\n\n\u2022 'stock_card' \u2014 ANY stock, share price, crypto or ticker ('chart AAPL', 'how is TSLA doing', 'bitcoin price'). Renders the price header, range tabs, chart, technicals and fundamentals together. Call html_notes_stock_history(symbol) first, then pass config={\"symbol\": \"AAPL\"} \u2014 just the symbol; the server fills in everything else. Do NOT use 'chart' for a ticker: 'chart' has no price header, no technicals and no fundamentals, and is the wrong widget for a stock.\n\u2022 'weather' \u2014 ANY current weather or forecast ('weather in Tokyo', 'what's it like in London', 'forecast for Denver'). Call html_notes_get_weather(location) first, then pass config={\"location\": \"Tokyo\"} \u2014 JUST the location; the server fills in the current conditions and 5-day forecast. Do NOT render weather as a data_card and do NOT web-search for it.\n\u2022 'scoreboard' \u2014 ANY sports scores, fixtures, results or standings. Call html_notes_sports_scores(league) first, then pass config={\"league\": \"nba\"} \u2014 just the league. Do NOT render scores as a data_card; a scoreboard has to show who is playing whom.\n\u2022 'data_card' \u2014 the default for fetched text data: news, recipes, search results, weather, facts, lists. Every item needs a 'description' with the actual text; a title+url alone renders as a bare link the user has to click, which is a failure.\n\u2022 'chart' \u2014 generic numbers only (line/bar/pie from labels+values): populations, poll results, revenue by quarter. NOT for tickers \u2014 use 'stock_card'.\n\u2022 'image' \u2014 display picture URLs. 'youtube_player' \u2014 call html_notes_youtube_search first and pass the chosen video_id.\n\u2022 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player' \u2014 utility widgets, no data fetch needed.\n\nEDITING: to change an existing widget (retime a timer, restyle a clock's timezone, swap a stock, refresh a chart) call this AGAIN with the SAME widget_id and the full updated config \u2014 it re-renders that widget in place instead of adding a duplicate. This is the correct way to edit a clock/timer/countdown; do NOT use canvas_modify_dom on these server-rendered widgets, it cannot rebuild them.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -18,7 +18,8 @@
             "image",
             "chart",
             "stock_card",
-            "scoreboard"
+            "scoreboard",
+            "weather"
           ],
           "description": "The pre-built widget type to spawn"
         },
@@ -28,7 +29,7 @@
         },
         "config": {
           "type": "object",
-          "description": "Widget configuration, by widget_type. stock_card: {symbol} \u2014 ONLY the symbol, e.g. {\"symbol\": \"AAPL\"}; do not copy labels/values/technicals/fundamentals back, the server already has them from html_notes_stock_history. scoreboard: {league} \u2014 ONLY the league, e.g. {\"league\": \"nba\"}. data_card: {title, subtitle?, icon?, image?, content?, items:[{title, description, url?, image?, badge?, meta?}]} \u2014 use items for lists (news headlines, recipes, results), content for prose; 'description' carries the actual text of each item and is REQUIRED \u2014 copy the snippet from the search result into it, and if a snippet is empty call html_notes_read_page on that url to get real text. A data_card whose items have only a title and url renders as a naked hyperlink and is useless. chart: {title, type:'line'|'bar'|'pie', labels:[str], values:[num]} or {title, chart:<full Chart.js config>}. image: {title, url, caption?} or {title, images:[{url, caption?}]}. clock: {timezone}. checklist: {title, items:[str]}. notes: {title, content}. iframe_app: {url, title}. youtube_player: {video_id, title}. mini_music_player: {genre, autoplay}."
+          "description": "Widget configuration, by widget_type. stock_card: {symbol} \u2014 ONLY the symbol, e.g. {\"symbol\": \"AAPL\"}; do not copy labels/values/technicals/fundamentals back, the server already has them from html_notes_stock_history. scoreboard: {league} \u2014 ONLY the league, e.g. {\"league\": \"nba\"}. data_card: {title, subtitle?, icon?, image?, content?, items:[{title, description, url?, image?, badge?, meta?}]} \u2014 use items for lists (news headlines, recipes, results), content for prose; 'description' carries the actual text of each item and is REQUIRED \u2014 copy the snippet from the search result into it, and if a snippet is empty call html_notes_read_page on that url to get real text. A data_card whose items have only a title and url renders as a naked hyperlink and is useless. chart: {title, type:'line'|'bar'|'pie', labels:[str], values:[num]} or {title, chart:<full Chart.js config>}. image: {title, url, caption?} or {title, images:[{url, caption?}]}. clock: {timezone}. checklist: {title, items:[str]}. notes: {title, content}. iframe_app: {url, title}. youtube_player: {video_id, title}. mini_music_player: {genre, autoplay}. weather: {location} \u2014 ONLY the location, e.g. {\"location\": \"Tokyo\"}; the server already has the conditions from html_notes_get_weather."
         }
       },
       "required": [
@@ -240,6 +241,40 @@
       },
       "required": [
         "note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_get_weather",
+    "description": "Current conditions plus a 5-day forecast for any city or place, via a keyless weather source (Open-Meteo). Sub-second. Returns location, current {temp, feels_like, humidity, wind, condition} and daily {day, hi, lo, condition}. Then call canvas_add_widget(widget_type='weather', config={\"location\": \"<place>\"}) \u2014 config is JUST the location; the server fills the widget in. Do NOT copy the returned data into the config, do NOT render weather as a data_card, and never web-search for weather.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string",
+          "description": "City or place name, e.g. 'Tokyo', 'San Francisco', 'Paris, France'"
+        },
+        "units": {
+          "type": "string",
+          "enum": [
+            "fahrenheit",
+            "celsius"
+          ],
+          "description": "Temperature/wind units (default 'fahrenheit')"
+        }
+      },
+      "required": [
+        "location"
       ]
     },
     "tier": 0,
