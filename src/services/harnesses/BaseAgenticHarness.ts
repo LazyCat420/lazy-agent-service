@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   OUTPUT_TOKEN_CLAMP_SAFETY_MARGIN,
   MINIMUM_CLAMPED_OUTPUT_TOKENS,
+  MINIMUM_VIABLE_OUTPUT_TOKENS,
 } from "../../constants/TokenBudgetDefaults.ts";
 import ConversationGenerationTracker from "../ConversationGenerationTracker.ts";
 import RequestLogger from "../RequestLogger.ts";
@@ -474,14 +475,45 @@ export default class BaseAgenticHarness {
    * Create an LLM text stream from the provider.
    * Handles liveAPI fallback, message expansion, and dynamic output
    * token clamping to prevent context window overflow.
+   *
+   * Returns `null` when the pre-flight context exhaustion guard (ported
+   * from prism-service) determines that context pressure has clamped the
+   * output budget below MINIMUM_VIABLE_OUTPUT_TOKENS — sending such a
+   * request would only produce a mid-tool-call truncation. A
+   * `context_exhausted` status event is emitted before returning null.
    */
   createProviderStream(
     messages: ConversationMessage[],
     passOptions: AgenticOptions,
-  ): AsyncIterable<unknown> {
+  ): AsyncIterable<unknown> | null {
     const { provider, resolvedModel, modelDefinition, signal } = this.context;
 
     const clampedMaxTokens = this.clampOutputTokens(messages, passOptions.maxTokens);
+
+    // ── Pre-flight context exhaustion guard ──────────────────
+    // Fires only when clamping actually reduced the requested budget below
+    // the viable floor (an intentionally small requested maxTokens is fine).
+    if (
+      passOptions.maxTokens &&
+      clampedMaxTokens !== undefined &&
+      clampedMaxTokens !== passOptions.maxTokens &&
+      clampedMaxTokens < MINIMUM_VIABLE_OUTPUT_TOKENS
+    ) {
+      const contextWindow = modelDefinition?.maxInputTokens || 0;
+      logger.warn(
+        `[ContextExhaustionGuard] Output budget ${clampedMaxTokens} < ` +
+          `${MINIMUM_VIABLE_OUTPUT_TOKENS} threshold — context window (${contextWindow}) exhausted. ` +
+          `Skipping provider call instead of sending a doomed request.`,
+      );
+      this.context.emit({
+        type: SERVER_SENT_EVENT_TYPES.STATUS,
+        message: "context_exhausted",
+        availableOutputTokens: clampedMaxTokens,
+        contextWindow,
+      });
+      return null;
+    }
+
     const clampedPassOptions = clampedMaxTokens !== passOptions.maxTokens
       ? { ...passOptions, maxTokens: clampedMaxTokens }
       : passOptions;
@@ -508,12 +540,17 @@ export default class BaseAgenticHarness {
   /**
    * Consume an LLM stream, routing each chunk through `processStreamChunk`.
    * Handles abort signals and stream teardown.
+   *
+   * Accepts `null` (from the context exhaustion guard in
+   * `createProviderStream`) as a no-op — the pass ends with empty output
+   * and each harness's empty-output/exhaustion handling takes over.
    */
   public async consumeStream(
-    stream: AsyncIterable<unknown>,
+    stream: AsyncIterable<unknown> | null,
     pass: PassState,
     allowedToolNames: Set<string>,
   ): Promise<void> {
+    if (stream === null) return;
     for await (const chunk of stream) {
       const result = await this.processStreamChunk(
         chunk,

@@ -46,6 +46,62 @@ async function reportUsage(payload: Record<string, unknown>) {
   }
 }
 
+/**
+ * Classify a tool result for telemetry truthfulness. routeLocalTool resolves
+ * (rather than throws) for many tool-level failures — results whose content
+ * carries a top-level `error` / `is_error` key or `{"status":"error"}` are
+ * failures and must not be reported as success:true.
+ *
+ * Only affects the telemetry classification — never the response payload.
+ */
+export function classifyToolResult(result: unknown): {
+  success: boolean;
+  errorMessage?: string;
+} {
+  let value: unknown = result;
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{")) return { success: true };
+    try {
+      value = JSON.parse(trimmed);
+    } catch {
+      return { success: true };
+    }
+  }
+
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { success: true };
+  }
+
+  const record = value as Record<string, unknown>;
+  const hasErrorKey =
+    record.error !== undefined && record.error !== null && record.error !== false;
+  const hasIsErrorFlag = record.is_error === true || record.isError === true;
+  const hasErrorStatus = record.status === "error";
+
+  if (!hasErrorKey && !hasIsErrorFlag && !hasErrorStatus) {
+    return { success: true };
+  }
+
+  let errorMessage: string;
+  if (typeof record.error === "string" && record.error) {
+    errorMessage = record.error;
+  } else if (
+    typeof record.error === "object" &&
+    record.error !== null &&
+    typeof (record.error as Record<string, unknown>).message === "string"
+  ) {
+    errorMessage = (record.error as Record<string, unknown>).message as string;
+  } else if (typeof record.message === "string" && record.message) {
+    errorMessage = record.message;
+  } else {
+    errorMessage = "tool_returned_error";
+  }
+
+  return { success: false, errorMessage };
+}
+
 const handleExecuteRoute: RequestHandler = async (request, response) => {
   const { toolName } = request.params;
   let toolArguments = (request.body || {}) as Record<string, unknown>;
@@ -92,30 +148,65 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
       { agentName, cycleId, ticker }
     );
 
-    // Preserve pre-refactor telemetry semantics: gated widget failures were
-    // returned before the success report fired.
+    // Gated widget refusals (planning/validation) are still refusals — report
+    // them as failed telemetry rows so they stop being invisible, then return
+    // the same response the caller always received.
+    const gatedError = String(
+      (result as { error?: string } | null | undefined)?.error ?? ""
+    );
     const gated =
       typeof result === "object" &&
       result !== null &&
       (result as { success?: boolean }).success === false &&
-      ["PLANNING_REQUIRED", "VALIDATION_FAILED"].includes(
-        String((result as { error?: string }).error)
-      );
+      ["PLANNING_REQUIRED", "VALIDATION_FAILED"].includes(gatedError);
     if (gated) {
+      const durationMs = Date.now() - startTime;
+      logger.info(
+        JSON.stringify({ event: "tool_gated", toolName, gate: gatedError, durationMs })
+      );
+      reportUsage({
+        tool_name: toolName as string,
+        agent_name: agentName,
+        ticker,
+        cycle_id: cycleId,
+        success: false,
+        execution_ms: durationMs,
+        error_message: gatedError.toLowerCase(),
+        service_source: "lazy-tool-service"
+      }).catch(() => {});
       response.json(result);
       return;
     }
 
     const durationMs = Date.now() - startTime;
-    logger.info(JSON.stringify({ event: "tool_success", toolName, durationMs }));
+
+    // Classify the result before reporting — many tools resolve (rather than
+    // throw) with an error payload, which used to be reported as success:true.
+    const classification = classifyToolResult(result);
+
+    if (classification.success) {
+      logger.info(JSON.stringify({ event: "tool_success", toolName, durationMs }));
+    } else {
+      logger.warn(
+        JSON.stringify({
+          event: "tool_soft_failure",
+          toolName,
+          error: classification.errorMessage,
+          durationMs
+        })
+      );
+    }
 
     reportUsage({
       tool_name: toolName as string,
       agent_name: agentName,
       ticker,
       cycle_id: cycleId,
-      success: true,
+      success: classification.success,
       execution_ms: durationMs,
+      ...(classification.success
+        ? {}
+        : { error_message: classification.errorMessage }),
       service_source: "lazy-tool-service"
     }).catch(() => {});
 

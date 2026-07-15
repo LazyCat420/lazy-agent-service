@@ -7,6 +7,7 @@
 import { Agent } from "undici";
 import { getDataUrlMimeType } from "./media.ts";
 import { ThinkTagParser, extractThinkTags } from "./ThinkTagParser.ts";
+import logger from "./logger.ts";
 import type {
   ProviderOptions,
   ChatMessageContent,
@@ -24,6 +25,68 @@ export const STREAMING_DISPATCHER = new Agent({
   headersTimeout: 1_800_000,
   keepAliveTimeout: 30_000,
 });
+
+// ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+// ┃  TEMPORARY PATCH — Remove when vLLM fixes Qwen3.6 chat     ┃
+// ┃  template system message positioning bug.                   ┃
+// ┃                                                             ┃
+// ┃  TODO(vllm-qwen3.6): Remove this entire block once vLLM    ┃
+// ┃  supports mid-conversation system messages for Qwen3.6.    ┃
+// ┃                                                             ┃
+// ┃  Bug: vLLM's Qwen3.6 chat template enforces that system    ┃
+// ┃  messages must only appear at the very beginning. The       ┃
+// ┃  agentic harness injects mid-conversation system messages   ┃
+// ┃  (tool doc addendums, validation errors, retry guidance)    ┃
+// ┃  which triggers:                                            ┃
+// ┃  "System message must be at the beginning."                 ┃
+// ┃                                                             ┃
+// ┃  Workaround: rewrite non-leading system → user role.        ┃
+// ┃  Shared by the vLLM provider (direct :7778 path) and        ┃
+// ┃  PrismProxyService (proxied path) — keep in one place.      ┃
+// ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+// FIXME(vllm-qwen3.6): Temporary model list — delete with the patch above
+const MODELS_REQUIRING_SYSTEM_REWRITE_TEMPORARY_PATCH = ["qwen"];
+
+// FIXME(vllm-qwen3.6): Temporary predicate — delete with the patch above
+export function requiresSystemMessageRewriteTemporaryPatch(
+  modelName: string,
+): boolean {
+  const normalizedModelName = modelName.toLowerCase();
+  return MODELS_REQUIRING_SYSTEM_REWRITE_TEMPORARY_PATCH.some((pattern) =>
+    normalizedModelName.includes(pattern),
+  );
+}
+
+/**
+ * FIXME(vllm-qwen3.6): Temporary rewriter — delete with the patch above.
+ *
+ * Rewrites every non-leading `role:"system"` message to `role:"user"` for
+ * models whose vLLM chat template rejects mid-conversation system messages.
+ * Returns the original array untouched when no rewrite is needed.
+ */
+export function rewriteNonLeadingSystemMessages<T extends { role?: string }>(
+  messages: T[],
+  modelName: string,
+  logContext: string = "vLLM",
+): T[] {
+  if (!requiresSystemMessageRewriteTemporaryPatch(modelName)) return messages;
+
+  const needsRewrite = messages.some(
+    (message, index) => message.role === "system" && index !== 0,
+  );
+  if (!needsRewrite) return messages;
+
+  return messages.map((message, index) => {
+    if (message.role === "system" && index !== 0) {
+      logger.warn(
+        `[${logContext}] TEMP PATCH: Rewriting non-primary system message to user role for ${modelName} (vllm-qwen3.6 workaround)`,
+      );
+      return { ...message, role: "user" };
+    }
+    return message;
+  });
+}
 
 // ── Types ────────────────────────────────────────────────────
 

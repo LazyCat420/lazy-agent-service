@@ -18,59 +18,16 @@ import {
   processNonStreamingResponse,
   parseSSEStream,
   fetchOpenAICompat,
+  rewriteNonLeadingSystemMessages,
   MEDIA_STRATEGIES,
   type OpenAICompletionResponse,
 } from "../utils/openai-compat.ts";
 import type { InputMessage } from "../utils/openai-compat.ts";
 
-// ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-// ┃  TEMPORARY PATCH — Remove when vLLM fixes Qwen3.6 chat     ┃
-// ┃  template system message positioning bug.                   ┃
-// ┃                                                             ┃
-// ┃  TODO(vllm-qwen3.6): Remove this entire block once vLLM    ┃
-// ┃  supports mid-conversation system messages for Qwen3.6.    ┃
-// ┃                                                             ┃
-// ┃  Bug: vLLM's Qwen3.6 chat template enforces that system    ┃
-// ┃  messages must only appear at the very beginning. The       ┃
-// ┃  agentic harness injects mid-conversation system messages   ┃
-// ┃  (tool doc addendums) which triggers:                       ┃
-// ┃  "System message must be at the beginning."                 ┃
-// ┃                                                             ┃
-// ┃  Workaround: rewrite non-leading system → user role.        ┃
-// ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-
-// FIXME(vllm-qwen3.6): Temporary model list — delete with the patch above
-const MODELS_REQUIRING_SYSTEM_REWRITE_TEMPORARY_PATCH = ["qwen"];
-
-function requiresSystemMessageRewriteTemporaryPatch(
-  modelName: string,
-): boolean {
-  const normalizedModelName = modelName.toLowerCase();
-  return MODELS_REQUIRING_SYSTEM_REWRITE_TEMPORARY_PATCH.some((pattern) =>
-    normalizedModelName.includes(pattern),
-  );
-}
-
-// FIXME(vllm-qwen3.6): Temporary rewriter — delete with the patch above
-function rewriteNonLeadingSystemMessages(
-  messages: InputMessage[],
-  modelName: string,
-): InputMessage[] {
-  if (!requiresSystemMessageRewriteTemporaryPatch(modelName)) return messages;
-
-  return messages.map((message, index) => {
-    if (message.role === "system") {
-      if (index === 0) {
-        return message;
-      }
-      logger.warn(
-        `[vLLM] TEMP PATCH: Rewriting non-primary system message to user role for ${modelName} (vllm-qwen3.6 workaround)`,
-      );
-      return { ...message, role: "user" };
-    }
-    return message;
-  });
-}
+// NOTE(vllm-qwen3.6): The temporary non-leading system message rewrite
+// (Qwen chat template workaround) now lives in utils/openai-compat.ts as
+// `rewriteNonLeadingSystemMessages`, shared with PrismProxyService so the
+// direct :7778 path and the proxied path apply identical transformations.
 
 // ── Types ────────────────────────────────────────────────────
 

@@ -35,3 +35,13 @@ export const OUTPUT_TOKEN_CLAMP_SAFETY_MARGIN = 256;
  * partial response rather than silently failing with 0 output.
  */
 export const MINIMUM_CLAMPED_OUTPUT_TOKENS = 1_024;
+
+/**
+ * Minimum viable output budget for an agentic provider request (ported
+ * from prism-service's ContextExhaustionGuard). When context pressure
+ * clamps the output budget below this threshold, the model cannot produce
+ * a complete tool-call JSON (typically 500–2K tokens) plus reasoning
+ * overhead — the request is doomed to mid-tool-call truncation. Instead
+ * of sending it, the harness fails fast with a context_exhausted event.
+ */
+export const MINIMUM_VIABLE_OUTPUT_TOKENS = 4_096;

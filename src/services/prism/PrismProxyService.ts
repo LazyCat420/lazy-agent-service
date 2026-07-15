@@ -1,31 +1,90 @@
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
 import { getToolSchemas } from "../ToolSchemaService.js";
+import { rewriteNonLeadingSystemMessages } from "../../utils/openai-compat.ts";
 
 const REAL_PRISM_URL = process.env.REAL_PRISM_URL || "http://10.0.0.16:7777";
 
+/**
+ * Timeout for the upstream connection + response headers. Generous (120s)
+ * because /agent requests can take a long time before the first byte.
+ * The timer is cleared as soon as headers arrive — long-running SSE streams
+ * are never aborted once streaming has begun.
+ */
+const UPSTREAM_HEADERS_TIMEOUT_MS = 120_000;
+
+/** Session registrations older than this are pruned on insert. */
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Hard cap on tracked sessions — oldest entries are evicted beyond this. */
+const MAX_TRACKED_SESSIONS = 5_000;
+
+interface SessionToolRegistration {
+  allowedTools: string[];
+  registeredAt: number;
+}
+
 export class PrismProxyService {
-  // Map conversationId -> allowed tool names
-  private static sessionAllowedTools = new Map<string, string[]>();
+  // Map conversationId -> allowed tool names (+ registration timestamp for TTL eviction).
+  // NOTE: in-memory only. Registrations are intentionally NOT persisted:
+  // isToolAllowed is a synchronous hot-path check (ExecuteRoutes calls it
+  // inline on every tool execution) and this service is designed to keep the
+  // proxy path dependency-free. A restart therefore fails OPEN for in-flight
+  // cycles — see the distinct warning in isToolAllowed.
+  private static sessionAllowedTools = new Map<string, SessionToolRegistration>();
+
+  // Sessions we already warned about fail-open treatment (avoid log spam).
+  private static warnedUnknownSessions = new Set<string>();
 
   public static registerSession(conversationId: string, allowedTools: string[]) {
     logger.info(`[PrismProxy] Registering allowed tools for conversation ${conversationId}: ${allowedTools.join(", ")}`);
-    this.sessionAllowedTools.set(conversationId, allowedTools);
+    this.pruneSessions();
+    this.sessionAllowedTools.set(conversationId, {
+      allowedTools,
+      registeredAt: Date.now()
+    });
+  }
+
+  /** Prune expired registrations and enforce the max-size cap (called on insert). */
+  private static pruneSessions() {
+    const now = Date.now();
+    for (const [conversationId, registration] of this.sessionAllowedTools) {
+      if (now - registration.registeredAt > SESSION_TTL_MS) {
+        this.sessionAllowedTools.delete(conversationId);
+      }
+    }
+    // Map iteration order is insertion order — evict oldest first.
+    while (this.sessionAllowedTools.size >= MAX_TRACKED_SESSIONS) {
+      const oldestKey = this.sessionAllowedTools.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.sessionAllowedTools.delete(oldestKey);
+      logger.warn(`[PrismProxy] Session registry at capacity (${MAX_TRACKED_SESSIONS}) — evicted oldest session ${oldestKey}`);
+    }
   }
 
   public static isToolAllowed(conversationId: string, toolName: string): boolean {
     if (!conversationId) return true; // Default to allow if no context (fallback)
-    
+
     // Normalize tool name for lookup (strip prefix from hallucinated tool name)
     const cleanToolName = toolName.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
-    
-    const allowed = this.sessionAllowedTools.get(conversationId);
-    if (!allowed) {
-      // If we don't have this session tracked, allow it (could be non-trading agent)
+
+    const registration = this.sessionAllowedTools.get(conversationId);
+    if (!registration) {
+      // Fail OPEN for unknown sessions: could be a non-trading agent, or a
+      // registration lost to a service restart / TTL eviction. A restart must
+      // not brick in-flight cycles, but make the fail-open visible.
+      if (!this.warnedUnknownSessions.has(conversationId)) {
+        if (this.warnedUnknownSessions.size >= 1_000) this.warnedUnknownSessions.clear();
+        this.warnedUnknownSessions.add(conversationId);
+        logger.warn(
+          `[PrismProxy] FAIL-OPEN: no tool whitelist registered for conversation ${conversationId} ` +
+            `(unregistered session, service restart, or TTL eviction) — allowing "${toolName}" and all further calls for this session`
+        );
+      }
       return true;
     }
-    
-    return allowed.includes(cleanToolName);
+
+    return registration.allowedTools.includes(cleanToolName);
   }
 
   public static async handle(req: Request, res: Response) {
@@ -51,27 +110,20 @@ export class PrismProxyService {
       body.enabledTools = originalEnabledTools;
     }
 
-    // Apply Qwen non-leading system message rewrite patch (workaround for Qwen chat template constraint in vLLM)
+    // Apply Qwen non-leading system message rewrite patch (workaround for Qwen
+    // chat template constraint in vLLM). Shared with the vLLM provider so the
+    // proxied path and the direct :7778 path apply identical transformations.
     if ((basePath === "/agent" || basePath === "/chat") && req.method === "POST" && body && Array.isArray(body.messages) && typeof body.model === "string") {
-      const modelName = body.model.toLowerCase();
-      if (modelName.includes("qwen")) {
-        let hasSeenFirstSystemMessage = false;
+      const rewrittenMessages = rewriteNonLeadingSystemMessages(
+        body.messages as Array<{ role?: string }>,
+        body.model,
+        "PrismProxy"
+      );
+      if (rewrittenMessages !== body.messages) {
         if (body === req.body) {
           body = { ...req.body };
         }
-        body.messages = body.messages.map((message: any) => {
-          if (message.role === "system") {
-            if (!hasSeenFirstSystemMessage) {
-              hasSeenFirstSystemMessage = true;
-              return message;
-            }
-            logger.warn(
-              `[PrismProxy] TEMP PATCH: Rewriting non-primary system message to user role for ${body.model} (Qwen vLLM chat template workaround)`
-            );
-            return { ...message, role: "user" };
-          }
-          return message;
-        });
+        body.messages = rewrittenMessages;
       }
     }
 
@@ -94,11 +146,26 @@ export class PrismProxyService {
         }
       }
 
-      const response = await fetch(targetUrl, {
-        method: req.method,
-        headers,
-        body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(body) : undefined
-      });
+      // Connect/headers timeout — abort if the upstream never responds.
+      // Cleared as soon as headers arrive so long-running SSE streams are
+      // never cut off once streaming has begun.
+      const upstreamAbortController = new AbortController();
+      const headersTimeout = setTimeout(() => {
+        logger.error(`[PrismProxy] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
+        upstreamAbortController.abort();
+      }, UPSTREAM_HEADERS_TIMEOUT_MS);
+
+      let response: globalThis.Response;
+      try {
+        response = await fetch(targetUrl, {
+          method: req.method,
+          headers,
+          body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(body) : undefined,
+          signal: upstreamAbortController.signal
+        });
+      } finally {
+        clearTimeout(headersTimeout);
+      }
 
       if (!response.ok) {
         const errText = await response.text();
@@ -124,15 +191,28 @@ export class PrismProxyService {
 
         if (response.body) {
           const reader = (response.body as any).getReader();
+          // Client-disconnect teardown: if the downstream client goes away
+          // mid-stream (e.g. an infinite /webhooks/requests/stream), cancel
+          // the upstream reader so the pump loop doesn't consume forever.
+          let clientDisconnected = false;
+          const handleClientDisconnect = () => {
+            clientDisconnected = true;
+            reader.cancel?.().catch(() => {});
+          };
+          res.on("close", handleClientDisconnect);
           try {
             while (true) {
               const { done, value } = await reader.read();
-              if (done) break;
+              if (done || clientDisconnected) break;
               res.write(value);
             }
           } finally {
+            res.off("close", handleClientDisconnect);
             // Client disconnects mid-stream shouldn't leak the upstream reader
             reader.cancel?.().catch(() => {});
+          }
+          if (clientDisconnected) {
+            logger.info(`[PrismProxy] Client disconnected mid-stream for ${originalPath} — upstream reader cancelled`);
           }
         }
         res.end();

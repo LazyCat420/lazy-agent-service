@@ -69,6 +69,37 @@ interface IterationPassOptions extends AgenticOptions {
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 
+// ── Repetition/stall detection (simplified port of prism's detectors) ──
+// A model cycling the SAME tool+args with non-error results is stalled but
+// trips neither the consecutive-error brake nor plan mode — without this it
+// burns every remaining iteration. After 3 identical consecutive calls we
+// inject guidance; after 5 we terminate the loop.
+const REPETITION_WARNING_THRESHOLD = 3;
+const REPETITION_TERMINATION_THRESHOLD = 5;
+
+/** Deterministically stringify a value with recursively sorted object keys. */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    const sortedKeys = Object.keys(record).sort();
+    return `{${sortedKeys
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Signature of an iteration's tool calls: (toolName, normalized args) pairs. */
+function computeToolCallSignature(toolCalls: ToolCall[]): string {
+  return toolCalls
+    .map((toolCall) => `${toolCall.name}(${stableStringify(toolCall.args || {})})`)
+    .sort()
+    .join("|");
+}
+
 /**
  * ReActHarness — Reason→Act→Observe tool-use loop with pluggable thought structures.
  *
@@ -164,6 +195,11 @@ export default class ReActHarness extends BaseAgenticHarness {
     let currentMessages: ConversationMessage[] = [...context.messages];
     let truncationRecoveryCount = 0;
     let hasCleanTextBreak = false;
+
+    // Repetition/stall tracking — consecutive iterations issuing the exact
+    // same tool call(s) with the same normalized arguments.
+    let lastToolCallSignature: string | null = null;
+    let repeatedToolCallCount = 0;
 
     // ── Initialize lifecycle hooks ──────────────────────────
     const { hooks, approvalEngine } = createStandardHooks({
@@ -312,6 +348,30 @@ export default class ReActHarness extends BaseAgenticHarness {
 
         // ── Stream LLM response ────────────────────────────────
         const stream = this.createProviderStream(currentMessages, passOptions);
+
+        // ── Context exhaustion pre-flight ──────────────────────
+        // When context pressure clamps the output budget below the minimum
+        // viable threshold, createProviderStream returns null instead of a
+        // stream (it already emitted a context_exhausted status event).
+        // Break to the exhaustion recovery path below the loop instead of
+        // sending a doomed request.
+        if (stream === null) {
+          logger.warn(
+            `[ReActHarness] Context exhaustion guard fired on iteration ${state.iterations} — ` +
+              `skipping provider call, triggering exhaustion recovery.`,
+          );
+          injectErrorAsConversationMessage(
+            currentMessages,
+            `Context window exhausted on iteration ${state.iterations}: the remaining output ` +
+              `token budget is too small to produce a complete response. The conversation ` +
+              `history has consumed nearly the entire context window.`,
+            context,
+          );
+          state.conversationOutcome = "exhausted";
+          this.logIteration(pass, currentMessages);
+          break;
+        }
+
         await this.consumeStream(stream, pass, allowedToolNames);
 
         // ── Finalize tracker for this pass ─────────────────────
@@ -330,6 +390,34 @@ export default class ReActHarness extends BaseAgenticHarness {
 
         // ── Tool execution ─────────────────────────────────────
         if (pass.pendingToolCalls.length > 0) {
+          // ── Repetition/stall detection ──────────────────────
+          const toolCallSignature = computeToolCallSignature(
+            pass.pendingToolCalls,
+          );
+          if (toolCallSignature === lastToolCallSignature) {
+            repeatedToolCallCount++;
+          } else {
+            lastToolCallSignature = toolCallSignature;
+            repeatedToolCallCount = 1;
+          }
+
+          if (repeatedToolCallCount >= REPETITION_TERMINATION_THRESHOLD) {
+            logger.warn(
+              `[ReActHarness] Repetition limit reached on iteration ${state.iterations} — ` +
+                `identical tool call(s) repeated ${repeatedToolCallCount} times in a row. ` +
+                `Terminating loop. Signature: ${toolCallSignature.slice(0, 300)}`,
+            );
+            emit({
+              type: SERVER_SENT_EVENT_TYPES.STATUS,
+              message: "repetition_limit_reached",
+              iteration: state.iterations,
+              repeatCount: repeatedToolCallCount,
+            });
+            state.conversationOutcome = "exhausted";
+            this.logIteration(pass, currentMessages);
+            break;
+          }
+
           // Plan mode enforcement
           if (state.planModeActive) {
             const { allBlocked } = blockUnauthorizedToolCalls(
@@ -544,6 +632,31 @@ export default class ReActHarness extends BaseAgenticHarness {
           );
           if (retryGuidanceMessage) {
             currentMessages.push(retryGuidanceMessage);
+          }
+
+          // ── Repetition guidance ─────────────────────────────
+          // The model repeated the exact same tool call(s) several times in
+          // a row — tell it to change approach or answer with what it has.
+          if (repeatedToolCallCount >= REPETITION_WARNING_THRESHOLD) {
+            logger.warn(
+              `[ReActHarness] Repetition detected on iteration ${state.iterations} — ` +
+                `identical tool call(s) repeated ${repeatedToolCallCount} times in a row. Injecting guidance.`,
+            );
+            emit({
+              type: SERVER_SENT_EVENT_TYPES.STATUS,
+              message: "repetition_detected",
+              iteration: state.iterations,
+              repeatCount: repeatedToolCallCount,
+            });
+            currentMessages.push({
+              role: "system",
+              content:
+                `[Loop guard] You have now issued the exact same tool call(s) with identical ` +
+                `arguments ${repeatedToolCallCount} times in a row. Repeating the call again will ` +
+                `not produce different results. You MUST either change your approach (different ` +
+                `tool or different arguments) or answer now using the information you already have. ` +
+                `If the call repeats ${REPETITION_TERMINATION_THRESHOLD} times the loop will be terminated.`,
+            });
           }
 
           currentMessages = currentMessages.filter(
