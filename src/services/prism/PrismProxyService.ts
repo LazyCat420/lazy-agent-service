@@ -13,6 +13,16 @@ const REAL_PRISM_URL = process.env.REAL_PRISM_URL || "http://10.0.0.16:7777";
  */
 const UPSTREAM_HEADERS_TIMEOUT_MS = 120_000;
 
+/**
+ * NON-STREAM /agent requests only send headers when the ENTIRE agentic loop
+ * has finished — tournament pitches routinely run 2-5 minutes, and the 120s
+ * budget above aborted them mid-generation (observed live 2026-07-15:
+ * "Upstream headers timeout after 120000ms for /agent?stream=false" killed a
+ * pitch at exactly 120.00s). Agent paths get a much larger budget; the tight
+ * budget stays for everything else.
+ */
+const AGENT_HEADERS_TIMEOUT_MS = 900_000;
+
 /** Session registrations older than this are pruned on insert. */
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -150,10 +160,13 @@ export class PrismProxyService {
       // Cleared as soon as headers arrive so long-running SSE streams are
       // never cut off once streaming has begun.
       const upstreamAbortController = new AbortController();
+      const headersTimeoutMs = originalPath.startsWith("/agent")
+        ? AGENT_HEADERS_TIMEOUT_MS
+        : UPSTREAM_HEADERS_TIMEOUT_MS;
       const headersTimeout = setTimeout(() => {
-        logger.error(`[PrismProxy] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
+        logger.error(`[PrismProxy] Upstream headers timeout after ${headersTimeoutMs}ms for ${originalPath}`);
         upstreamAbortController.abort();
-      }, UPSTREAM_HEADERS_TIMEOUT_MS);
+      }, headersTimeoutMs);
 
       let response: globalThis.Response;
       try {
