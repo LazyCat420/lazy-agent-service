@@ -17,7 +17,7 @@ import logger from "../utils/logger.ts";
  * Routing:
  *   music_player_*                       → music-player HTTP API
  *   *_widget tools                       → validated locally, forwarded to HTML-Notes /internal/execute
- *   html_notes_* / canvas_* / render_component → HTML-Notes /internal/execute
+ *   html_notes_* / canvas_* → HTML-Notes /internal/execute
  *   everything else                      → trading-service Python bridge (execute_tool.py)
  */
 
@@ -455,7 +455,6 @@ export async function routeLocalTool(
 
   if (
     tName.startsWith("html_notes_") ||
-    tName === "render_component" ||
     tName.startsWith("canvas_")
   ) {
     if (tName === "canvas_modify_dom" && !toolArguments.canvas_html) {
