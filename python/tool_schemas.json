@@ -1,1584 +1,118 @@
 [
   {
-    "name": "graph_learn",
-    "description": "Record new associations or insights into the brain graph. Nodes and edges will be validated and upserted. Use this when you discover cross-ticker relationships, sector correlations, or market drivers.",
+    "name": "canvas_add_widget",
+    "description": "Spawn a pre-built widget on the canvas dashboard grid. Fetch the data FIRST with the matching data tool, then pass the result into config \u2014 the widget renders server-side, so config IS the finished content. Choosing widget_type:\n\n\u2022 'clock' \u2014 clocks AND timers. config={\"mode\": \"clock\"|\"stopwatch\"|\"countdown\", \"duration_seconds\": N, \"timezone\": \"America/New_York\"}. A TIMER or COUNTDOWN request ('set a timer for 5 minutes', 'pomodoro') is mode='countdown' with duration_seconds (5 minutes \u2192 300) \u2014 NOT a plain clock; it starts automatically with Pause/Reset controls. A STOPWATCH request ('time my run') is mode='stopwatch'. A world/city clock ('time in Tokyo') is mode='clock' with an IANA timezone. Multiple timers/clocks can coexist \u2014 spawn one widget each.\n\n\u2022 'stock_card' \u2014 ANY stock, share price, crypto or ticker ('chart AAPL', 'how is TSLA doing', 'bitcoin price'). Renders the price header, range tabs, chart, technicals and fundamentals together. Call html_notes_stock_history(symbol) first, then pass config={\"symbol\": \"AAPL\"} \u2014 just the symbol; the server fills in everything else. Do NOT use 'chart' for a ticker: 'chart' has no price header, no technicals and no fundamentals, and is the wrong widget for a stock.\n\u2022 'scoreboard' \u2014 ANY sports scores, fixtures, results or standings. Call html_notes_sports_scores(league) first, then pass config={\"league\": \"nba\"} \u2014 just the league. Do NOT render scores as a data_card; a scoreboard has to show who is playing whom.\n\u2022 'data_card' \u2014 the default for fetched text data: news, recipes, search results, weather, facts, lists. Every item needs a 'description' with the actual text; a title+url alone renders as a bare link the user has to click, which is a failure.\n\u2022 'chart' \u2014 generic numbers only (line/bar/pie from labels+values): populations, poll results, revenue by quarter. NOT for tickers \u2014 use 'stock_card'.\n\u2022 'image' \u2014 display picture URLs. 'youtube_player' \u2014 call html_notes_youtube_search first and pass the chosen video_id.\n\u2022 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player' \u2014 utility widgets, no data fetch needed.",
     "parameters": {
       "type": "object",
       "properties": {
-        "nodes": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string",
-                "description": "One of: Claim, Signal, Hypothesis, Theme, Event, Risk"
-              },
-              "label": {
-                "type": "string"
-              },
-              "metadata": {
-                "type": "object"
-              }
-            },
-            "required": [
-              "id",
-              "type"
-            ]
-          }
-        },
-        "edges": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "source": {
-                "type": "string"
-              },
-              "target": {
-                "type": "string"
-              },
-              "relation": {
-                "type": "string",
-                "description": "e.g. SUPPORTS, CONTRADICTS, DRIVES, MITIGATES"
-              },
-              "weight": {
-                "type": "number"
-              },
-              "reason": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "source",
-              "target",
-              "relation"
-            ]
-          }
-        }
-      },
-      "required": [
-        "nodes",
-        "edges"
-      ]
-    },
-    "tier": 1,
-    "source": "internal_db",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [
-      "ontology",
-      "brain_graph",
-      "graph",
-      "learn"
-    ],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "get_sec_filings",
-    "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "Stock ticker symbol, e.g. 'AAPL'"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "sec",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "get_market_data",
-    "description": "Get recent price history, fundamentals, financials, and balance sheet for a stock from multiple reliable sources.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol (e.g., AAPL)"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "data_rotator",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "get_finnhub_news",
-    "description": "Get the latest news articles for a stock from Finnhub.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "finnhub",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "get_technical_indicators",
-    "description": "Get computed technical indicators (RSI, MACD, SMA, Bollinger Bands).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "computed",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "write_memory_note",
-    "description": "Save or update a markdown note in the shared LLMWiki folder (short/long-term memory). Useful for storing structural knowledge, agent rules, and mind maps.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "topic": {
-          "type": "string",
-          "description": "The concept, ticker, or structural name of the note (e.g. 'NVDA_strategy')."
-        },
-        "content": {
-          "type": "string",
-          "description": "The markdown-formatted content of the note."
-        }
-      },
-      "required": [
-        "topic",
-        "content"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "read_memory_note",
-    "description": "Read a specific note from the LLMWiki folder into your context.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "topic": {
-          "type": "string",
-          "description": "The topic of the note to retrieve."
-        }
-      },
-      "required": [
-        "topic"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "scrape_url",
-    "description": "Scrape the main text content from a URL. Use this to read articles or SEC filings.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "url": {
-          "type": "string",
-          "description": "The URL to scrape."
-        }
-      },
-      "required": [
-        "url"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Research & Intelligence",
-    "labels": [
-      "research",
-      "scraping",
-      "web-search"
-    ]
-  },
-  {
-    "name": "search_internal_database",
-    "description": "Perform semantic search across all previously scraped news, reddit, and youtube transcripts in the internal database to find specific information.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "The exact topic or question to search for (e.g. 'debt restructuring details' or 'CEO resignation reasons')."
-        },
-        "ticker": {
-          "type": "string",
-          "description": "Optional ticker to restrict the search to a specific stock. Leave empty for macro-economic queries."
-        }
-      },
-      "required": [
-        "query"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "check_hallucination",
-    "description": "Run a hallucination check on an LLM claim by cross-referencing it against the actual data in our database. Useful during debates when one agent suspects another agent is citing fabricated numbers.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker the claim is about."
-        },
-        "claim": {
-          "type": "string",
-          "description": "The specific claim to verify (e.g. 'RSI is 28' or 'P/E ratio is 15.3')."
-        }
-      },
-      "required": [
-        "ticker",
-        "claim"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "search_trading_skills",
-    "description": "Search and load specific trading skills or sector instructions mid-cycle. Use this to dynamically fetch expert analysis guidelines for a specific stock or sector.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker to load skills for."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "start_trading_cycle",
-    "description": "Start a new trading cycle. Use this when the user explicitly asks to run or start a cycle. You can optionally provide a list of tickers to focus on.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "tickers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Optional list of stock tickers to process. Leave empty to use auto-discovery."
-        },
-        "collect": {
-          "type": "boolean",
-          "description": "Whether to run the data collection phase. Default True."
-        },
-        "analyze": {
-          "type": "boolean",
-          "description": "Whether to run the analysis phase. Default True."
-        },
-        "trade": {
-          "type": "boolean",
-          "description": "Whether to execute trades. Default True."
-        }
-      }
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "post_finding",
-    "description": "Share a discovered fact, risk, or opportunity with other agents on the team. Other agents can see your findings and use them to strengthen or challenge arguments. Categories: 'fact' (verified data point), 'risk' (potential danger), 'opportunity' (potential upside), 'question' (open question for the team).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "content": {
-          "type": "string",
-          "description": "The finding to share (e.g. 'RSI is at 28.5 \u2014 stock is oversold')."
-        },
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker this finding relates to."
-        },
-        "category": {
+        "widget_type": {
           "type": "string",
           "enum": [
-            "fact",
-            "risk",
-            "opportunity",
-            "question"
+            "checklist",
+            "clock",
+            "notes",
+            "iframe_app",
+            "mini_music_player",
+            "youtube_player",
+            "data_card",
+            "image",
+            "chart",
+            "stock_card",
+            "scoreboard"
           ],
-          "description": "Type of finding."
+          "description": "The pre-built widget type to spawn"
         },
-        "confidence": {
-          "type": "integer",
-          "description": "How confident you are in this finding (0-100)."
+        "widget_id": {
+          "type": "string",
+          "description": "A unique ID for the new widget, e.g. 'clock-1' or 'yt-lofi'"
+        },
+        "config": {
+          "type": "object",
+          "description": "Widget configuration, by widget_type. stock_card: {symbol} \u2014 ONLY the symbol, e.g. {\"symbol\": \"AAPL\"}; do not copy labels/values/technicals/fundamentals back, the server already has them from html_notes_stock_history. scoreboard: {league} \u2014 ONLY the league, e.g. {\"league\": \"nba\"}. data_card: {title, subtitle?, icon?, image?, content?, items:[{title, description, url?, image?, badge?, meta?}]} \u2014 use items for lists (news headlines, recipes, results), content for prose; 'description' carries the actual text of each item and is REQUIRED \u2014 copy the snippet from the search result into it, and if a snippet is empty call html_notes_read_page on that url to get real text. A data_card whose items have only a title and url renders as a naked hyperlink and is useless. chart: {title, type:'line'|'bar'|'pie', labels:[str], values:[num]} or {title, chart:<full Chart.js config>}. image: {title, url, caption?} or {title, images:[{url, caption?}]}. clock: {timezone}. checklist: {title, items:[str]}. notes: {title, content}. iframe_app: {url, title}. youtube_player: {video_id, title}. mini_music_player: {genre, autoplay}."
         }
       },
       "required": [
-        "content",
-        "ticker",
-        "category"
+        "widget_type",
+        "widget_id"
       ]
     },
     "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
+    "permission": "write",
     "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "publish_event",
-    "description": "Publish an event to the Event Bus to notify other agents. Use this to signal that your analysis is complete, or to trigger the next stage. For example, emit 'ANALYSIS_READY' when you have finished your research for a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "event_name": {
-          "type": "string",
-          "description": "The name of the event (e.g., 'ANALYSIS_READY', 'TRADE_EXECUTED')."
-        },
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker this event is for."
-        },
-        "payload": {
-          "type": "string",
-          "description": "A JSON-formatted string containing event payload data."
-        }
-      },
-      "required": [
-        "event_name",
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "whiteboard_read",
-    "description": "Read a specific section of the team's shared whiteboard for a given ticker. The whiteboard is a living document where agents collaborate. Sections include: 'market_context', 'risk_flags', 'signals', 'consensus', 'trade_plan'.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker to read from."
-        },
-        "section": {
-          "type": "string",
-          "description": "The section name to read."
-        }
-      },
-      "required": [
-        "ticker",
-        "section"
-      ]
-    },
-    "tier": 1,
-    "source": "whiteboard",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
+    "domain": "HTML Notes",
     "labels": [
       "tool"
-    ]
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
-    "name": "whiteboard_write",
-    "description": "Write or overwrite a section of the team's shared whiteboard. Use this to post your final analysis or consensus for other agents to read. Writing will bump the version number of the section. Content should be valid JSON string.",
+    "name": "canvas_modify_dom",
+    "description": "Modify an element on the live canvas dashboard using a CSS selector. Use this to update, append to, or remove existing widgets/components without replacing the entire canvas.",
     "parameters": {
       "type": "object",
       "properties": {
-        "ticker": {
+        "css_selector": {
           "type": "string",
-          "description": "The stock ticker this relates to."
+          "description": "CSS selector to locate the target element (e.g., '#widget-abc123', '.glass-card:first-child', 'h3')"
         },
-        "section": {
+        "action": {
           "type": "string",
-          "description": "The section name to write to (e.g. 'consensus')."
+          "enum": [
+            "append",
+            "prepend",
+            "replace",
+            "remove",
+            "insert_after",
+            "insert_before"
+          ],
+          "description": "The DOM operation: append/prepend add inside the element, replace swaps it, remove deletes it, insert_before/after add as siblings."
         },
-        "content": {
+        "html_snippet": {
           "type": "string",
-          "description": "The content to write (preferably a JSON string or clear text)."
+          "description": "The HTML to insert. Not required for 'remove' action."
         }
       },
       "required": [
-        "ticker",
-        "section",
-        "content"
+        "css_selector",
+        "action"
       ]
     },
-    "tier": 1,
-    "source": "whiteboard",
+    "tier": 0,
     "permission": "write",
-    "fallback_only": false,
     "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
+    "domain": "HTML Notes",
     "labels": [
       "tool"
-    ]
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
-    "name": "whiteboard_annotate",
-    "description": "Add a note or comment to an existing whiteboard entry without overwriting it. Use this to highlight risks, disagree with a consensus, or add context.",
+    "name": "canvas_read_dom",
+    "description": "Read the current live canvas DOM and return a structured summary of all visible elements. Use this to understand what is currently displayed before making modifications. Returns element count, component types, text summaries, and optionally the HTML of a specific element matched by CSS selector.",
     "parameters": {
       "type": "object",
       "properties": {
-        "entry_id": {
-          "type": "integer",
-          "description": "The exact entry_id (from whiteboard_read) to annotate."
-        },
-        "note": {
+        "css_selector": {
           "type": "string",
-          "description": "Your annotation/comment."
-        }
-      },
-      "required": [
-        "entry_id",
-        "note"
-      ]
-    },
-    "tier": 1,
-    "source": "whiteboard",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "whiteboard_summarize",
-    "description": "Get a full summary of all sections currently on the whiteboard. Provides a snapshot of the entire team's consensus and state.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker to summarize."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 1,
-    "source": "whiteboard",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "buy_stock",
-    "description": "Execute a buy order for a stock ticker. Requires user confirmation.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol (e.g., AAPL)."
-        },
-        "size_pct": {
-          "type": "number",
-          "description": "The percentage of available cash to use (e.g., 0.10 for 10%, 1.0 for 100%). Default is 0.10."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 1,
-    "source": "paper_trader",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Trading & Execution",
-    "labels": [
-      "trading",
-      "execution",
-      "portfolio"
-    ]
-  },
-  {
-    "name": "sell_stock",
-    "description": "Execute a sell order to close a position for a stock ticker. Requires user confirmation.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol to sell (e.g., AAPL)."
-        },
-        "qty_pct": {
-          "type": "number",
-          "description": "The percentage of the position to sell (e.g., 1.0 for 100%, 0.5 for 50%). Default is 1.0."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 1,
-    "source": "paper_trader",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Trading & Execution",
-    "labels": [
-      "trading",
-      "execution",
-      "portfolio"
-    ]
-  },
-  {
-    "name": "add_to_watchlist",
-    "description": "Add a stock ticker (e.g., from the Discovery list) to the user's active watchlist. Do NOT use this tool to add items TO discovery; discovery is automatic. Requires user confirmation.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol to add (e.g., AAPL)."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 1,
-    "source": "watchlist",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Trading & Execution",
-    "labels": [
-      "trading",
-      "execution",
-      "portfolio"
-    ]
-  },
-  {
-    "name": "remove_from_watchlist",
-    "description": "Remove a stock ticker from the user's active watchlist. Requires user confirmation.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol to remove (e.g., AAPL)."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 1,
-    "source": "watchlist",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Trading & Execution",
-    "labels": [
-      "trading",
-      "execution",
-      "portfolio"
-    ]
-  },
-  {
-    "name": "get_options_flow",
-    "description": "Fetch unusual options activity and flow for a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "options",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "get_insider_trades",
-    "description": "Fetch recent insider trading activity for a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "insider",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "get_congress_trades",
-    "description": "Fetch recent congressional trading activity for a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "congress",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "get_earnings_data",
-    "description": "Fetch upcoming or recent earnings dates and estimates for a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "earnings",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "get_finviz_fundamentals",
-    "description": "Fetch fundamental data from Finviz.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "finviz",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "get_polygon_price_history",
-    "description": "Fetch historical OHLCV price data from Polygon.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "polygon",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ]
-  },
-  {
-    "name": "get_portfolio_state",
-    "description": "Get the bot's full portfolio state including cash balance, all open positions with P&L, sector breakdown, and position count. Use this to understand portfolio health and make informed BUY/SELL decisions.",
-    "parameters": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "get_position_pnl",
-    "description": "Check the P&L and health of a specific held position. Returns entry price, current price, unrealized P&L, holding duration, and stop-loss proximity. Use this during debates to evaluate whether to hold or sell.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker to check."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "get_performance_metrics",
-    "description": "Get bot's historical trading performance metrics over the last N trades or N days. Includes win rate, average profit, average loss, and average holding duration. Useful for benchmarking and suggesting strategy improvements.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "days_back": {
-          "type": "integer",
-          "description": "Number of days back to look. Default 30."
+          "description": "Optional CSS selector to read a specific element. If omitted, returns full canvas summary."
         }
       },
       "required": []
     },
     "tier": 0,
-    "source": "",
     "permission": "read_only",
-    "fallback_only": false,
     "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "calculate_position_size",
-    "description": "Calculate the number of shares to buy based on risk management rules. Uses the fixed-risk method: risk_amount = cash * risk_percent, shares = risk_amount / (entry_price - stop_loss_price).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "cash_available": {
-          "type": "number",
-          "description": "Total cash available for trading (e.g., 100000)"
-        },
-        "risk_percent": {
-          "type": "number",
-          "description": "Max percentage of cash to risk on this trade (e.g., 0.02 for 2%)"
-        },
-        "entry_price": {
-          "type": "number",
-          "description": "Planned entry price per share (e.g., 150.50)"
-        },
-        "stop_loss_price": {
-          "type": "number",
-          "description": "Planned stop-loss price per share (e.g., 142.00)"
-        }
-      },
-      "required": [
-        "cash_available",
-        "risk_percent",
-        "entry_price",
-        "stop_loss_price"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "calculate_stop_loss",
-    "description": "Calculate a stop-loss price based on ATR (Average True Range) volatility. stop_loss = entry_price - (ATR * multiplier).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "entry_price": {
-          "type": "number",
-          "description": "Planned entry price per share"
-        },
-        "atr": {
-          "type": "number",
-          "description": "Current ATR (Average True Range) value"
-        },
-        "multiplier": {
-          "type": "number",
-          "description": "ATR multiplier (default 2.0, higher = wider stop)"
-        }
-      },
-      "required": [
-        "entry_price",
-        "atr"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "calculate_risk_reward",
-    "description": "Calculate the risk-to-reward ratio for a trade setup. A ratio >= 2.0 is generally considered favorable.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "entry_price": {
-          "type": "number",
-          "description": "Planned entry price per share"
-        },
-        "target_price": {
-          "type": "number",
-          "description": "Price target for profit taking"
-        },
-        "stop_loss_price": {
-          "type": "number",
-          "description": "Stop-loss price for the trade (alias: stop_loss)"
-        },
-        "stop_loss": {
-          "type": "number",
-          "description": "Alternative key for stop-loss price"
-        }
-      },
-      "required": [
-        "entry_price",
-        "target_price"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "calculate_portfolio_allocation",
-    "description": "Calculate how much capital to allocate to the next trade based on portfolio diversification rules (max position size, remaining slots).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "total_portfolio_value": {
-          "type": "number",
-          "description": "Total portfolio value (cash + positions)"
-        },
-        "max_position_pct": {
-          "type": "number",
-          "description": "Max percentage per position (e.g., 0.10 for 10%)"
-        },
-        "current_positions": {
-          "type": "integer",
-          "description": "Number of positions currently held"
-        },
-        "max_positions": {
-          "type": "integer",
-          "description": "Maximum number of positions allowed (e.g., 10)"
-        }
-      },
-      "required": [
-        "total_portfolio_value"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "get_cycle_context",
-    "description": "Expand a capsule source reference to get the full raw agent findings from a prior step. Use this when the compressed capsule summary is insufficient for your analysis. The ref_id is found in the '\u2192 Expand: ref:capsule:<id>' line of each capsule summary.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ref_id": {
-          "type": "string",
-          "description": "The reference ID to expand. Extract from the capsule's source_refs. Format: either the full 'ref:capsule:<uuid>' or just the UUID portion."
-        }
-      },
-      "required": [
-        "ref_id"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "query_financial_metrics",
-    "description": "Fetch specific financial metrics, ratios, or multiples for a stock ticker from the database. Use this when you need exact numerical values like P/E ratio, revenue, debt-to-equity, free cash flow, etc. Accepts multiple metrics in a single call for efficiency. Supports synonyms (e.g. 'P/E Ratio', 'Sales', 'D/E' all resolve correctly).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol (e.g. 'AAPL')"
-        },
-        "metrics": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "List of metric names to fetch. Examples: ['pe_ratio', 'revenue', 'debt_to_equity', 'free_cash_flow', 'eps']. Synonyms accepted: 'P/E Ratio', 'Sales', 'D/E', 'FCF'."
-        },
-        "period": {
-          "type": "string",
-          "description": "Optional timeframe context (e.g. 'Q1_2026', 'FY_2025'). Defaults to latest available."
-        }
-      },
-      "required": [
-        "ticker",
-        "metrics"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "query_technical_indicator",
-    "description": "Fetch specific technical indicators (RSI, MACD, SMA, Bollinger Bands, ATR, ADX, etc.) for a stock. Use this to verify momentum claims, check exact RSI/MACD values, or compare price to moving averages. Returns the latest computed value with status labels (OVERSOLD/OVERBOUGHT/NEUTRAL).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol (e.g. 'AAPL')"
-        },
-        "indicator": {
-          "type": "string",
-          "description": "The indicator to fetch. Examples: 'RSI', 'MACD', 'SMA_20', 'SMA_50', 'SMA_200', 'ATR', 'ADX', 'Bollinger Upper', 'Stochastic K', 'OBV', 'VWAP', 'Support', 'Resistance'."
-        },
-        "timeframe": {
-          "type": "string",
-          "description": "Timeframe context (e.g. 'daily', 'weekly'). Currently only daily is computed."
-        }
-      },
-      "required": [
-        "ticker",
-        "indicator"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "query_brain_graph",
-    "description": "Query the Brain Graph (ontology) to retrieve sector connections, supply chain relationships, competitor links, and correlation data for a list of tickers. Returns pre-computed subgraph data showing how tickers are connected in the knowledge graph. Use this to identify portfolio concentration risks and hidden correlations.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "tickers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "List of ticker symbols to query connections for."
-        }
-      },
-      "required": [
-        "tickers"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": []
-  },
-  {
-    "name": "save_trading_chart",
-    "description": "Render and save an HTML chart and JSON overlay data from the technical analyst agent.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol"
-        },
-        "overlays": {
-          "type": "array",
-          "description": "JSON overlays array from the agent"
-        },
-        "period": {
-          "type": "string",
-          "description": "Timeframe of historical data to fetch (e.g., '1mo', '3mo', '6mo', '1y')"
-        }
-      },
-      "required": [
-        "ticker",
-        "overlays"
-      ]
-    },
-    "tier": 1,
-    "source": "data_sink",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
+    "domain": "HTML Notes",
     "labels": [
       "tool"
-    ]
-  },
-  {
-    "name": "get_institutional_holdings",
-    "description": "Get institutional hedge fund ownership data for a stock. Shows which top hedge funds hold it, position sizes, new positions, quarterly momentum, and whether top-performing funds are invested.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol (e.g., AAPL)"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "sec_13f",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "lazy_web_search",
-    "description": "Search the web for information using a controlled, truncated search engine.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "The search query."
-        }
-      },
-      "required": [
-        "query"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "request_peer_analysis",
-    "description": "Request a specific peer agent (e.g. 'quant_analyst', 'fundamental_analyst', 'junior_analyst') to run a query, check a lead, or verify details, and post findings to the whiteboard.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker to research."
-        },
-        "target_agent": {
-          "type": "string",
-          "description": "The exact name of the target agent (junior_analyst, fundamental_analyst, quant_analyst)."
-        },
-        "query": {
-          "type": "string",
-          "description": "The specific question or instructions for the target agent."
-        }
-      },
-      "required": [
-        "ticker",
-        "target_agent",
-        "query"
-      ]
-    },
-    "tier": 1,
-    "source": "agent_coordination",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "escalate_to_pm",
-    "description": "Immediately escalate the cycle to the Board of Directors and Portfolio Manager, bypass standard research loops, and submit the reasoning/findings.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker."
-        },
-        "reason": {
-          "type": "string",
-          "description": "The critical reason or justification for escalation."
-        }
-      },
-      "required": [
-        "ticker",
-        "reason"
-      ]
-    },
-    "tier": 1,
-    "source": "agent_coordination",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "read_user_notes",
-    "description": "Read markdown notes written by the human user. These notes contain human thoughts, context, watchlists, or market observations. Always check this if the user tells you they 'wrote it down' or if you need extra context.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "filename": {
-          "type": "string",
-          "description": "Optional. The specific .md filename to read. If omitted, returns a list of all available notes."
-        }
-      },
-      "required": []
-    },
-    "tier": 1,
-    "source": "notes",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "get_market_map_data",
-    "description": "Fetches the top movers and market map data for S&P 500 components, grouped by sector. Use this to analyze broad market trends and sector performance for the day.",
-    "parameters": {
-      "type": "object",
-      "properties": {},
-      "required": []
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "search_equations",
-    "description": "Search the shared Quant Equation Library for existing mathematical strategies. Returns equations with their win rates, Sharpe ratios, and code. Use this before writing a new equation to check if one already exists.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "Search keyword (e.g., 'zscore', 'momentum', 'rsi'). Empty returns top equations by win rate."
-        },
-        "top_k": {
-          "type": "integer",
-          "description": "Max results to return (default: 10)."
-        }
-      },
-      "required": []
-    },
-    "tier": 0,
-    "source": "equation_library",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "save_equation",
-    "description": "Save a new mathematical equation to the shared Quant Equation Library. The equation must be Python code that receives 'df' (price DataFrame) and 'params' (dict), and assigns its output to 'result'. Future agents can reuse this equation.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Unique snake_case name for the equation."
-        },
-        "code": {
-          "type": "string",
-          "description": "Python code. Must assign output to 'result'. Has access to df, params, np, pd."
-        },
-        "description": {
-          "type": "string",
-          "description": "What this equation does and when to use it."
-        },
-        "parameters": {
-          "type": "string",
-          "description": "JSON string of default parameters."
-        }
-      },
-      "required": [
-        "name",
-        "code",
-        "description"
-      ]
-    },
-    "tier": 0,
-    "source": "equation_library",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "run_equation",
-    "description": "Execute a mathematical equation against live price/technical data for a ticker. You can run a named equation from the library OR provide raw Python code. The code receives 'df' (DataFrame with OHLCV + technicals) and 'params' (dict). Must assign output to 'result'.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "Stock ticker to run against (e.g., AAPL)."
-        },
-        "equation_name": {
-          "type": "string",
-          "description": "Name of a saved equation. If empty, 'code' must be provided."
-        },
-        "code": {
-          "type": "string",
-          "description": "Raw Python code if not using a named equation."
-        },
-        "parameters": {
-          "type": "string",
-          "description": "JSON string of parameters."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "equation_library",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "run_backtest",
-    "description": "Backtest a named equation from the library over historical price data. Returns performance metrics: PnL, win rate, max drawdown, Sharpe ratio, and trade list.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "Stock ticker to backtest against."
-        },
-        "equation_name": {
-          "type": "string",
-          "description": "Name of the equation from the library to backtest."
-        },
-        "parameters": {
-          "type": "string",
-          "description": "JSON string of parameters for the backtest."
-        }
-      },
-      "required": [
-        "ticker",
-        "equation_name"
-      ]
-    },
-    "tier": 0,
-    "source": "equation_library",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "create_widget",
@@ -1644,7 +178,458 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_create_note",
+    "description": "Create a new note in the HTML Notes database with a title, sanitized HTML fragment, tags, and optional backlinks.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Title of the note"
+        },
+        "rendered_html": {
+          "type": "string",
+          "description": "HTML note content using approved subset tags: article, section, p, ul, ol, li, blockquote, hr, strong, em, code, pre, a"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of tags to categorize the note"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional list of note IDs to link to"
+        }
+      },
+      "required": [
+        "title",
+        "rendered_html"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_get_note",
+    "description": "Retrieve the details and full HTML content of a specific note by its ID.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "description": "The note ID to fetch"
+        }
+      },
+      "required": [
+        "note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_link_notes",
+    "description": "Establish a hyperlink connection between a source note and a target note.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "source_note_id": {
+          "type": "string",
+          "description": "ID of the source note"
+        },
+        "target_note_id": {
+          "type": "string",
+          "description": "ID of the target note to connect to"
+        }
+      },
+      "required": [
+        "source_note_id",
+        "target_note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_read_page",
+    "description": "Fetch the readable text of a web page by URL. Use after html_notes_web_search when a result's snippet is not enough to answer the question.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Absolute URL to read"
+        },
+        "max_chars": {
+          "type": "integer",
+          "description": "Truncate the page text to this many characters (default 6000)"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_search_notes",
+    "description": "Search notes in the HTML Notes database matching a specific query term.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search keyword or tag name"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_sports_scores",
+    "description": "Live scores, fixtures and results for any major league \u2014 soccer (FIFA World Cup, Premier League, Champions League, La Liga, MLS), UFC/MMA, NBA, NFL, MLB, NHL, college. Sub-second. Then call canvas_add_widget(widget_type='scoreboard', config={\"league\": \"<league>\"}) \u2014 config is JUST the league. Do NOT copy the returned events into the config; the server fills them in. Never web-search for scores and never render them as a data_card.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "league": {
+          "type": "string",
+          "description": "Friendly league name: fifa, world cup, premier league, champions league, la liga, serie a, bundesliga, mls, soccer, ufc, mma, nba, wnba, nfl, mlb, nhl, college football, college basketball"
+        }
+      },
+      "required": [
+        "league"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_stock_history",
+    "description": "Full snapshot for a stock/ETF/crypto ticker (NVDA, AAPL, BTC-USD): price series plus technicals (RSI, SMA 20/50/200, volatility, 52-week range, trend) and fundamentals (market cap, P/E, EPS, beta, dividend yield, revenue, margin, analyst target, sector). Sub-second. Then call canvas_add_widget(widget_type='stock_card', config={\"symbol\": \"<SYM>\"}) \u2014 config is JUST the symbol. Do NOT copy the returned data into the config; the server already has it and fills the widget in. Re-typing it wastes about a minute per turn. Never use widget_type='chart' for a ticker, and never web-search for prices.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Ticker symbol, e.g. 'NVDA', 'AAPL', 'BTC-USD'"
+        },
+        "range": {
+          "type": "string",
+          "enum": [
+            "1d",
+            "5d",
+            "1mo",
+            "3mo",
+            "6mo",
+            "1y",
+            "5y",
+            "10y",
+            "max"
+          ],
+          "description": "How far back to fetch (default '1mo')"
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_stock_news",
+    "description": "Stock/company/market news headlines plus ticker discovery for a free-text query (a ticker, company name, or topic like 'AI chip stocks'). Returns 'news' (title, publisher, date, url, related tickers) and 'matches' (ticker symbols with names) \u2014 use 'matches' to find symbols when the user says 'find me stocks' without naming one, then feed each symbol into html_notes_stock_history for the stock_card. Use THIS for any stock/market news; do NOT use html_notes_stock_history for news (it returns prices only) and do NOT use html_notes_web_search for stock news (this returns cleaner structured headlines). Present headlines with canvas_add_widget(widget_type='data_card') \u2014 every item needs a 'description' with the actual headline text.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Ticker, company name, or market topic, e.g. 'NVDA', 'Apple', 'semiconductor stocks'"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max headlines to return (default 8, max 15)"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_update_note",
+    "description": "Update the content, title, tags, or links of an existing note in the HTML Notes database.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "note_id": {
+          "type": "string",
+          "description": "The unique note ID to update (e.g., 'note_123')"
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional updated title"
+        },
+        "rendered_html": {
+          "type": "string",
+          "description": "Optional updated HTML content fragment"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional updated list of tags"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional updated list of target link note IDs"
+        }
+      },
+      "required": [
+        "note_id"
+      ]
+    },
+    "tier": 0,
+    "permission": "write",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_web_search",
+    "description": "Search the web and return real, current results as [{title, url, snippet}]. This is the ONLY working web search tool \u2014 use it for any factual, historical, news, recipe, or 'what/when/who/which is' question before answering. Takes 20-60s to return; that is normal, wait for it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Plain-language search query, e.g. 'oldest cannabis video on youtube'"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default 6)"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "html_notes_youtube_search",
+    "description": "Search YouTube for videos matching a query. Returns a list of results with video_id, title, and channel. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "YouTube search query, e.g. 'lofi hip hop radio' or 'latest video from <channel name>'"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default 5)"
+        },
+        "order": {
+          "type": "string",
+          "enum": [
+            "relevance",
+            "date",
+            "live"
+          ],
+          "description": "'relevance' (default), 'date' for newest uploads first, or 'live' to find an actual LIVE STREAM. Use order='live' for any 'X live' / 'live news' / 'watch X live' request \u2014 a plain search returns recorded clips, not the stream."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "permission": "read_only",
+    "concurrency_safe": true,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "list_widget_types",
+    "description": "Retrieve a list of canonical widget types currently supported by the template registry, along with their parameters schema templates.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "html-notes",
+    "agents": []
+  },
+  {
+    "name": "plan_widget",
+    "description": "Propose a structured design plan for creating or updating a widget on the canvas dashboard grid. Must be called and approved before create_widget can be executed.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "widgetType": {
+          "type": "string",
+          "enum": [
+            "checklist",
+            "clock",
+            "notes",
+            "iframe_app",
+            "mini_music_player",
+            "youtube_player",
+            "custom"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string",
+          "description": "A short summary of how the widget will behave and style"
+        },
+        "proposedLayout": {
+          "type": "string",
+          "description": "Placement or grid configuration details"
+        }
+      },
+      "required": [
+        "widgetType",
+        "title",
+        "description"
+      ]
+    },
+    "tier": 1,
+    "source": "canvas_manager",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "widget",
+      "canvas"
+    ],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "update_widget",
@@ -1699,7 +684,9 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
     "name": "validate_widget_html",
@@ -1734,511 +721,694 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "html-notes",
+    "agents": []
   },
   {
-    "name": "plan_widget",
-    "description": "Propose a structured design plan for creating or updating a widget on the canvas dashboard grid. Must be called and approved before create_widget can be executed.",
+    "name": "add_to_watchlist",
+    "description": "Add a stock ticker (e.g., from the Discovery list) to the user's active watchlist. Do NOT use this tool to add items TO discovery; discovery is automatic. Requires user confirmation.",
     "parameters": {
       "type": "object",
       "properties": {
-        "widgetType": {
+        "ticker": {
           "type": "string",
-          "enum": [
-            "checklist",
-            "clock",
-            "notes",
-            "iframe_app",
-            "mini_music_player",
-            "youtube_player",
-            "custom"
-          ]
+          "description": "The stock ticker symbol to add (e.g., AAPL)."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "watchlist",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  },
+  {
+    "name": "buy_stock",
+    "description": "Execute a buy order for a stock ticker. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol (e.g., AAPL)."
         },
-        "title": {
+        "size_pct": {
+          "type": "number",
+          "description": "The percentage of available cash to use (e.g., 0.10 for 10%, 1.0 for 100%). Default is 0.10."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "paper_trader",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  },
+  {
+    "name": "calculate_position_size",
+    "description": "Calculate the number of shares to buy based on risk management rules. Uses the fixed-risk method: risk_amount = cash * risk_percent, shares = risk_amount / (entry_price - stop_loss_price).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "cash_available": {
+          "type": "number",
+          "description": "Total cash available for trading (e.g., 100000)"
+        },
+        "risk_percent": {
+          "type": "number",
+          "description": "Max percentage of cash to risk on this trade (e.g., 0.02 for 2%)"
+        },
+        "entry_price": {
+          "type": "number",
+          "description": "Planned entry price per share (e.g., 150.50)"
+        },
+        "stop_loss_price": {
+          "type": "number",
+          "description": "Planned stop-loss price per share (e.g., 142.00)"
+        }
+      },
+      "required": [
+        "cash_available",
+        "risk_percent",
+        "entry_price",
+        "stop_loss_price"
+      ]
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "calculate_risk_reward",
+    "description": "Calculate the risk-to-reward ratio for a trade setup. A ratio >= 2.0 is generally considered favorable.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "entry_price": {
+          "type": "number",
+          "description": "Planned entry price per share"
+        },
+        "target_price": {
+          "type": "number",
+          "description": "Price target for profit taking"
+        },
+        "stop_loss_price": {
+          "type": "number",
+          "description": "Stop-loss price for the trade (alias: stop_loss)"
+        },
+        "stop_loss": {
+          "type": "number",
+          "description": "Alternative key for stop-loss price"
+        }
+      },
+      "required": [
+        "entry_price",
+        "target_price"
+      ]
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "calculate_stop_loss",
+    "description": "Calculate a stop-loss price based on ATR (Average True Range) volatility. stop_loss = entry_price - (ATR * multiplier).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "entry_price": {
+          "type": "number",
+          "description": "Planned entry price per share"
+        },
+        "atr": {
+          "type": "number",
+          "description": "Current ATR (Average True Range) value"
+        },
+        "multiplier": {
+          "type": "number",
+          "description": "ATR multiplier (default 2.0, higher = wider stop)"
+        }
+      },
+      "required": [
+        "entry_price",
+        "atr"
+      ]
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "escalate_to_pm",
+    "description": "Immediately escalate the cycle to the Board of Directors and Portfolio Manager, bypass standard research loops, and submit the reasoning/findings.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker."
+        },
+        "reason": {
+          "type": "string",
+          "description": "The critical reason or justification for escalation."
+        }
+      },
+      "required": [
+        "ticker",
+        "reason"
+      ]
+    },
+    "tier": 1,
+    "source": "agent_coordination",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  },
+  {
+    "name": "get_congress_trades",
+    "description": "Fetch recent congressional trading activity for a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
           "type": "string"
-        },
-        "description": {
-          "type": "string",
-          "description": "A short summary of how the widget will behave and style"
-        },
-        "proposedLayout": {
-          "type": "string",
-          "description": "Placement or grid configuration details"
         }
       },
       "required": [
-        "widgetType",
-        "title",
-        "description"
+        "ticker"
       ]
     },
-    "tier": 1,
-    "source": "canvas_manager",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [
-      "widget",
-      "canvas"
-    ],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ]
-  },
-  {
-    "name": "list_widget_types",
-    "description": "Retrieve a list of canonical widget types currently supported by the template registry, along with their parameters schema templates.",
-    "parameters": {
-      "type": "object",
-      "properties": {}
-    },
-    "tier": 1,
-    "source": "canvas_manager",
+    "tier": 0,
+    "source": "congress",
     "permission": "read_only",
     "fallback_only": false,
     "concurrency_safe": true,
     "max_result_chars": 50000,
-    "tags": [
-      "widget",
-      "canvas"
-    ],
-    "domain": "General",
+    "tags": [],
+    "domain": "Market Data",
     "labels": [
-      "tool"
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider"
     ]
   },
   {
-    "name": "html_notes_create_note",
-    "description": "Create a new note in the HTML Notes database with a title, sanitized HTML fragment, tags, and optional backlinks.",
+    "name": "get_earnings_data",
+    "description": "Fetch upcoming or recent earnings dates and estimates for a ticker.",
     "parameters": {
       "type": "object",
       "properties": {
-        "title": {
-          "type": "string",
-          "description": "Title of the note"
-        },
-        "rendered_html": {
-          "type": "string",
-          "description": "HTML note content using approved subset tags: article, section, p, ul, ol, li, blockquote, hr, strong, em, code, pre, a"
-        },
-        "tags": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "List of tags to categorize the note"
-        },
-        "links": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Optional list of note IDs to link to"
+        "ticker": {
+          "type": "string"
         }
       },
       "required": [
-        "title",
-        "rendered_html"
+        "ticker"
       ]
     },
     "tier": 0,
-    "permission": "write",
-    "concurrency_safe": true,
-    "domain": "HTML Notes",
-    "labels": [
-      "tool"
-    ],
-    "source": "html-notes"
-  },
-  {
-    "name": "html_notes_update_note",
-    "description": "Update the content, title, tags, or links of an existing note in the HTML Notes database.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "note_id": {
-          "type": "string",
-          "description": "The unique note ID to update (e.g., 'note_123')"
-        },
-        "title": {
-          "type": "string",
-          "description": "Optional updated title"
-        },
-        "rendered_html": {
-          "type": "string",
-          "description": "Optional updated HTML content fragment"
-        },
-        "tags": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Optional updated list of tags"
-        },
-        "links": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Optional updated list of target link note IDs"
-        }
-      },
-      "required": [
-        "note_id"
-      ]
-    },
-    "tier": 0,
-    "permission": "write",
-    "concurrency_safe": true,
-    "domain": "HTML Notes",
-    "labels": [
-      "tool"
-    ],
-    "source": "html-notes"
-  },
-  {
-    "name": "html_notes_get_note",
-    "description": "Retrieve the details and full HTML content of a specific note by its ID.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "note_id": {
-          "type": "string",
-          "description": "The note ID to fetch"
-        }
-      },
-      "required": [
-        "note_id"
-      ]
-    },
-    "tier": 0,
+    "source": "earnings",
     "permission": "read_only",
+    "fallback_only": false,
     "concurrency_safe": true,
-    "domain": "HTML Notes",
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
     "labels": [
-      "tool"
+      "market-data",
+      "stock-analysis"
     ],
-    "source": "html-notes"
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_worker_fundamental"
+    ]
   },
   {
-    "name": "html_notes_search_notes",
-    "description": "Search notes in the HTML Notes database matching a specific query term.",
+    "name": "get_finnhub_news",
+    "description": "Get the latest news articles for a stock from Finnhub.",
     "parameters": {
       "type": "object",
       "properties": {
-        "query": {
+        "ticker": {
           "type": "string",
-          "description": "Search keyword or tag name"
+          "description": "The stock ticker symbol"
         }
       },
       "required": [
-        "query"
+        "ticker"
       ]
     },
     "tier": 0,
+    "source": "finnhub",
     "permission": "read_only",
+    "fallback_only": false,
     "concurrency_safe": true,
-    "domain": "HTML Notes",
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
     "labels": [
-      "tool"
+      "market-data",
+      "stock-analysis"
     ],
-    "source": "html-notes"
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager",
+      "v3_regime_engine",
+      "v3_worker_news"
+    ]
   },
   {
-    "name": "html_notes_link_notes",
-    "description": "Establish a hyperlink connection between a source note and a target note.",
+    "name": "get_finviz_fundamentals",
+    "description": "Fetch fundamental data from Finviz.",
     "parameters": {
       "type": "object",
       "properties": {
-        "source_note_id": {
-          "type": "string",
-          "description": "ID of the source note"
-        },
-        "target_note_id": {
-          "type": "string",
-          "description": "ID of the target note to connect to"
+        "ticker": {
+          "type": "string"
         }
       },
       "required": [
-        "source_note_id",
-        "target_note_id"
+        "ticker"
       ]
     },
     "tier": 0,
-    "permission": "write",
-    "concurrency_safe": true,
-    "domain": "HTML Notes",
-    "labels": [
-      "tool"
-    ],
-    "source": "html-notes"
-  },
-  {
-    "name": "html_notes_youtube_search",
-    "description": "Search YouTube for videos matching a query. Returns a list of results with video_id, title, and channel. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "YouTube search query, e.g. 'lofi hip hop radio' or 'latest video from <channel name>'"
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Maximum number of results to return (default 5)"
-        },
-        "order": {
-          "type": "string",
-          "enum": [
-            "relevance",
-            "date",
-            "live"
-          ],
-          "description": "'relevance' (default), 'date' for newest uploads first, or 'live' to find an actual LIVE STREAM. Use order='live' for any 'X live' / 'live news' / 'watch X live' request \u2014 a plain search returns recorded clips, not the stream."
-        }
-      },
-      "required": [
-        "query"
-      ]
-    },
-    "tier": 0,
+    "source": "finviz",
     "permission": "read_only",
+    "fallback_only": false,
     "concurrency_safe": true,
-    "domain": "HTML Notes",
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
     "labels": [
-      "tool"
+      "market-data",
+      "stock-analysis"
     ],
-    "source": "html-notes"
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_worker_fundamental"
+    ]
   },
   {
-    "name": "html_notes_web_search",
-    "description": "Search the web and return real, current results as [{title, url, snippet}]. This is the ONLY working web search tool \u2014 use it for any factual, historical, news, recipe, or 'what/when/who/which is' question before answering. Takes 20-60s to return; that is normal, wait for it.",
+    "name": "get_insider_trades",
+    "description": "Fetch recent insider trading activity for a ticker.",
     "parameters": {
       "type": "object",
       "properties": {
-        "query": {
-          "type": "string",
-          "description": "Plain-language search query, e.g. 'oldest cannabis video on youtube'"
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Maximum number of results to return (default 6)"
+        "ticker": {
+          "type": "string"
         }
       },
       "required": [
-        "query"
+        "ticker"
       ]
     },
     "tier": 0,
+    "source": "insider",
     "permission": "read_only",
+    "fallback_only": false,
     "concurrency_safe": true,
-    "domain": "HTML Notes",
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
     "labels": [
-      "tool"
+      "market-data",
+      "stock-analysis"
     ],
-    "source": "html-notes"
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider"
+    ]
   },
   {
-    "name": "html_notes_read_page",
-    "description": "Fetch the readable text of a web page by URL. Use after html_notes_web_search when a result's snippet is not enough to answer the question.",
+    "name": "get_institutional_holdings",
+    "description": "Get institutional hedge fund ownership data for a stock. Shows which top hedge funds hold it, position sizes, new positions, quarterly momentum, and whether top-performing funds are invested.",
     "parameters": {
       "type": "object",
       "properties": {
-        "url": {
+        "ticker": {
           "type": "string",
-          "description": "Absolute URL to read"
-        },
-        "max_chars": {
-          "type": "integer",
-          "description": "Truncate the page text to this many characters (default 6000)"
+          "description": "The stock ticker symbol (e.g., AAPL)"
         }
       },
       "required": [
-        "url"
+        "ticker"
       ]
     },
     "tier": 0,
+    "source": "sec_13f",
     "permission": "read_only",
+    "fallback_only": false,
     "concurrency_safe": true,
-    "domain": "HTML Notes",
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_junior_analyst"
+    ]
   },
   {
-    "name": "html_notes_stock_history",
-    "description": "Full snapshot for a stock/ETF/crypto ticker (NVDA, AAPL, BTC-USD): price series plus technicals (RSI, SMA 20/50/200, volatility, 52-week range, trend) and fundamentals (market cap, P/E, EPS, beta, dividend yield, revenue, margin, analyst target, sector). Sub-second. Then call canvas_add_widget(widget_type='stock_card', config={\"symbol\": \"<SYM>\"}) \u2014 config is JUST the symbol. Do NOT copy the returned data into the config; the server already has it and fills the widget in. Re-typing it wastes about a minute per turn. Never use widget_type='chart' for a ticker, and never web-search for prices.",
+    "name": "get_market_data",
+    "description": "Get recent price history, fundamentals, financials, and balance sheet for a stock from multiple reliable sources.",
     "parameters": {
       "type": "object",
       "properties": {
-        "symbol": {
+        "ticker": {
           "type": "string",
-          "description": "Ticker symbol, e.g. 'NVDA', 'AAPL', 'BTC-USD'"
-        },
-        "range": {
-          "type": "string",
-          "enum": [
-            "1d",
-            "5d",
-            "1mo",
-            "3mo",
-            "6mo",
-            "1y",
-            "5y",
-            "10y",
-            "max"
-          ],
-          "description": "How far back to fetch (default '1mo')"
+          "description": "The stock ticker symbol (e.g., AAPL)"
         }
       },
       "required": [
-        "symbol"
+        "ticker"
       ]
     },
     "tier": 0,
+    "source": "data_rotator",
     "permission": "read_only",
+    "fallback_only": false,
     "concurrency_safe": true,
-    "domain": "HTML Notes",
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
     "labels": [
-      "tool"
+      "market-data",
+      "stock-analysis"
     ],
-    "source": "html-notes"
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager",
+      "v3_quant_analyst",
+      "v3_regime_engine",
+      "v3_worker_fundamental",
+      "v3_worker_quant"
+    ]
   },
   {
-    "name": "html_notes_sports_scores",
-    "description": "Live scores, fixtures and results for any major league \u2014 soccer (FIFA World Cup, Premier League, Champions League, La Liga, MLS), UFC/MMA, NBA, NFL, MLB, NHL, college. Sub-second. Then call canvas_add_widget(widget_type='scoreboard', config={\"league\": \"<league>\"}) \u2014 config is JUST the league. Do NOT copy the returned events into the config; the server fills them in. Never web-search for scores and never render them as a data_card.",
+    "name": "get_market_map_data",
+    "description": "Fetches the top movers and market map data for S&P 500 components, grouped by sector. Use this to analyze broad market trends and sector performance for the day.",
     "parameters": {
       "type": "object",
-      "properties": {
-        "league": {
-          "type": "string",
-          "description": "Friendly league name: fifa, world cup, premier league, champions league, la liga, serie a, bundesliga, mls, soccer, ufc, mma, nba, wnba, nfl, mlb, nhl, college football, college basketball"
-        }
-      },
-      "required": [
-        "league"
-      ]
-    },
-    "tier": 0,
-    "permission": "read_only",
-    "concurrency_safe": true,
-    "domain": "HTML Notes",
-    "labels": [
-      "tool"
-    ],
-    "source": "html-notes"
-  },
-  {
-    "name": "canvas_read_dom",
-    "description": "Read the current live canvas DOM and return a structured summary of all visible elements. Use this to understand what is currently displayed before making modifications. Returns element count, component types, text summaries, and optionally the HTML of a specific element matched by CSS selector.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "css_selector": {
-          "type": "string",
-          "description": "Optional CSS selector to read a specific element. If omitted, returns full canvas summary."
-        }
-      },
+      "properties": {},
       "required": []
     },
     "tier": 0,
+    "source": "",
     "permission": "read_only",
+    "fallback_only": false,
     "concurrency_safe": true,
-    "domain": "HTML Notes",
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
     "labels": [
       "tool"
     ],
-    "source": "html-notes"
+    "owner_app": "trading",
+    "agents": []
   },
   {
-    "name": "canvas_modify_dom",
-    "description": "Modify an element on the live canvas dashboard using a CSS selector. Use this to update, append to, or remove existing widgets/components without replacing the entire canvas.",
+    "name": "get_options_flow",
+    "description": "Fetch unusual options activity and flow for a ticker.",
     "parameters": {
       "type": "object",
       "properties": {
-        "css_selector": {
-          "type": "string",
-          "description": "CSS selector to locate the target element (e.g., '#widget-abc123', '.glass-card:first-child', 'h3')"
-        },
-        "action": {
-          "type": "string",
-          "enum": [
-            "append",
-            "prepend",
-            "replace",
-            "remove",
-            "insert_after",
-            "insert_before"
-          ],
-          "description": "The DOM operation: append/prepend add inside the element, replace swaps it, remove deletes it, insert_before/after add as siblings."
-        },
-        "html_snippet": {
-          "type": "string",
-          "description": "The HTML to insert. Not required for 'remove' action."
+        "ticker": {
+          "type": "string"
         }
       },
       "required": [
-        "css_selector",
-        "action"
+        "ticker"
       ]
     },
     "tier": 0,
-    "permission": "write",
+    "source": "options",
+    "permission": "read_only",
+    "fallback_only": false,
     "concurrency_safe": true,
-    "domain": "HTML Notes",
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
     "labels": [
-      "tool"
+      "market-data",
+      "stock-analysis"
     ],
-    "source": "html-notes"
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst",
+      "v3_worker_quant"
+    ]
   },
   {
-    "name": "canvas_add_widget",
-    "description": "Spawn a pre-built widget on the canvas dashboard grid. Fetch the data FIRST with the matching data tool, then pass the result into config \u2014 the widget renders server-side, so config IS the finished content. Choosing widget_type:\n\n\u2022 'stock_card' \u2014 ANY stock, share price, crypto or ticker ('chart AAPL', 'how is TSLA doing', 'bitcoin price'). Renders the price header, range tabs, chart, technicals and fundamentals together. Call html_notes_stock_history(symbol) first, then pass config={\"symbol\": \"AAPL\"} \u2014 just the symbol; the server fills in everything else. Do NOT use 'chart' for a ticker: 'chart' has no price header, no technicals and no fundamentals, and is the wrong widget for a stock.\n\u2022 'scoreboard' \u2014 ANY sports scores, fixtures, results or standings. Call html_notes_sports_scores(league) first, then pass config={\"league\": \"nba\"} \u2014 just the league. Do NOT render scores as a data_card; a scoreboard has to show who is playing whom.\n\u2022 'data_card' \u2014 the default for fetched text data: news, recipes, search results, weather, facts, lists. Every item needs a 'description' with the actual text; a title+url alone renders as a bare link the user has to click, which is a failure.\n\u2022 'chart' \u2014 generic numbers only (line/bar/pie from labels+values): populations, poll results, revenue by quarter. NOT for tickers \u2014 use 'stock_card'.\n\u2022 'image' \u2014 display picture URLs. 'youtube_player' \u2014 call html_notes_youtube_search first and pass the chosen video_id.\n\u2022 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player' \u2014 utility widgets, no data fetch needed.",
+    "name": "get_polygon_price_history",
+    "description": "Fetch historical OHLCV price data from Polygon.",
     "parameters": {
       "type": "object",
       "properties": {
-        "widget_type": {
-          "type": "string",
-          "enum": [
-            "checklist",
-            "clock",
-            "notes",
-            "iframe_app",
-            "mini_music_player",
-            "youtube_player",
-            "data_card",
-            "image",
-            "chart",
-            "stock_card",
-            "scoreboard"
-          ],
-          "description": "The pre-built widget type to spawn"
-        },
-        "widget_id": {
-          "type": "string",
-          "description": "A unique ID for the new widget, e.g. 'clock-1' or 'yt-lofi'"
-        },
-        "config": {
-          "type": "object",
-          "description": "Widget configuration, by widget_type. stock_card: {symbol} \u2014 ONLY the symbol, e.g. {\"symbol\": \"AAPL\"}; do not copy labels/values/technicals/fundamentals back, the server already has them from html_notes_stock_history. scoreboard: {league} \u2014 ONLY the league, e.g. {\"league\": \"nba\"}. data_card: {title, subtitle?, icon?, image?, content?, items:[{title, description, url?, image?, badge?, meta?}]} \u2014 use items for lists (news headlines, recipes, results), content for prose; 'description' carries the actual text of each item and is REQUIRED \u2014 copy the snippet from the search result into it, and if a snippet is empty call html_notes_read_page on that url to get real text. A data_card whose items have only a title and url renders as a naked hyperlink and is useless. chart: {title, type:'line'|'bar'|'pie', labels:[str], values:[num]} or {title, chart:<full Chart.js config>}. image: {title, url, caption?} or {title, images:[{url, caption?}]}. clock: {timezone}. checklist: {title, items:[str]}. notes: {title, content}. iframe_app: {url, title}. youtube_player: {video_id, title}. mini_music_player: {genre, autoplay}."
+        "ticker": {
+          "type": "string"
         }
       },
       "required": [
-        "widget_type",
-        "widget_id"
+        "ticker"
       ]
     },
     "tier": 0,
-    "permission": "write",
+    "source": "polygon",
+    "permission": "read_only",
+    "fallback_only": false,
     "concurrency_safe": true,
-    "domain": "HTML Notes",
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
     "labels": [
-      "tool"
+      "market-data",
+      "stock-analysis"
     ],
-    "source": "html-notes"
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst",
+      "v3_worker_quant"
+    ]
+  },
+  {
+    "name": "get_portfolio_state",
+    "description": "Get the bot's full portfolio state including cash balance, all open positions with P&L, sector breakdown, and position count. Use this to understand portfolio health and make informed BUY/SELL decisions.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_board_of_directors",
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "get_position_pnl",
+    "description": "Check the P&L and health of a specific held position. Returns entry price, current price, unrealized P&L, holding duration, and stop-loss proximity. Use this during debates to evaluate whether to hold or sell.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker to check."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "get_sec_filings",
+    "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Stock ticker symbol, e.g. 'AAPL'"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "sec",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_worker_fundamental",
+      "v3_worker_insider"
+    ]
+  },
+  {
+    "name": "get_technical_indicators",
+    "description": "Get computed technical indicators (RSI, MACD, SMA, Bollinger Bands).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol"
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "computed",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_quant_analyst",
+      "v3_regime_engine",
+      "v3_worker_quant"
+    ]
   },
   {
     "name": "get_ticker_summary",
@@ -2265,43 +1435,570 @@
     "domain": "General",
     "labels": [
       "tool"
-    ]
+    ],
+    "owner_app": "trading",
+    "agents": []
   },
   {
-    "name": "strain_search",
-    "description": "Search the cannabis strain database by name. Returns matching strains with breeder, type, whether a genomic/chemical sample exists, and dominant terpenes. Use this FIRST to resolve a user's fuzzy strain name into a canonical name before calling any other strain_* tool. If it returns no results, the strain is not in the database yet \u2014 use strain_import to fetch it.",
+    "name": "lazy_web_search",
+    "description": "Search the web for information using a controlled, truncated search engine.",
     "parameters": {
       "type": "object",
       "properties": {
         "query": {
           "type": "string",
-          "description": "Strain name or partial name, e.g. 'blue dream'."
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Max results. Default 20."
-        },
-        "complete_only": {
-          "type": "boolean",
-          "description": "Only strains that have a complete genomic/chemical sample. Default false."
+          "description": "The search query."
         }
       },
       "required": [
         "query"
       ]
     },
-    "permission": "read_only",
     "tier": 0,
-    "source": "treesearch",
+    "source": "",
+    "permission": "read_only",
     "fallback_only": false,
     "concurrency_safe": true,
     "max_result_chars": 50000,
     "tags": [],
-    "domain": "Cannabis Research",
+    "domain": "General",
     "labels": [
-      "cannabis",
-      "strain",
-      "research"
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager",
+      "v3_regime_engine",
+      "v3_worker_news"
+    ]
+  },
+  {
+    "name": "read_user_notes",
+    "description": "Read markdown notes written by the human user. These notes contain human thoughts, context, watchlists, or market observations. Always check this if the user tells you they 'wrote it down' or if you need extra context.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filename": {
+          "type": "string",
+          "description": "Optional. The specific .md filename to read. If omitted, returns a list of all available notes."
+        }
+      },
+      "required": []
+    },
+    "tier": 1,
+    "source": "notes",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat"
+    ]
+  },
+  {
+    "name": "remove_from_watchlist",
+    "description": "Remove a stock ticker from the user's active watchlist. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol to remove (e.g., AAPL)."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "watchlist",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  },
+  {
+    "name": "request_peer_analysis",
+    "description": "Request a specific peer agent (e.g. 'quant_analyst', 'fundamental_analyst', 'junior_analyst') to run a query, check a lead, or verify details, and post findings to the whiteboard.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker to research."
+        },
+        "target_agent": {
+          "type": "string",
+          "description": "The exact name of the target agent (junior_analyst, fundamental_analyst, quant_analyst)."
+        },
+        "query": {
+          "type": "string",
+          "description": "The specific question or instructions for the target agent."
+        }
+      },
+      "required": [
+        "ticker",
+        "target_agent",
+        "query"
+      ]
+    },
+    "tier": 1,
+    "source": "agent_coordination",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  },
+  {
+    "name": "run_backtest",
+    "description": "Backtest a named equation from the library over historical price data. Returns performance metrics: PnL, win rate, max drawdown, Sharpe ratio, and trade list.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Stock ticker to backtest against."
+        },
+        "equation_name": {
+          "type": "string",
+          "description": "Name of the equation from the library to backtest."
+        },
+        "parameters": {
+          "type": "string",
+          "description": "JSON string of parameters for the backtest."
+        }
+      },
+      "required": [
+        "ticker",
+        "equation_name"
+      ]
+    },
+    "tier": 0,
+    "source": "equation_library",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "run_equation",
+    "description": "Execute a mathematical equation against live price/technical data for a ticker. You can run a named equation from the library OR provide raw Python code. The code receives 'df' (DataFrame with OHLCV + technicals) and 'params' (dict). Must assign output to 'result'.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Stock ticker to run against (e.g., AAPL)."
+        },
+        "equation_name": {
+          "type": "string",
+          "description": "Name of a saved equation. If empty, 'code' must be provided."
+        },
+        "code": {
+          "type": "string",
+          "description": "Raw Python code if not using a named equation."
+        },
+        "parameters": {
+          "type": "string",
+          "description": "JSON string of parameters."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "equation_library",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "save_equation",
+    "description": "Save a new mathematical equation to the shared Quant Equation Library. The equation must be Python code that receives 'df' (price DataFrame) and 'params' (dict), and assigns its output to 'result'. Future agents can reuse this equation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique snake_case name for the equation."
+        },
+        "code": {
+          "type": "string",
+          "description": "Python code. Must assign output to 'result'. Has access to df, params, np, pd."
+        },
+        "description": {
+          "type": "string",
+          "description": "What this equation does and when to use it."
+        },
+        "parameters": {
+          "type": "string",
+          "description": "JSON string of default parameters."
+        }
+      },
+      "required": [
+        "name",
+        "code",
+        "description"
+      ]
+    },
+    "tier": 0,
+    "source": "equation_library",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "save_trading_chart",
+    "description": "Render and save an HTML chart and JSON overlay data from the technical analyst agent.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol"
+        },
+        "overlays": {
+          "type": "array",
+          "description": "JSON overlays array from the agent"
+        },
+        "period": {
+          "type": "string",
+          "description": "Timeframe of historical data to fetch (e.g., '1mo', '3mo', '6mo', '1y')"
+        }
+      },
+      "required": [
+        "ticker",
+        "overlays"
+      ]
+    },
+    "tier": 1,
+    "source": "data_sink",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "scrape_url",
+    "description": "Scrape the main text content from a URL. Use this to read articles or SEC filings.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The URL to scrape."
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "research",
+      "scraping",
+      "web-search"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_worker_news"
+    ]
+  },
+  {
+    "name": "search_equations",
+    "description": "Search the shared Quant Equation Library for existing mathematical strategies. Returns equations with their win rates, Sharpe ratios, and code. Use this before writing a new equation to check if one already exists.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search keyword (e.g., 'zscore', 'momentum', 'rsi'). Empty returns top equations by win rate."
+        },
+        "top_k": {
+          "type": "integer",
+          "description": "Max results to return (default: 10)."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "equation_library",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "sell_stock",
+    "description": "Execute a sell order to close a position for a stock ticker. Requires user confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker symbol to sell (e.g., AAPL)."
+        },
+        "qty_pct": {
+          "type": "number",
+          "description": "The percentage of the position to sell (e.g., 1.0 for 100%, 0.5 for 50%). Default is 1.0."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "paper_trader",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Trading & Execution",
+    "labels": [
+      "trading",
+      "execution",
+      "portfolio"
+    ],
+    "owner_app": "trading",
+    "agents": []
+  },
+  {
+    "name": "whiteboard_annotate",
+    "description": "Add a note or comment to an existing whiteboard entry without overwriting it. Use this to highlight risks, disagree with a consensus, or add context.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "entry_id": {
+          "type": "integer",
+          "description": "The exact entry_id (from whiteboard_read) to annotate."
+        },
+        "note": {
+          "type": "string",
+          "description": "Your annotation/comment."
+        }
+      },
+      "required": [
+        "entry_id",
+        "note"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_board_of_directors",
+      "v3_debate_judge"
+    ]
+  },
+  {
+    "name": "whiteboard_read",
+    "description": "Read a specific section of the team's shared whiteboard for a given ticker. The whiteboard is a living document where agents collaborate. Sections include: 'market_context', 'risk_flags', 'signals', 'consensus', 'trade_plan'.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker to read from."
+        },
+        "section": {
+          "type": "string",
+          "description": "The section name to read."
+        }
+      },
+      "required": [
+        "ticker",
+        "section"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_board_of_directors",
+      "v3_debate_judge"
+    ]
+  },
+  {
+    "name": "whiteboard_summarize",
+    "description": "Get a full summary of all sections currently on the whiteboard. Provides a snapshot of the entire team's consensus and state.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker to summarize."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_board_of_directors"
+    ]
+  },
+  {
+    "name": "whiteboard_write",
+    "description": "Write or overwrite a section of the team's shared whiteboard. Use this to post your final analysis or consensus for other agents to read. Writing will bump the version number of the section. Content should be valid JSON string.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker this relates to."
+        },
+        "section": {
+          "type": "string",
+          "description": "The section name to write to (e.g. 'consensus')."
+        },
+        "content": {
+          "type": "string",
+          "description": "The content to write (preferably a JSON string or clear text)."
+        }
+      },
+      "required": [
+        "ticker",
+        "section",
+        "content"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_board_of_directors",
+      "v3_debate_judge",
+      "v3_junior_analyst",
+      "v3_quant_analyst"
     ]
   },
   {
@@ -2335,36 +2032,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
-  },
-  {
-    "name": "strain_terpene_profile",
-    "description": "Get the terpene profile for a strain: each terpene with its value, plus the dominant terpene. Terpenes drive a strain's aroma and effect (myrcene = sedating/earthy, limonene = citrus/uplifting, caryophyllene = peppery). Returns an error if no chemical assay exists for the strain.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "strain_name": {
-          "type": "string",
-          "description": "Canonical strain name, as returned by strain_search."
-        }
-      },
-      "required": [
-        "strain_name"
-      ]
-    },
-    "permission": "read_only",
-    "tier": 0,
-    "source": "treesearch",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Cannabis Research",
-    "labels": [
-      "cannabis",
-      "strain",
-      "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_forum_posts",
@@ -2401,7 +2071,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_images",
@@ -2434,40 +2106,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
-  },
-  {
-    "name": "strain_neighbors",
-    "description": "Get the k nearest strains to a given strain by genetic and chemical distance, with their distances. Use this to answer 'what is similar to X?'.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "strain_name": {
-          "type": "string",
-          "description": "Canonical strain name, as returned by strain_search."
-        },
-        "k": {
-          "type": "integer",
-          "description": "Number of neighbors. Default 10."
-        }
-      },
-      "required": [
-        "strain_name"
-      ]
-    },
-    "permission": "read_only",
-    "tier": 0,
-    "source": "treesearch",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Cannabis Research",
-    "labels": [
-      "cannabis",
-      "strain",
-      "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_import",
@@ -2500,7 +2141,9 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   },
   {
     "name": "strain_import_status",
@@ -2529,6 +2172,113 @@
       "cannabis",
       "strain",
       "research"
-    ]
+    ],
+    "owner_app": "treesearch",
+    "agents": []
+  },
+  {
+    "name": "strain_neighbors",
+    "description": "Get the k nearest strains to a given strain by genetic and chemical distance, with their distances. Use this to answer 'what is similar to X?'.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "strain_name": {
+          "type": "string",
+          "description": "Canonical strain name, as returned by strain_search."
+        },
+        "k": {
+          "type": "integer",
+          "description": "Number of neighbors. Default 10."
+        }
+      },
+      "required": [
+        "strain_name"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ],
+    "owner_app": "treesearch",
+    "agents": []
+  },
+  {
+    "name": "strain_search",
+    "description": "Search the cannabis strain database by name. Returns matching strains with breeder, type, whether a genomic/chemical sample exists, and dominant terpenes. Use this FIRST to resolve a user's fuzzy strain name into a canonical name before calling any other strain_* tool. If it returns no results, the strain is not in the database yet \u2014 use strain_import to fetch it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Strain name or partial name, e.g. 'blue dream'."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max results. Default 20."
+        },
+        "complete_only": {
+          "type": "boolean",
+          "description": "Only strains that have a complete genomic/chemical sample. Default false."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ],
+    "owner_app": "treesearch",
+    "agents": []
+  },
+  {
+    "name": "strain_terpene_profile",
+    "description": "Get the terpene profile for a strain: each terpene with its value, plus the dominant terpene. Terpenes drive a strain's aroma and effect (myrcene = sedating/earthy, limonene = citrus/uplifting, caryophyllene = peppery). Returns an error if no chemical assay exists for the strain.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "strain_name": {
+          "type": "string",
+          "description": "Canonical strain name, as returned by strain_search."
+        }
+      },
+      "required": [
+        "strain_name"
+      ]
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "source": "treesearch",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Cannabis Research",
+    "labels": [
+      "cannabis",
+      "strain",
+      "research"
+    ],
+    "owner_app": "treesearch",
+    "agents": []
   }
 ]
