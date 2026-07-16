@@ -12,12 +12,20 @@ from app.db.memory_repo import (
     mark_observations_promoted,
     log_consolidation_run,
 )
-from app.services.prism_agent_caller import llm, Priority
+from app.services.prism_agent_caller import Priority
 from app.services.prism_agent_caller import call_prism_agent
+
+import time
 
 logger = logging.getLogger(__name__)
 
 NEW_EPISODIC_THRESHOLD = 5
+
+# Per-ticker attempt cooldown. Without it, a persistently failing LLM pass
+# leaves the observations unpromoted, should-consolidate stays true, and the
+# 8k-token consolidation call re-fires on EVERY subsequent cycle.
+CONSOLIDATION_COOLDOWN_SECONDS = 6 * 3600
+_last_attempt: dict[str, float] = {}
 
 CONSOLIDATION_SYSTEM_PROMPT = """
 You are the Autodream Memory Consolidator, a background system optimizing a trading AI's knowledge base.
@@ -52,18 +60,27 @@ Important notes on output:
 """
 
 
-async def should_consolidate(ticker: str) -> bool:
-    unpromoted = get_unpromoted_observations(ticker)
-    if len(unpromoted) >= NEW_EPISODIC_THRESHOLD:
-        return True
+async def maybe_consolidate(ticker: str) -> None:
+    """Threshold + cooldown gate, then consolidate. Never raises — safe to
+    schedule fire-and-forget off the pipeline's critical path."""
+    try:
+        now = time.monotonic()
+        last = _last_attempt.get(ticker)
+        if last is not None and (now - last) < CONSOLIDATION_COOLDOWN_SECONDS:
+            return
+        observations = get_unpromoted_observations(ticker)
+        if len(observations) < NEW_EPISODIC_THRESHOLD:
+            return
+        _last_attempt[ticker] = now
+        await run_ticker_consolidation(ticker, observations=observations)
+    except Exception as e:
+        logger.warning("maybe_consolidate(%s) failed (non-fatal): %s", ticker, e)
 
-    # Optional elapsed time threshold logic could go here
-    return False
 
-
-async def run_ticker_consolidation(ticker: str):
+async def run_ticker_consolidation(ticker: str, observations: list | None = None):
     logger.info(f"Starting consolidation for {ticker}...")
-    observations = get_unpromoted_observations(ticker)
+    if observations is None:
+        observations = get_unpromoted_observations(ticker)
 
     if not observations:
         logger.info(f"No unpromoted observations for {ticker}.")
@@ -107,6 +124,29 @@ async def run_ticker_consolidation(ticker: str):
 
         updated_mems = parsed_res.get("new_or_updated_memories", [])
         deprecated_ids = parsed_res.get("deprecated_memory_ids", [])
+
+        if not updated_mems and not deprecated_ids:
+            # Nothing extracted — either the LLM output failed to parse or the
+            # response was genuinely empty. Do NOT mark the observations
+            # promoted: promotion consumes them (the janitor deletes promoted
+            # rows after 30 days), so promoting with zero memories created
+            # permanently destroys the knowledge. Leave them for the next run
+            # (the per-ticker cooldown prevents hammering).
+            logger.warning(
+                "Consolidation for %s extracted nothing — leaving %d observations "
+                "unpromoted for retry. Raw response head: %r",
+                ticker, len(observations), (response_text or "")[:500],
+            )
+            log_consolidation_run(
+                {
+                    "id": str(uuid.uuid4()),
+                    "ticker": ticker,
+                    "observations_consumed": 0,
+                    "memories_created": 0,
+                    "memories_deprecated": 0,
+                }
+            )
+            return
 
         # Fill missing IDs and defaults
         for mem in updated_mems:

@@ -206,6 +206,12 @@ async def run_v3_agent(
             f"## Cycle: {cycle_id}\n\n"
         )
 
+        # Peer-request text rides in the USER message and cannot be rerouted
+        # to the system prompt like dynamic_block — cap it, or a long peer
+        # query alone can blow Prism's 2048-token memory-embed limit.
+        if custom_instructions and len(custom_instructions) > 3000:
+            custom_instructions = custom_instructions[:3000] + " …[truncated]"
+
         # Prism's server-side agent memory embeds the USER message with
         # embeddinggemma, which has a hard 2048-token positional limit — a
         # larger user message fails with a "memory:embed ... maximum context
@@ -217,8 +223,14 @@ async def run_v3_agent(
         # back. ~4 chars/token, with headroom below 2048 to absorb tokenizer
         # density differences on numeric/ticker-heavy text.
         _EMBED_TOKEN_LIMIT = 2048
-        _USER_SCAFFOLD_CHARS = 1600  # tool/output directives + reminder appended below
-        _projected_user_chars = len(user_prompt) + len(dynamic_block) + _USER_SCAFFOLD_CHARS
+        _USER_SCAFFOLD_CHARS = 1900  # tool/output directives + reminder appended below
+        # custom_instructions (peer-request text) is appended to the user
+        # prompt AFTER this guard runs — it must be counted here or a long
+        # peer query can push the real message past the embed limit.
+        _projected_user_chars = (
+            len(user_prompt) + len(dynamic_block)
+            + len(custom_instructions or "") + _USER_SCAFFOLD_CHARS
+        )
         _fits_embedder = (_projected_user_chars // 4) < (_EMBED_TOKEN_LIMIT - 400)
 
         if prompt_split and dynamic_block and _fits_embedder:
@@ -252,7 +264,10 @@ async def run_v3_agent(
             f"you MUST output ONLY a valid JSON object matching the `{artifact_type}` schema.\n"
             f"Do NOT include any conversational intro/outro, preambles, summary comments, or markdown headings.\n"
             f"Do NOT wrap the JSON response in markdown code blocks (do NOT use ```json).\n"
-            f"Your entire response MUST start with '{{' and end with '}}'.\n\n"
+            f"Your entire response MUST start with '{{' and end with '}}'.\n"
+            f"You MAY include an optional \"tags\" array of short hashtag labels "
+            f"(e.g. [\"#catalyst\", \"#earnings_risk\", \"#verify_later\"]) to flag "
+            f"data points for other agents and future cycles.\n\n"
         )
 
         # Append custom peer instructions if requested
@@ -332,11 +347,32 @@ async def run_v3_agent(
         # Validate the artifact
         errors = validate_artifact(artifact_type, artifact)
         if errors:
+            missing_required = [e for e in errors if e.startswith("Missing required field")]
+            if missing_required and artifact_type in ("final_decision", "trade_decision"):
+                # A decision artifact without action/confidence/reasoning is a
+                # failed run, not a salvageable one: appending it and returning
+                # SUCCESS silently drops the board/synthesizer vote (the
+                # synthesizer then zeroes the board's signal weight), while
+                # AGENT_ERROR engages the circuit breaker's existing retry.
+                logger.error(
+                    "[V3Runner] %s decision artifact for %s is missing required fields %s — "
+                    "treating as AGENT_ERROR so the circuit breaker can retry",
+                    agent_name, desk.ticker, missing_required,
+                )
+                emit(
+                    "analyzing",
+                    f"v3_{agent_name}_fail_{desk.ticker}",
+                    f"❌ {desk.ticker}: V3 {agent_name} — decision artifact missing required fields",
+                    status="error",
+                )
+                _record_telemetry(desk, agent_name, elapsed_ms, loops_used, token_usage, "AGENT_ERROR",
+                                  sys_prompt_chars=sys_prompt_chars, user_prompt_chars=user_prompt_chars)
+                return PhaseOutcome.AGENT_ERROR
             logger.warning(
                 "[V3Runner] %s artifact validation warnings for %s: %s",
                 agent_name, desk.ticker, errors,
             )
-            # Non-fatal — we still append, but log the validation issues
+            # Non-fatal for analyst artifacts — we still append, but log the issues
             artifact["_validation_warnings"] = errors
 
         # Append to SharedDesk
@@ -404,8 +440,13 @@ async def run_v3_agent(
             },
         )
 
+        try:
+            artifact_size_bytes = len(json.dumps(artifact, default=str))
+        except Exception:
+            artifact_size_bytes = 0
         _record_telemetry(desk, agent_name, elapsed_ms, loops_used, token_usage, "SUCCESS", quality_score,
-                          sys_prompt_chars=sys_prompt_chars, user_prompt_chars=user_prompt_chars)
+                          sys_prompt_chars=sys_prompt_chars, user_prompt_chars=user_prompt_chars,
+                          artifact_size_bytes=artifact_size_bytes)
 
         # Classify outcome
         data_gaps = artifact.get("data_gaps", [])
@@ -478,6 +519,13 @@ def _parse_artifact(
     if not text or not text.strip():
         return None
 
+    # The Board (and any persona prompt using scratchpad XML) emits a
+    # <thought_process> block before its JSON. Strip it first: if the block
+    # itself contains braces, the first-{/last-} extraction below would grab
+    # an invalid span and needlessly degrade to the lossiest parse strategy.
+    if "</thought_process>" in text:
+        text = text.rsplit("</thought_process>", 1)[-1]
+
     # Strategy 1: Direct JSON parse
     try:
         parsed = json.loads(text.strip())
@@ -536,6 +584,7 @@ def _record_telemetry(
     quality_score: int = -1,
     sys_prompt_chars: int = 0,
     user_prompt_chars: int = 0,
+    artifact_size_bytes: int = 0,
 ) -> None:
     """Record telemetry for a V3 agent run."""
     entry = {
@@ -547,6 +596,7 @@ def _record_telemetry(
         "outcome": outcome,
         "phase": desk.phase.value,
         "quality_score": quality_score,
+        "artifact_size_bytes": artifact_size_bytes,
         # Context budget report: per-agent prompt footprint (chars). The DB
         # insert ignores extra keys; these surface in logs/v3_metadata.
         "sys_prompt_chars": sys_prompt_chars,

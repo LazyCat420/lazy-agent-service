@@ -25,6 +25,10 @@ from app.v3.desk_persistence import save_desk
 
 logger = logging.getLogger(__name__)
 
+# Fire-and-forget background tasks (e.g. memory consolidation) — a bare
+# create_task result gets garbage-collected mid-flight without this anchor.
+_BG_TASKS: set = set()
+
 
 async def run_v3_pipeline(
     ticker: str,
@@ -280,6 +284,7 @@ async def run_v3_pipeline(
     debate_dispatched = False
     board_dispatched = False
     synth_dispatched = False
+    peer_drop_logged = False
 
     def _queue_agent(name: str, module: Any, query: str = "", parent: str = ""):
         if run_counts.get(name, 0) >= MAX_RUNS_PER_AGENT:
@@ -300,16 +305,23 @@ async def run_v3_pipeline(
 
     async def whiteboard_subscriber(event):
         nonlocal regime, fa_skipped, debate_dispatched, board_dispatched, synth_dispatched
-        # Whiteboard broadcasts to every subscriber; concurrent tickers share
-        # the bus. Only react to this ticker's events or agents cross-trigger
-        # (duplicate queued tasks, re-runs of completed agents).
+        # The bus delivers only this ticker's events (subscription is
+        # ticker-scoped), but keep the filter as defense in depth against
+        # unscoped publishers — a cross-ticker event here would cross-trigger
+        # duplicate queued tasks and re-runs of completed agents.
         event_ticker = (event.get("ticker") or "").upper()
         if event_ticker and event_ticker != ticker.upper():
             return
         # Same ticker from another cycle (or the legacy default_cycle board)
-        # must not trigger this cycle's agent chain.
-        event_cycle = event.get("cycle_id") or ""
-        if event_cycle and event_cycle != cycle_id:
+        # must not trigger this cycle's agent chain. Strict: an event with NO
+        # cycle_id is rejected too — every real publisher stamps one.
+        if (event.get("cycle_id") or "") != cycle_id:
+            return
+        # Only section WRITES drive the agent chain. Annotations
+        # ("whiteboard_annotation") carry the annotated entry's section but no
+        # content — letting one fall through would reset regime to
+        # CONTRADICTORY, re-queue FA/QA, or re-trigger the debate chain.
+        if event.get("type") != "whiteboard_update":
             return
         sec = event.get("section")
         auth = event.get("author")
@@ -461,9 +473,33 @@ async def run_v3_pipeline(
         return False
 
     async def _process_peer_requests():
+        nonlocal peer_drop_logged
         # Do not spawn analyst re-runs once the debate has moved on (see
-        # _has_pending_peer_requests). Pending requests are left as-is.
+        # _has_pending_peer_requests). Pending requests are left as-is —
+        # but say so ONCE, or the requesting agent's ask vanishes untraceably.
+        # (One-shot: this runs every scheduler iteration after dispatch, and
+        # each check is a whiteboard DB read.)
         if debate_dispatched:
+            if not peer_drop_logged:
+                peer_drop_logged = True
+                try:
+                    task_section = await whiteboard.get_section(
+                        ticker=ticker, cycle_id=cycle_id, section="task_queue"
+                    )
+                    if task_section and isinstance(task_section.get("content"), dict):
+                        dropped = [
+                            t for t in task_section["content"].get("tasks", [])
+                            if t.get("status") == "pending"
+                        ]
+                        if dropped:
+                            logger.info(
+                                "[V3] %s: %d peer request(s) dropped — debate already "
+                                "dispatched (targets: %s)",
+                                ticker, len(dropped),
+                                ", ".join(str(t.get("target_agent")) for t in dropped),
+                            )
+                except Exception:
+                    pass
             return
         try:
             task_section = await whiteboard.get_section(ticker=ticker, cycle_id=cycle_id, section="task_queue")
@@ -704,7 +740,7 @@ async def run_v3_pipeline(
 
     # Subscribe live whiteboard triggers
     from app.agents.whiteboard import whiteboard
-    whiteboard.subscribe(whiteboard_subscriber)
+    whiteboard.subscribe(whiteboard_subscriber, ticker=ticker)
 
     try:
         # Run Regime Engine first to kick off the whiteboard triggers
@@ -962,6 +998,17 @@ async def run_v3_pipeline(
             "outcome_label": action,
         })
         logger.info("[V3] %s: Episodic observation recorded", ticker)
+
+        # Consolidation: without this, episodic observations pile up forever
+        # and canonical memories are never distilled from cycle experience —
+        # the retriever would read a table nothing populates. Runs as a
+        # BACKGROUND task (its output feeds future cycles, not this trade),
+        # internally gated by a ≥5-unpromoted threshold and a per-ticker
+        # cooldown so a failing LLM pass can't re-fire every cycle.
+        from app.services.memory.consolidator import maybe_consolidate
+        _task = asyncio.create_task(maybe_consolidate(ticker))
+        _BG_TASKS.add(_task)
+        _task.add_done_callback(_BG_TASKS.discard)
     except Exception as e:
         logger.warning("[V3] %s: Memory persistence failed (non-fatal): %s", ticker, e)
 
@@ -1016,6 +1063,11 @@ async def run_v3_pipeline(
 
     # Inject the actual policy action so upstream callers (like cycle_main) can respect it
     result["policy_action"] = policy_action
+
+    # Record the tier the Triage Gate actually evaluated — _build_v1_compatible_result
+    # hardcodes "v3_full", which made analysis_results.triage_tier wrong for
+    # every deep/standard ticker (triage analytics grouped on a constant).
+    result["triage_tier"] = triage_tier
 
     return result
 
@@ -1353,7 +1405,10 @@ def _build_cycle_metadata(
     if research_focus:
         metadata["research_focus"] = research_focus
 
-    # Fetch position context (if held)
+    # Fetch position context — pushed for BOTH held and not-held. Without the
+    # explicit not-held line, agents had no pushed signal and could reason
+    # their way into an EXECUTE_SELL on a ticker the bot doesn't hold (a
+    # guaranteed-dead trade attempt at the paper trader).
     try:
         from app.tools.portfolio_tools import get_position_context
         pos_ctx = get_position_context(ticker, bot_id)
@@ -1365,6 +1420,13 @@ def _build_cycle_metadata(
                 f"Held {pos_ctx.get('holding_days', 0)} days."
             )
             metadata["held"] = True
+        else:
+            metadata["portfolio_context"] = (
+                f"NO OPEN POSITION in {ticker}. The bot cannot SELL what it "
+                "does not hold (no shorting) — a SELL decision is only valid "
+                "for held tickers."
+            )
+            metadata["held"] = False
     except Exception as e:
         logger.warning("[V3] %s: Failed to fetch portfolio context: %s", ticker, e)
 

@@ -9,6 +9,9 @@ The system prompt is HOT-SWAPPED based on the Market Regime Engine's classificat
 Phase 2: Has access to `get_portfolio_state` tool to check portfolio exposure.
 The agent autonomously decides WHEN to use it based on context.
 """
+import logging
+
+logger = logging.getLogger(__name__)
 
 AGENT_NAME = "v3_board_of_directors"
 
@@ -272,4 +275,9 @@ def get_persona_prompt(regime: str) -> str:
 
     Falls back to Jane Street (CONTRADICTORY) for unknown regimes.
     """
+    if regime not in PERSONA_MAP:
+        logger.warning(
+            "[Board] Unknown regime label %r — falling back to Jane Street persona",
+            regime,
+        )
     return PERSONA_MAP.get(regime, PERSONA_JANE_STREET)
