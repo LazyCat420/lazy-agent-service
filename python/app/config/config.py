@@ -121,6 +121,15 @@ class Settings(BaseSettings):
 
     # ── Decision Pipeline ──
     DECISION_AGENT_ENABLED: bool = True  # enable Layer 5 decision synthesis agent
+    # KV-cache prompt split (2026-07-15): keep every V3 agent's system prompt
+    # byte-identical across cycles (vLLM prefix-cache reuse) by moving all
+    # cycle-specific context into the user message. False = legacy layout
+    # (dynamic content appended to the system prompt) — the rollback path.
+    V3_PROMPT_SPLIT: bool = True
+    # Portfolio-level circuit breaker: refuse NEW BUYs once mark-to-market
+    # portfolio value falls this far below its recorded peak (0.25 = 25%).
+    # SELLs are never blocked. 0 disables the breaker.
+    MAX_PORTFOLIO_DRAWDOWN_PCT: float = 0.25
     ANALYSIS_CONFIDENCE_THRESHOLD: int = 65  # minimum confidence (0-100) to execute trades
     MAX_POSITION_SIZE_PCT: float = 0.10  # hard cap on a single trade's cash fraction (agent sizing is clamped to this)
 
@@ -250,7 +259,10 @@ class Settings(BaseSettings):
     PRISM_USERNAME: str = "lazy-trader"
     PRISM_ENABLED: bool = True
     PRISM_AGENT: str = "CUSTOM_MARKET_ALPHA"  # Routes through the CUSTOM_MARKET_ALPHA persona in Prism — custom agent with tailored trading tools
-    PRISM_AGENT_ROUTING: bool = True  # Override via PRISM_AGENT_ROUTING=false in .env to bypass Prism and call vLLM directly
+    # DEPRECATED: never read by any code path. The real prism bypass is
+    # PRISM_ENABLED=false (lazycat-sdk calls vLLM directly). Kept only so a
+    # stale PRISM_AGENT_ROUTING env var doesn't crash pydantic settings.
+    PRISM_AGENT_ROUTING: bool = True
     PRISM_MONGO_URI: str = _config.get("PRISM_MONGO_URI", f"mongodb://{_default_host}:27017/?directConnection=true")
     PRISM_MONGO_DB: str = "prism"
     PRISM_SKIP_CONVERSATION: bool = False

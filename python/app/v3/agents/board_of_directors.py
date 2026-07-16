@@ -21,6 +21,15 @@ TOOL_WHITELIST: list[str] = [
     "whiteboard_annotate",
     "whiteboard_summarize",
     "get_portfolio_state",
+    # Read-only data fallbacks (registry-registered). The board was previously
+    # 100% dependent on what upstream analysts wrote to the desk and could not
+    # verify or fill a single data gap itself — if the desk was thin (e.g. no
+    # numeric fundamentals), the verdict was grounded on nothing. These let the
+    # board confirm a price/indicator/fundamental when the desk is missing it.
+    # It should still PRIMARILY trust the desk, not re-run analysis.
+    "get_market_data",
+    "get_technical_indicators",
+    "get_finviz_fundamentals",
 ]
 
 ARTIFACT_TYPE = "final_decision"
@@ -53,11 +62,33 @@ You are making the FINAL trading decision for this ticker.
    your confidence level and position sizing — do not ignore the gap.
 5. Size your position relative to the risk you can quantify.
 
+
+## REGIME ENGINE DIRECTIVE
+The desk context includes the Regime Engine's directive to the Board — a lens
+instruction derived from its live factor readings (volatility, trend_strength,
+macro_risk, sector_momentum, liquidity) and market context tags. Follow it:
+where it conflicts with the generic philosophy above, the directive wins,
+because it reflects the CURRENT market rather than an archetype.
+
 ## TOOLS
 You have access to `get_portfolio_state` to check current portfolio exposure.
 Use it when your decision depends on existing position context (e.g., sizing
 a new position relative to current holdings). Do NOT use it reflexively —
 only when portfolio context would materially change your decision.
+
+
+## GATE CONTROLS (all optional, use deliberately)
+- confidence_floor: raise the minimum confidence the policy gate demands for
+  THIS decision (it can never lower the firm-wide floor). Set it when data
+  quality or regime uncertainty makes you want a higher bar.
+- conviction_vector: score data_quality / consensus_strength /
+  regime_alignment / risk_adjusted 0-100. data_quality < 40 hard-blocks the
+  trade regardless of confidence.
+- overrides_veto + override_justification: a jury-majority veto normally
+  blocks the trade outright. You may override it ONLY with a written
+  justification, and the trade must then carry full mitigation (stop_loss,
+  dynamic_trigger, position_size_pct). Use sparingly.
+- position_size_pct = 0 means "watch, do not trade" and is honored literally.
 
 ## OUTPUT
 CRITICAL INSTRUCTION: You MUST process your reasoning in a `<thought_process>` block first, followed immediately by ONLY valid JSON. Do NOT include markdown fences around the JSON. Start your final JSON payload immediately with { and end with }.
@@ -72,6 +103,11 @@ CRITICAL INSTRUCTION: You MUST process your reasoning in a `<thought_process>` b
         "type": "sma_100_drop",
         "value": null
     },
+    "signal_basis": {"equation": "Which statistical signal/equation drives this call", "backtest_expectation": "Expected edge based on the pattern's history"},
+    "confidence_floor": 0,
+    "conviction_vector": {"data_quality": 75, "consensus_strength": 60, "regime_alignment": 85, "risk_adjusted": 70},
+    "overrides_veto": false,
+    "override_justification": "",
     "persona_used": "jim_simons",
     "regime": "HIGH_VOLATILITY"
 }"""
@@ -100,11 +136,33 @@ You are making the FINAL trading decision for this ticker.
    uncertainty but does not automatically force a specific action.
 5. Think in terms of business ownership, not price speculation.
 
+
+## REGIME ENGINE DIRECTIVE
+The desk context includes the Regime Engine's directive to the Board — a lens
+instruction derived from its live factor readings (volatility, trend_strength,
+macro_risk, sector_momentum, liquidity) and market context tags. Follow it:
+where it conflicts with the generic philosophy above, the directive wins,
+because it reflects the CURRENT market rather than an archetype.
+
 ## TOOLS
 You have access to `get_portfolio_state` to check current portfolio exposure.
 Use it when your decision depends on existing position context (e.g., avoiding
 concentration risk in one sector). Do NOT use it reflexively — only when
 portfolio context would materially change your decision.
+
+
+## GATE CONTROLS (all optional, use deliberately)
+- confidence_floor: raise the minimum confidence the policy gate demands for
+  THIS decision (it can never lower the firm-wide floor). Set it when data
+  quality or regime uncertainty makes you want a higher bar.
+- conviction_vector: score data_quality / consensus_strength /
+  regime_alignment / risk_adjusted 0-100. data_quality < 40 hard-blocks the
+  trade regardless of confidence.
+- overrides_veto + override_justification: a jury-majority veto normally
+  blocks the trade outright. You may override it ONLY with a written
+  justification, and the trade must then carry full mitigation (stop_loss,
+  dynamic_trigger, position_size_pct). Use sparingly.
+- position_size_pct = 0 means "watch, do not trade" and is honored literally.
 
 ## OUTPUT
 CRITICAL INSTRUCTION: You MUST process your reasoning in a `<thought_process>` block first, followed immediately by ONLY valid JSON. Do NOT include markdown fences around the JSON. Start your final JSON payload immediately with { and end with }.
@@ -119,6 +177,12 @@ CRITICAL INSTRUCTION: You MUST process your reasoning in a `<thought_process>` b
         "type": "rsi_14_oversold",
         "value": null
     },
+    "moat_assessment": "Competitive moat quality and durability",
+    "intrinsic_value_estimate": "Your estimate of intrinsic value vs current price",
+    "confidence_floor": 0,
+    "conviction_vector": {"data_quality": 75, "consensus_strength": 60, "regime_alignment": 85, "risk_adjusted": 70},
+    "overrides_veto": false,
+    "override_justification": "",
     "persona_used": "warren_buffett",
     "regime": "DEEP_DISCOUNT"
 }"""
@@ -143,11 +207,33 @@ You are making the FINAL trading decision for this ticker.
 4. If one side clearly won the debate but the market hasn't priced it in,
    that's your trade.
 
+
+## REGIME ENGINE DIRECTIVE
+The desk context includes the Regime Engine's directive to the Board — a lens
+instruction derived from its live factor readings (volatility, trend_strength,
+macro_risk, sector_momentum, liquidity) and market context tags. Follow it:
+where it conflicts with the generic philosophy above, the directive wins,
+because it reflects the CURRENT market rather than an archetype.
+
 ## TOOLS
 You have access to `get_portfolio_state` to check current portfolio exposure.
 Use it when you need to understand if resolving a contradiction would create
 unwanted concentration in the portfolio. Do NOT use it reflexively — only
 when portfolio context would materially change your decision.
+
+
+## GATE CONTROLS (all optional, use deliberately)
+- confidence_floor: raise the minimum confidence the policy gate demands for
+  THIS decision (it can never lower the firm-wide floor). Set it when data
+  quality or regime uncertainty makes you want a higher bar.
+- conviction_vector: score data_quality / consensus_strength /
+  regime_alignment / risk_adjusted 0-100. data_quality < 40 hard-blocks the
+  trade regardless of confidence.
+- overrides_veto + override_justification: a jury-majority veto normally
+  blocks the trade outright. You may override it ONLY with a written
+  justification, and the trade must then carry full mitigation (stop_loss,
+  dynamic_trigger, position_size_pct). Use sparingly.
+- position_size_pct = 0 means "watch, do not trade" and is honored literally.
 
 ## OUTPUT
 CRITICAL INSTRUCTION: You MUST process your reasoning in a `<thought_process>` block first, followed immediately by ONLY valid JSON. Do NOT include markdown fences around the JSON. Start your final JSON payload immediately with { and end with }.
@@ -162,6 +248,12 @@ CRITICAL INSTRUCTION: You MUST process your reasoning in a `<thought_process>` b
         "type": "trailing_drop",
         "value": 0.15
     },
+    "mispricing_basis": "The specific contradiction/mispricing you are trading",
+    "edge_type": "informational|structural|behavioral",
+    "confidence_floor": 0,
+    "conviction_vector": {"data_quality": 75, "consensus_strength": 60, "regime_alignment": 85, "risk_adjusted": 70},
+    "overrides_veto": false,
+    "override_justification": "",
     "persona_used": "jane_street",
     "regime": "CONTRADICTORY"
 }"""

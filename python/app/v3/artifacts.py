@@ -39,6 +39,15 @@ DESK_NOTE_SCHEMA: dict = {
                 "agents should pursue."
             ),
         },
+        "triage_recommendation": {
+            "type": "string",
+            "enum": ["FULL", "QUANT_ONLY", "SKIP"],
+            "description": (
+                "JA's pipeline-depth recommendation, honored by the "
+                "orchestrator: FULL = normal, QUANT_ONLY = skip the "
+                "Fundamental Analyst, SKIP = end the pipeline (no catalysts)"
+            ),
+        },
     },
 }
 
@@ -98,6 +107,14 @@ QUANT_REPORT_SCHEMA: dict = {
         "summary": {
             "type": "string",
             "description": "2-3 paragraph quantitative/risk analysis narrative",
+        },
+        "sub_analyses_requested": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Open quantitative questions the analyst could not resolve "
+                "this run; surfaced to the Board as unresolved uncertainty"
+            ),
         },
         "risk_metrics": {
             "type": "object",
@@ -326,6 +343,18 @@ DEBATE_JUDGE_SCHEMA: dict = {
             "minimum": 0,
             "maximum": 100,
         },
+        "weaknesses_of_winner": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "The winning side's weakest points — the board uses these "
+                "for position sizing and stop-loss calibration"
+            ),
+        },
+        "strongest_point_of_loser": {
+            "type": "string",
+            "description": "The losing side's single best argument",
+        },
     },
 }
 
@@ -350,6 +379,38 @@ REGIME_CLASSIFICATION_SCHEMA: dict = {
         "rationale": {
             "type": "string",
             "description": "Why this regime was classified",
+        },
+        "factors": {
+            "type": "object",
+            "description": (
+                "Weighted factor vector (each 0.0-1.0): volatility, "
+                "trend_strength, macro_risk, sector_momentum, liquidity. "
+                "The nuanced regime signal — the enum label is only coarse."
+            ),
+        },
+        "market_context_tags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Free-form macro tags the Regime Engine stamps itself "
+                "(e.g. 'rate-sensitive', 'earnings-week'); persisted on the "
+                "desk so all downstream agents can self-calibrate"
+            ),
+        },
+        "board_directive": {
+            "type": "string",
+            "description": (
+                "The Regime Engine's own 2-4 sentence lens instruction for "
+                "the Board of Directors, replacing a hardcoded persona rule"
+            ),
+        },
+        "suggested_pipeline_modifications": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Pipeline steps the orchestrator should adjust; honored "
+                "values: 'skip_fundamental_analyst'"
+            ),
         },
         "vix_level": {"type": "number"},
         "yield_trend": {"type": "string"},
@@ -396,6 +457,31 @@ FINAL_DECISION_SCHEMA: dict = {
         "regime": {
             "type": "string",
             "description": "The market regime that triggered the persona",
+        },
+        "confidence_floor": {
+            "type": "number",
+            "description": (
+                "Board-raised minimum confidence for THIS decision; the "
+                "policy gate uses max(firm threshold, this value)"
+            ),
+        },
+        "conviction_vector": {
+            "type": "object",
+            "description": (
+                "Sub-scores 0-100: data_quality, consensus_strength, "
+                "regime_alignment, risk_adjusted. data_quality < 40 blocks."
+            ),
+        },
+        "overrides_veto": {
+            "type": "boolean",
+            "description": (
+                "Board overrides a jury-majority veto; requires a non-empty "
+                "override_justification and full mitigation"
+            ),
+        },
+        "override_justification": {
+            "type": "string",
+            "description": "Why the board is trading through the jury veto",
         },
     },
 }
@@ -460,6 +546,23 @@ TRADE_DECISION_SCHEMA: dict = {
         "position_size_pct": {
             "type": "number",
             "description": "Suggested position size as percentage of portfolio",
+        },
+        "internal_consensus_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": (
+                "How aligned the upstream agents were (research directions, "
+                "jury votes, board verdict). High consensus supports larger "
+                "sizing; disagreement argues for smaller positions."
+            ),
+        },
+        "learning_signal": {
+            "type": "object",
+            "description": (
+                "What past-cycle memory contributed: similar_past_cycles, "
+                "outcome_correlation, lessons_applied"
+            ),
         },
     },
 }

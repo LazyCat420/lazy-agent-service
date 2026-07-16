@@ -117,6 +117,19 @@ async def run_v3_pipeline(
     # Store the pre-collected report
     desk.cycle_metadata["data_report"] = data_report
 
+    # Live macro snapshot for the Regime Engine. It classifies the GLOBAL
+    # market state but the per-ticker data_report gives it nothing macro, so
+    # it was producing a regime from thin air (1 turn, no tools, lowest
+    # quality). Inject real VIX/index/yield/dollar levels so the classification
+    # is grounded. Non-fatal — the engine still has its tools as a fallback.
+    try:
+        from app.collectors.market_regime_collector import get_latest_market_snapshot
+        macro_briefing = _format_macro_briefing(get_latest_market_snapshot())
+        if macro_briefing:
+            desk.cycle_metadata["macro_briefing"] = macro_briefing
+    except Exception as e:
+        logger.warning("[V3] %s: macro snapshot unavailable (non-fatal): %s", ticker, e)
+
     # Retrieve past cycle memory for this ticker (non-fatal)
     try:
         from app.services.memory.retriever import MemoryRetriever
@@ -140,7 +153,9 @@ async def run_v3_pipeline(
         from app.v3.desk_persistence import load_latest_desk_for_ticker
         previous_desk = load_latest_desk_for_ticker(ticker)
         if previous_desk:
-            prev_context = previous_desk.get_compressed_context(include_debate=True)
+            # Compact structured brief (~400 chars), not the full 8K narrative —
+            # continuity needs the decision + headline findings only (plan 4.4).
+            prev_context = previous_desk.get_handoff_brief()
             if prev_context and prev_context != "No artifacts on desk yet.":
                 desk.cycle_metadata["previous_desk_context"] = prev_context
                 
@@ -254,6 +269,17 @@ async def run_v3_pipeline(
     }
 
     regime = "CONTRADICTORY"
+    fa_skipped = False  # set when the Regime Engine recommends skipping FA
+    # Dispatch-once latches for the decision layer. Peer-requested analyst
+    # re-runs (request_peer_analysis) re-write the research sections, which
+    # would otherwise re-fire the whole debate→board→synth chain every time
+    # (observed live: 1 ticker → tournament×2, board×2, synth×2, ~2x compute).
+    # The debate consumes a SNAPSHOT of research; re-running analysts after it
+    # has started cannot change a verdict already rendered, so we latch each
+    # decision-layer stage to a single dispatch.
+    debate_dispatched = False
+    board_dispatched = False
+    synth_dispatched = False
 
     def _queue_agent(name: str, module: Any, query: str = "", parent: str = ""):
         if run_counts.get(name, 0) >= MAX_RUNS_PER_AGENT:
@@ -273,7 +299,7 @@ async def run_v3_pipeline(
         logger.info("[V3] Queued dynamic task: %s (query='%s', parent='%s')", name, query, parent)
 
     async def whiteboard_subscriber(event):
-        nonlocal regime
+        nonlocal regime, fa_skipped, debate_dispatched, board_dispatched, synth_dispatched
         # Whiteboard broadcasts to every subscriber; concurrent tickers share
         # the bus. Only react to this ticker's events or agents cross-trigger
         # (duplicate queued tasks, re-runs of completed agents).
@@ -292,11 +318,25 @@ async def run_v3_pipeline(
         if sec == "regime_classification":
             content = event.get("content") or {}
             regime = content.get("regime", "CONTRADICTORY")
-            
-            if regime == "HIGH_VOLATILITY":
-                logger.info("[V3] High Volatility regime detected. Running JA & QA. Bypassing FA.")
+
+            # The Regime Engine owns the skip decision (plan 1.3): honor its
+            # suggested_pipeline_modifications instead of hardcoding on the
+            # regime label. An artifact WITHOUT the field (older prompt or
+            # partial output) keeps the legacy HIGH_VOLATILITY heuristic.
+            mods = content.get("suggested_pipeline_modifications")
+            skip_fa = _regime_recommends_skip_fa(content)
+
+            if skip_fa:
+                fa_skipped = True
+                logger.info(
+                    "[V3] Regime Engine recommends skipping Fundamental Analyst "
+                    "(regime=%s, mods=%s). Running JA & QA only.", regime, mods,
+                )
                 desk.append_artifact("fundamental_report", {
-                    "summary": "Skipped detailed fundamental analysis due to High Volatility regime. Quantitative metrics prioritized.",
+                    "summary": (
+                        "Fundamental analysis skipped on the Regime Engine's "
+                        f"recommendation (regime: {regime}). Quantitative metrics prioritized."
+                    ),
                     "pillars": {
                         "revenue_growth": "Not analyzed", "profitability": "Not analyzed",
                         "moat": "Not analyzed", "management": "Not analyzed", "valuation": "Not analyzed"
@@ -308,20 +348,62 @@ async def run_v3_pipeline(
                     "risks": []
                 })
                 breaker.record_outcome("fundamental_analyst", PhaseOutcome.SUCCESS)
-                
+
                 _queue_agent("junior_analyst", junior_analyst, parent="regime_engine")
                 _queue_agent("quant_analyst", quant_analyst, parent="regime_engine")
             else:
                 _queue_agent("junior_analyst", junior_analyst, parent="regime_engine")
-                
+
         elif sec == "desk_note":  # junior_analyst completed
-            if regime != "HIGH_VOLATILITY":
+            # JA is the first real intelligence gate (plan 2.2): honor its
+            # triage_recommendation. Anything unrecognized behaves as FULL.
+            triage = str((event.get("content") or {}).get("triage_recommendation") or "FULL").upper()
+
+            if triage == "SKIP":
+                logger.info("[V3] %s: JA triage says SKIP — ending pipeline (no catalysts).", ticker)
+                # Drop anything already queued (e.g. QA pre-queued by a
+                # regime-engine skip_fa path) — SKIP ends the pipeline.
+                tasks_to_run.clear()
+                # Local append only (no whiteboard write) so the synthesizer
+                # is NOT chained — mirrors the Triage Gate's early HOLD.
+                desk.append_artifact("final_decision", {
+                    "action": "HOLD",
+                    "confidence": 0,
+                    "reasoning": (
+                        "Junior Analyst triage: no new catalysts since the previous "
+                        f"cycle. JA summary: {(event.get('content') or {}).get('summary', '')[:300]}"
+                    ),
+                    "persona_used": "junior_analyst_triage",
+                })
+                emit("analyzing", f"v3_ja_triage_{ticker}",
+                     f"🚦 {ticker}: JA triage → SKIP (no new catalysts)", status="ok")
+            elif triage == "QUANT_ONLY" and not fa_skipped:
+                fa_skipped = True
+                logger.info("[V3] %s: JA triage says QUANT_ONLY — skipping Fundamental Analyst.", ticker)
+                desk.append_artifact("fundamental_report", {
+                    "summary": (
+                        "Fundamental analysis skipped on the Junior Analyst's triage "
+                        "recommendation (QUANT_ONLY): no qualitative catalysts found."
+                    ),
+                    "pillars": {
+                        "revenue_growth": "Not analyzed", "profitability": "Not analyzed",
+                        "moat": "Not analyzed", "management": "Not analyzed", "valuation": "Not analyzed"
+                    },
+                    "thesis_direction": "NEUTRAL",
+                    "confidence": 50,
+                    "data_gaps": ["DataGap: Fundamental analysis bypassed"],
+                    "catalysts": [],
+                    "risks": []
+                })
+                breaker.record_outcome("fundamental_analyst", PhaseOutcome.SUCCESS)
+                _queue_agent("quant_analyst", quant_analyst, parent="junior_analyst")
+            elif not fa_skipped:
                 _queue_agent("fundamental_analyst", fundamental_analyst, parent="junior_analyst")
                 _queue_agent("quant_analyst", quant_analyst, parent="junior_analyst")
-                
+
         elif sec in ("fundamental_report", "quant_report"):
             # Check if research tier is fully complete
-            if regime == "HIGH_VOLATILITY":
+            if fa_skipped:
                 if desk.has_artifact("desk_note") and desk.has_artifact("quant_report"):
                     _queue_debate_phase()
             else:
@@ -333,18 +415,29 @@ async def run_v3_pipeline(
                 _queue_agent("debate_judge", debate_judge, parent="bull_argument")
                 
         elif sec in ("debate_judge", "tournament_result"):
-            _queue_agent("board_of_directors", None, parent="debate_judge")
-            
+            if not board_dispatched:
+                board_dispatched = True
+                _queue_agent("board_of_directors", None, parent="debate_judge")
+
         elif sec == "final_decision":
-            if _settings.DECISION_AGENT_ENABLED:
+            if _settings.DECISION_AGENT_ENABLED and not synth_dispatched:
+                synth_dispatched = True
                 _queue_agent("decision_synthesizer", decision_agent, parent="board_of_directors")
 
     def _queue_debate_phase():
+        nonlocal debate_dispatched
+        # Latch: the debate runs once on a research snapshot. A peer-requested
+        # analyst re-run that re-writes fundamental_report/quant_report must
+        # NOT re-queue the (expensive, ~8min) tournament.
+        if debate_dispatched:
+            return
+        debate_dispatched = True
+
         if desk.phase == DeskPhase.INIT:
             desk.advance_phase(DeskPhase.RESEARCH_DONE)
             save_desk(desk)
             emit("analyzing", f"v3_research_done_{ticker}", f"📊 {ticker}: Research layer complete", status="ok")
-            
+
         if _cog_settings.TOURNAMENT_MODE:
             _queue_agent("tournament_debate", None, parent="quant_analyst")
         else:
@@ -352,6 +445,12 @@ async def run_v3_pipeline(
             _queue_agent("bear_rebuttal", bear_agent, parent="quant_analyst")
 
     async def _has_pending_peer_requests() -> bool:
+        # Peer requests are a RESEARCH-phase mechanism: an analyst asking a
+        # sibling for a specific data point before the debate. Once the debate
+        # has been dispatched, a late request cannot inform the verdict — and
+        # honoring it re-runs an analyst whose output nothing downstream reads.
+        if debate_dispatched:
+            return False
         try:
             task_section = await whiteboard.get_section(ticker=ticker, cycle_id=cycle_id, section="task_queue")
             if task_section and isinstance(task_section.get("content"), dict):
@@ -362,6 +461,10 @@ async def run_v3_pipeline(
         return False
 
     async def _process_peer_requests():
+        # Do not spawn analyst re-runs once the debate has moved on (see
+        # _has_pending_peer_requests). Pending requests are left as-is.
+        if debate_dispatched:
+            return
         try:
             task_section = await whiteboard.get_section(ticker=ticker, cycle_id=cycle_id, section="task_queue")
             if task_section and isinstance(task_section.get("content"), dict):
@@ -406,6 +509,7 @@ async def run_v3_pipeline(
             status="running",
             data={"parent": parent} if parent else None
         )
+        t_tournament = time.monotonic()
         try:
             from app.cognition.debate.tournament import run_tournament_debate
             from app.cognition.contracts.evidence import EvidencePacket
@@ -446,6 +550,10 @@ async def run_v3_pipeline(
                 "winning_side": tournament_result.get("winning_side", "split"),
                 "pitches": tournament_result.get("pitches", []),
                 "survivors": tournament_result.get("survivors", []),
+                # h2h carries each thesis's attack_points — the debate nuance
+                # the board needs for sizing/stop calibration. Without it the
+                # board only ever saw the one-line rationale.
+                "h2h": tournament_result.get("h2h", {}),
                 "jury_verdict": tournament_result.get("jury_verdict", {}),
                 "vetoed": tournament_result.get("jury_verdict", {}).get("vetoed", False),
                 "risk_flags": tournament_result.get("risk_flags", []),
@@ -535,9 +643,32 @@ async def run_v3_pipeline(
                 f"(winner: {tournament_result.get('winning_side', 'split')})",
                 status="ok",
             )
+            # The tournament bypasses run_v3_agent, so without this it leaves no
+            # v3_agent_telemetry row — which drops its node from the replay flow
+            # graph and severs the analyst→board edges (the "islands" bug).
+            desk.record_agent_telemetry({
+                "agent_name": "v3_tournament_debate",
+                "ticker": ticker,
+                "elapsed_ms": int((time.monotonic() - t_tournament) * 1000),
+                "loops_used": 1,
+                "token_usage": int(tournament_result.get("total_tokens", 0) or 0),
+                "outcome": "SUCCESS",
+                "phase": desk.phase.value,
+                "quality_score": -1,
+            })
         except Exception as tournament_err:
             logger.error("[V3] %s: Tournament debate failed: %s", ticker, tournament_err, exc_info=True)
             logger.info("[V3] Falling back to classic debate agents (Bull/Bear).")
+            desk.record_agent_telemetry({
+                "agent_name": "v3_tournament_debate",
+                "ticker": ticker,
+                "elapsed_ms": int((time.monotonic() - t_tournament) * 1000),
+                "loops_used": 1,
+                "token_usage": 0,
+                "outcome": "AGENT_ERROR",
+                "phase": desk.phase.value,
+                "quality_score": -1,
+            })
             _queue_agent("bull_argument", bull_agent, parent="tournament_debate")
             _queue_agent("bear_rebuttal", bear_agent, parent="tournament_debate")
 
@@ -609,21 +740,33 @@ async def run_v3_pipeline(
         # Scheduler task processing loop
         loop_counter = 0
         MAX_LOOP_ITERATIONS = 20
-        
+        # Observable topology (plan 2.4): record every scheduler iteration on
+        # the desk so runaway loops can be debugged after the fact. Persisted
+        # via cycle_metadata; never injected into agent prompts.
+        iteration_log: list[dict] = []
+        desk.cycle_metadata["pipeline_iteration_log"] = iteration_log
+
         while (tasks_to_run or await _has_pending_peer_requests()) and loop_counter < MAX_LOOP_ITERATIONS:
             loop_counter += 1
             await _process_peer_requests()
-            
+
             if not tasks_to_run:
                 break
-                
+
             task = tasks_to_run.pop(0)
             name = task["name"]
             module = task["module"]
             query = task["query"]
             parent = task["parent"]
-            
+
             run_counts[name] += 1
+            iteration_log.append({
+                "iteration": loop_counter,
+                "task": name,
+                "run": run_counts[name],
+                "parent": parent,
+                "query": (query or "")[:200],
+            })
             logger.info("[V3] Executing dynamic task: %s (run %d)", name, run_counts[name])
             
             if name == "junior_analyst":
@@ -689,7 +832,12 @@ async def run_v3_pipeline(
                     breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
                     custom_instructions=query, parent_agent=parent
                 )
-                breaker.record_outcome("bull_argument", outcome)
+                # Deferred-item 8.2 decision (2026-07-15): a debate timeout is a
+                # hard ABORT, not a silent degrade to an unmarked HOLD@0.
+                abort = _check_abort(desk, breaker, "bull_argument", outcome)
+                if abort:
+                    whiteboard.unsubscribe(whiteboard_subscriber)
+                    return abort
                 # Write bull_argument to whiteboard so subscriber chains debate_judge
                 if outcome in (PhaseOutcome.SUCCESS, PhaseOutcome.DATA_GAP) and desk.bull_argument:
                     await whiteboard.write_section(
@@ -705,7 +853,10 @@ async def run_v3_pipeline(
                     breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
                     custom_instructions=query, parent_agent=parent
                 )
-                breaker.record_outcome("bear_rebuttal", outcome)
+                abort = _check_abort(desk, breaker, "bear_rebuttal", outcome)
+                if abort:
+                    whiteboard.unsubscribe(whiteboard_subscriber)
+                    return abort
                 # Write bear_rebuttal to whiteboard so subscriber chains debate_judge
                 if outcome in (PhaseOutcome.SUCCESS, PhaseOutcome.DATA_GAP) and desk.bear_rebuttal:
                     await whiteboard.write_section(
@@ -717,9 +868,13 @@ async def run_v3_pipeline(
 
             elif name == "debate_judge":
                 outcome = await _run_debate_judge(
-                    desk=desk, breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
+                    desk=desk, breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
+                    parent_agent=_SECTION_TO_AGENT.get(parent, parent),
                 )
-                breaker.record_outcome("debate_judge", outcome)
+                abort = _check_abort(desk, breaker, "debate_judge", outcome)
+                if abort:
+                    whiteboard.unsubscribe(whiteboard_subscriber)
+                    return abort
                 # Write debate_judge to whiteboard so subscriber chains board_of_directors
                 if outcome in (PhaseOutcome.SUCCESS, PhaseOutcome.DATA_GAP) and desk.debate_judge:
                     await whiteboard.write_section(
@@ -739,9 +894,16 @@ async def run_v3_pipeline(
                     emit("analyzing", f"v3_debate_done_{ticker}", f"⚔️ {ticker}: Debate layer complete", status="ok")
                     
                 outcome = await _run_board_of_directors(
-                    desk=desk, regime=regime, breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit
+                    desk=desk, regime=regime, breaker=breaker, cycle_id=cycle_id, bot_id=bot_id, emit=emit,
+                    parent_agent=_SECTION_TO_AGENT.get(parent, parent),
                 )
-                breaker.record_outcome("board_of_directors", outcome)
+                # A board timeout used to leave final_decision unwritten and fall
+                # through to an unmarked HOLD@0 (indistinguishable from a real
+                # no-signal HOLD). Abort loudly instead (deferred item 8.2).
+                abort = _check_abort(desk, breaker, "board_of_directors", outcome)
+                if abort:
+                    whiteboard.unsubscribe(whiteboard_subscriber)
+                    return abort
                 # Write final_decision to whiteboard so subscriber chains decision_synthesizer
                 if outcome in (PhaseOutcome.SUCCESS, PhaseOutcome.DATA_GAP) and desk.final_decision:
                     await whiteboard.write_section(
@@ -761,14 +923,25 @@ async def run_v3_pipeline(
                 await _persist_trade_verdict()
 
         if loop_counter >= MAX_LOOP_ITERATIONS:
-            logger.warning("[V3] DynamicOrchestrator hit MAX_LOOP_ITERATIONS safeguard for %s.", ticker)
+            iteration_log.append({"iteration": loop_counter, "event": "max_loop_iterations_hit"})
+            logger.warning(
+                "[V3] DynamicOrchestrator hit MAX_LOOP_ITERATIONS safeguard for %s. Iteration log: %s",
+                ticker,
+                [f"{e.get('task', e.get('event'))}<-{e.get('parent', '')}" for e in iteration_log],
+            )
 
     finally:
         whiteboard.unsubscribe(whiteboard_subscriber)
 
     try:
-        desk.advance_phase(DeskPhase.PM_DONE)
-        save_desk(desk)
+        if desk.phase == DeskPhase.INIT and desk.has_artifact("final_decision"):
+            # JA triage SKIP: research/debate never ran, so INIT is the
+            # correct terminal phase (same as a Triage Gate glance skip).
+            logger.info("[V3] %s: JA-triage-skipped cycle — desk stays at INIT", ticker)
+            save_desk(desk)
+        else:
+            desk.advance_phase(DeskPhase.PM_DONE)
+            save_desk(desk)
     except ValueError as e:
         logger.error("[V3] %s: Pipeline failed before reaching PM_DONE. Status: %s. Error: %s", ticker, desk.phase, e)
     try:
@@ -853,29 +1026,56 @@ def _apply_policy_gates(desk: SharedDesk) -> str:
     execution (a *_POLICY_BLOCKED_* result never trades) — it is not advisory.
     """
     decision = desk.trade_decision or desk.final_decision or {}
+    board = desk.final_decision or {}
     action = decision.get("action", "HOLD").upper()
     confidence = decision.get("confidence", 0)
 
     if action == "HOLD":
         return "HOLD_NO_SIGNAL"
 
-    if confidence < 60:
+    # Dynamic confidence floor (plan 3.1): the board may RAISE the bar for
+    # this specific decision, never lower the firm-wide threshold.
+    # pipeline_service still enforces the base threshold as belt-and-braces.
+    from app.config.config import settings as _settings
+    floor = _settings.ANALYSIS_CONFIDENCE_THRESHOLD
+    board_floor = board.get("confidence_floor")
+    if isinstance(board_floor, (int, float)) and not isinstance(board_floor, bool):
+        floor = max(floor, board_floor)
+    if confidence < floor:
         return "HOLD_POLICY_BLOCKED_LOW_CONFIDENCE"
 
     if not desk.has_artifact("regime_classification"):
         return "HOLD_POLICY_BLOCKED_MISSING_REGIME"
 
+    # Conviction sub-scores (plan 3.2): a board that admits its data quality
+    # is poor gets blocked regardless of headline confidence.
+    conviction = board.get("conviction_vector") or {}
+    data_quality = conviction.get("data_quality") if isinstance(conviction, dict) else None
+    if isinstance(data_quality, (int, float)) and not isinstance(data_quality, bool) and data_quality < 40:
+        return "HOLD_POLICY_BLOCKED_DATA_QUALITY"
+
     tournament = getattr(desk, "tournament_result", None) or {}
 
-    # Jury-majority veto is binding: the collective decided, no single agent
-    # (including the board) overrides it.
+    # Jury-majority veto is binding by default. The board may override it
+    # ONLY with an explicit written justification (plan 3.3) — the veto then
+    # degrades to a standing risk flag, which still demands full mitigation.
+    veto_overridden = False
     if tournament.get("vetoed"):
-        return "HOLD_POLICY_BLOCKED_JURY_VETO"
+        justification = str(board.get("override_justification") or "").strip()
+        if board.get("overrides_veto") and justification:
+            veto_overridden = True
+            logger.warning(
+                "[V3] %s: Board overrides jury-majority veto — justification: %s",
+                desk.ticker, justification[:300],
+            )
+        else:
+            return "HOLD_POLICY_BLOCKED_JURY_VETO"
 
     # A solo juror veto is a standing risk flag: the board may trade through
     # it ONLY with explicit mitigation — a defined stop-loss, a dynamic
     # trigger, and its own reasoned position size. Anything less holds.
-    if tournament.get("risk_flags"):
+    # An overridden jury veto is held to the same standard.
+    if tournament.get("risk_flags") or veto_overridden:
         mitigation = {**(desk.final_decision or {}), **(desk.trade_decision or {})}
         has_stop = isinstance(mitigation.get("stop_loss"), (int, float))
         has_trigger = bool(mitigation.get("dynamic_trigger"))
@@ -977,12 +1177,27 @@ async def _run_agent_with_circuit_breaker(
     return outcome
 
 
+# Queued parents are whiteboard *section* names; office-graph edges key on
+# *agent* node ids. Normalize before emitting so edges actually connect.
+_SECTION_TO_AGENT = {
+    "regime_classification": "regime_engine",
+    "desk_note": "junior_analyst",
+    "fundamental_report": "fundamental_analyst",
+    "quant_report": "quant_analyst",
+    "bull_argument": "bull_agent",
+    "bear_rebuttal": "bear_agent",
+    "tournament_result": "tournament_debate",
+    "final_decision": "board_of_directors",
+}
+
+
 async def _run_debate_judge(
     desk: SharedDesk,
     breaker: CircuitBreaker,
     cycle_id: str,
     bot_id: str,
     emit: Any,
+    parent_agent: str = "",
 ) -> PhaseOutcome:
     """Run the Debate Judge to synthesize parallel Bull and Bear arguments."""
     from app.v3.agents import debate_judge
@@ -996,6 +1211,7 @@ async def _run_debate_judge(
         bot_id=bot_id,
         emit=emit,
         include_debate_context=True,
+        parent_agent=parent_agent,
     )
 
 
@@ -1006,6 +1222,7 @@ async def _run_board_of_directors(
     cycle_id: str,
     bot_id: str,
     emit: Any,
+    parent_agent: str = "",
 ) -> PhaseOutcome:
     """Run the Board of Directors with a regime-swapped persona.
 
@@ -1050,7 +1267,61 @@ async def _run_board_of_directors(
         bot_id=bot_id,
         emit=emit,
         include_debate_context=True,
+        parent_agent=parent_agent,
     )
+
+
+def _format_macro_briefing(snapshot: dict) -> str:
+    """Format get_latest_market_snapshot() into a compact macro briefing.
+
+    Returns "" for an empty/missing snapshot so nothing is injected.
+    """
+    if not snapshot or not isinstance(snapshot, dict):
+        return ""
+
+    # Friendly labels for the key instruments; sector ETFs are summarized.
+    labels = [
+        ("VIX", "VIX (volatility)"),
+        ("VIX3M", "VIX 3-Month"),
+        ("GSPC", "S&P 500 (SPX)"),
+        ("IXIC", "Nasdaq Composite"),
+        ("RUT", "Russell 2000"),
+        ("DJI", "Dow Jones"),
+        ("TNX", "10-Year Yield"),
+        ("FVX", "5-Year Yield"),
+        ("IRX", "13-Week T-Bill"),
+        ("TYX", "30-Year Yield"),
+        ("DX", "US Dollar (DXY)"),
+    ]
+    lines = []
+    as_of = ""
+    for sym, label in labels:
+        entry = snapshot.get(sym)
+        if isinstance(entry, dict) and entry.get("close") is not None:
+            try:
+                lines.append(f"- {label}: {float(entry['close']):.2f}")
+            except (TypeError, ValueError):
+                continue
+            as_of = as_of or str(entry.get("date", ""))
+
+    if not lines:
+        return ""
+
+    header = f"Latest close values{f' (as of {as_of})' if as_of else ''}:"
+    return header + "\n" + "\n".join(lines)
+
+
+def _regime_recommends_skip_fa(content: dict) -> bool:
+    """Should the Fundamental Analyst be skipped this cycle?
+
+    The Regime Engine owns this decision via suggested_pipeline_modifications
+    (plan 1.3). Artifacts without the field (older prompt, partial output)
+    fall back to the legacy HIGH_VOLATILITY label heuristic.
+    """
+    mods = content.get("suggested_pipeline_modifications")
+    if isinstance(mods, list):
+        return "skip_fundamental_analyst" in mods or "skip_fa" in mods
+    return content.get("regime") == "HIGH_VOLATILITY"
 
 
 def _persona_label(regime: str) -> str:

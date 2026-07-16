@@ -188,6 +188,38 @@ class SharedDesk:
                 result[name] = val
         return result
 
+    def get_handoff_brief(self) -> str:
+        """Compact structured brief of this desk for the NEXT cycle's context.
+
+        The Manila-Envelope injection used to ship the full compressed
+        narrative (up to 8,000 chars) into every downstream agent's prompt.
+        Continuity only needs the decision and the headline findings — keep
+        it to a few hundred chars (plan 4.4).
+        """
+        decision = self.trade_decision or self.final_decision or {}
+        parts: list[str] = []
+
+        action = decision.get("action")
+        if action:
+            parts.append(
+                f"Previous decision: {action} @ {decision.get('confidence', '?')}% confidence"
+            )
+        regime = (self.regime_classification or {}).get("regime") or decision.get("regime")
+        if regime:
+            parts.append(f"Regime then: {regime}")
+
+        key_findings = (self.desk_note or {}).get("key_findings") or []
+        for finding in key_findings[:3]:
+            parts.append(f"- {str(finding)[:160]}")
+
+        reasoning = decision.get("reasoning", "")
+        if reasoning:
+            parts.append(f"Rationale: {reasoning[:200]}")
+
+        if not parts:
+            return ""
+        return "\n".join(parts)[:800]
+
     def get_compressed_context(self, include_debate: bool = False) -> str:
         """Build a compressed narrative for downstream agents.
 
@@ -248,6 +280,11 @@ class SharedDesk:
                 )
                 if metrics:
                     text += f"\n**Key Metrics:** {metrics}"
+            open_questions = self.quant_report.get("sub_analyses_requested") or []
+            if open_questions:
+                text += "\n**Open questions the Quant could not resolve:**\n" + "\n".join(
+                    f"- {q}" for q in open_questions[:5]
+                )
             sections.append(text)
 
         # Debate artifacts (only if requested)
@@ -276,11 +313,35 @@ class SharedDesk:
                 conf = tournament.get("confidence", 0)
                 side = tournament.get("winning_side", "split")
                 veto = " [JURY VETO]" if tournament.get("vetoed") else ""
-                sections.append(
+                text = (
                     f"## Tournament Debate Verdict{veto}\n"
                     f"**{action} @ {conf}% confidence (winner: {side})**\n"
                     f"{tournament.get('summary', '')}"
                 )
+                # Debate nuance for the board: each side's attack points are
+                # the tournament's equivalent of the classic judge's
+                # weaknesses_of_winner / strongest_point_of_loser. A confident
+                # verdict whose loser landed real blows deserves tighter stops.
+                h2h = tournament.get("h2h") or {}
+                for side_key, label in (("thesis_a", "Thesis A"), ("thesis_b", "Thesis B")):
+                    thesis = h2h.get(side_key) or {}
+                    attacks = thesis.get("attack_points") or []
+                    if attacks:
+                        persona = thesis.get("persona", label)
+                        text += f"\n**{label} ({persona}) attack points:**\n" + "\n".join(
+                            f"- {str(a)[:200]}" for a in attacks[:3]
+                        )
+                jury_results = (tournament.get("jury_verdict") or {}).get("jury_results") or {}
+                juror_lines = []
+                for juror, verdict in list(jury_results.items())[:3]:
+                    if isinstance(verdict, dict) and verdict.get("reasoning"):
+                        flag = " [VETO]" if verdict.get("veto") else ""
+                        juror_lines.append(
+                            f"- {juror}{flag}: {str(verdict['reasoning'])[:200]}"
+                        )
+                if juror_lines:
+                    text += "\n**Juror reasoning:**\n" + "\n".join(juror_lines)
+                sections.append(text)
 
             # Skip the debate_judge artifact when it is just a copy of the
             # tournament verdict already rendered above.
@@ -290,16 +351,37 @@ class SharedDesk:
                 # debate judge wrote winner/final_confidence — accept both.
                 winner = self.debate_judge.get("winning_side") or self.debate_judge.get("winner", "")
                 conf = self.debate_judge.get("confidence", self.debate_judge.get("final_confidence", 0))
-                sections.append(f"## Debate Judge Verdict (Winner: {winner} @ {conf}% confidence)\n{summary}")
+                text = f"## Debate Judge Verdict (Winner: {winner} @ {conf}% confidence)\n{summary}"
+                weaknesses = self.debate_judge.get("weaknesses_of_winner") or []
+                if weaknesses:
+                    text += "\n**Winner's weak points:**\n" + "\n".join(
+                        f"- {w}" for w in weaknesses[:3]
+                    )
+                loser_best = self.debate_judge.get("strongest_point_of_loser", "")
+                if loser_best:
+                    text += f"\n**Loser's best point:** {loser_best}"
+                sections.append(text)
 
         # Regime
         if self.regime_classification:
             regime = self.regime_classification.get("regime", "?")
             conf = self.regime_classification.get("confidence", 0)
             rationale = self.regime_classification.get("rationale", "")
-            sections.append(
-                f"## Market Regime: {regime} ({conf}% confidence)\n{rationale}"
-            )
+            text = f"## Market Regime: {regime} ({conf}% confidence)\n{rationale}"
+            factors = self.regime_classification.get("factors") or {}
+            if isinstance(factors, dict) and factors:
+                rendered = ", ".join(
+                    f"{k}={v}" for k, v in factors.items() if isinstance(v, (int, float))
+                )
+                if rendered:
+                    text += f"\n**Regime Factors (0-1):** {rendered}"
+            tags = self.regime_classification.get("market_context_tags") or []
+            if tags:
+                text += "\n**Market Context Tags:** " + ", ".join(str(t) for t in tags[:8])
+            directive = self.regime_classification.get("board_directive", "")
+            if directive:
+                text += f"\n**Regime Engine's Directive to the Board:** {directive}"
+            sections.append(text)
 
         # Board of Directors
         if self.final_decision:

@@ -23,6 +23,38 @@ import httpx
 
 _dynamic_model_cache = {}
 
+
+def _extract_token_usage(resp: Any, response_text: str) -> int:
+    """Real token count from the prism/vLLM response envelope.
+
+    The old `len(response_text) // 4` counted OUTPUT characters only, so
+    input tokens (which dominate — evidence packets, long prompts) were
+    invisible. This made the tournament debate report ~2.5K tokens for an
+    8-minute, many-call run. Prefer the provider's `usage`; fall back to the
+    char estimate only when usage is absent.
+    """
+    try:
+        payload = resp.json() if hasattr(resp, "json") else None
+        if isinstance(payload, dict):
+            usage = payload.get("usage") or {}
+            if isinstance(usage, dict) and usage:
+                # Prism/lazy-agent (TypeScript) emit camelCase — the SDK's
+                # streaming path sums inputTokens+outputTokens+reasoningOutputTokens
+                # (lazycat/agent.py). Match that first; keep snake_case + a
+                # totalTokens field as fallbacks for other providers.
+                total = usage.get("totalTokens") or usage.get("total_tokens")
+                if isinstance(total, (int, float)) and total > 0:
+                    return int(total)
+                inp = usage.get("inputTokens") or usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+                out = usage.get("outputTokens") or usage.get("completion_tokens") or usage.get("output_tokens") or 0
+                reasoning = usage.get("reasoningOutputTokens") or usage.get("reasoning_tokens") or 0
+                if inp or out or reasoning:
+                    return int(inp) + int(out) + int(reasoning)
+    except Exception:
+        pass
+    # Fallback: rough estimate from output length (better than nothing).
+    return len(response_text or "") // 4
+
 async def get_live_model_from_vllm(url: str, force_refresh: bool = False) -> str:
     now = time.time()
     if not force_refresh and url in _dynamic_model_cache:
@@ -220,7 +252,7 @@ async def call_prism_agent(
         except Exception:
             response_text = resp.text.strip()
         elapsed_ms = int((time.monotonic() - start) * 1000)
-        tokens = len(response_text) // 4
+        tokens = _extract_token_usage(resp, response_text)
         
         try:
             publish_event(TelemetryEvent(
