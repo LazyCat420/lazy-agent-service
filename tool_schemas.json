@@ -1437,6 +1437,55 @@
     ]
   },
   {
+    "name": "get_reddit_trending_stocks",
+    "description": "Scan the retail-trading subreddits (WSB, r/stocks, r/options, ...) and return the most-mentioned stock tickers right now, ranked by weighted mention count, each with a bull/bear sentiment read and its top post. Use for a market-wide 'what is retail talking about' pulse or to surface candidate tickers. Tickers are validated against yfinance so junk like 'YOLO'/'CEO' is filtered out. This makes many outbound requests and can take 30-120s; keep 'per_subreddit' modest.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Max number of ranked tickers to return (1-50). Default 50."
+        },
+        "subreddits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional subreddit names (without 'r/') to scan. Defaults to the 9 main retail-trading subreddits."
+        },
+        "per_subreddit": {
+          "type": "integer",
+          "description": "How many 'rising' posts to pull per subreddit (1-25). Default 8."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "reddit",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "reddit",
+      "sentiment",
+      "trending",
+      "social",
+      "tickers"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "research",
+      "sentiment",
+      "social"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_junior_analyst"
+    ]
+  },
+  {
     "name": "get_sec_filings",
     "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
     "parameters": {
@@ -1863,6 +1912,53 @@
     "agents": [
       "tournament_pitch",
       "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "run_tool_chain",
+    "description": "Run a named, pre-defined sequence of tools in ONE call instead of calling each tool separately (saves turns/tokens). Pass 'chain' (the chain name) and 'params' (its inputs, e.g. {\"ticker\": \"NVDA\"}). Omit 'chain' or pass an unknown name to get the catalog of available chains and their params. Available: ticker_deep_dive (market data + indicators + news + fundamentals for a ticker), chart_with_context (chart + market data + news; params ticker, overlays), news_and_fundamentals (news + fundamentals for a ticker), morning_market_pulse (Reddit-trending tickers + market map; no params). Each underlying tool is also callable on its own.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "chain": {
+          "type": "string",
+          "enum": [
+            "ticker_deep_dive",
+            "chart_with_context",
+            "news_and_fundamentals",
+            "morning_market_pulse"
+          ],
+          "description": "Name of the chain to run. Omit to list available chains."
+        },
+        "params": {
+          "type": "object",
+          "description": "Inputs for the chain (e.g. {\"ticker\": \"AAPL\"}). See each chain's params."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "chain",
+      "workflow",
+      "bundle",
+      "orchestration"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "chain",
+      "orchestration"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_junior_analyst",
+      "v3_fundamental_analyst"
     ]
   },
   {

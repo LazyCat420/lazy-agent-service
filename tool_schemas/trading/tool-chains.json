@@ -1,0 +1,49 @@
+[
+  {
+    "name": "run_tool_chain",
+    "description": "Run a named, pre-defined sequence of tools in ONE call instead of calling each tool separately (saves turns/tokens). Pass 'chain' (the chain name) and 'params' (its inputs, e.g. {\"ticker\": \"NVDA\"}). Omit 'chain' or pass an unknown name to get the catalog of available chains and their params. Available: ticker_deep_dive (market data + indicators + news + fundamentals for a ticker), chart_with_context (chart + market data + news; params ticker, overlays), news_and_fundamentals (news + fundamentals for a ticker), morning_market_pulse (Reddit-trending tickers + market map; no params). Each underlying tool is also callable on its own.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "chain": {
+          "type": "string",
+          "enum": [
+            "ticker_deep_dive",
+            "chart_with_context",
+            "news_and_fundamentals",
+            "morning_market_pulse"
+          ],
+          "description": "Name of the chain to run. Omit to list available chains."
+        },
+        "params": {
+          "type": "object",
+          "description": "Inputs for the chain (e.g. {\"ticker\": \"AAPL\"}). See each chain's params."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "chain",
+      "workflow",
+      "bundle",
+      "orchestration"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "chain",
+      "orchestration"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_junior_analyst",
+      "v3_fundamental_analyst"
+    ]
+  }
+]

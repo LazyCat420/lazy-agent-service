@@ -35,5 +35,54 @@
       "v3_junior_analyst",
       "v3_worker_news"
     ]
+  },
+  {
+    "name": "get_reddit_trending_stocks",
+    "description": "Scan the retail-trading subreddits (WSB, r/stocks, r/options, ...) and return the most-mentioned stock tickers right now, ranked by weighted mention count, each with a bull/bear sentiment read and its top post. Use for a market-wide 'what is retail talking about' pulse or to surface candidate tickers. Tickers are validated against yfinance so junk like 'YOLO'/'CEO' is filtered out. This makes many outbound requests and can take 30-120s; keep 'per_subreddit' modest.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Max number of ranked tickers to return (1-50). Default 50."
+        },
+        "subreddits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional subreddit names (without 'r/') to scan. Defaults to the 9 main retail-trading subreddits."
+        },
+        "per_subreddit": {
+          "type": "integer",
+          "description": "How many 'rising' posts to pull per subreddit (1-25). Default 8."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "reddit",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "reddit",
+      "sentiment",
+      "trending",
+      "social",
+      "tickers"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "research",
+      "sentiment",
+      "social"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_junior_analyst"
+    ]
   }
 ]
