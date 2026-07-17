@@ -135,19 +135,56 @@ async def run_v3_pipeline(
     except Exception as e:
         logger.warning("[V3] %s: macro snapshot unavailable (non-fatal): %s", ticker, e)
 
+    # Autoresearch directives — global ones plus any targeting this ticker.
+    # The param existed since V3 launch but was never consumed; directives
+    # were write-only (janitor-deleted). Non-fatal, capped to stay small.
+    if active_directives:
+        try:
+            relevant = [
+                d for d in active_directives
+                if not d.get("target_ticker")
+                or (d.get("target_ticker") or "").upper() == ticker.upper()
+            ][:6]
+            if relevant:
+                lines = [
+                    f"- [{d.get('severity', 'info').upper()}] "
+                    f"({d.get('directive_type', 'note')}) {d.get('directive_text', '')}"
+                    for d in relevant
+                ]
+                desk.cycle_metadata["directives_context"] = "\n".join(lines)[:1500]
+                logger.info("[V3] %s: injected %d autoresearch directives",
+                            ticker, len(relevant))
+        except Exception as dir_err:
+            logger.debug("[V3] %s: directive injection failed (non-fatal): %s",
+                         ticker, dir_err)
+
     # Retrieve past cycle memory for this ticker (non-fatal)
     try:
         from app.services.memory.retriever import MemoryRetriever
         retrieval_results = MemoryRetriever.retrieve(ticker=ticker)
+        brief_text = ""
         if retrieval_results:
             memory_brief = MemoryRetriever.build_memory_brief(retrieval_results)
             brief_text = memory_brief.get("brief_text", "")
-            if brief_text:
-                desk.cycle_metadata["memory_context"] = brief_text
-                logger.info(
-                    "[V3] %s: Injected %d memory entries (%d chars)",
-                    ticker, len(retrieval_results), len(brief_text),
-                )
+
+        # Working-memory (reminders/facts/patterns) + hybrid semantic recall.
+        # These were previously injected only via the dead RLM prompt path and
+        # never reached live agents. Char-capped inside the builders.
+        addenda = ""
+        try:
+            from app.services.retrieval_context import build_memory_addenda
+            addenda = build_memory_addenda(ticker)
+        except Exception as addenda_err:
+            logger.debug("[V3] %s: memory addenda failed (non-fatal): %s",
+                         ticker, addenda_err)
+
+        combined = "\n\n".join(b for b in (brief_text, addenda) if b)
+        if combined:
+            desk.cycle_metadata["memory_context"] = combined
+            logger.info(
+                "[V3] %s: Injected memory context (%d canonical entries, %d chars total)",
+                ticker, len(retrieval_results or []), len(combined),
+            )
     except Exception as e:
         logger.warning("[V3] %s: Memory retrieval failed (non-fatal): %s", ticker, e)
 
@@ -435,6 +472,29 @@ async def run_v3_pipeline(
         elif sec == "final_decision":
             if _settings.DECISION_AGENT_ENABLED and not synth_dispatched:
                 synth_dispatched = True
+                # Deep decomposed recall for the synthesizer, only when the
+                # debate verdict is low-confidence/conflicted — one extra
+                # small LLM call + a few retrievals, justified exactly where
+                # signals disagree. Non-fatal; synthesizer runs without it.
+                try:
+                    verdict = desk.debate_judge or {}
+                    v_conf = int(verdict.get("confidence") or 0)
+                    if v_conf < 60:
+                        from app.services.retrieval_decomposed import build_decomposed_block
+                        deep_block = await build_decomposed_block(
+                            ticker,
+                            f"What are the key risks, catalysts, and conflicting "
+                            f"signals for {ticker}?",
+                        )
+                        if deep_block:
+                            desk.cycle_metadata["deep_retrieval_context"] = deep_block
+                            logger.info(
+                                "[V3] %s: deep retrieval injected for synthesizer "
+                                "(verdict confidence %d)", ticker, v_conf,
+                            )
+                except Exception as deep_err:
+                    logger.debug("[V3] %s: deep retrieval failed (non-fatal): %s",
+                                 ticker, deep_err)
                 _queue_agent("decision_synthesizer", decision_agent, parent="board_of_directors")
 
     def _queue_debate_phase():
@@ -734,7 +794,7 @@ async def run_v3_pipeline(
                 # era. The compressed desk context is exactly the blob whose
                 # section headers the judge's faithfulness markers match.
                 try:
-                    from app.services.rlm.rlm_audit import log_rlm_audit_trail
+                    from app.services.rlm_audit import log_rlm_audit_trail
                     _telemetry = desk.agent_telemetry or []
                     log_rlm_audit_trail(
                         cycle_id=cycle_id,
