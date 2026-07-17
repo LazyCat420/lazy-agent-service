@@ -19,6 +19,18 @@ TOOL_WHITELIST = [
     "get_finnhub_news",
     "lazy_web_search",
     "get_market_data",
+    # Research pipeline management: the gatekeeper owns the research budget —
+    # schedule/queue the best candidates, prune stale ones (governor-capped).
+    "get_upcoming_events",
+    "list_scheduled_research",
+    "schedule_research",
+    "request_research_now",
+    "cancel_scheduled_research",
+    # Sentinel: leave cheap "wake me if…" watch conditions so the desk keeps
+    # monitoring a name in code without burning a cycle until a trigger trips.
+    "set_watch",
+    "list_watches",
+    "clear_watch",
 ]
 
 SYSTEM_PROMPT = """You are the Portfolio Gatekeeper.

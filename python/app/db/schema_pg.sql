@@ -350,13 +350,14 @@ CREATE TABLE IF NOT EXISTS user_data (
 CREATE TABLE IF NOT EXISTS cycle_schedules (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
-    schedule_type   TEXT NOT NULL,         -- 'cron' | 'interval' | 'policy'
+    schedule_type   TEXT NOT NULL,         -- 'cron' | 'interval' | 'policy' | 'once'
     cron_expression TEXT,
     interval_hours  DOUBLE PRECISION,
-    schedule_scope  TEXT,                  -- portfolio, positions, watchlist_subset, sector, single_ticker
-    review_intent   TEXT,                  -- monitor, reassess, trade_window, event_followup, weekly_review, monthly_review
+    run_at          TIMESTAMPTZ,           -- 'once' only: exact fire time (event sniping)
+    schedule_scope  TEXT,                  -- single_ticker, watchlist_subset (bot); portfolio/positions/sector legacy
+    review_intent   TEXT,                  -- reassess, trade_window, event_followup (monitoring now = Sentinel set_watch)
     urgency         TEXT,                  -- low, medium, high, critical
-    earliest_window TEXT,                  -- next_pre_market, next_open, midday, pre_close, post_close, next_trading_day, next_week
+    earliest_window TEXT,                  -- LEGACY/retired coarse windows; bot 'once' schedules use run_at + 'exact_time'
     expiry_at       TIMESTAMP,
     reason_codes    TEXT,                  -- JSONB array
     confidence      INTEGER,
@@ -2402,3 +2403,42 @@ CREATE TABLE IF NOT EXISTS congress_members (
     state VARCHAR,
     collected_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ── Sentinel: agent-defined watch conditions (the "notes" left after analysis) ──
+-- The cheap background monitor evaluates these with pure code (no LLM); a trip
+-- enqueues a targeted, reason-tagged research cycle for that ticker. This is how
+-- the expensive agent stays OFF until a real, thesis-relevant condition is met.
+CREATE TABLE IF NOT EXISTS ticker_watches (
+    id                TEXT PRIMARY KEY,
+    ticker            TEXT NOT NULL,
+    bot_id            TEXT,
+    triggers          TEXT NOT NULL,          -- JSON array of typed trigger conditions
+    reason            TEXT,
+    thesis_summary    TEXT,
+    is_active         BOOLEAN DEFAULT TRUE,
+    cooldown_minutes  INTEGER DEFAULT 240,    -- min gap between fires (debounce)
+    fire_count        INTEGER DEFAULT 0,
+    last_fired_at     TIMESTAMPTZ,
+    last_evaluated_at TIMESTAMPTZ,
+    source_cycle_id   TEXT,
+    expiry_at         TIMESTAMPTZ,            -- hard TTL; deactivates when past
+    created_at        TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ticker_watches_active ON ticker_watches (is_active, ticker);
+
+-- Fire log: one row per trip. Powers the daily wake budget, the data_report
+-- "why you woke up" section, and auditability.
+CREATE TABLE IF NOT EXISTS sentinel_events (
+    id           TEXT PRIMARY KEY,
+    watch_id     TEXT,
+    ticker       TEXT NOT NULL,
+    trigger_type TEXT,
+    detail       TEXT,                        -- human-readable "why it woke"
+    trigger_json TEXT,
+    value        DOUBLE PRECISION,
+    fired_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    cycle_id     TEXT,
+    consumed_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_sentinel_events_ticker ON sentinel_events (ticker, fired_at DESC);

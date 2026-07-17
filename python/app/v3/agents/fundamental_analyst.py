@@ -26,9 +26,17 @@ TOOL_WHITELIST = [
     "get_institutional_holdings",
     "lazy_web_search",
     "scrape_url",
+    # Named tool chains — e.g. ticker_deep_dive / news_and_fundamentals in one call.
+    "run_tool_chain",
     "whiteboard_read",
     "whiteboard_write",
     "request_peer_analysis",
+    # Research sniping: earnings dates are this desk's home turf — schedule a
+    # one-shot research cycle to land on the fresh numbers (governor-capped).
+    "get_upcoming_events",
+    "list_scheduled_research",
+    "schedule_research",
+    "request_research_now",
 ]
 
 

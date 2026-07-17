@@ -18,8 +18,17 @@ TOOL_WHITELIST = [
     "scrape_url",
     "get_market_data",
     "get_institutional_holdings",
+    # Retail social pulse: what tickers Reddit is buzzing on, with sentiment.
+    "get_reddit_trending_stocks",
+    # Named tool chains — one call runs a bundled recon sequence.
+    "run_tool_chain",
     "whiteboard_write",
     "whiteboard_read",
+    # Research sniping: spot an upcoming catalyst during recon and schedule a
+    # one-shot research cycle to land right after it (governor-capped).
+    "get_upcoming_events",
+    "list_scheduled_research",
+    "schedule_research",
 ]
 
 SYSTEM_PROMPT = """You are the Junior Analyst at a quantitative trading firm.

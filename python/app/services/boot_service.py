@@ -54,6 +54,17 @@ class BootService:
         cls._run_stage("Auto-Register MCP Servers", cls._register_mcp_servers, required=False)
         cls._run_stage("Register V3 Prism Agents", cls._register_v3_agents, required=False)
 
+        # --- Absorbed scraper: shared httpx session ---
+        # The folded-in scraper engines/collectors (app.scraper) share one httpx
+        # client. Initialize it here for proxy/UA config + clean teardown; the
+        # session self-initializes lazily on first use if this stage is skipped.
+        try:
+            from app.scraper.core.session_manager import session_manager
+            await session_manager.startup()
+            logger.info("[Boot] Scraper shared httpx session initialized.")
+        except Exception as e:
+            logger.warning("[Boot] Scraper session init failed (non-fatal, will lazy-init): %s", e)
+
         # --- Background Tasks ---
         # Spawns a background, non-blocking task for long-running startup data refreshes
         asyncio.create_task(cls._start_background_tasks())
@@ -121,6 +132,14 @@ class BootService:
             await llm.close()
         except Exception as e:
             logger.warning("[Boot] vLLM client close: %s", e)
+
+        # Close the absorbed scraper's shared httpx session
+        try:
+            from app.scraper.core.session_manager import session_manager
+
+            await session_manager.shutdown()
+        except Exception as e:
+            logger.warning("[Boot] Scraper session close: %s", e)
 
         # Stop audit worker
         try:
@@ -262,7 +281,14 @@ class BootService:
 
     @classmethod
     def _start_scheduler(cls):
-        pass
+        # Revive the APScheduler engine. This runs inside the async boot
+        # sequence (BootService.startup is awaited from cycle_main.run_worker),
+        # so the AsyncIOScheduler has a live event loop to attach to. Only the
+        # cycle backend process calls BootService.startup(), so the scheduler
+        # runs in exactly one process — the same one that consumes the
+        # v3_system_commands queue it enqueues into.
+        from app.services.cycle_scheduler import SchedulerService
+        SchedulerService.start()
 
     @classmethod
     def _warmup_models(cls):

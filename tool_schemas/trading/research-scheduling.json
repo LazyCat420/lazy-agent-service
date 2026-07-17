@@ -144,7 +144,7 @@
   },
   {
     "name": "schedule_research",
-    "description": "Schedule a ONE-SHOT research cycle (collect + analyze, NEVER trades) sniped to a specific DATED event. Use this ONLY for a known calendar catalyst (earnings, a Fed decision). For ongoing 'keep an eye on this ticker' monitoring, DO NOT schedule \u2014 use set_watch instead (it watches price/news/etc. in cheap background code and wakes a cycle only when a condition trips). `when`: OMIT it to auto-snipe the ticker's next earnings (single ticker; the governor resolves the real date/time for you), OR pass an exact ISO-8601 UTC datetime (e.g. '2026-07-21T21:30:00Z') for a non-earnings event. Fires ONCE then auto-deactivates. Coarse market windows and 'monitor' are rejected \u2014 use set_watch. Governor enforces max 5 active, 10/day, per-ticker dedupe, 4h cooldown; a vague reason is rejected.",
+    "description": "Schedule a ONE-SHOT research cycle (collect + analyze, NEVER trades) sniped to a specific DATED event. Use this ONLY for a known calendar catalyst (earnings, a Fed decision). For ongoing 'keep an eye on this ticker' monitoring, DO NOT schedule \u2014 use watch_ticker instead (it watches price/news/etc. in cheap background code and wakes a cycle only when a condition trips). `when`: OMIT it to auto-snipe the ticker's next earnings (single ticker; the governor resolves the real date/time for you), OR pass an exact ISO-8601 UTC datetime (e.g. '2026-07-21T21:30:00Z') for a non-earnings event. Fires ONCE then auto-deactivates. Coarse market windows and 'monitor' are rejected \u2014 use watch_ticker. Governor enforces max 5 active, 10/day, per-ticker dedupe, 4h cooldown; a vague reason is rejected.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -170,7 +170,7 @@
             "trade_window",
             "event_followup"
           ],
-          "description": "Why this research exists. Default event_followup. (For monitoring, use set_watch.)"
+          "description": "Why this research exists. Default event_followup. (For monitoring, use watch_ticker.)"
         },
         "urgency": {
           "type": "string",

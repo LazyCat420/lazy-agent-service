@@ -984,6 +984,79 @@
     ]
   },
   {
+    "name": "cancel_scheduled_research",
+    "description": "Cancel a bot-created research schedule (sch-bot-* id from list_scheduled_research) that is no longer worth running \u2014 e.g. the thesis changed or the event passed. Frees a slot under the 5-active cap.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "schedule_id": {
+          "type": "string",
+          "description": "The sch-bot-* schedule id."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why it is no longer needed."
+        }
+      },
+      "required": [
+        "schedule_id"
+      ]
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_portfolio_manager"
+    ]
+  },
+  {
+    "name": "clear_watch",
+    "description": "Deactivate a Sentinel watch by watch_id, or all active watches for a ticker \u2014 use when the thesis changed and the old triggers no longer apply.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "watch_id": {
+          "type": "string",
+          "description": "The watch-* id to clear."
+        },
+        "ticker": {
+          "type": "string",
+          "description": "Or clear all active watches for this ticker."
+        }
+      }
+    },
+    "tier": 1,
+    "source": "sentinel",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "sentinel",
+      "watch",
+      "monitor"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "sentinel",
+      "monitoring"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_portfolio_manager"
+    ]
+  },
+  {
     "name": "escalate_to_pm",
     "description": "Immediately escalate the cycle to the Board of Directors and Portfolio Manager, bypass standard research loops, and submit the reasoning/findings.",
     "parameters": {
@@ -1402,6 +1475,55 @@
     ]
   },
   {
+    "name": "get_reddit_trending_stocks",
+    "description": "Scan the retail-trading subreddits (WSB, r/stocks, r/options, ...) and return the most-mentioned stock tickers right now, ranked by weighted mention count, each with a bull/bear sentiment read and its top post. Use for a market-wide 'what is retail talking about' pulse or to surface candidate tickers. Tickers are validated against yfinance so junk like 'YOLO'/'CEO' is filtered out. This makes many outbound requests and can take 30-120s; keep 'per_subreddit' modest.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Max number of ranked tickers to return (1-50). Default 50."
+        },
+        "subreddits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional subreddit names (without 'r/') to scan. Defaults to the 9 main retail-trading subreddits."
+        },
+        "per_subreddit": {
+          "type": "integer",
+          "description": "How many 'rising' posts to pull per subreddit (1-25). Default 8."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "reddit",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "reddit",
+      "sentiment",
+      "trending",
+      "social",
+      "tickers"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "research",
+      "sentiment",
+      "social"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_junior_analyst"
+    ]
+  },
+  {
     "name": "get_sec_filings",
     "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
     "parameters": {
@@ -1502,6 +1624,39 @@
     "agents": []
   },
   {
+    "name": "get_upcoming_events",
+    "description": "Get upcoming scheduled events for a ticker over the next 90 days \u2014 currently earnings dates with report timing (bmo = before market open, amc = after market close) and EPS/revenue estimates. Use this to time-snipe research: e.g. earnings on 2026-07-21 amc \u2192 schedule_research with when='2026-07-21T21:30:00Z' so the analysis runs on the fresh numbers, not before them.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager"
+    ]
+  },
+  {
     "name": "lazy_web_search",
     "description": "Search the web for information using a controlled, truncated search engine.",
     "parameters": {
@@ -1536,6 +1691,65 @@
       "v3_portfolio_manager",
       "v3_regime_engine",
       "v3_worker_news"
+    ]
+  },
+  {
+    "name": "list_scheduled_research",
+    "description": "List all pending/scheduled bot research (active schedules + queued immediate research) plus tickers researched in the last 48h and the governor's limits. ALWAYS check this before requesting or scheduling research \u2014 duplicates are rejected.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager"
+    ]
+  },
+  {
+    "name": "list_watches",
+    "description": "List active Sentinel watches (optionally for one ticker) \u2014 their triggers, fire counts, and expiry. Check before setting a new watch.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Optional ticker filter."
+        }
+      }
+    },
+    "tier": 1,
+    "source": "sentinel",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "sentinel",
+      "watch",
+      "monitor"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "sentinel",
+      "monitoring"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_portfolio_manager"
     ]
   },
   {
@@ -1638,6 +1852,56 @@
     "agents": []
   },
   {
+    "name": "request_research_now",
+    "description": "Queue an immediate research-only cycle (collect + analyze, NEVER trades) on up to 5 tickers. Use ONLY when a catalyst already hit and the current data is insufficient. Governor enforces: max 2 queued at once, 4h per-ticker cooldown, dedupe against scheduled research. Be picky \u2014 routine curiosity will be rejected; check list_scheduled_research first.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tickers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "1-5 ticker symbols, highest conviction only."
+        },
+        "reason": {
+          "type": "string",
+          "description": "The specific catalyst/question this research must answer."
+        },
+        "urgency": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "critical bypasses the recency cooldown \u2014 reserve for genuine breaking catalysts."
+        }
+      },
+      "required": [
+        "tickers",
+        "reason"
+      ]
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_portfolio_manager"
+    ]
+  },
+  {
     "name": "run_backtest",
     "description": "Backtest a named equation from the library over historical price data. Returns performance metrics: PnL, win rate, max drawdown, Sharpe ratio, and trade list.",
     "parameters": {
@@ -1720,6 +1984,53 @@
     "agents": [
       "tournament_pitch",
       "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "run_tool_chain",
+    "description": "Run a named, pre-defined sequence of tools in ONE call instead of calling each tool separately (saves turns/tokens). Pass 'chain' (the chain name) and 'params' (its inputs, e.g. {\"ticker\": \"NVDA\"}). Omit 'chain' or pass an unknown name to get the catalog of available chains and their params. Available: ticker_deep_dive (market data + indicators + news + fundamentals for a ticker), chart_with_context (chart + market data + news; params ticker, overlays), news_and_fundamentals (news + fundamentals for a ticker), morning_market_pulse (Reddit-trending tickers + market map; no params). Each underlying tool is also callable on its own.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "chain": {
+          "type": "string",
+          "enum": [
+            "ticker_deep_dive",
+            "chart_with_context",
+            "news_and_fundamentals",
+            "morning_market_pulse"
+          ],
+          "description": "Name of the chain to run. Omit to list available chains."
+        },
+        "params": {
+          "type": "object",
+          "description": "Inputs for the chain (e.g. {\"ticker\": \"AAPL\"}). See each chain's params."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "chain",
+      "workflow",
+      "bundle",
+      "orchestration"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "chain",
+      "orchestration"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_junior_analyst",
+      "v3_fundamental_analyst"
     ]
   },
   {
@@ -1806,6 +2117,76 @@
     "owner_app": "trading",
     "agents": [
       "v3_quant_analyst"
+    ]
+  },
+  {
+    "name": "schedule_research",
+    "description": "Schedule a ONE-SHOT research cycle (collect + analyze, NEVER trades) sniped to a specific DATED event. Use this ONLY for a known calendar catalyst (earnings, a Fed decision). For ongoing 'keep an eye on this ticker' monitoring, DO NOT schedule \u2014 use set_watch instead (it watches price/news/etc. in cheap background code and wakes a cycle only when a condition trips). `when`: OMIT it to auto-snipe the ticker's next earnings (single ticker; the governor resolves the real date/time for you), OR pass an exact ISO-8601 UTC datetime (e.g. '2026-07-21T21:30:00Z') for a non-earnings event. Fires ONCE then auto-deactivates. Coarse market windows and 'monitor' are rejected \u2014 use set_watch. Governor enforces max 5 active, 10/day, per-ticker dedupe, 4h cooldown; a vague reason is rejected.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tickers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "1-5 tickers. Omit `when` only for a SINGLE ticker (earnings auto-snipe)."
+        },
+        "when": {
+          "type": "string",
+          "description": "Omit to auto-snipe next earnings (single ticker), or an ISO-8601 UTC datetime for a dated event."
+        },
+        "reason": {
+          "type": "string",
+          "description": "The specific event/catalyst being sniped and the question to answer (\u226510 chars)."
+        },
+        "review_intent": {
+          "type": "string",
+          "enum": [
+            "reassess",
+            "trade_window",
+            "event_followup"
+          ],
+          "description": "Why this research exists. Default event_followup. (For monitoring, use set_watch.)"
+        },
+        "urgency": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Short catalyst codes, e.g. ['earnings_2026-07-21', 'guidance_cut']."
+        }
+      },
+      "required": [
+        "tickers",
+        "reason"
+      ]
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager"
     ]
   },
   {
@@ -1913,6 +2294,69 @@
     ],
     "owner_app": "trading",
     "agents": []
+  },
+  {
+    "name": "set_watch",
+    "description": "Leave a 'wake me if\u2026' note on a ticker so the expensive agent stays OFF until a real, thesis-relevant condition trips \u2014 a cheap background monitor checks it in code (no LLM) and only then re-runs a targeted cycle. Call this at the END of analysing a ticker with the conditions that would change your view. Supersedes any existing watch for the ticker (re-arm). Trigger types: price_above{level}, price_below{level} (target / invalidation levels); pct_change{ref,pct,direction} (moved pct off a reference price; direction up|down|any); rsi{op,value} (op gt|lt); volume_spike{mult} (\u00d7 20d avg); news{categories} (earnings|guidance|downgrade|upgrade|mna|litigation|insider); staleness{max_days} (re-check backstop). Always include an invalidation level and a staleness backstop.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The ticker to watch."
+        },
+        "triggers": {
+          "type": "array",
+          "description": "List of trigger objects, e.g. [{\"type\":\"price_below\",\"level\":145.5},{\"type\":\"staleness\",\"max_days\":10}].",
+          "items": {
+            "type": "object"
+          }
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why you're watching (the thesis hook)."
+        },
+        "thesis_summary": {
+          "type": "string",
+          "description": "Optional 1-2 line current thesis to seed the wake."
+        },
+        "cooldown_minutes": {
+          "type": "integer",
+          "description": "Min minutes between wakes (debounce). Default 240."
+        },
+        "expiry_days": {
+          "type": "integer",
+          "description": "Auto-expire the watch after N days. Default 30."
+        }
+      },
+      "required": [
+        "ticker",
+        "triggers"
+      ]
+    },
+    "tier": 1,
+    "source": "sentinel",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "sentinel",
+      "watch",
+      "monitor",
+      "alert",
+      "trigger"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "sentinel",
+      "monitoring"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_portfolio_manager"
+    ]
   },
   {
     "name": "whiteboard_annotate",

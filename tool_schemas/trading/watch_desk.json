@@ -1,7 +1,7 @@
 [
   {
-    "name": "set_watch",
-    "description": "Leave a 'wake me if…' note on a ticker so the expensive agent stays OFF until a real, thesis-relevant condition trips — a cheap background monitor checks it in code (no LLM) and only then re-runs a targeted cycle. Call this at the END of analysing a ticker with the conditions that would change your view. Supersedes any existing watch for the ticker (re-arm). Trigger types: price_above{level}, price_below{level} (target / invalidation levels); pct_change{ref,pct,direction} (moved pct off a reference price; direction up|down|any); rsi{op,value} (op gt|lt); volume_spike{mult} (× 20d avg); news{categories} (earnings|guidance|downgrade|upgrade|mna|litigation|insider); staleness{max_days} (re-check backstop). Always include an invalidation level and a staleness backstop.",
+    "name": "watch_ticker",
+    "description": "Leave a 'wake me if…' note on a ticker so the expensive agent stays OFF until a real, thesis-relevant condition trips — the Watch Desk checks it in code (no LLM) and only then re-runs a targeted cycle. Call this at the END of analysing a ticker with the conditions that would change your view. Supersedes any existing watch for the ticker (re-arm). Trigger types: price_above{level}, price_below{level} (target / invalidation levels); pct_change{ref,pct,direction} (moved pct off a reference price; direction up|down|any); rsi{op,value} (op gt|lt); volume_spike{mult} (× 20d avg); news{categories} (earnings|guidance|downgrade|upgrade|mna|litigation|insider); staleness{max_days} (re-check backstop). Always include an invalidation level and a staleness backstop.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -19,20 +19,20 @@
       "required": ["ticker", "triggers"]
     },
     "tier": 1,
-    "source": "sentinel",
+    "source": "watch_desk",
     "permission": "write",
     "fallback_only": false,
     "concurrency_safe": true,
     "max_result_chars": 50000,
-    "tags": ["sentinel", "watch", "monitor", "alert", "trigger"],
+    "tags": ["watch-desk", "watch", "monitor", "alert", "trigger"],
     "domain": "Research & Intelligence",
-    "labels": ["sentinel", "monitoring"],
+    "labels": ["watch-desk", "monitoring"],
     "owner_app": "trading",
     "agents": ["user_chat", "v3_portfolio_manager"]
   },
   {
     "name": "list_watches",
-    "description": "List active Sentinel watches (optionally for one ticker) — their triggers, fire counts, and expiry. Check before setting a new watch.",
+    "description": "List active Watch Desk watches (optionally for one ticker) — their triggers, fire counts, and expiry. Check before setting a new watch.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -40,20 +40,20 @@
       }
     },
     "tier": 1,
-    "source": "sentinel",
+    "source": "watch_desk",
     "permission": "read_only",
     "fallback_only": false,
     "concurrency_safe": true,
     "max_result_chars": 50000,
-    "tags": ["sentinel", "watch", "monitor"],
+    "tags": ["watch-desk", "watch", "monitor"],
     "domain": "Research & Intelligence",
-    "labels": ["sentinel", "monitoring"],
+    "labels": ["watch-desk", "monitoring"],
     "owner_app": "trading",
     "agents": ["user_chat", "v3_portfolio_manager"]
   },
   {
     "name": "clear_watch",
-    "description": "Deactivate a Sentinel watch by watch_id, or all active watches for a ticker — use when the thesis changed and the old triggers no longer apply.",
+    "description": "Deactivate a Watch Desk watch by watch_id, or all active watches for a ticker — use when the thesis changed and the old triggers no longer apply.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -62,14 +62,14 @@
       }
     },
     "tier": 1,
-    "source": "sentinel",
+    "source": "watch_desk",
     "permission": "write",
     "fallback_only": false,
     "concurrency_safe": true,
     "max_result_chars": 50000,
-    "tags": ["sentinel", "watch", "monitor"],
+    "tags": ["watch-desk", "watch", "monitor"],
     "domain": "Research & Intelligence",
-    "labels": ["sentinel", "monitoring"],
+    "labels": ["watch-desk", "monitoring"],
     "owner_app": "trading",
     "agents": ["user_chat", "v3_portfolio_manager"]
   }
