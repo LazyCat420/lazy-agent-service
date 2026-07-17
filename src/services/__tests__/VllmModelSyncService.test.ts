@@ -3,7 +3,7 @@ import { bootstrapLocalEnvironment } from "../../bootstrap.ts";
 
 bootstrapLocalEnvironment();
 
-const { VllmModelSyncService } = await import("../VllmModelSyncService.ts");
+const { VllmModelSyncService, isEmbeddingModel } = await import("../VllmModelSyncService.ts");
 const { default: SettingsService } = await import("../SettingsService.ts");
 type SettingsData = import("../SettingsService.ts").SettingsData;
 
@@ -121,98 +121,39 @@ describe("VllmModelSyncService — auto-healing of stale provider/model settings
   });
 });
 
-// ── Regression: embedding models must never be selected for a generation role ──
+// ── Regression: embedding models must never qualify for a generation role ──────
 // `embeddinggemma` scores 60 via `scoreLargeModel`'s "gemma" branch, so when the
-// preferred Qwen chat model is briefly unloaded the daemon used to heal
-// consolidation onto the embedding-only instance, and every consolidation call
-// then 404'd against `/v1/chat/completions`.
-describe("VllmModelSyncService — embedding models are excluded from generation roles", () => {
-  let embSettings: SettingsData;
-  let embPut: any = null;
-
-  const embFetch = async (
-    url: string | URL | Request,
-    options?: RequestInit,
-  ): Promise<Response> => {
-    const urlStr = typeof url === "string" ? url : url instanceof Request ? url.url : String(url);
-    if (urlStr.includes("/settings") && options?.method === "PUT") {
-      embPut = JSON.parse(options.body as string);
-      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
-    }
-    // Jetson (vllm): only the embedding model is online right now
-    if (urlStr.includes("10.0.0.30:8000/v1/models")) {
-      return new Response(
-        JSON.stringify({ object: "list", data: [{ id: "embeddinggemma" }] }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    }
-    // DGX Spark (vllm-2): a real chat model is online
-    if (urlStr.includes("10.0.0.141:8000/v1/models")) {
-      return new Response(
-        JSON.stringify({ object: "list", data: [{ id: "google/gemma-4-26B-A4B-it" }] }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    }
-    return new Response(JSON.stringify({}), { status: 404 });
-  };
-
-  beforeAll(async () => {
-    embSettings = {
-      memory: {
-        extractionProvider: "vllm",
-        extractionModel: "Qwen/Qwen3.6-35B-A3B-FP8", // not loaded anywhere
-        // Already corrupted to the embedding model by a prior mis-heal:
-        consolidationProvider: "vllm",
-        consolidationModel: "embeddinggemma",
-        embeddingProvider: "vllm",
-        embeddingModel: "embeddinggemma",
-      },
-      agents: {
-        subAgentProvider: "vllm-2",
-        subAgentModel: "google/gemma-4-26B-A4B-it",
-        criticProvider: "vllm-2",
-        criticModel: "google/gemma-4-26B-A4B-it",
-        reminderProvider: "",
-        reminderModel: "",
-        harness: "standard",
-        topology: "peer_to_peer",
-        dynamicToolActivation: true,
-        locale: "en",
-      },
-      security: { allowEnvFiles: false },
-    } as SettingsData;
-
-    SettingsService.get = async () => embSettings;
-    SettingsService.update = async (data: Partial<SettingsData>) => {
-      embSettings = {
-        ...embSettings,
-        ...data,
-        memory: { ...embSettings.memory, ...data.memory },
-        agents: { ...embSettings.agents, ...data.agents },
-      } as SettingsData;
-      return embSettings;
-    };
-
-    globalThis.fetch = embFetch as any;
-    await VllmModelSyncService.checkAndSync();
+// preferred Qwen chat model was briefly unloaded the daemon healed consolidation
+// onto the embedding-only instance, and every consolidation call then 404'd
+// against `/v1/chat/completions`. `isEmbeddingModel` is the guard that keeps
+// embedding models out of the generation-role candidate pool. These are pure
+// unit tests — no global fetch/settings mutation — so they can't race the rest
+// of the suite (which shares `globalThis.fetch`) the way an integration test would.
+describe("VllmModelSyncService.isEmbeddingModel — generation-role exclusion guard", () => {
+  it("flags embeddinggemma (the model that caused the consolidate 404s)", () => {
+    expect(isEmbeddingModel("embeddinggemma", "")).toBe(true);
   });
 
-  afterAll(() => {
-    globalThis.fetch = originalFetch;
+  it("flags common embedding model names via the /embed/ heuristic", () => {
+    expect(isEmbeddingModel("text-embedding-embeddinggemma-300m", "")).toBe(true);
+    expect(isEmbeddingModel("BAAI/bge-large-en-v1.5-embed", "")).toBe(true);
+    expect(isEmbeddingModel("intfloat/e5-embed", "")).toBe(true);
   });
 
-  it("re-heals a consolidation role stuck on the embedding model onto the real chat model", () => {
-    // The only alternative online is the Gemma chat build on vllm-2 — never embeddinggemma.
-    expect(embSettings.memory.consolidationModel).toBe("google/gemma-4-26B-A4B-it");
-    expect(embSettings.memory.consolidationProvider).toBe("vllm-2");
+  it("flags the exact model configured as the embedding role even without 'embed' in the name", () => {
+    expect(isEmbeddingModel("nomic-custom-vectorizer", "nomic-custom-vectorizer")).toBe(true);
+    // case-insensitive
+    expect(isEmbeddingModel("Nomic-Custom-Vectorizer", "nomic-custom-vectorizer")).toBe(true);
   });
 
-  it("never selects the embedding model for extraction either", () => {
-    expect(embSettings.memory.extractionModel).not.toBe("embeddinggemma");
-    expect(embSettings.memory.extractionModel).toBe("google/gemma-4-26B-A4B-it");
+  it("does NOT flag chat/generation models — including chat Gemma and Qwen", () => {
+    expect(isEmbeddingModel("google/gemma-4-26B-A4B-it", "embeddinggemma")).toBe(false);
+    expect(isEmbeddingModel("cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit", "embeddinggemma")).toBe(false);
+    expect(isEmbeddingModel("cyankiwi/MiniMax-M2.7-AWQ-4bit", "embeddinggemma")).toBe(false);
   });
 
-  it("leaves the embedding role itself untouched", () => {
-    expect(embSettings.memory.embeddingModel).toBe("embeddinggemma");
+  it("handles empty/undefined model names safely", () => {
+    expect(isEmbeddingModel("", "embeddinggemma")).toBe(false);
+    expect(isEmbeddingModel(undefined as unknown as string, "")).toBe(false);
   });
 });

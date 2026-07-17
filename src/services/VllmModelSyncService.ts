@@ -21,7 +21,7 @@ function isVllmProvider(provider: string): boolean {
  * the daemon happily heals a generation role onto the embedding instance
  * whenever the preferred chat model is briefly unloaded.
  */
-function isEmbeddingModel(
+export function isEmbeddingModel(
   modelName: string,
   configuredEmbeddingModel: string,
 ): boolean {
