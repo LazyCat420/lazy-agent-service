@@ -2,6 +2,45 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Per-block cap for memory context (~4 chars/token → ~1.5k tokens each) so the
+# brain-graph + working-memory blocks combined can't balloon the context budget.
+_MEMORY_BLOCK_MAX_CHARS = 6000
+
+
+def _cap(text: str, max_chars: int = _MEMORY_BLOCK_MAX_CHARS) -> str:
+    """Truncate a memory block to a char budget, appending an elision marker."""
+    if text and len(text) > max_chars:
+        return text[:max_chars].rstrip() + "\n… [truncated]"
+    return text
+
+
+def _build_retrieved_context(ticker: str) -> str:
+    """Semantic recall over the embedded corpus (news / analysis / graph-claims)
+    via the hybrid retriever (dense + BM25 + RRF). Returns an empty string when
+    nothing relevant is found or on any failure — always non-fatal."""
+    try:
+        from app.services.retrieval_hybrid import hybrid_retriever
+
+        chunks = hybrid_retriever.retrieve(
+            ticker, f"{ticker} latest analysis news catalysts outlook", top_k=6
+        )
+    except Exception as e:
+        logger.debug("[RLM] Retrieved context failed (non-fatal): %s", e)
+        return ""
+
+    if not chunks:
+        return ""
+
+    lines = [
+        "========================================",
+        f"## Retrieved Context [{ticker}] (semantic recall)",
+        "========================================",
+    ]
+    for c in chunks:
+        snippet = (c.content or "").strip().replace("\n", " ")[:280]
+        lines.append(f"- [{c.source_table} · {c.score:.2f}] {snippet}")
+    return "\n".join(lines)
+
 # ---------------------------------------------------------------------------
 # Compact system prompt -- custom tools FIRST, llm_query demoted to fallback
 # ---------------------------------------------------------------------------
@@ -74,37 +113,52 @@ def build_rlm_prompt(
     is_escalation: bool = False,
     system_prompt_override: str | None = None,
     bot_id: str = "",
+    retrieved_override: str | None = None,
 ) -> str:
-    """Builds the complete RLM system prompt including memory, skills, and portfolio."""
+    """Builds the complete RLM system prompt including memory, skills, and portfolio.
+
+    retrieved_override: a precomputed "Retrieved Context" block (e.g. the
+    decomposed-recall block built in the async escalation path). When provided,
+    it replaces the default single-query hybrid retrieval block.
+    """
     prompt_parts = []
 
-    memory_block = ""
+    # Memory context = brain-graph activation AND the 5-store working memory,
+    # combined (not either/or). Previously working memory was only a fallback
+    # that almost never ran, so prospective/procedural/semantic/episodic memory
+    # never reached the LLM. Each block is capped so the sum stays bounded.
+    memory_blocks: list[str] = []
     if ticker:
         try:
             from app.cognition.ontology.ontology_builder import BrainGraph
 
             graph_ctx = BrainGraph.get_activated_context(ticker)
-            if graph_ctx:
-                memory_block = graph_ctx
+            if graph_ctx and graph_ctx.strip():
+                memory_blocks.append(_cap(graph_ctx))
         except Exception as graph_err:
             logger.debug("[RLM] Graph context failed (non-fatal): %s", graph_err)
 
-    if not memory_block:
         try:
             from app.services.memory.working_memory import working_memory
 
-            memory_block = working_memory.get_context(ticker)
-        except ImportError:
-            pass
+            wm_ctx = working_memory.get_context(ticker)
+            # get_context always returns header scaffolding; only inject when it
+            # actually carries content (a "### " section = reminders/facts/etc).
+            if wm_ctx and "### " in wm_ctx:
+                memory_blocks.append(_cap(wm_ctx))
+        except Exception as wm_err:
+            logger.debug("[RLM] Working memory failed (non-fatal): %s", wm_err)
 
-    if not memory_block:
-        # Fallback: flat TradingMemory (Phase 1-3 compat)
-        from app.cognition.trading_memory import trading_memory
+    if memory_blocks:
+        prompt_parts.append("\n\n".join(memory_blocks))
 
-        memory_block = trading_memory.get_frozen_snapshot() or ""
-
-    if memory_block:
-        prompt_parts.append(memory_block)
+    # Semantic recall over the embedded corpus (Phase 3 — needs embedding_ingest
+    # to have populated news/analysis/graph_claims). Capped + non-fatal. When the
+    # caller precomputed a decomposed-recall block (escalation path), use that.
+    if ticker:
+        retrieved_block = retrieved_override or _build_retrieved_context(ticker)
+        if retrieved_block:
+            prompt_parts.append(_cap(retrieved_block))
 
     if ticker:
         from app.services.trading_skills import load_skill_for_ticker
