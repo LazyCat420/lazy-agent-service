@@ -4,7 +4,7 @@ import path from "node:path";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { PrismProxyService } from "../services/prism/PrismProxyService.ts";
-import { executePythonTool, routeLocalTool } from "../services/LocalToolRouter.ts";
+import { routeLocalTool } from "../services/LocalToolRouter.ts";
 
 const router = Router();
 
@@ -13,9 +13,6 @@ const dataDir = path.resolve("data");
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
-
-/** Python-bridge executor (moved to LocalToolRouter; re-exported for compat). */
-export const executeTool = executePythonTool;
 
 /**
  * Fire-and-forget telemetry reporting back to trading-service.

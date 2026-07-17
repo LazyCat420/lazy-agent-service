@@ -1,6 +1,4 @@
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import fs from "node:fs";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 
@@ -18,7 +16,7 @@ import logger from "../utils/logger.ts";
  *   music_player_*                       → music-player HTTP API
  *   *_widget tools                       → validated locally, forwarded to HTML-Notes /internal/execute
  *   html_notes_* / canvas_* → HTML-Notes /internal/execute
- *   everything else                      → trading-service Python bridge (execute_tool.py)
+ *   everything else                      → trading-service HTTP bridge (/api/v1/agent-tools/execute)
  */
 
 export interface LocalToolContext {
@@ -33,101 +31,6 @@ interface CacheEntry {
   expiresAt: number;
 }
 const cache = new Map<string, CacheEntry>();
-
-/**
- * Executes a tool by launching the execute_tool.py Python script.
- */
-export const executePythonTool = async (
-  toolName: string,
-  toolArguments: Record<string, unknown>,
-  context?: LocalToolContext
-): Promise<unknown> => {
-  const argumentsJson = JSON.stringify(toolArguments);
-  const cacheKey = crypto.createHash("sha256").update(toolName + argumentsJson).digest("hex");
-
-  // Check cache first
-  const cached = cache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    logger.info(JSON.stringify({ event: "cache_hit", toolName, args: toolArguments }));
-    return cached.result;
-  }
-
-  return new Promise((resolve, reject) => {
-    // Set up environment, stripping empty strings to avoid Pydantic conversion errors
-    const env: Record<string, string> = {};
-    for (const key of Object.keys(process.env)) {
-      const val = process.env[key];
-      if (val !== undefined && val !== "") {
-        env[key] = val;
-      }
-    }
-    env.PYTHONPATH = CONFIG.PYTHONPATH;
-    env.SKIP_TOOL_USAGE_LOG = "true";
-    env.USE_LAZY_TOOL_SERVICE = "false";
-    if (context?.agentName) env.AGENT_NAME = context.agentName;
-    if (context?.cycleId) env.CYCLE_ID = context.cycleId;
-    if (context?.ticker) env.TICKER = context.ticker;
-
-    const child = spawn(
-      CONFIG.PYTHON_INTERPRETER,
-      [CONFIG.PYTHON_EXEC_SCRIPT, toolName, argumentsJson],
-      {
-        cwd: CONFIG.PYTHON_CWD,
-        env
-      }
-    );
-
-    let stdout = "";
-    let stderr = "";
-    let isTimeout = false;
-
-    const timeoutId = setTimeout(() => {
-      isTimeout = true;
-      child.kill("SIGKILL");
-      reject(new Error(`Execution timed out after ${CONFIG.EXECUTION_TIMEOUT_MS} ms`));
-    }, CONFIG.EXECUTION_TIMEOUT_MS);
-
-    // Without this handler a spawn failure (e.g. missing interpreter) emits an
-    // unhandled 'error' event that crashes the entire Node process — this took
-    // down the container in a restart loop on 2026-07-14 (98 restarts).
-    child.on("error", (spawnError) => {
-      clearTimeout(timeoutId);
-      reject(new Error(`Failed to spawn python bridge (${CONFIG.PYTHON_INTERPRETER}): ${spawnError.message}`));
-    });
-
-    child.stdout.on("data", (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timeoutId);
-      if (isTimeout) return; // already rejected
-
-      if (code !== 0) {
-        reject(new Error(`Tool execution failed (exit code ${code}): ${stderr || stdout}`));
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(stdout.trim());
-        // Save to cache
-        cache.set(cacheKey, { result: parsed, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
-        resolve(parsed);
-      } catch (error: unknown) {
-        reject(new Error(`Invalid JSON output from tool: ${stdout}`));
-      }
-    });
-  });
-};
-
-// The container image is Node-only (no Python interpreter), so the spawn
-// bridge can never work there — python-bridge tools go to trading-service's
-// HTTP executor instead. Local dev keeps the spawn path (venv exists).
-const hasLocalPython = fs.existsSync(CONFIG.PYTHON_INTERPRETER);
 
 /**
  * Execute a python-bridge tool via trading-service's HTTP endpoint
@@ -463,8 +366,8 @@ export async function routeLocalTool(
     return forwardToHtmlNotes(tName, toolArguments);
   }
 
-  if (!hasLocalPython) {
-    return executeToolViaTradingService(tName, toolArguments, context);
-  }
-  return executePythonTool(tName, toolArguments, context);
+  // Python-bridge tools always go over HTTP to trading-service. The old
+  // subprocess bridge (spawn execute_tool.py) could never run in the Node-only
+  // container and was removed; one uniform path for prod and local dev.
+  return executeToolViaTradingService(tName, toolArguments, context);
 }
