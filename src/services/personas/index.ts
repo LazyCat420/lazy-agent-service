@@ -15,6 +15,9 @@ import { MeepoPersona } from "./MeepoPersona.ts";
 // identity + forced core tools. Add new client agents under ./clients/.
 import { HtmlNotesPersona } from "./clients/HtmlNotesPersona.ts";
 import { MusicResearchPersona } from "./clients/MusicResearchPersona.ts";
+// Universal (repo-agnostic) research agent — see DeepResearchPersona.ts. Any
+// caller names "DEEP_RESEARCH" and supplies the task + output contract.
+import { DeepResearchPersona } from "./clients/DeepResearchPersona.ts";
 
 export * from "./types.ts";
 export * from "./utils.ts";
@@ -32,4 +35,5 @@ export const BUILT_IN_PERSONAS = new Map<string, Persona>([
   [AGENT_IDS.MEEPO, MeepoPersona],
   [HtmlNotesPersona.id, HtmlNotesPersona],
   [MusicResearchPersona.id, MusicResearchPersona],
+  [DeepResearchPersona.id, DeepResearchPersona],
 ]);
