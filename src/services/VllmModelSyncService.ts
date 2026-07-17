@@ -9,6 +9,34 @@ function isVllmProvider(provider: string): boolean {
   return provider === "vllm" || provider.startsWith("vllm-");
 }
 
+/**
+ * Embedding models must never be auto-selected for a generation role
+ * (extraction / consolidation / critic / sub-agent). They only expose
+ * `/v1/embeddings`, so a chat-completion call against one 404s.
+ *
+ * Two signals: a name heuristic (`embeddinggemma`, `bge-*-embed`, `e5-embed`,
+ * `text-embedding-*` all contain "embed"), and the exact model configured as
+ * the embedding role in settings. `scoreLargeModel` otherwise scores
+ * "embeddinggemma" at 60 (via its "gemma" substring), so without this filter
+ * the daemon happily heals a generation role onto the embedding instance
+ * whenever the preferred chat model is briefly unloaded.
+ */
+function isEmbeddingModel(
+  modelName: string,
+  configuredEmbeddingModel: string,
+): boolean {
+  if (!modelName) return false;
+  const lower = modelName.toLowerCase();
+  if (/embed/.test(lower)) return true;
+  if (
+    configuredEmbeddingModel &&
+    lower === configuredEmbeddingModel.toLowerCase()
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function scoreLargeModel(modelName: string): number {
   const lower = modelName.toLowerCase();
   if (lower.includes("qwen3.6") || lower.includes("qwen3")) return 100;
@@ -98,6 +126,15 @@ export const VllmModelSyncService = {
         return;
       }
 
+      // Candidates eligible for a *generation* role. Embedding models
+      // (e.g. embeddinggemma on the embedding-only vLLM instance) are
+      // excluded so healing never points a chat role at a `/v1/embeddings`
+      // server, which would 404 every consolidation/extraction call.
+      const configuredEmbeddingModel = settings.memory?.embeddingModel || "";
+      const generationCandidates = allLoaded.filter(
+        (c) => !isEmbeddingModel(c.modelName, configuredEmbeddingModel),
+      );
+
       const dataCopy = JSON.parse(JSON.stringify(settings));
       let updated = false;
 
@@ -141,18 +178,38 @@ export const VllmModelSyncService = {
           continue;
         }
 
-        const loadedOnCurrent = currentProvider && loadedModelsByInstance.get(currentProvider)?.includes(currentModel);
+        // A generation role currently pinned to an embedding model is corrupt
+        // (a prior heal mis-selected it). Force re-selection even though the
+        // model is "loaded" on its instance — otherwise the bad value is sticky.
+        const currentIsEmbedding = isEmbeddingModel(
+          currentModel,
+          configuredEmbeddingModel,
+        );
+        if (currentIsEmbedding) {
+          logger.warn(
+            `[VllmModelSyncService] ${role.section}.${role.modelKey} is pinned to embedding model "${currentModel}" — forcing re-heal onto a generation model.`,
+          );
+        }
+
+        const loadedOnCurrent =
+          !currentIsEmbedding &&
+          currentProvider &&
+          loadedModelsByInstance.get(currentProvider)?.includes(currentModel);
 
         if (loadedOnCurrent) {
           continue;
         }
 
-        // Check if the current model is loaded on a different vLLM instance
+        // Check if the current model is loaded on a different vLLM instance.
+        // Skip this shortcut for an embedding-pinned role — matching it would
+        // just re-point the provider at another embedding instance.
         let foundInstanceId: string | null = null;
-        for (const [instanceId, models] of loadedModelsByInstance.entries()) {
-          if (models.includes(currentModel)) {
-            foundInstanceId = instanceId;
-            break;
+        if (!currentIsEmbedding) {
+          for (const [instanceId, models] of loadedModelsByInstance.entries()) {
+            if (models.includes(currentModel)) {
+              foundInstanceId = instanceId;
+              break;
+            }
           }
         }
 
@@ -163,16 +220,26 @@ export const VllmModelSyncService = {
           continue;
         }
 
-        // Model not loaded on any instance, pick the best candidate
+        // Model not loaded on any instance, pick the best candidate — but
+        // only from generation-capable models. If the only thing online is an
+        // embedding instance, leave the role untouched rather than corrupt it
+        // with a model that can't serve chat completions.
+        if (generationCandidates.length === 0) {
+          logger.warn(
+            `[VllmModelSyncService] "${currentModel}" for ${role.section}.${role.modelKey} is not loaded and no generation-capable model is online — leaving unchanged.`,
+          );
+          continue;
+        }
+
         const scoreFn = role.type === "large" ? scoreLargeModel : scoreGeneralModel;
-        let bestCandidate = allLoaded[0];
+        let bestCandidate = generationCandidates[0];
         let bestScore = scoreFn(bestCandidate.modelName);
 
-        for (let i = 1; i < allLoaded.length; i++) {
-          const score = scoreFn(allLoaded[i].modelName);
+        for (let i = 1; i < generationCandidates.length; i++) {
+          const score = scoreFn(generationCandidates[i].modelName);
           if (score > bestScore) {
             bestScore = score;
-            bestCandidate = allLoaded[i];
+            bestCandidate = generationCandidates[i];
           }
         }
 

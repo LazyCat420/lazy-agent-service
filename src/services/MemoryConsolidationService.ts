@@ -413,6 +413,23 @@ const MemoryConsolidationService = {
     let consolidationProvider = config.provider;
     let consolidationModel = config.model;
 
+    // Guard: consolidation is a chat/generation task. An embedding model only
+    // exposes /v1/embeddings, so a generateText call against it 404s. Fail fast
+    // with a clear message rather than emitting an opaque "404 Not Found".
+    // (VllmModelSyncService should never heal this role onto an embedding model,
+    // but a manual misconfiguration must not silently corrupt every run.)
+    if (/embed/i.test(consolidationModel)) {
+      logger.error(
+        `[MemoryConsolidation] Configured consolidation model "${consolidationModel}" is an embedding model — ` +
+          `it cannot serve chat completions. Set a generation model in Settings → Memory Models.`,
+      );
+      return {
+        skipped: true,
+        reason: "consolidation_model_is_embedding",
+        total: allMemories.length,
+      };
+    }
+
     let resolvedModel = consolidationModel;
     let targetProviderId = consolidationProvider;
 
