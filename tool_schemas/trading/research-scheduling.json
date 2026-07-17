@@ -1,0 +1,217 @@
+[
+  {
+    "name": "cancel_scheduled_research",
+    "description": "Cancel a bot-created research schedule (sch-bot-* id from list_scheduled_research) that is no longer worth running \u2014 e.g. the thesis changed or the event passed. Frees a slot under the 5-active cap.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "schedule_id": {
+          "type": "string",
+          "description": "The sch-bot-* schedule id."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why it is no longer needed."
+        }
+      },
+      "required": [
+        "schedule_id"
+      ]
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_portfolio_manager"
+    ]
+  },
+  {
+    "name": "get_upcoming_events",
+    "description": "Get upcoming scheduled events for a ticker over the next 90 days \u2014 currently earnings dates with report timing (bmo = before market open, amc = after market close) and EPS/revenue estimates. Use this to time-snipe research: e.g. earnings on 2026-07-21 amc \u2192 schedule_research with when='2026-07-21T21:30:00Z' so the analysis runs on the fresh numbers, not before them.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The stock ticker."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager"
+    ]
+  },
+  {
+    "name": "list_scheduled_research",
+    "description": "List all pending/scheduled bot research (active schedules + queued immediate research) plus tickers researched in the last 48h and the governor's limits. ALWAYS check this before requesting or scheduling research \u2014 duplicates are rejected.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager"
+    ]
+  },
+  {
+    "name": "request_research_now",
+    "description": "Queue an immediate research-only cycle (collect + analyze, NEVER trades) on up to 5 tickers. Use ONLY when a catalyst already hit and the current data is insufficient. Governor enforces: max 2 queued at once, 4h per-ticker cooldown, dedupe against scheduled research. Be picky \u2014 routine curiosity will be rejected; check list_scheduled_research first.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tickers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "1-5 ticker symbols, highest conviction only."
+        },
+        "reason": {
+          "type": "string",
+          "description": "The specific catalyst/question this research must answer."
+        },
+        "urgency": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "critical bypasses the recency cooldown \u2014 reserve for genuine breaking catalysts."
+        }
+      },
+      "required": [
+        "tickers",
+        "reason"
+      ]
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_portfolio_manager"
+    ]
+  },
+  {
+    "name": "schedule_research",
+    "description": "Schedule a ONE-SHOT research cycle (collect + analyze, NEVER trades) for up to 5 tickers at a specific time \u2014 snipe research to land right when new information exists, not on a dumb loop. `when` is either a market window ('next_pre_market' | 'next_open' | 'midday' | 'pre_close') or an ISO-8601 UTC datetime (e.g. '2026-07-21T21:30:00Z' = 30 min after an after-close earnings report; use get_upcoming_events to find event dates). The schedule fires ONCE, then auto-deactivates; it expires unrun after 7 days. Governor enforces: max 5 active, 10 creations/day, per-ticker dedupe, 4h research cooldown. Only the best ideas get scheduled \u2014 a vague reason is rejected.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tickers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "1-5 ticker symbols this research targets."
+        },
+        "when": {
+          "type": "string",
+          "description": "'next_pre_market' | 'next_open' | 'midday' | 'pre_close', or ISO-8601 UTC datetime \u22647 days out."
+        },
+        "reason": {
+          "type": "string",
+          "description": "The specific event/catalyst being sniped and the question to answer (\u226510 chars)."
+        },
+        "review_intent": {
+          "type": "string",
+          "enum": [
+            "monitor",
+            "reassess",
+            "trade_window",
+            "event_followup"
+          ],
+          "description": "Why this research exists. Default event_followup."
+        },
+        "urgency": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Short catalyst codes, e.g. ['earnings_2026-07-21', 'guidance_cut']."
+        }
+      },
+      "required": [
+        "tickers",
+        "when",
+        "reason"
+      ]
+    },
+    "tier": 1,
+    "source": "research_scheduling",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_portfolio_manager"
+    ]
+  }
+]
