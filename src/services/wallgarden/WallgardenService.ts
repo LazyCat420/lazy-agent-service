@@ -1,6 +1,7 @@
 import logger from "../../logger.js";
 import { getInstancesByType } from "../../providers/instance-registry.js";
 import type { InstanceEntry } from "../../types/ProviderTypes.js";
+import { prismAttributionHeaders } from "../../utils/PrismAttribution.js";
 
 // ── Prism Service URL ───────────────────────────────────────
 const PRISM_URL = process.env.REAL_PRISM_URL || "http://10.0.0.16:7777";
@@ -280,7 +281,12 @@ async function callPrismAgent(
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      // Prism attributes requests by header only — without these the call is
+      // filed under its catch-all "default"/"anonymous" project.
+      ...prismAttributionHeaders(),
+    },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120_000),
   });

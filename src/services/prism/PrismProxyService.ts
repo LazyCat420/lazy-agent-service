@@ -2,6 +2,7 @@ import { type Request, type Response } from "express";
 import logger from "../../logger.js";
 import { getToolSchemas } from "../ToolSchemaService.js";
 import { rewriteNonLeadingSystemMessages } from "../../utils/openai-compat.ts";
+import { prismAttributionHeaders } from "../../utils/PrismAttribution.ts";
 
 const REAL_PRISM_URL = process.env.REAL_PRISM_URL || "http://10.0.0.16:7777";
 
@@ -155,6 +156,23 @@ export class PrismProxyService {
           headers[h] = req.headers[h] as string;
         }
       }
+
+      // Prism attributes traffic by the x-project / x-username HEADERS only —
+      // it never reads project/username out of the JSON body. A caller that
+      // POSTs {project: "vllm-trading-bot"} without the headers lands in
+      // prism's catch-all "default"/"anonymous" bucket. Backfill the headers
+      // from the same sources authMiddleware uses (query → body), so header and
+      // body agree, and fall back to this service's own identity.
+      const attribution = prismAttributionHeaders(
+        headers["x-project"] ||
+          (req.query?.project as string) ||
+          (body && typeof body === "object" ? (body as any).project : undefined),
+        headers["x-username"] ||
+          (req.query?.username as string) ||
+          (body && typeof body === "object" ? (body as any).username : undefined),
+      );
+      headers["x-project"] = attribution["x-project"];
+      headers["x-username"] = attribution["x-username"];
 
       // Connect/headers timeout — abort if the upstream never responds.
       // Cleared as soon as headers arrive so long-running SSE streams are

@@ -2,6 +2,7 @@ import logger from "../utils/logger.ts";
 import SettingsService, { SettingsData } from "./SettingsService.ts";
 import { getInstancesByType } from "../providers/instance-registry.ts";
 import { getProvider } from "../providers/index.ts";
+import { prismAttributionHeaders } from "../utils/PrismAttribution.ts";
 
 const CHECK_INTERVAL_MS = 30_000; // Check every 30 seconds
 
@@ -54,12 +55,24 @@ function scoreGeneralModel(modelName: string): number {
   return 10;
 }
 
+// Real prism, NOT localhost. This container binds 7778 (see src/index.ts) and
+// prism runs on another host, so the previous hardcoded "http://localhost:7777"
+// could never connect: every heal fell through to the direct-DB fallback below.
+// That write bypasses prism's API, so the RUNNING prism process kept serving its
+// cached settings — the DB looked healed while prism still used the stale
+// (embedding-model-on-a-generation-role) values until someone restarted it.
+const PRISM_SETTINGS_URL =
+  process.env.REAL_PRISM_URL || "http://10.0.0.16:7777";
+
 async function updateSettings(mergedData: Partial<SettingsData>) {
   try {
-    const response = await fetch("http://localhost:7777/settings", {
+    const response = await fetch(`${PRISM_SETTINGS_URL}/settings`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
+        // Prism attributes requests by header only — without these the call is
+        // filed under its catch-all "default"/"anonymous" project.
+        ...prismAttributionHeaders(),
       },
       body: JSON.stringify(mergedData),
     });
