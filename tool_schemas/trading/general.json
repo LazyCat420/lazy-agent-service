@@ -623,6 +623,10 @@
         "note": {
           "type": "string",
           "description": "Your annotation/comment."
+        },
+        "author": {
+          "type": "string",
+          "description": "YOUR agent name (e.g. v3_quant_analyst) so teammates know who wrote this. Always provide it."
         }
       },
       "required": [
@@ -732,6 +736,10 @@
         "content": {
           "type": "string",
           "description": "The content to write (preferably a JSON string or clear text)."
+        },
+        "author": {
+          "type": "string",
+          "description": "YOUR agent name (e.g. v3_quant_analyst) so teammates know who wrote this. Always provide it."
         }
       },
       "required": [
