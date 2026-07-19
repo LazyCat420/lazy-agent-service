@@ -356,8 +356,8 @@ class SchedulerService:
                 if SchedulerService._expire_if_past_ttl(s, db):
                     continue
                 # Retired: coarse-window 'policy' schedules are superseded by
-                # Sentinel (set_watch). Deactivate any lingering rows instead of
-                # arming them.
+                # the Watch Desk (watch_ticker). Deactivate any lingering rows
+                # instead of arming them.
                 if s["schedule_type"] == "policy":
                     db.execute(
                         "UPDATE cycle_schedules SET is_active = FALSE, next_run_at = NULL, "
@@ -468,19 +468,9 @@ class SchedulerService:
             trigger = IntervalTrigger(
                 hours=float(s["interval_hours"]), timezone=local_tz
             )
-        elif s["schedule_type"] == "policy" and s["earliest_window"]:
-            try:
-                from apscheduler.triggers.date import DateTrigger
-
-                # Check if it was supposed to run in the past but missed
-                run_time = MarketCalendar.get_next_window(s["earliest_window"])
-                if run_time < datetime.now(local_tz):
-                    # It missed its window (e.g. system was down), run immediately
-                    run_time = datetime.now(local_tz) + timedelta(seconds=5)
-
-                trigger = DateTrigger(run_date=run_time, timezone=local_tz)
-            except Exception as e:
-                logger.error("[SCHEDULER] Failed to create policy trigger for %s: %s", job_id, e)
+        # NOTE: 'policy' schedules are retired — load_all_schedules deactivates
+        # every policy row on boot (Watch Desk owns condition-driven wakes), so
+        # the old DateTrigger branch for them was dead code and is gone.
         elif s["schedule_type"] == "once" and s.get("run_at"):
             # One-shot at an exact datetime — used by agents to snipe research
             # around known events (earnings drops, Fed announcements, ...).
@@ -620,26 +610,43 @@ class SchedulerService:
                     "[SCHEDULER] Failed to register background stop-loss: %s", e
                 )
 
-            # ── Morning Briefing Generator (6:30 AM Pacific) ──
-            pt_tz = pytz.timezone("America/Los_Angeles")
+            # ── Equation Lab: nightly strategy R&D (8 PM Pacific, after close) ──
+            # Compiles the most-used unbacktestable equation stubs from the
+            # tournament into real signal code and backtests them, so the jury
+            # sees actual PnL instead of "N/A" and the library accumulates
+            # honest win_rate/sharpe stats over time.
             try:
                 scheduler.add_job(
-                    SchedulerService._run_morning_briefing,
-                    trigger=CronTrigger(hour=6, minute=30, timezone=pt_tz),
-                    id="morning_briefing_job",
+                    SchedulerService._run_equation_lab,
+                    trigger=CronTrigger(hour=20, minute=0, timezone=pytz.timezone("America/Los_Angeles")),
+                    id="equation_lab_nightly",
                     replace_existing=True,
                     misfire_grace_time=3600,
                     coalesce=True,
                 )
-                logger.info(
-                    "[SCHEDULER] Registered morning briefing generator (cron: 6:30 AM PT)"
-                )
+                logger.info("[SCHEDULER] Registered Equation Lab (cron: 8:00 PM PT)")
             except Exception as e:
-                logger.warning(
-                    "[SCHEDULER] Failed to register morning briefing job: %s", e
+                logger.warning("[SCHEDULER] Failed to register Equation Lab: %s", e)
+
+            # ── Macro data refresh (5 PM PT weekdays, after FRED's ~4:15 ET
+            # daily updates settle). Collection was startup-only before, so
+            # data freshness was an accident of deploy frequency.
+            try:
+                scheduler.add_job(
+                    SchedulerService._run_macro_refresh,
+                    trigger=CronTrigger(hour=17, minute=0, day_of_week="mon-fri",
+                                        timezone=pytz.timezone("America/Los_Angeles")),
+                    id="macro_refresh_daily",
+                    replace_existing=True,
+                    misfire_grace_time=3600,
+                    coalesce=True,
                 )
+                logger.info("[SCHEDULER] Registered macro refresh (cron: 5:00 PM PT, mon-fri)")
+            except Exception as e:
+                logger.warning("[SCHEDULER] Failed to register macro refresh: %s", e)
 
             # ── Morning Trading Cycle (market open: 6:30 AM Pacific = 9:30 AM ET) ──
+            pt_tz = pytz.timezone("America/Los_Angeles")
             try:
                 scheduler.add_job(
                     SchedulerService._run_market_open_cycle,
@@ -657,18 +664,21 @@ class SchedulerService:
                     "[SCHEDULER] Failed to register market-open trading cycle: %s", e
                 )
 
-            # ── Live Feed Reports — every 4 hours; report type auto-selected by time of day ──
+            # ── Live Feed Reports — governed interval (default 4h); report type auto-selected by time of day ──
             try:
+                from app.services.parameter_store import get_param as _get_param
+                _flash_hours = int(_get_param("FLASH_BRIEFING_INTERVAL_HOURS"))
                 scheduler.add_job(
                     SchedulerService._run_flash_briefing,
-                    trigger=IntervalTrigger(hours=4, timezone=local_tz),
+                    trigger=IntervalTrigger(hours=_flash_hours, timezone=local_tz),
                     id="flash_briefing_4h",
                     replace_existing=True,
                     misfire_grace_time=3600,
                     coalesce=True,
                 )
                 logger.info(
-                    "[SCHEDULER] Registered live feed flash briefings (interval: every 4h)"
+                    "[SCHEDULER] Registered live feed flash briefings (interval: every %dh)",
+                    _flash_hours,
                 )
             except Exception as e:
                 logger.warning(
@@ -695,59 +705,170 @@ class SchedulerService:
                     "[SCHEDULER] Failed to register background ticker validation: %s", e
                 )
 
-            # ── Sentinel: cheap background watch evaluation (no LLM) ──
+            # ── Watch Desk: cheap background watch evaluation (no LLM) ──
             # Evaluates agent-defined watch conditions every 15m and wakes the
             # agent ONLY when a trigger trips. This is the energy-saver: the
             # expensive cycle stays off until a real, thesis-relevant condition
-            # is met. See app/services/sentinel.py.
+            # is met. See app/services/watch_desk.py.
             try:
+                from app.services.parameter_store import get_param as _get_param
+                _wd_minutes = int(_get_param("WATCHDESK_EVAL_INTERVAL_MINUTES"))
                 scheduler.add_job(
-                    SchedulerService._run_sentinel_evaluation,
-                    trigger=IntervalTrigger(minutes=15, timezone=local_tz),
-                    id="sentinel_evaluation",
+                    SchedulerService._run_watchdesk_evaluation,
+                    trigger=IntervalTrigger(minutes=_wd_minutes, timezone=local_tz),
+                    id="watchdesk_evaluation",
                     replace_existing=True,
                     misfire_grace_time=300,
                     coalesce=True,
                 )
                 logger.info(
-                    "[SCHEDULER] Registered Sentinel watch evaluation (interval: 15m)"
+                    "[SCHEDULER] Registered Watch Desk evaluation (interval: %dm)",
+                    _wd_minutes,
                 )
             except Exception as e:
                 logger.warning(
-                    "[SCHEDULER] Failed to register Sentinel evaluation: %s", e
+                    "[SCHEDULER] Failed to register Watch Desk evaluation: %s", e
+                )
+
+            # ── Cadence sync: reconcile governed intervals onto live jobs ──
+            # Agents adjust cadence parameters through the Parameter Governor;
+            # this periodic pass (plus a best-effort push from the governor)
+            # retunes the APScheduler jobs to match the store.
+            try:
+                scheduler.add_job(
+                    SchedulerService.sync_cadence_jobs,
+                    trigger=IntervalTrigger(minutes=5, timezone=local_tz),
+                    id="parameter_cadence_sync",
+                    replace_existing=True,
+                    misfire_grace_time=300,
+                    coalesce=True,
+                )
+                logger.info("[SCHEDULER] Registered parameter cadence sync (interval: 5m)")
+            except Exception as e:
+                logger.warning(
+                    "[SCHEDULER] Failed to register parameter cadence sync: %s", e
                 )
 
     @staticmethod
-    async def _run_background_stop_loss():
-        """Run stop loss, take profit, and custom trigger checks for the active bot."""
-        try:
-            bot_id = get_active_bot_id()
-            if bot_id:
-                await check_stop_losses(bot_id, cycle_id="background")
-                await check_take_profits(bot_id, cycle_id="background")
-                # Custom order triggers (stop_loss, take_profit, buy_limit, sell_limit, trailing_stop)
-                try:
-                    from app.trading.order_triggers import check_triggers
+    def sync_cadence_jobs() -> list[str]:
+        """Retune interval jobs whose governed cadence parameter changed.
 
-                    fired = await check_triggers(bot_id)
-                    if fired:
-                        logger.info(
-                            "[SCHEDULER] %d order trigger(s) fired for bot '%s'",
-                            len(fired),
-                            bot_id,
+        Reads every PARAMETER_REGISTRY entry with a scheduler_job binding and
+        reschedules the live APScheduler job when its interval no longer
+        matches the store. Returns the list of job ids that were retuned.
+        """
+        from app.services.parameter_store import PARAMETER_REGISTRY, get_param
+
+        retuned: list[str] = []
+        for key, spec in PARAMETER_REGISTRY.items():
+            if not spec.scheduler_job:
+                continue
+            job_id, unit = spec.scheduler_job
+            try:
+                job = scheduler.get_job(job_id)
+                if job is None or not isinstance(job.trigger, IntervalTrigger):
+                    continue
+                desired = int(get_param(key))
+                desired_sec = desired * (3600 if unit == "hours" else 60)
+                current_sec = int(job.trigger.interval.total_seconds())
+                if current_sec != desired_sec:
+                    scheduler.reschedule_job(
+                        job_id,
+                        trigger=IntervalTrigger(**{unit: desired}, timezone=local_tz),
+                    )
+                    retuned.append(job_id)
+                    logger.warning(
+                        "[SCHEDULER] Cadence retuned: %s %ds -> %ds (%s=%s)",
+                        job_id, current_sec, desired_sec, key, desired,
+                    )
+            except Exception as e:
+                logger.warning("[SCHEDULER] Cadence sync failed for %s: %s", job_id, e)
+        return retuned
+
+    @staticmethod
+    async def _run_background_stop_loss():
+        """Run stop loss, take profit, and custom trigger checks for EVERY bot
+        holding positions.
+
+        Sweeping only the active bot silently orphaned every other profile's
+        positions — audited live at ~$69k of entry value (cycle-backend + test
+        bots) carrying no stop-loss, take-profit, or trigger monitoring at
+        all. Risk protection must not depend on which bot the UI has selected.
+        """
+        try:
+            with get_db() as db:
+                rows = db.execute(
+                    "SELECT DISTINCT bot_id FROM positions WHERE qty > 0"
+                ).fetchall()
+            bot_ids = [r[0] for r in rows if r and r[0]]
+            active = get_active_bot_id()
+            if active and active not in bot_ids:
+                bot_ids.append(active)
+
+            # Per-pass cycle id, NOT the constant "background": sell()'s
+            # duplicate-order guard keys on (cycle_id, ticker, side), so a
+            # constant id meant any ticker that background-stopped ONCE could
+            # never be background-sold again — its protective stop was
+            # silently dead forever after (live-confirmed on GOOGL/AMP).
+            # A per-minute id keeps the double-sell protection WITHIN a pass
+            # (stop-loss and take-profit share it) while future passes start clean.
+            from datetime import datetime, timezone
+            bg_cycle = f"background-{datetime.now(timezone.utc):%Y%m%d%H%M}"
+
+            for bot_id in bot_ids:
+                try:
+                    await check_stop_losses(bot_id, cycle_id=bg_cycle)
+                    await check_take_profits(bot_id, cycle_id=bg_cycle)
+                    # Custom order triggers (stop_loss, take_profit, buy_limit,
+                    # sell_limit, trailing_stop)
+                    try:
+                        from app.trading.order_triggers import check_triggers
+
+                        fired = await check_triggers(bot_id)
+                        if fired:
+                            logger.info(
+                                "[SCHEDULER] %d order trigger(s) fired for bot '%s'",
+                                len(fired),
+                                bot_id,
+                            )
+                    except Exception as trig_err:
+                        logger.error(
+                            "[SCHEDULER] Order trigger check failed for bot '%s': %s",
+                            bot_id, trig_err,
                         )
-                except Exception as trig_err:
-                    logger.error("[SCHEDULER] Order trigger check failed: %s", trig_err)
+                except Exception as bot_err:
+                    logger.error(
+                        "[SCHEDULER] Background risk sweep failed for bot '%s': %s",
+                        bot_id, bot_err,
+                    )
         except Exception as e:
             logger.error("[SCHEDULER] Background stop-loss check failed: %s", e)
 
     @staticmethod
-    async def _run_morning_briefing():
-        """Generate the morning briefing."""
-        logger.info("[SCHEDULER] Morning briefing is a legacy V2 feature and is not run in V3.")
-        return
+    async def _run_equation_lab():
+        """Nightly equation R&D — compile + backtest stubbed tournament equations."""
+        try:
+            from app.cognition.debate.equation_lab import run_equation_lab
+            await run_equation_lab()
+        except Exception as e:
+            logger.error("[SCHEDULER] Equation Lab run failed: %s", e)
 
-
+    @staticmethod
+    async def _run_macro_refresh():
+        """Daily FRED + futures/commodities refresh (weekday post-close)."""
+        import asyncio as _asyncio
+        try:
+            from app.collectors.fred_collector import sync_collect_fred
+            total = await _asyncio.to_thread(sync_collect_fred, lambda: False)
+            logger.info("[SCHEDULER] Macro refresh: %d FRED rows", total)
+        except Exception as e:
+            logger.error("[SCHEDULER] FRED refresh failed: %s", e)
+        try:
+            from app.collectors.market_regime_collector import collect_market_data
+            result = await collect_market_data(period="6mo")
+            logger.info("[SCHEDULER] Macro refresh: %s market rows", result.get("total", 0))
+        except Exception as e:
+            logger.error("[SCHEDULER] Market data refresh failed: %s", e)
 
     @staticmethod
     async def _run_market_open_cycle():
@@ -808,16 +929,16 @@ class SchedulerService:
             logger.error(f"[SCHEDULER] Flash briefing ({report_type or 'auto'}) generation failed: {e}")
 
     @staticmethod
-    async def _run_sentinel_evaluation():
+    async def _run_watchdesk_evaluation():
         """Evaluate agent-defined watch conditions (cheap, no LLM) and wake the
         agent only when a trigger trips."""
         if cycle_control.is_paused or cycle_control.is_stopped:
             return
         try:
-            from app.services.sentinel import evaluate_watches
+            from app.services.watch_desk import evaluate_watches
             await evaluate_watches()
         except Exception as e:
-            logger.error("[SCHEDULER] Sentinel evaluation failed: %s", e)
+            logger.error("[SCHEDULER] Watch Desk evaluation failed: %s", e)
 
     @staticmethod
     async def _run_background_validation():

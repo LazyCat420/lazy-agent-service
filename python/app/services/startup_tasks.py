@@ -50,12 +50,19 @@ async def startup_vllm_discovery():
                 except Exception:
                     pass
 
+            # Prism attributes requests by the x-project / x-username HEADERS
+            # (it ignores the same fields in a JSON body). Without them the call
+            # lands in prism's catch-all "default"/"anonymous" project.
+            prism_headers = {
+                "x-project": app_settings.PRISM_PROJECT,
+                "x-username": app_settings.PRISM_USERNAME,
+            }
             async with httpx.AsyncClient(timeout=3.0) as client:
                 for target_url in agent_targets:
                     base_url = target_url.rstrip("/")
                     url = f"{base_url}/config/agents"
 
-                    r = await client.get(url)
+                    r = await client.get(url, headers=prism_headers)
                     if r.status_code != 200:
                         raise ValueError(f"Agent list check failed on {url} (status {r.status_code})")
 
@@ -106,8 +113,13 @@ async def startup_fred_refresh(is_shutting_down: Callable[[], bool]):
     if is_shutting_down():
         return
     # Skip if we already have fresh FRED data (avoids 2+ minute delay on
-    # every server restart, which is critical when --reload kills cycles)
-    if _is_data_fresh("macro_indicators", "source = 'fred'", 1):
+    # every server restart, which is critical when --reload kills cycles).
+    # Freshness needs BOTH checks: a bare MAX(date) is dominated by the daily
+    # treasury series and says nothing about the monthly CPI/UNRATE lagging.
+    if (_is_data_fresh("macro_indicators", "source = 'fred'", 2)
+            and _is_data_fresh(
+                "macro_indicators",
+                "source = 'fred' AND indicator = 'CPI'", 45)):
         logger.info("[startup] FRED data already fresh, skipping refresh")
         return
 
