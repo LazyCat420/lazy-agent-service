@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Platform Tools — lazy-tool-service</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #171a23;
+    --card-2: #1d212c;
+    --border: #2a2f3d;
+    --text: #e6e9ef;
+    --muted: #8b93a7;
+    --accent: #6366f1;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  a { color: var(--accent); }
+  header {
+    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    background: var(--card);
+  }
+  header h1 { margin: 0; font-size: 17px; letter-spacing: .2px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  select, button {
+    background: var(--card-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--accent); }
+  main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
+  .row { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 22px; }
+  .tile {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 16px;
+  }
+  .tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .tile .value { font-size: 24px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  h2 { font-size: 14px; margin: 26px 0 10px; letter-spacing: .3px; }
+  h2 .hint { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+  .project {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); margin-bottom: 14px; overflow: hidden;
+  }
+  .project > summary {
+    padding: 12px 16px; cursor: pointer; display: flex; align-items: center;
+    gap: 14px; flex-wrap: wrap; list-style: none;
+  }
+  .project > summary::-webkit-details-marker { display: none; }
+  .project > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+  .project[open] > summary::before { transform: rotate(90deg); }
+  .pname { font-weight: 700; font-size: 14px; }
+  .chip {
+    font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .chip.ok { color: var(--ok); border-color: rgba(34,197,94,.4); }
+  .chip.warn { color: var(--warn); border-color: rgba(245,158,11,.4); }
+  .chip.err { color: var(--err); border-color: rgba(239,68,68,.4); }
+  .tablewrap { overflow-x: auto; border-top: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 16px; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  tbody tr:nth-child(odd) { background: rgba(255,255,255,.02); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 5px; border-radius: 3px; background: var(--card-2); overflow: hidden; min-width: 60px; }
+  .bar > i { display: block; height: 100%; background: var(--ok); }
+  .never { padding: 10px 16px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
+  .never code { color: #a5b4fc; background: rgba(99,102,241,.1); padding: 1px 5px; border-radius: 4px; margin: 0 3px 3px 0; display: inline-block; }
+  .empty { color: var(--muted); padding: 14px 16px; font-size: 13px; }
+  .err-box { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.35); color: #fca5a5; padding: 12px 16px; border-radius: var(--radius); margin-bottom: 18px; }
+  footer { color: var(--muted); font-size: 12px; padding: 0 24px 30px; max-width: 1500px; margin: 0 auto; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Platform Tools</h1>
+    <div class="sub">Cross-project tool telemetry · lazy-tool-service</div>
+  </div>
+  <div class="spacer"></div>
+  <label class="sub" for="range">Window</label>
+  <select id="range">
+    <option value="24">Last 24 hours</option>
+    <option value="72">Last 3 days</option>
+    <option value="168" selected>Last 7 days</option>
+    <option value="720">Last 30 days</option>
+  </select>
+  <button id="refresh">Refresh</button>
+</header>
+
+<main>
+  <div id="error"></div>
+  <div class="row" id="tiles"></div>
+
+  <h2>By project <span class="hint">tool ownership comes from <code>owner_app</code> in the schema registry</span></h2>
+  <div id="projects"></div>
+
+  <h2>By executing service <span class="hint">which runtime actually ran the call</span></h2>
+  <div class="project" open><div class="tablewrap"><table id="services">
+    <thead><tr>
+      <th>Service</th><th class="num">Calls</th><th class="num">Success</th>
+      <th class="num">Avg ms</th><th class="num">Distinct tools</th><th>Last call</th>
+    </tr></thead><tbody></tbody>
+  </table></div></div>
+
+  <h2>Recent calls</h2>
+  <div class="project" open><div class="tablewrap"><table id="recent">
+    <thead><tr>
+      <th>When</th><th>Tool</th><th>Project</th><th>Agent</th>
+      <th>Status</th><th class="num">ms</th><th>Service</th>
+    </tr></thead><tbody></tbody>
+  </table></div></div>
+</main>
+
+<footer>
+  Trading-specific tools are also shown in the trading dashboard's Tools tab, scoped to <code>owner_app = trading</code>.
+  This page is the only cross-project view.
+</footer>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const fmt = (n) => (n ?? 0).toLocaleString();
+const ago = (iso) => {
+  if (!iso) return '—';
+  const secs = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (secs < 60) return Math.max(0, Math.round(secs)) + 's ago';
+  if (secs < 3600) return Math.round(secs / 60) + 'm ago';
+  if (secs < 86400) return Math.round(secs / 3600) + 'h ago';
+  return Math.round(secs / 86400) + 'd ago';
+};
+const rateClass = (r) => (r >= 95 ? 'ok' : r >= 80 ? 'warn' : 'err');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
+async function getJson(url) {
+  const res = await fetch(url);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || (res.status + ' ' + res.statusText));
+  return body;
+}
+
+function renderTiles(s) {
+  $('#tiles').innerHTML = [
+    ['Total calls', fmt(s.total_calls)],
+    ['Success rate', (s.success_rate ?? 0) + '%'],
+    ['Tools used', fmt(s.unique_tools_used)],
+    ['Tools registered', fmt(s.total_registered)],
+    ['Projects', fmt(s.projects)],
+  ].map(([label, value]) =>
+    `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div></div>`
+  ).join('');
+}
+
+function renderProjects(projects) {
+  if (!projects.length) { $('#projects').innerHTML = '<div class="empty">No data in this window.</div>'; return; }
+  $('#projects').innerHTML = projects.map((p, i) => `
+    <details class="project" ${i === 0 ? 'open' : ''}>
+      <summary>
+        <span class="pname">${esc(p.project)}</span>
+        <span class="chip">${fmt(p.total_calls)} calls</span>
+        <span class="chip ${rateClass(p.success_rate)}">${p.success_rate}% success</span>
+        <span class="chip">${p.tools.length}/${p.registered} tools active</span>
+        ${p.never_called.length ? `<span class="chip warn">${p.never_called.length} never called</span>` : ''}
+      </summary>
+      ${p.tools.length ? `
+      <div class="tablewrap"><table>
+        <thead><tr>
+          <th>Tool</th><th class="num">Calls</th><th>Success</th>
+          <th class="num">Avg ms</th><th class="num">Max ms</th><th>Last call</th><th>Ran by</th>
+        </tr></thead>
+        <tbody>${p.tools.map((t) => `
+          <tr>
+            <td>${esc(t.tool_name)}</td>
+            <td class="num">${fmt(t.total_calls)}</td>
+            <td>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div class="bar"><i style="width:${t.success_rate}%;background:var(--${rateClass(t.success_rate) === 'ok' ? 'ok' : rateClass(t.success_rate) === 'warn' ? 'warn' : 'err'})"></i></div>
+                <span style="font-variant-numeric:tabular-nums">${t.success_rate}%</span>
+              </div>
+            </td>
+            <td class="num">${fmt(Math.round(t.avg_ms))}</td>
+            <td class="num">${fmt(t.max_ms)}</td>
+            <td>${ago(t.last_called)}</td>
+            <td style="color:var(--muted)">${esc(t.service_sources)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>` : '<div class="empty">No calls in this window.</div>'}
+      ${p.never_called.length ? `<div class="never"><strong>Never called:</strong><br>${p.never_called.map((n) => `<code>${esc(n)}</code>`).join('')}</div>` : ''}
+    </details>
+  `).join('');
+}
+
+function renderServices(services) {
+  $('#services tbody').innerHTML = services.length ? services.map((s) => `
+    <tr>
+      <td>${esc(s.service_source)}</td>
+      <td class="num">${fmt(s.total_calls)}</td>
+      <td class="num" style="color:var(--${rateClass(s.success_rate) === 'ok' ? 'ok' : rateClass(s.success_rate) === 'warn' ? 'warn' : 'err'})">${s.success_rate}%</td>
+      <td class="num">${fmt(Math.round(s.avg_ms))}</td>
+      <td class="num">${fmt(s.distinct_tools)}</td>
+      <td>${ago(s.last_called)}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">No data in this window.</td></tr>';
+}
+
+function renderRecent(calls) {
+  $('#recent tbody').innerHTML = calls.length ? calls.map((c) => `
+    <tr>
+      <td>${ago(c.called_at)}</td>
+      <td>${esc(c.tool_name)}</td>
+      <td>${esc(c.project)}</td>
+      <td style="color:var(--muted)">${esc(c.agent_name) || '—'}</td>
+      <td style="color:var(--${c.success ? 'ok' : 'err'})">${c.success ? 'ok' : 'fail'}</td>
+      <td class="num">${fmt(c.execution_ms)}</td>
+      <td style="color:var(--muted)">${esc(c.service_source)}</td>
+    </tr>`).join('') : '<tr><td colspan="7" class="empty">No recent calls.</td></tr>';
+}
+
+async function load() {
+  const hours = $('#range').value;
+  $('#error').innerHTML = '';
+  try {
+    const [stats, services, recent] = await Promise.all([
+      getJson(`../platform/stats?hours=${hours}`),
+      getJson(`../platform/services?hours=${hours}`),
+      getJson('../platform/recent?limit=60'),
+    ]);
+    renderTiles(stats.summary || {});
+    renderProjects(stats.projects || []);
+    renderServices(services.services || []);
+    renderRecent(recent.calls || []);
+  } catch (e) {
+    $('#error').innerHTML = `<div class="err-box">Failed to load telemetry: ${esc(e.message)}</div>`;
+  }
+}
+
+$('#range').addEventListener('change', load);
+$('#refresh').addEventListener('click', load);
+load();
+</script>
+</body>
+</html>

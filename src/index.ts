@@ -78,6 +78,7 @@ import workspacesRouter from "./routes/WorkspacesRoutes.ts";
 import scheduledTasksRouter from "./routes/ScheduledTasksRoutes.ts";
 import promptsRouter from "./routes/PromptsRoutes.ts";
 import webhookRouter from "./routes/WebhookRoutes.ts";
+import platformRouter from "./routes/PlatformRoutes.ts";
 import executeRouter from "./routes/ExecuteRoutes.ts";
 
 
@@ -214,6 +215,12 @@ app.use("/scheduled-tasks", scheduledTasksRouter);
 app.use("/prompts", promptsRouter);
 app.use("/webhooks", webhookRouter);
 app.use("/execute", executeRouter);
+app.use("/platform", platformRouter);
+
+// Platform dashboard — cross-project tool telemetry. Lives here (not in
+// trading-client) because this service owns the tool registry; trading-client
+// scopes its own Tools tab to owner_app === "trading".
+app.use("/dashboard", express.static("public"));
 
 // Tool executor compatibility routes
 app.get("/mcp/sse", (req: Request, res: Response, next: NextFunction) => {
