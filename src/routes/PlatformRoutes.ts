@@ -319,10 +319,23 @@ router.get(
 
     try {
       const owners = await ownerIndex();
-      // Over-fetch when filtering by project: attribution happens in JS (the
-      // owner map lives in the registry file, not the database), so the SQL
-      // LIMIT alone could return a page with nothing from the wanted project.
-      const sqlLimit = project ? Math.min(limit * 20, 4000) : limit;
+
+      // Attribution lives in the registry file, not the database, so a project
+      // filter has to be translated into the set of tool names that project
+      // owns and pushed into SQL. Filtering in JS after a LIMIT would starve
+      // low-volume projects: html-notes' handful of calls never appear in the
+      // most recent N rows once trading has thousands.
+      const wanted: string[] = [];
+      if (project) {
+        for (const [name, owner] of owners) {
+          if (owner !== project) continue;
+          wanted.push(name, ...MCP_PREFIXES.map((p) => p + name));
+        }
+        if (!wanted.length) return res.json({ calls: [], total: 0 });
+      }
+
+      const where = project ? "WHERE tool_name = ANY($2)" : "";
+      const params: unknown[] = project ? [limit, wanted] : [limit];
 
       const rows = await platformQuery<{
         tool_name: string;
@@ -337,9 +350,10 @@ router.get(
         `SELECT tool_name, agent_name, cycle_id, success, execution_ms,
                 error_message, called_at, service_source
            FROM tool_usage_stats
+           ${where}
           ORDER BY called_at DESC
           LIMIT $1`,
-        [sqlLimit],
+        params,
       );
 
       let calls = rows.map((r) => {
@@ -357,7 +371,6 @@ router.get(
         };
       });
 
-      if (project) calls = calls.filter((c) => c.project === project);
       if (tool) calls = calls.filter((c) => c.tool_name === tool);
 
       res.json({ calls: calls.slice(0, limit), total: Math.min(calls.length, limit) });
