@@ -35,6 +35,14 @@ const HTML_NOTES_TOOLS = [
   "mcp__lazy-tool-service__html_notes_read_page",
   "mcp__lazy-tool-service__html_notes_stock_history",
   "mcp__lazy-tool-service__html_notes_sports_scores",
+  // Added when this file became the source of truth for the Prism-side agent
+  // (PrismRegistrationService). The hand-registered CUSTOM_HTML_NOTES_CANVAS
+  // had drifted to 21 tools while this list still said 18 — upserting from
+  // here without these would have silently un-scoped news/weather on a live
+  // agent. That drift is exactly what generating from one source prevents.
+  "mcp__lazy-tool-service__html_notes_news",
+  "mcp__lazy-tool-service__html_notes_get_weather",
+  "mcp__lazy-tool-service__html_notes_stock_news",
 ];
 
 export const HtmlNotesPersona: Persona = {

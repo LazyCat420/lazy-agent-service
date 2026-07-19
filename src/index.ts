@@ -31,6 +31,7 @@ import MinioWrapper from "./wrappers/MinioWrapper.ts";
 import ChangeStreamService from "./services/ChangeStreamService.ts";
 import MemoryConsolidationService from "./services/MemoryConsolidationService.ts";
 import BackgroundHousekeepingService from "./services/BackgroundHousekeepingService.ts";
+import { registerWithPrism } from "./services/PrismRegistrationService.ts";
 import {
   installShutdownHandlers,
   registerCleanup,
@@ -592,6 +593,11 @@ setupWebSocket(wss);
       logger.info(`  WS    →  ws://localhost:${PORT}${endpoint}`);
     }
 
-
+    // Announce ourselves to Prism once we are actually accepting connections —
+    // Prism dials back into /mcp/sse, so registering before listen() would race.
+    // Owning this here (rather than in a consumer's boot) is what makes a
+    // redeploy self-healing: the SSE link dies with us and we are the process
+    // that comes back.
+    await registerWithPrism();
   });
 })();
