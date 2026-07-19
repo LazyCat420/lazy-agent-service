@@ -20,6 +20,7 @@ import path from "path";
 
 import logger from "../utils/logger.ts";
 import { platformQuery, getPlatformPool } from "../db/postgres.ts";
+import { guardStats } from "../services/ToolCallGuard.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 
 const router = Router();
@@ -292,6 +293,84 @@ router.get(
     } catch (e) {
       logger.warn(`[Platform] stats query failed: ${getErrorMessage(e)}`);
       res.status(500).json({ error: getErrorMessage(e), projects: [] });
+    }
+  }),
+);
+
+/**
+ * GET /platform/storms?hours=&threshold=
+ * Minutes where a single tool exceeded `threshold` calls — the signature of a
+ * runaway caller. On 2026-07-14 one harness hit 285 calls/min of
+ * get_sec_filings for a single ticker, saturating the bridge until everything
+ * timed out; nothing surfaced it at the time. Also reports live guard state so
+ * the coalescing/repeat/concurrency layers can be seen working.
+ */
+router.get(
+  "/storms",
+  asyncHandler(async (req: Request, res: Response) => {
+    const hours = Math.min(
+      Math.max(parseInt(String(req.query.hours ?? "24"), 10) || 24, 1),
+      720,
+    );
+    const threshold = Math.max(
+      parseInt(String(req.query.threshold ?? "60"), 10) || 60,
+      1,
+    );
+
+    if (!getPlatformPool()) {
+      return res.status(503).json({
+        error: "DATABASE_URL is not configured — platform telemetry unavailable",
+        storms: [],
+        guard: guardStats(),
+      });
+    }
+
+    try {
+      const rows = await platformQuery<{
+        minute: Date;
+        tool_name: string;
+        calls: string;
+        failures: string;
+        distinct_tickers: string;
+      }>(
+        `SELECT date_trunc('minute', called_at) AS minute,
+                tool_name,
+                COUNT(*)                                  AS calls,
+                COUNT(*) FILTER (WHERE NOT success)       AS failures,
+                COUNT(DISTINCT NULLIF(ticker, ''))        AS distinct_tickers
+           FROM tool_usage_stats
+          WHERE called_at > NOW() - INTERVAL '1 hour' * $1
+          GROUP BY 1, 2
+         HAVING COUNT(*) >= $2
+          ORDER BY calls DESC
+          LIMIT 50`,
+        [hours, threshold],
+      );
+
+      res.json({
+        period_hours: hours,
+        threshold_calls_per_minute: threshold,
+        storms: rows.map((r) => {
+          const calls = Number(r.calls) || 0;
+          const failures = Number(r.failures) || 0;
+          const tickers = Number(r.distinct_tickers) || 0;
+          return {
+            minute: r.minute ? new Date(r.minute).toISOString() : null,
+            tool_name: canonicalName(r.tool_name),
+            calls,
+            failures,
+            failure_rate: calls ? Math.round((failures / calls) * 1000) / 10 : 0,
+            distinct_tickers: tickers,
+            // Many calls against almost no distinct subjects is the tell-tale
+            // of a retry loop rather than legitimate breadth of work.
+            likely_runaway: calls >= threshold && tickers <= 2,
+          };
+        }),
+        guard: guardStats(),
+      });
+    } catch (e) {
+      logger.warn(`[Platform] storms query failed: ${getErrorMessage(e)}`);
+      res.status(500).json({ error: getErrorMessage(e), storms: [], guard: guardStats() });
     }
   }),
 );

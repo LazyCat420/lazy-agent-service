@@ -78,6 +78,9 @@
   .never code { color: #a5b4fc; background: rgba(99,102,241,.1); padding: 1px 5px; border-radius: 4px; margin: 0 3px 3px 0; display: inline-block; }
   .empty { color: var(--muted); padding: 14px 16px; font-size: 13px; }
   .err-box { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.35); color: #fca5a5; padding: 12px 16px; border-radius: var(--radius); margin-bottom: 18px; }
+  .storm-box { background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.35); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 14px; }
+  .storm-flag { color: var(--err); font-weight: 600; }
+  .guard-line { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
   footer { color: var(--muted); font-size: 12px; padding: 0 24px 30px; max-width: 1500px; margin: 0 auto; }
 </style>
 </head>
@@ -101,6 +104,8 @@
 <main>
   <div id="error"></div>
   <div class="row" id="tiles"></div>
+
+  <div id="storms"></div>
 
   <h2>By project <span class="hint">tool ownership comes from <code>owner_app</code> in the schema registry</span></h2>
   <div id="projects"></div>
@@ -226,16 +231,58 @@ function renderRecent(calls) {
     </tr>`).join('') : '<tr><td colspan="7" class="empty">No recent calls.</td></tr>';
 }
 
+function renderStorms(data) {
+  const storms = data.storms || [];
+  const guard = data.guard || {};
+  const cfg = guard.config || {};
+  const guardLine =
+    `<div class="guard-line">Runaway guards active — coalescing identical in-flight calls, ` +
+    `refusing after ${cfg.REPEAT_REFUSE_AT ?? '?'} identical calls in ` +
+    `${Math.round((cfg.REPEAT_WINDOW_MS ?? 0) / 1000)}s, max ${cfg.MAX_CONCURRENCY ?? '?'} concurrent per tool. ` +
+    `Live: ${guard.in_flight ?? 0} in flight, ${guard.ledger_entries ?? 0} tracked.</div>`;
+
+  if (!storms.length) {
+    $('#storms').innerHTML = `<h2>Runaway detection <span class="hint">no minute exceeded ${data.threshold_calls_per_minute}
+      calls/min in this window</span></h2>${guardLine}`;
+    return;
+  }
+  const runaway = storms.filter(s => s.likely_runaway).length;
+  $('#storms').innerHTML = `
+    <h2>Runaway detection <span class="hint">minutes above ${data.threshold_calls_per_minute} calls/min</span></h2>
+    ${guardLine}
+    <div class="storm-box">
+      <strong>${storms.length} burst minute${storms.length === 1 ? '' : 's'} detected</strong>
+      ${runaway ? ` · <span class="storm-flag">${runaway} look like a retry loop (high volume, ≤2 distinct tickers)</span>` : ''}
+      <div class="tablewrap" style="margin-top:8px">
+        <table>
+          <thead><tr><th>Minute</th><th>Tool</th><th class="num">Calls</th><th class="num">Failures</th><th class="num">Tickers</th><th>Verdict</th></tr></thead>
+          <tbody>${storms.map(s => `
+            <tr>
+              <td>${s.minute ? new Date(s.minute).toLocaleString() : '—'}</td>
+              <td>${esc(s.tool_name)}</td>
+              <td class="num">${fmt(s.calls)}</td>
+              <td class="num" style="color:var(--${s.failure_rate > 20 ? 'err' : 'muted'})">${fmt(s.failures)} (${s.failure_rate}%)</td>
+              <td class="num">${fmt(s.distinct_tickers)}</td>
+              <td>${s.likely_runaway ? '<span class="storm-flag">likely runaway</span>' : 'high volume'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 async function load() {
   const hours = $('#range').value;
   $('#error').innerHTML = '';
   try {
-    const [stats, services, recent] = await Promise.all([
+    const [stats, services, recent, storms] = await Promise.all([
       getJson(`../platform/stats?hours=${hours}`),
       getJson(`../platform/services?hours=${hours}`),
       getJson('../platform/recent?limit=60'),
+      getJson(`../platform/storms?hours=${hours}`),
     ]);
     renderTiles(stats.summary || {});
+    renderStorms(storms);
     renderProjects(stats.projects || []);
     renderServices(services.services || []);
     renderRecent(recent.calls || []);
