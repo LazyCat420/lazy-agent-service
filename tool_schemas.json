@@ -788,6 +788,27 @@
     "agents": []
   },
   {
+    "name": "news_search",
+    "description": "Current news stories for a topic, with REAL publisher URLs and REAL article photos. Rotates across keyed news providers (gnews, worldnewsapi, currentsapi, thenewsapi, newsapi) and returns the first usable result, so no single provider's daily limit blocks a request. Prefer this over a generic web search for anything time-sensitive: web search returns news-site homepages rather than stories, and Google News RSS returns opaque redirect links with no article photo. Each item carries {title, url, image, source, snippet, date}; `url` is the publisher's own page and `image` is that story's photo, so both are safe to show and to cite. An empty items list means no provider had a usable story, not an error.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "What to find stories about, e.g. 'James Webb space telescope' or 'federal reserve rate decision'. Multi-word topics are matched as a phrase."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "How many stories to return (default 6). Some free tiers cap lower and will return fewer."
+        }
+      },
+      "required": [
+        "topic"
+      ]
+    },
+    "owner_app": "shared"
+  },
+  {
     "name": "add_to_watchlist",
     "description": "Add a stock ticker (e.g., from the Discovery list) to the user's active watchlist. Do NOT use this tool to add items TO discovery; discovery is automatic. Requires user confirmation.",
     "parameters": {

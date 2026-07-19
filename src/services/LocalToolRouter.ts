@@ -1,6 +1,7 @@
-import crypto from "node:crypto";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
+import { callKey, guardedRun } from "./ToolCallGuard.ts";
+import { newsSearch, newsProviderStatus } from "./NewsSearchService.ts";
 
 /**
  * LocalToolRouter — single source of truth for executing this service's
@@ -13,6 +14,7 @@ import logger from "../utils/logger.ts";
  *     mcp__lazy-tool-service__* tool calls)
  *
  * Routing:
+ *   news_search                          → implemented HERE (NewsSearchService)
  *   music_player_*                       → music-player HTTP API
  *   *_widget tools                       → validated locally, forwarded to HTML-Notes /internal/execute
  *   html_notes_* / canvas_* → HTML-Notes /internal/execute
@@ -42,15 +44,36 @@ export const executeToolViaTradingService = async (
   toolArguments: Record<string, unknown>,
   context?: LocalToolContext
 ): Promise<unknown> => {
-  const argumentsJson = JSON.stringify(toolArguments);
-  const cacheKey = crypto.createHash("sha256").update(toolName + argumentsJson).digest("hex");
+  const cacheKey = callKey(toolName, toolArguments);
 
-  const cached = cache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
+  const readCache = (): unknown | undefined => {
+    const hit = cache.get(cacheKey);
+    return hit && hit.expiresAt > Date.now() ? hit.result : undefined;
+  };
+
+  const fresh = readCache();
+  if (fresh !== undefined) {
     logger.info(JSON.stringify({ event: "cache_hit", toolName, args: toolArguments }));
-    return cached.result;
+    return fresh;
   }
 
+  // Coalesce identical in-flight calls, apply repeat-call friction, and cap
+  // per-tool concurrency. See ToolCallGuard for why each layer exists.
+  return guardedRun({
+    toolName,
+    key: cacheKey,
+    scope: { agentName: context?.agentName, cycleId: context?.cycleId },
+    cached: readCache,
+    run: () => callTradingService(toolName, toolArguments, context, cacheKey),
+  });
+};
+
+const callTradingService = async (
+  toolName: string,
+  toolArguments: Record<string, unknown>,
+  context: LocalToolContext | undefined,
+  cacheKey: string
+): Promise<unknown> => {
   const url = `${CONFIG.TRADING_SERVICE_URL}/api/v1/agent-tools/execute`;
   try {
     const controller = new AbortController();
@@ -79,7 +102,14 @@ export const executeToolViaTradingService = async (
     }
 
     const result = await apiResponse.json();
-    cache.set(cacheKey, { result, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
+    // Never cache a failure: a cached error would be replayed to every repeat
+    // caller for the whole TTL, turning one transient blip into a minute of
+    // guaranteed failures.
+    const isError =
+      result && typeof result === "object" && (result as Record<string, unknown>).is_error === true;
+    if (!isError) {
+      cache.set(cacheKey, { result, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
+    }
     return result;
   } catch (fetchError: unknown) {
     const message = (fetchError as Error).message || String(fetchError);
@@ -354,6 +384,27 @@ export async function routeLocalTool(
       }
     }
     return forwardToHtmlNotes(tName, toolArguments);
+  }
+
+  // Natively implemented here — not proxied anywhere. news is wanted by more
+  // than one consumer, so it lives in this service rather than being rebuilt
+  // per repo. See NewsSearchService for why Google News RSS and GDELT both
+  // failed the job.
+  if (tName === "news_search") {
+    const topic = String(toolArguments.topic ?? toolArguments.query ?? "").trim();
+    const limit = Number(toolArguments.limit ?? 6) || 6;
+    if (!topic) {
+      return { error: "news_search requires a 'topic'", is_error: true };
+    }
+    const items = await newsSearch(topic, limit);
+    return {
+      topic,
+      count: items.length,
+      // An empty list is a real answer ("nothing usable right now"), not an
+      // error — the caller has its own fallback and needs to tell the two apart.
+      items,
+      providers: newsProviderStatus(),
+    };
   }
 
   if (

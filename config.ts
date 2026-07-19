@@ -125,6 +125,16 @@ export const HTML_NOTES_URL = process.env.HTML_NOTES_URL || "http://10.0.0.16:80
 // container — same reasoning as above, default to the NAS host IP.
 export const TREESEARCH_SERVICE_URL = process.env.TREESEARCH_SERVICE_URL || "http://10.0.0.16:8005";
 
+// News providers for the shared news_search tool (NewsSearchService). Keys are
+// hydrated from the vault via boot.ts like everything else here — no defaults,
+// no secrets in this file. A provider without a key is simply skipped, so it is
+// fine for only some of these to be set.
+export const GNEWS_API_KEY = process.env.GNEWS_API_KEY;
+export const WORLDNEWSAPI_KEY = process.env.WORLDNEWSAPI_KEY;
+export const CURRENTS_API_KEY = process.env.CURRENTS_API_KEY;
+export const THENEWSAPI_KEY = process.env.THENEWSAPI_KEY;
+export const NEWSAPI_API_KEY = process.env.NEWSAPI_API_KEY;
+
 const CONFIG = {
   LAZY_TOOL_SERVICE_PORT,
   LAZY_TOOL_SERVICE_URL,
@@ -140,5 +150,10 @@ const CONFIG = {
   TRADING_SERVICE_API_KEY,
   HTML_NOTES_URL,
   TREESEARCH_SERVICE_URL,
+  GNEWS_API_KEY,
+  WORLDNEWSAPI_KEY,
+  CURRENTS_API_KEY,
+  THENEWSAPI_KEY,
+  NEWSAPI_API_KEY,
 };
 export default CONFIG;
