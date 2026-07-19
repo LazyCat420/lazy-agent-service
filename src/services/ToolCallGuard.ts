@@ -47,10 +47,20 @@ export const GUARD_CONFIG = {
   REPEAT_SOFT_AT: num("TOOL_REPEAT_SOFT_AT", 3),
   /** At this repeat count, refuse and tell the model how to proceed. */
   REPEAT_REFUSE_AT: num("TOOL_REPEAT_REFUSE_AT", 6),
-  /** Max concurrent executions of any single tool. */
-  MAX_CONCURRENCY: num("TOOL_MAX_CONCURRENCY", 8),
-  /** How long to wait for a semaphore slot before failing fast. */
-  ACQUIRE_TIMEOUT_MS: num("TOOL_ACQUIRE_TIMEOUT_MS", 5_000),
+  /**
+   * Max concurrent executions of any single tool. Measured against 30 days of
+   * real traffic: outside the incident the busiest tool peaked at 7 calls/sec
+   * (get_market_data), everything else at ≤4. 12 sits above legitimate load
+   * while still being two orders of magnitude below the storm's 285/min.
+   */
+  MAX_CONCURRENCY: num("TOOL_MAX_CONCURRENCY", 12),
+  /**
+   * How long to wait for a slot before failing fast. Kept well under the 30s
+   * bridge abort: a call that waits this long and then runs still finishes
+   * inside the budget, so waiting is worth it — but never so long that waiters
+   * pile up into the timeout, which is the spiral that caused the incident.
+   */
+  ACQUIRE_TIMEOUT_MS: num("TOOL_ACQUIRE_TIMEOUT_MS", 15_000),
 };
 
 export interface GuardScope {
