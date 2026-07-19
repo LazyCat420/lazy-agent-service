@@ -121,7 +121,13 @@ async function callPrism(
 const DEFAULT_CONSUMERS: PrismConsumer[] = [
   { project: "coding", username: "admin" },
   { project: "vllm-trading-bot", username: "lazy-trader" },
-  { project: "html-notes-client", username: "lazycat", persona: "HTML_NOTES" },
+  // username MUST match what html-notes actually sends as x-username
+  // (AGENT_USERNAME, default "admin"). It was "lazycat" — inherited verbatim
+  // from trading-service's old config — so the MCP row landed in a scope the
+  // caller never looks at. Tools still resolved (Prism serves them globally
+  // once connected) but html-notes' own scope showed zero MCP servers, which
+  // is what its health check reported.
+  { project: "html-notes-client", username: "admin", persona: "HTML_NOTES" },
 ];
 
 /**
