@@ -311,6 +311,143 @@
     ]
   },
   {
+    "name": "get_smart_money_leaderboard",
+    "description": "Get the best-performing members of Congress or hedge funds ranked by real risk-adjusted performance (alpha vs SPY), with sample sizes. Use to judge how much weight to give a particular actor's trades.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "congress",
+            "fund"
+          ],
+          "description": "Which cohort. Default congress."
+        },
+        "horizon": {
+          "type": "string",
+          "enum": [
+            "1m",
+            "3m",
+            "6m",
+            "1y"
+          ],
+          "description": "Forward window. Default 1y."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max rows. Default 15."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "smart_money",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider",
+      "v3_junior_analyst"
+    ]
+  },
+  {
+    "name": "get_smart_money_leads",
+    "description": "Find stocks that multiple members of Congress and/or multiple hedge funds have recently bought - ranked research leads based on consensus buying by informed money. Use to discover candidate tickers when you have no specific ticker in mind.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "integer",
+          "description": "Lookback window. Default 180."
+        },
+        "min_buyers": {
+          "type": "integer",
+          "description": "Minimum distinct buyers. Default 3."
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "congress",
+            "fund",
+            "both"
+          ],
+          "description": "Which cohort to mine. Default both."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max leads. Default 15."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "smart_money",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider",
+      "v3_junior_analyst"
+    ]
+  },
+  {
+    "name": "get_smart_money_signal",
+    "description": "Get smart-money activity for a specific stock: which members of Congress and which hedge funds bought or sold it, when it became public, and how well those actors have historically performed (real alpha vs SPY). Use to check whether informed money is accumulating or exiting a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Stock ticker symbol"
+        },
+        "days": {
+          "type": "integer",
+          "description": "Lookback window in days. Default 365."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "smart_money",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider",
+      "v3_junior_analyst"
+    ]
+  },
+  {
     "name": "get_technical_indicators",
     "description": "Get computed technical indicators (RSI, MACD, SMA, Bollinger Bands).",
     "parameters": {
