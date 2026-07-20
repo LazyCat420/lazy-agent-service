@@ -80,6 +80,24 @@ def run_migrations(conn):
     # ── Cycle schedules: one-shot at an exact datetime (schedule_type='once')
     _safe_add_column(conn, "cycle_schedules", "run_at", "TIMESTAMPTZ")
 
+    # ── Failure taxonomy: separate harness defects from bad market calls so the
+    #    self-healing watchdog never tries to "repair" a losing trade.
+    #    The index must be created HERE, after the column exists — putting it in
+    #    schema_pg.sql aborts schema init on any pre-existing database.
+    _safe_add_column(conn, "failure_buckets", "error_class", "TEXT")
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_failure_buckets_error_class "
+                "ON failure_buckets(error_class)"
+            )
+            conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
     # ── Youtube
     _safe_add_column(conn, "youtube_transcripts", "thumbnail_url", "TEXT")
     _safe_add_column(conn, "youtube_transcripts", "summary", "TEXT")
@@ -92,6 +110,10 @@ def run_migrations(conn):
     _safe_add_column(conn, "news_articles", "quality_reason", "TEXT")
     _safe_add_column(conn, "news_articles", "quality_score", "INTEGER")
     _safe_add_column(conn, "news_articles", "is_cluster_winner", "BOOLEAN")
+    # Grounded fact extraction (langextract-style; app/services/news_extraction.py):
+    # facts with source-aligned quotes, cached per article.
+    _safe_add_column(conn, "news_articles", "grounded_facts", "JSONB")
+    _safe_add_column(conn, "news_articles", "facts_extracted_at", "TIMESTAMPTZ")
     _safe_add_column(conn, "reddit_posts", "collected_at", "TIMESTAMPTZ")
     _safe_add_column(conn, "reddit_posts", "quality_status", "TEXT")
     _safe_add_column(conn, "reddit_posts", "quality_reason", "TEXT")
@@ -3441,6 +3463,49 @@ def _fix_eth_cagr_data(conn):
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_watch_events_ticker ON watch_events (ticker, fired_at DESC);"
             )
+            conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+    # ── SkillOpt: per-agent learned skill docs (agent_skills) + audit log of
+    # edits that failed the validation gate (rejected_skill_edits). Written by
+    # app/autoresearch/skill_optimizer.py, read by skill_loader.py.
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS agent_skills (
+                    id          BIGSERIAL PRIMARY KEY,
+                    agent_name  TEXT NOT NULL,
+                    version     INTEGER NOT NULL DEFAULT 1,
+                    skill_text  TEXT NOT NULL,
+                    skill_hash  TEXT,
+                    cycle_id    TEXT,
+                    score       DOUBLE PRECISION,
+                    action      TEXT,
+                    rationale   TEXT,
+                    status      TEXT NOT NULL DEFAULT 'active',
+                    created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agent_skills_active
+                ON agent_skills (agent_name, status, version DESC);
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS rejected_skill_edits (
+                    id          BIGSERIAL PRIMARY KEY,
+                    agent_name  TEXT NOT NULL,
+                    skill_hash  TEXT,
+                    cycle_id    TEXT,
+                    reason      TEXT,
+                    score_delta DOUBLE PRECISION,
+                    rationale   TEXT,
+                    created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
             conn.commit()
     except Exception:
         try:

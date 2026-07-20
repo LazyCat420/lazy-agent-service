@@ -693,6 +693,36 @@ CREATE TABLE IF NOT EXISTS autoresearch_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_autoresearch_reports_cycle ON autoresearch_reports(cycle_id);
 
+-- SkillOpt: per-agent learned skill docs, prepended to V3 system prompts by
+-- app/autoresearch/skill_loader.py; mutated post-cycle by skill_optimizer.py.
+-- Self-contained on purpose: schema_pg.sql runs BEFORE migrations.py, so
+-- nothing here may reference migration-added columns.
+CREATE TABLE IF NOT EXISTS agent_skills (
+    id          BIGSERIAL PRIMARY KEY,
+    agent_name  TEXT NOT NULL,
+    version     INTEGER NOT NULL DEFAULT 1,
+    skill_text  TEXT NOT NULL,
+    skill_hash  TEXT,
+    cycle_id    TEXT,
+    score       DOUBLE PRECISION,
+    action      TEXT,
+    rationale   TEXT,
+    status      TEXT NOT NULL DEFAULT 'active',
+    created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_skills_active ON agent_skills (agent_name, status, version DESC);
+
+CREATE TABLE IF NOT EXISTS rejected_skill_edits (
+    id          BIGSERIAL PRIMARY KEY,
+    agent_name  TEXT NOT NULL,
+    skill_hash  TEXT,
+    cycle_id    TEXT,
+    reason      TEXT,
+    score_delta DOUBLE PRECISION,
+    rationale   TEXT,
+    created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS autoresearch_cycle_summaries (
     id              TEXT PRIMARY KEY,
     cycle_id        TEXT UNIQUE,
@@ -2303,9 +2333,15 @@ CREATE TABLE IF NOT EXISTS failure_buckets (
     run_id              TEXT,
     bucket_type         TEXT, -- skipped_needed_tool, wrong_tool_selected, etc.
     description         TEXT,
+    -- 'engineering' (a defect worth repairing) | 'market' (a bad trade call)
+    -- | 'unclassified'. The self-healing watchdog acts on 'engineering' ONLY.
+    error_class         TEXT,
     created_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_failure_buckets_run ON failure_buckets(run_id);
+-- NOTE: the index on error_class lives in migrations.py, NOT here. On an
+-- existing database the CREATE TABLE above is a no-op, so the column does not
+-- exist yet at schema-init time and indexing it aborts the whole init.
 
 CREATE TABLE IF NOT EXISTS tool_playbook (
     id                  TEXT PRIMARY KEY,
