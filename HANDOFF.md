@@ -45,6 +45,30 @@ The sync rides out on their next deploy. If you are that session: the shims
 keep every existing import working, and trading-service ran 892 unit + 157
 integration/regression tests green against the identical change.
 
+## DO NOT sync `app/utils/resilience.py` on its own
+
+trading-service `811cb69` fixed its dead retry telemetry: it added a real
+class-level `PipelineService.emit()` and registered an emitter with the SDK's
+`set_failure_emitter()` hook.
+
+**That fix was deliberately NOT synced here**, because it takes two files that
+must move together:
+
+- `app/services/pipeline_service.py` — one of the four files that genuinely
+  differ between these twins, **and dirty from the parallel session**.
+  This copy's `PipelineService` still has no `emit` method.
+- `app/utils/resilience.py` — clean here, so it looks safe to sync.
+
+Copying `resilience.py` alone would register an emitter that calls
+`PipelineService.emit(...)` on a class that doesn't have it — recreating the
+exact silent `AttributeError`-into-`except: pass` bug that fix removed. The SDK
+swallows emitter exceptions, so it would fail silently again, which is how it
+went unnoticed for so long in the first place.
+
+When you do sync it: take **both** files, and check
+`tests/unit/test_pipeline_emit.py` from trading-service comes along — it exists
+specifically to stop this rotting again.
+
 ## Gotcha to remember
 
 `python/lazycat/` is a *copy*, not a mount. Any future SDK change needs:
