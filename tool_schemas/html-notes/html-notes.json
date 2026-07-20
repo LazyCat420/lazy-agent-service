@@ -51,13 +51,13 @@
   },
   {
     "name": "canvas_modify_dom",
-    "description": "Modify an element on the live canvas dashboard using a CSS selector. Use this to update, append to, or remove existing widgets/components without replacing the entire canvas.",
+    "description": "Modify or REMOVE a widget on the live canvas. ALWAYS target a widget by its exact id selector ('#<widget_id>') taken from canvas_read_dom or the CURRENT CANVAS listing — never by class, tag or position. Class/positional selectors ('.widget-container:first-child', 'h3') match whichever widget happens to come first and will silently destroy the wrong one; a remove that matches more than one widget is now REJECTED and returns the candidate ids so you can retry with the right one. To remove the widget a user described in words ('close the san jose to sf map'), call canvas_read_dom first and match their words against each widget's title and type, then remove that widget's id. Note a directions/route map renders as type 'iframe_app' and a place map as 'map' — both are 'the map' to a user, so match on the TITLE, not the type alone. Do NOT use this to edit server-rendered widgets (clock, weather, stock, map, data_card): call canvas_add_widget again with the SAME widget_id instead.",
     "parameters": {
       "type": "object",
       "properties": {
         "css_selector": {
           "type": "string",
-          "description": "CSS selector to locate the target element (e.g., '#widget-abc123', '.glass-card:first-child', 'h3')"
+          "description": "CSS selector for the target. Use the widget's exact id selector, e.g. '#traffic-c20bc01b'. Ids come from canvas_read_dom / the CURRENT CANVAS list. Avoid class, tag and positional selectors — they are ambiguous and a remove matching several widgets is rejected."
         },
         "action": {
           "type": "string",
