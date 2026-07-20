@@ -22,6 +22,54 @@ from app.trading.paper_trader import _get_current_price
 
 logger = logging.getLogger(__name__)
 
+# Abandoned dynamic "buy setup" triggers (e.g. sma_200_reclaim) pile up across
+# cycles as the thesis evolves — different setup types don't supersede each other,
+# so an old-thesis setup can sit active for weeks. Expire ones older than this.
+DYNAMIC_TRIGGER_TTL_DAYS = 14
+
+
+def _expire_stale_dynamic_triggers(db) -> None:
+    """Deactivate dynamic triggers older than the TTL (stale-thesis sweep). Cheap
+    UPDATE; called once per check_triggers pass. Protective/limit triggers are
+    left alone — those are managed by supersede-on-create and firing."""
+    try:
+        db.execute(
+            "UPDATE price_triggers SET active = FALSE "
+            "WHERE trigger_type = 'dynamic' AND active = TRUE "
+            f"AND created_at < NOW() - INTERVAL '{int(DYNAMIC_TRIGGER_TTL_DAYS)} days'"
+        )
+    except Exception as e:
+        logger.warning("[TRIGGER] stale dynamic-trigger sweep failed: %s", e)
+
+
+def deactivate_sell_side_triggers(bot_id: str, ticker: str) -> int:
+    """Deactivate standing stop_loss/take_profit trigger rows for a ticker.
+
+    Called when a position takes 'hard_stop' exit ownership (agent-owned
+    exits live on the positions row) — leftover trigger rows from earlier
+    cycles would otherwise re-create the dual stop mechanism. Returns the
+    number of rows deactivated; never raises.
+    """
+    try:
+        with get_db() as db:
+            retired = db.execute(
+                "UPDATE price_triggers SET active = FALSE "
+                "WHERE bot_id = %s AND ticker = %s AND active = TRUE "
+                "AND trigger_type IN ('stop_loss', 'take_profit') "
+                "RETURNING id",
+                [bot_id, ticker],
+            ).fetchall()
+        count = len(retired or [])
+        if count:
+            logger.info(
+                "[TRIGGER] %s: hard_stop ownership — %d standing sell-side trigger(s) retired",
+                ticker, count,
+            )
+        return count
+    except Exception as e:
+        logger.warning("[TRIGGER] %s: sell-side trigger retirement failed: %s", ticker, e)
+        return 0
+
 
 async def create_trigger(
     bot_id: str,
@@ -94,6 +142,18 @@ async def create_trigger(
                 "WHERE bot_id = %s AND ticker = %s AND trigger_type = %s AND active = TRUE",
                 [bot_id, ticker, trigger_type],
             )
+        # Dynamic triggers (e.g. sma_200_reclaim) are re-armed by the pipeline
+        # every time it re-analyses a ticker. Supersede the prior active row of the
+        # SAME dynamic setup so re-runs don't stack identical rows. Distinct setups
+        # (a different dynamic_trigger_type) may coexist, but a stale-thesis sweep
+        # (see _expire_stale_dynamic_triggers) bounds their accumulation.
+        elif trigger_type == "dynamic" and dynamic_trigger_type:
+            db.execute(
+                "UPDATE price_triggers SET active = FALSE "
+                "WHERE bot_id = %s AND ticker = %s AND trigger_type = 'dynamic' "
+                "AND dynamic_trigger_type = %s AND active = TRUE",
+                [bot_id, ticker, dynamic_trigger_type],
+            )
         db.execute(
             """
             INSERT INTO price_triggers (
@@ -151,6 +211,7 @@ async def check_triggers(bot_id: str) -> list[dict]:
     Returns list of triggered/executed results.
     """
     with get_db() as db:
+        _expire_stale_dynamic_triggers(db)
         triggers = db.execute(
             """
             SELECT id, ticker, trigger_type, trigger_price, action,
@@ -167,6 +228,7 @@ async def check_triggers(bot_id: str) -> list[dict]:
 
     results = []
     now = datetime.now(timezone.utc)
+    fired_tickers: set[str] = set()
 
     for row in triggers:
         (
@@ -182,6 +244,12 @@ async def check_triggers(bot_id: str) -> list[dict]:
             dynamic_trigger_type,
             dynamic_trigger_value,
         ) = row
+
+        # One spawned cycle per ticker per pass — that cycle re-evaluates the
+        # whole position, so sibling triggers on the same ticker are moot (and
+        # each would just error "cycle already running" anyway).
+        if ticker in fired_tickers:
+            continue
 
         current_price, _ = _get_current_price(ticker)
         if current_price is None:
@@ -280,12 +348,23 @@ async def check_triggers(bot_id: str) -> list[dict]:
                     trigger_type=f"edge_case_{trigger_type}",
                 )
                 
-                # If we successfully started a cycle, mark the trigger as fired so it doesn't repeatedly spawn cycles
+                # Mark the trigger fired so it doesn't repeatedly spawn cycles —
+                # and retire its SIBLINGS of the same protective type too. Legacy
+                # pileups (28 identical AAPL stops observed) meant one breach
+                # would otherwise chain-spawn a cycle per stale row, minute
+                # after minute, until every copy had fired.
+                fired_tickers.add(ticker)
                 with get_db() as db:
                     db.execute(
                         "UPDATE price_triggers SET active = FALSE, triggered_at = %s WHERE id = %s",
                         [now, trigger_id],
                     )
+                    if trigger_type in ("stop_loss", "take_profit", "trailing_stop"):
+                        db.execute(
+                            "UPDATE price_triggers SET active = FALSE "
+                            "WHERE bot_id = %s AND ticker = %s AND trigger_type = %s AND active = TRUE",
+                            [bot_id, ticker, trigger_type],
+                        )
                 
                 trade_result = {
                     "status": "cycle_started",

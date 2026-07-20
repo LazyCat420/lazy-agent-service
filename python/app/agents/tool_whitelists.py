@@ -63,10 +63,13 @@ AGENT_TOOL_WHITELISTS: dict[str, list[str]] = {
         "get_reddit_trending_stocks",
         # Named tool chains (bundle several tools into one call)
         "run_tool_chain",
-        # Sentinel background watches ("wake me if TSLA hits $300")
-        "set_watch",
+        # Watch Desk background watches ("wake me if TSLA hits $300")
+        "watch_ticker",
         "list_watches",
         "clear_watch",
+        # Parameter governance (human-driven chat can view + adjust)
+        "get_parameters",
+        "propose_parameter_change",
         # Portfolio & trading
         "get_portfolio_state",
         "get_position_pnl",

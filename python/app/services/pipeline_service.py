@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.services.pipeline_state import PipelineStateDB
+from app.services.parameter_store import get_param
 from app.v3.orchestrator import run_v3_pipeline
 from app.telemetry import send_system_log
+from app.utils.tz import ensure_aware
 from app.utils.us_ticker_resolver import (
     is_us_tradeable,
     resolve_to_us_ticker,
@@ -48,7 +50,8 @@ def resolve_buy_size_pct(
     confidence: int | float,
     max_position_size_pct: float,
 ) -> float | None:
-    """Resolve the BUY position size (fraction of cash) from the agents' decision.
+    """Resolve the BUY position size (fraction of portfolio equity, cash-capped
+    at execution) from the agents' decision.
 
     Deferred-item 8.1 decision (2026-07-15): an EXPLICIT position_size_pct <= 0
     from the board/synthesizer means "watch, don't trade" — returns None and no
@@ -152,15 +155,8 @@ class PipelineService:
                 started_at = db_state.get("started_at")
                 is_stale = False
                 if started_at:
-                    if isinstance(started_at, str):
-                        try:
-                            from dateutil.parser import parse as parse_date
-                            started_at = parse_date(started_at)
-                        except Exception:
-                            pass
+                    started_at = ensure_aware(started_at) or started_at
                     if isinstance(started_at, datetime):
-                        if started_at.tzinfo is None:
-                            started_at = started_at.replace(tzinfo=timezone.utc)
                         delta = datetime.now(timezone.utc) - started_at
                         if delta.total_seconds() > 1800: # 30 minutes
                             is_stale = True
@@ -210,9 +206,9 @@ class PipelineService:
             "benchmark_group", "discovered_tickers",
             # Scheduler / research-governor provenance (informational)
             "dynamic_selection_mode", "research_request", "research_reason",
-            # Sentinel wake provenance (informational; wake context flows via
-            # sentinel_events, not the payload) + stop-loss trigger tag.
-            "sentinel_wake", "sentinel_trigger", "trigger_type",
+            # Watch Desk wake provenance (informational; wake context flows via
+            # watch_events, not the payload) + stop-loss trigger tag.
+            "watch_wake", "watch_trigger", "trigger_type",
         }
         _unknown = set(kwargs) - _known_keys
         if _unknown:
@@ -285,8 +281,14 @@ class PipelineService:
             result dicts returned by _process_ticker (None entries are skipped)."""
             try:
                 from app.log_manager import log_manager
+                from app.v3 import collector_stats
 
+                cstats = collector_stats.consume(cycle_id)
                 summary = {
+                    "collector_ok": cstats["ok"],
+                    "collector_error": cstats["error"],
+                    "collector_skipped": cstats["skipped"],
+                    "collector_failures": cstats["failures"],
                     "report_generated": report_generated,
                     "trigger_type": "v3",
                     "started_at": cls._state.get("started_at"),
@@ -321,10 +323,68 @@ class PipelineService:
                 ):
                     summary["no_trade_reason"] = "hold_only"
                 log_manager.log_cycle_summary(cycle_id, summary)
+                _persist_benchmarks(summary, results)
                 return summary
             except Exception as sum_err:
                 logger.error("[PipelineService] Failed to persist cycle summary: %s", sum_err)
                 return None
+
+        def _persist_benchmarks(summary: dict, results) -> None:
+            """Revive cycle_benchmarks/cycle_ticker_benchmarks (the DevOps
+            Performance panel). Their V2 writer died in the V3 purge, freezing
+            the dashboard on 2026-06-24 data. V3 interleaves collect/analyze
+            per ticker, so the per-phase ms columns stay NULL — the panel
+            renders the summary cards (total, cache hit, tickers) without them.
+            """
+            try:
+                from app.db.connection import get_db
+
+                ok = summary.get("collector_ok", 0) or 0
+                err = summary.get("collector_error", 0) or 0
+                skipped = summary.get("collector_skipped", 0) or 0
+                steps_total = ok + err + skipped
+                ticker_count = len(summary.get("tickers_final") or [])
+                total_ms = summary.get("elapsed_ms")
+                with get_db() as db:
+                    tokens_row = db.execute(
+                        "SELECT COALESCE(SUM(tokens_used), 0) FROM llm_audit_logs WHERE cycle_id = %s",
+                        [cycle_id],
+                    ).fetchone()
+                    db.execute(
+                        """INSERT INTO cycle_benchmarks
+                        (cycle_id, started_at, finished_at, total_ms, ticker_count, avg_ticker_ms,
+                         steps_total, steps_skipped, steps_ok, steps_error, total_tokens, cache_hit_pct, status)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (cycle_id) DO UPDATE SET
+                            finished_at = EXCLUDED.finished_at, total_ms = EXCLUDED.total_ms,
+                            ticker_count = EXCLUDED.ticker_count, avg_ticker_ms = EXCLUDED.avg_ticker_ms,
+                            steps_total = EXCLUDED.steps_total, steps_skipped = EXCLUDED.steps_skipped,
+                            steps_ok = EXCLUDED.steps_ok, steps_error = EXCLUDED.steps_error,
+                            total_tokens = EXCLUDED.total_tokens, cache_hit_pct = EXCLUDED.cache_hit_pct,
+                            status = EXCLUDED.status""",
+                        [
+                            cycle_id, summary.get("started_at"), summary.get("ended_at"),
+                            total_ms, ticker_count,
+                            int(total_ms / ticker_count) if total_ms and ticker_count else None,
+                            steps_total, skipped, ok, err,
+                            int(tokens_row[0]) if tokens_row else 0,
+                            round(skipped / steps_total * 100, 1) if steps_total else 0.0,
+                            summary.get("status"),
+                        ],
+                    )
+                    for r in (results or []):
+                        if not isinstance(r, dict) or not r.get("ticker"):
+                            continue
+                        db.execute(
+                            """INSERT INTO cycle_ticker_benchmarks
+                            (cycle_id, ticker, action, confidence)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (cycle_id, ticker) DO UPDATE SET
+                                action = EXCLUDED.action, confidence = EXCLUDED.confidence""",
+                            [cycle_id, r["ticker"], r.get("action"), r.get("confidence")],
+                        )
+            except Exception as bench_err:
+                logger.warning("[PipelineService] cycle_benchmarks write failed (non-fatal): %s", bench_err)
 
         try:
             # ── Set prism_client.url ONCE for the entire cycle ──
@@ -546,10 +606,8 @@ class PipelineService:
                             
                         # 5. Construct dictionary structure
                         for tkr, info in all_pool.items():
-                            last_date = last_analysis_map.get(tkr)
+                            last_date = ensure_aware(last_analysis_map.get(tkr))
                             if last_date:
-                                if last_date.tzinfo is None:
-                                    last_date = last_date.replace(tzinfo=timezone.utc)
                                 days_ago = (datetime.now(timezone.utc) - last_date).days
                                 dsa_str = f"{days_ago} days ago" if days_ago > 0 else "Today"
                             else:
@@ -622,10 +680,8 @@ class PipelineService:
                                 score += 10.0  # Top-performer conviction
                                 
                             # Recency penalty: penalize score if analyzed in the last 3 days
-                            last_date = last_analysis_map.get(t)
+                            last_date = ensure_aware(last_analysis_map.get(t))
                             if last_date:
-                                if last_date.tzinfo is None:
-                                    last_date = last_date.replace(tzinfo=timezone.utc)
                                 days_ago = (datetime.now(timezone.utc) - last_date).days
                                 if days_ago <= 0:
                                     score -= 30.0
@@ -877,16 +933,34 @@ class PipelineService:
                 # the trade outcome mutated the result)
                 from app.services.result_saver import save_analysis_result
                 snapshot = _ticker_snapshot_map.get(ticker_name)
+                if snapshot is None:
+                    # Explicit-ticker cycles bypass the screener, so the snapshot
+                    # map is empty — without a fallback every such cycle persists
+                    # analysis_price=NULL and the next Freshness Gate / Watch Desk
+                    # baseline has nothing to diff against.
+                    try:
+                        from app.data.market_data import build_snapshot
+                        ms = await build_snapshot(ticker_name)
+                        if ms.price:
+                            snapshot = {"price": ms.price, "rsi": ms.rsi_14, "fund_count": 0}
+                            try:
+                                from app.collectors.fund_scanner import get_institutional_signal
+                                snapshot["fund_count"] = get_institutional_signal(ticker_name).get("fund_count", 0)
+                            except Exception:
+                                pass
+                            _ticker_snapshot_map[ticker_name] = snapshot
+                    except Exception as _snap_e:
+                        logger.warning("[PipelineService] %s: snapshot fallback failed (non-fatal): %s", ticker_name, _snap_e)
                 save_analysis_result(ticker_name, cycle_id, result, snapshot=snapshot)
 
-                # Auto-arm a Sentinel baseline watch so this ticker keeps being
+                # Auto-arm a Watch Desk baseline watch so this ticker keeps being
                 # monitored cheaply (in code) without waking the agent again until
                 # a real trigger trips. Best-effort — never breaks the cycle.
                 try:
-                    from app.services.sentinel import derive_baseline_watch
+                    from app.services.watch_desk import derive_baseline_watch
                     derive_baseline_watch(ticker_name, result, snapshot, cycle_id)
-                except Exception as _sen_e:
-                    logger.warning("[PipelineService] Sentinel baseline skipped for %s: %s", ticker_name, _sen_e)
+                except Exception as _wd_e:
+                    logger.warning("[PipelineService] Watch Desk baseline skipped for %s: %s", ticker_name, _wd_e)
 
                 if not trade_flag:
                     return result
@@ -914,10 +988,10 @@ class PipelineService:
                             ticker_name, action, policy_action,
                         )
                         result["no_trade_reason"] = policy_action
-                    elif action in ("BUY", "SELL") and confidence < _cfg.ANALYSIS_CONFIDENCE_THRESHOLD:
+                    elif action in ("BUY", "SELL") and confidence < get_param("ANALYSIS_CONFIDENCE_THRESHOLD"):
                         logger.warning(
                             "[PipelineService] %s: %s blocked — confidence %d%% < threshold %d%%",
-                            ticker_name, action, confidence, _cfg.ANALYSIS_CONFIDENCE_THRESHOLD,
+                            ticker_name, action, confidence, get_param("ANALYSIS_CONFIDENCE_THRESHOLD"),
                         )
                         result["no_trade_reason"] = REASON_CONFIDENCE_BLOCKED
                     elif action == "BUY":
@@ -928,7 +1002,7 @@ class PipelineService:
                         # directive and skips the trade entirely (deferred item 8.1).
                         agent_size_pct = (result.get("estimate") or {}).get("position_size_pct")
                         size_pct = resolve_buy_size_pct(
-                            agent_size_pct, confidence, _cfg.MAX_POSITION_SIZE_PCT
+                            agent_size_pct, confidence, get_param("MAX_POSITION_SIZE_PCT")
                         )
                         if size_pct is None:
                             result["no_trade_reason"] = REASON_WATCH_ONLY
@@ -940,12 +1014,18 @@ class PipelineService:
                         else:
                             result["trade_attempted"] = True
                             logger.info(
-                                "[PipelineService] %s: sizing %s → %.1f%% of cash",
+                                "[PipelineService] %s: sizing %s → %.1f%% of equity (cash-capped)",
                                 ticker_name,
                                 "from agent decision" if isinstance(agent_size_pct, (int, float)) and agent_size_pct > 0 else "via confidence fallback",
                                 size_pct * 100,
                             )
-                            trade_res = await buy(bot_id=active_bot_id, ticker=ticker_name, size_pct=size_pct, cycle_id=cycle_id)
+                            _est = result.get("estimate") or {}
+                            trade_res = await buy(
+                                bot_id=active_bot_id, ticker=ticker_name, size_pct=size_pct, cycle_id=cycle_id,
+                                stop_loss_price=_est.get("stop_loss"),
+                                take_profit_price=_est.get("take_profit"),
+                                exit_style=_est.get("exit_style"),
+                            )
                             if isinstance(trade_res, dict) and trade_res.get("error"):
                                 result["no_trade_reason"] = resolve_no_trade_reason(trade_res)
                                 logger.warning("[PipelineService] %s: BUY not executed: %s", ticker_name, trade_res["error"])
@@ -1013,10 +1093,32 @@ class PipelineService:
                                 ticker_name, policy_action,
                             )
                         from app.trading.order_triggers import create_trigger
-                        if stop_loss and allowed["sell_side"]:
-                            await create_trigger(bot_id=active_bot_id, ticker=ticker_name, trigger_type="stop_loss", trigger_price=float(stop_loss), action="SELL", qty_pct=1.0, created_by="pipeline")
-                        if take_profit and allowed["sell_side"]:
-                            await create_trigger(bot_id=active_bot_id, ticker=ticker_name, trigger_type="take_profit", trigger_price=float(take_profit), action="SELL", qty_pct=1.0, created_by="pipeline")
+                        from app.trading.paper_trader import normalize_exit_style, update_position_exits
+                        exit_style = normalize_exit_style(decision.get("exit_style"))
+                        if allowed["sell_side"] and not result.get("trade_executed"):
+                            # Held position, no trade this cycle: re-point the
+                            # position's OWN exits to the fresh agent levels
+                            # (buy() handles this when a trade executed).
+                            update_position_exits(
+                                active_bot_id, ticker_name,
+                                stop_loss_price=stop_loss,
+                                take_profit_price=take_profit,
+                                exit_style=exit_style,
+                            )
+                        # Exit ownership (dual-stop fix): with 'hard_stop' the
+                        # position's stored stop/target execute directly — no
+                        # parallel re-analysis trigger rows are registered, and
+                        # standing sell-side rows from pre-fix cycles retire.
+                        # 'reanalyze_on_breach' registers the wake triggers and
+                        # the background monitor leaves the position alone.
+                        if exit_style == "hard_stop" and allowed["sell_side"]:
+                            from app.trading.order_triggers import deactivate_sell_side_triggers
+                            deactivate_sell_side_triggers(active_bot_id, ticker_name)
+                        if exit_style == "reanalyze_on_breach":
+                            if stop_loss and allowed["sell_side"]:
+                                await create_trigger(bot_id=active_bot_id, ticker=ticker_name, trigger_type="stop_loss", trigger_price=float(stop_loss), action="SELL", qty_pct=1.0, created_by="pipeline")
+                            if take_profit and allowed["sell_side"]:
+                                await create_trigger(bot_id=active_bot_id, ticker=ticker_name, trigger_type="take_profit", trigger_price=float(take_profit), action="SELL", qty_pct=1.0, created_by="pipeline")
                         if dynamic_trigger and isinstance(dynamic_trigger, dict) and allowed["dynamic"]:
                             dt_type = dynamic_trigger.get("type")
                             dt_val = dynamic_trigger.get("value")
@@ -1095,11 +1197,15 @@ class PipelineService:
             except Exception as wb_err:
                 logger.warning("[PipelineService] Whiteboard retention failed: %s", wb_err)
 
-            # Fire and forget the post-cycle evolution and evaluation
+            # Fire and forget the post-cycle LLM reviewer.
+            # The per-cycle strategy generator (run_evolution_loop) was
+            # removed 2026-07-19: its data CSV never existed in the container
+            # so it backtested on SYNTHETIC series, promoted 1 strategy ever,
+            # and wrote blank lesson rows into the table agents read. The
+            # nightly Equation Lab covers strategy R&D on real data.
             try:
                 from app.cognition.evolution.evaluator import run_post_cycle_evaluation
-                from app.cognition.evolution.evolution_runner import run_evolution_loop
-                
+
                 def make_done_callback(name):
                     def callback(t):
                         try:
@@ -1113,21 +1219,15 @@ class PipelineService:
                 # Run the LLM reviewer
                 t1 = asyncio.create_task(run_post_cycle_evaluation(cycle_id))
                 t1.add_done_callback(make_done_callback("run_post_cycle_evaluation"))
-                
-                # Run the quant strategy generator
-                t2 = asyncio.create_task(run_evolution_loop(data_path="data/latest_market_data.csv"))
-                t2.add_done_callback(make_done_callback("run_evolution_loop"))
-                
+
                 if not hasattr(cls, "_background_tasks"):
                     cls._background_tasks = set()
                 cls._background_tasks.add(t1)
-                cls._background_tasks.add(t2)
                 t1.add_done_callback(cls._background_tasks.discard)
-                t2.add_done_callback(cls._background_tasks.discard)
 
-                logger.info("[PipelineService] Triggered post-cycle evolution tasks.")
+                logger.info("[PipelineService] Triggered post-cycle evaluation task.")
             except Exception as ev_err:
-                logger.error(f"[PipelineService] Failed to trigger evolution: {ev_err}")
+                logger.error(f"[PipelineService] Failed to trigger evaluation: {ev_err}")
 
             cls._state.update({
                 "status": "done",
@@ -1182,6 +1282,19 @@ class PipelineService:
 
     @classmethod
     async def stop_cycle(cls, _stop_t1=None):
+        # Nothing running (already done/error/idle)? Leave the terminal state
+        # alone. The deploy-shutdown path calls this unconditionally and used
+        # to relabel a COMPLETED cycle as "Cycle stopped by user" at boot,
+        # corrupting the cycle's postmortem status in the UI.
+        if not (cls._cycle_task and not cls._cycle_task.done()):
+            current = cls._state.get("status")
+            if current in ("done", "error", "stopped", "idle", None):
+                logger.info(
+                    "[PipelineService] stop_cycle: no active cycle (status=%s) — state left untouched",
+                    current,
+                )
+                return {"status": current or "idle"}
+
         cls.request_stop()
         if cls._cycle_task and not cls._cycle_task.done():
             try:

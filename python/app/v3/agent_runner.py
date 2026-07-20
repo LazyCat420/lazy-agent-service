@@ -32,6 +32,31 @@ from app.v3.quality_scorer import score_artifact
 
 logger = logging.getLogger(__name__)
 
+# Tool-playbook tips cache: (agent_name -> (tips, fetched_monotonic)).
+_PLAYBOOK_CACHE: dict[str, tuple[str, float]] = {}
+_PLAYBOOK_TTL_SEC = 3600.0
+
+
+def _get_tool_playbook_tips(agent_name: str, limit: int = 3) -> str:
+    """Compact per-agent tool guidance from the eval layer's tool_playbook."""
+    cached = _PLAYBOOK_CACHE.get(agent_name)
+    if cached and (time.monotonic() - cached[1]) < _PLAYBOOK_TTL_SEC:
+        return cached[0]
+    tips = ""
+    try:
+        from app.db.connection import get_db
+        with get_db() as db:
+            rows = db.execute(
+                "SELECT recommended_tool_sequence FROM tool_playbook "
+                "WHERE agent_role = %s ORDER BY created_at DESC LIMIT %s",
+                [agent_name, limit],
+            ).fetchall()
+        tips = "\n".join(f"- {r[0]}" for r in rows if r and r[0])
+    except Exception as e:  # noqa: BLE001 — advisory context, never blocks the agent
+        logger.debug("[V3Runner] tool_playbook fetch failed: %s", e)
+    _PLAYBOOK_CACHE[agent_name] = (tips, time.monotonic())
+    return tips
+
 
 async def run_v3_agent(
     desk: SharedDesk,
@@ -213,6 +238,18 @@ async def run_v3_agent(
                 dynamic_sections.append(wb_summary)
         except Exception as wb_err:
             logger.warning("[V3Runner] Failed to fetch whiteboard summary: %s", wb_err)
+
+        # Tool playbook: the eval layer grades every trace into tool-success
+        # stats, but tool_playbook had ZERO readers — all that compute landed
+        # in a write-only table. Surface this agent's proven tools (compact).
+        try:
+            playbook_tips = _get_tool_playbook_tips(agent_name)
+            if playbook_tips:
+                dynamic_sections.append(
+                    "## Tool Playbook (your historically highest-scoring tools)\n" + playbook_tips
+                )
+        except Exception as pb_err:
+            logger.debug("[V3Runner] Tool playbook lookup skipped: %s", pb_err)
 
         dynamic_block = "\n\n".join(dynamic_sections)
 
@@ -549,39 +586,9 @@ def _parse_artifact(
     if "</thought_process>" in text:
         text = text.rsplit("</thought_process>", 1)[-1]
 
-    # Strategy 1: Direct JSON parse
-    try:
-        parsed = json.loads(text.strip())
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    # Strategy 2: JSON from markdown code blocks
-    import re
-    code_block_pattern = r"```(?:json)?\s*\n?(.*?)\n?```"
-    matches = re.findall(code_block_pattern, text, re.DOTALL)
-    for match in matches:
-        try:
-            parsed = json.loads(match.strip())
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            continue
-
-    # Strategy 3: Find JSON object anywhere in text
-    try:
-        # Find the first { and last } and try to parse
-        start = text.index("{")
-        end = text.rindex("}") + 1
-        candidate = text[start:end]
-        parsed = json.loads(candidate)
-        if isinstance(parsed, dict):
-            return parsed
-    except (ValueError, json.JSONDecodeError):
-        pass
-
-    # Strategy 4: Use the existing parse_json_response utility
+    # Delegate to the shared util — it already covers what the old 4-strategy
+    # ladder did here (direct parse, fenced blocks, balanced-brace scan) plus
+    # placeholder filtering and the malformed-text fallback.
     try:
         from app.utils.text_utils import parse_json_response
         parsed = parse_json_response(text)

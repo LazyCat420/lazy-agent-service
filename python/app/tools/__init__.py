@@ -12,6 +12,8 @@ from . import quant_tools
 from . import portfolio_tools
 from . import reddit_tools
 from . import tool_chains
-from . import sentinel_tools
+from . import watch_desk_tools
+from . import parameter_tools
+from . import smart_money_tools
 
 __all__ = ["registry", "PermissionLevel"]

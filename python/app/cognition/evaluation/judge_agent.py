@@ -49,6 +49,122 @@ DEEPEVAL_MAX_RETRIES = int(os.environ.get("DEEPEVAL_MAX_RETRIES", "2"))
 _DEEPEVAL_CONCURRENCY = int(os.environ.get("MAX_CONCURRENT_DEEPEVAL", "3"))
 _deepeval_semaphore = asyncio.Semaphore(_DEEPEVAL_CONCURRENCY)
 
+# ── DeepEval circuit breaker ──
+# When the eval model can't produce DeepEval-parseable output, EVERY metric
+# call fails after retries (~2min per decision, observed exhausting the
+# strategy auditor's whole backfill budget on 2/4 decisions). After
+# _DEEPEVAL_BREAKER_LIMIT consecutive metric failures, skip DeepEval for
+# _DEEPEVAL_BREAKER_COOLDOWN_SEC and score with the local judge + ROUGE only.
+_DEEPEVAL_BREAKER_LIMIT = int(os.environ.get("DEEPEVAL_BREAKER_LIMIT", "4"))
+_DEEPEVAL_BREAKER_COOLDOWN_SEC = float(os.environ.get("DEEPEVAL_BREAKER_COOLDOWN_SEC", str(6 * 3600)))
+_deepeval_consecutive_failures = 0
+_deepeval_disabled_until = 0.0
+
+
+def _deepeval_breaker_open() -> bool:
+    import time as _time
+    return _time.monotonic() < _deepeval_disabled_until
+
+
+def _deepeval_record_outcome(success: bool) -> None:
+    """Track consecutive metric failures; open the breaker at the limit."""
+    global _deepeval_consecutive_failures, _deepeval_disabled_until
+    import time as _time
+    if success:
+        _deepeval_consecutive_failures = 0
+        return
+    _deepeval_consecutive_failures += 1
+    if _deepeval_consecutive_failures >= _DEEPEVAL_BREAKER_LIMIT:
+        _deepeval_disabled_until = _time.monotonic() + _DEEPEVAL_BREAKER_COOLDOWN_SEC
+        _deepeval_consecutive_failures = 0
+        logger.warning(
+            "[JUDGE] DeepEval breaker OPEN — %d consecutive metric failures; "
+            "skipping DeepEval metrics for %.0f min (local judge + ROUGE still run).",
+            _DEEPEVAL_BREAKER_LIMIT, _DEEPEVAL_BREAKER_COOLDOWN_SEC / 60,
+        )
+
+
+GROUNDING_JUDGE_SYSTEM = """You are a strict, impartial grounding evaluator for a quantitative trading firm.
+Given SOURCE CONTEXT (collected market data) and a DECISION OUTPUT (a trading bot's decision), score two things:
+
+1. faithfulness_score (0.0-1.0): Is every factual claim in the decision supported by the source context?
+   1.0 = every number, fact, and characterization traces to the context.
+   0.0 = the decision invents facts or contradicts the context.
+2. relevancy_score (0.0-1.0): Does the decision actually address the analyzed ticker and use the provided data,
+   rather than generic boilerplate that could apply to any stock?
+
+Return EXACTLY this JSON, no prose, no markdown fences:
+{
+    "faithfulness_score": <float 0.0-1.0>,
+    "faithfulness_reason": "<one sentence: the worst unsupported claim, or why it is fully supported>",
+    "relevancy_score": <float 0.0-1.0>,
+    "relevancy_reason": "<one sentence>"
+}"""
+
+GROUNDING_JUDGE_TEMPLATE = """### SOURCE CONTEXT
+{context}
+
+### DECISION OUTPUT
+{output}"""
+
+
+async def _run_grounding_judge(context_blob: str, raw_response: str, decision_id: str, ticker: str) -> tuple[dict | None, str | None]:
+    """In-house replacement for DeepEval Faithfulness/AnswerRelevancy.
+
+    DeepEval's bare json.loads rejected local-model output on most rows
+    ("Evaluation LLM outputted an invalid JSON"), so grounding was silently
+    dead. Same judge LLM, our own schema, parsed with parse_json_response
+    (fence-stripping + repair). Reuses the DeepEval breaker/semaphore so a
+    broken judge model still can't stall the backfill budget.
+
+    Returns (scores_dict, infra_error) — exactly one is non-None.
+    """
+    if _deepeval_breaker_open():
+        logger.info("[JUDGE] Grounding breaker open — skipping for %s", decision_id)
+        return None, "Grounding judge skipped: circuit breaker open"
+
+    last_err: Exception | None = None
+    for attempt in range(DEEPEVAL_MAX_RETRIES):
+        try:
+            async with _deepeval_semaphore:
+                response, _, _ = await asyncio.wait_for(
+                    llm.chat(
+                        system=GROUNDING_JUDGE_SYSTEM,
+                        user=GROUNDING_JUDGE_TEMPLATE.format(
+                            context=context_blob, output=(raw_response or "Empty Response")[:8000],
+                        ),
+                        temperature=0.0,
+                        max_tokens=1024,
+                        priority=Priority.HIGH,
+                        agent_name="grounding_judge",
+                        ticker=ticker,
+                    ),
+                    timeout=DEEPEVAL_TIMEOUT_SEC,
+                )
+            payload = parse_json_response(response)
+            scores = {
+                "faithfulness_score": max(0.0, min(1.0, float(payload["faithfulness_score"]))),
+                "relevancy_score": max(0.0, min(1.0, float(payload["relevancy_score"]))),
+                "faithfulness_reason": str(payload.get("faithfulness_reason") or "")[:500],
+                "relevancy_reason": str(payload.get("relevancy_reason") or "")[:500],
+            }
+            _deepeval_record_outcome(True)
+            return scores, None
+        except Exception as eval_err:
+            last_err = eval_err
+            if attempt < DEEPEVAL_MAX_RETRIES - 1:
+                logger.warning(
+                    "Grounding judge attempt %d failed for %s: %s — retrying",
+                    attempt + 1, decision_id, eval_err,
+                )
+                await asyncio.sleep(2)
+    logger.error(
+        "Grounding judge failed for %s after %d attempts: %s",
+        decision_id, DEEPEVAL_MAX_RETRIES, last_err,
+    )
+    _deepeval_record_outcome(False)
+    return None, f"Grounding Judge Error: {type(last_err).__name__}: {last_err}"
+
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are an independent, institutional Auditor Agent (LLM-as-a-Judge) for a quantitative trading firm.
@@ -265,121 +381,33 @@ async def evaluate_decision(decision_id: str) -> bool:
                 raw_response=raw_response or "Empty Response",
             )
 
-            # 5. 3rd-Party Evaluation Checks (DeepEval wrapper — lazy import
-            #    to avoid printing the DeepEval banner on every module load)
-            from .deepeval_client import VLLMDeepEvalWrapper
-            from deepeval.metrics import FaithfulnessMetric, AnswerRelevancyMetric
-            from deepeval.test_case import LLMTestCase
-
-            eval_model = VLLMDeepEvalWrapper()
-            faithfulness = FaithfulnessMetric(
-                threshold=FAITHFULNESS_THRESHOLD, model=eval_model, include_reason=True
-            )
-            relevancy = AnswerRelevancyMetric(
-                threshold=RELEVANCY_THRESHOLD, model=eval_model, include_reason=True
-            )
-            test_case = LLMTestCase(
-                input=user_prompt,
-                actual_output=raw_response or "Empty Response",
-                retrieval_context=[context_blob],
-            )
-
+            # 5. Grounding checks — in-house judge (replaced DeepEval 2026-07-19)
             red_cards = []
             # Evaluator crashes are infra problems, not hallucinations — they
             # must not zero the decision's quality score like a red card does.
             infra_errors = []
 
-            # ── Faithfulness check (with retry + semaphore) ──
-            faith_succeeded = False
-            for attempt in range(DEEPEVAL_MAX_RETRIES):
-                try:
-                    async with _deepeval_semaphore:
-                        await asyncio.wait_for(
-                            faithfulness.a_measure(test_case),
-                            timeout=DEEPEVAL_TIMEOUT_SEC,
-                        )
-                    logger.debug(
-                        "DeepEval faithfulness for %s: score=%.3f reason=%s",
-                        decision_id,
-                        faithfulness.score or 0,
-                        (faithfulness.reason or "")[:200],
+            grounding, grounding_infra_err = await _run_grounding_judge(
+                context_blob, raw_response, decision_id, ticker
+            )
+            if grounding is not None:
+                if grounding["faithfulness_score"] < FAITHFULNESS_THRESHOLD:
+                    red_cards.append(
+                        f"Faithfulness Failure (GroundingJudge): {grounding['faithfulness_reason'] or grounding['faithfulness_score']}"
                     )
-                    faith_succeeded = True
-                    if not faithfulness.is_successful():
-                        reasoning = faithfulness.reason or str(faithfulness.score)
-                        red_cards.append(
-                            f"Faithfulness Failure (DeepEval): {reasoning}"
-                        )
-                        if failure_reason == FailureReason.NONE:
-                            failure_reason = FailureReason.FAITHFULNESS
-                    break
-                except Exception as eval_err:
-                    if attempt < DEEPEVAL_MAX_RETRIES - 1:
-                        logger.warning(
-                            "DeepEval faithfulness attempt %d failed for %s: %s — retrying",
-                            attempt + 1,
-                            decision_id,
-                            eval_err,
-                        )
-                        await asyncio.sleep(2)
-                    else:
-                        logger.error(
-                            "DeepEval faithfulness failed for %s after %d attempts: %s",
-                            decision_id,
-                            DEEPEVAL_MAX_RETRIES,
-                            eval_err,
-                        )
-                        infra_errors.append(
-                            f"DeepEval Faithfulness Error: {type(eval_err).__name__}: {eval_err}"
-                        )
-                        if failure_reason == FailureReason.NONE:
-                            failure_reason = FailureReason.DEEPEVAL_ERROR
-            
-            # ── Answer Relevancy check (with retry + semaphore) ──
-            relevancy_succeeded = False
-            for attempt in range(DEEPEVAL_MAX_RETRIES):
-                try:
-                    async with _deepeval_semaphore:
-                        await asyncio.wait_for(
-                            relevancy.a_measure(test_case),
-                            timeout=DEEPEVAL_TIMEOUT_SEC,
-                        )
-                    logger.debug(
-                        "DeepEval relevancy for %s: score=%.3f reason=%s",
-                        decision_id,
-                        relevancy.score or 0,
-                        (relevancy.reason or "")[:200],
+                    if failure_reason == FailureReason.NONE:
+                        failure_reason = FailureReason.FAITHFULNESS
+                if grounding["relevancy_score"] < RELEVANCY_THRESHOLD:
+                    red_cards.append(
+                        f"Answer Relevancy Failure (GroundingJudge): {grounding['relevancy_reason'] or grounding['relevancy_score']}"
                     )
-                    relevancy_succeeded = True
-                    if not relevancy.is_successful():
-                        reasoning = relevancy.reason or str(relevancy.score)
-                        red_cards.append(
-                            f"Answer Relevancy Failure (DeepEval): {reasoning}"
-                        )
-                        if failure_reason == FailureReason.NONE:
-                            failure_reason = FailureReason.RELEVANCY
-                    break
-                except Exception as eval_err:
-                    if attempt < DEEPEVAL_MAX_RETRIES - 1:
-                        logger.warning(
-                            "DeepEval relevancy attempt %d failed for %s: %s — retrying",
-                            attempt + 1,
-                            decision_id,
-                            eval_err,
-                        )
-                        await asyncio.sleep(2)
-                    else:
-                        logger.error(
-                            "DeepEval relevancy failed for %s after %d attempts: %s",
-                            decision_id,
-                            DEEPEVAL_MAX_RETRIES,
-                            eval_err,
-                        )
-                        infra_errors.append(
-                            f"DeepEval Relevancy Error: {type(eval_err).__name__}: {eval_err}"
-                        )
-                        if failure_reason == FailureReason.NONE:
-                            failure_reason = FailureReason.DEEPEVAL_ERROR
+                    if failure_reason == FailureReason.NONE:
+                        failure_reason = FailureReason.RELEVANCY
+            else:
+                if grounding_infra_err:
+                    infra_errors.append(grounding_infra_err)
+                if failure_reason == FailureReason.NONE:
+                    failure_reason = FailureReason.DEEPEVAL_ERROR
 
             # 6. ROUGE-L Grounding Check (Semantic/Text Overlap)
             # Extract meaningful reasoning text and use full context for fair comparison
@@ -497,17 +525,19 @@ async def evaluate_decision(decision_id: str) -> bool:
             if infra_errors:
                 evidence["deepeval_infra_errors"] = infra_errors
 
+            # Key name kept as "deepeval_scorecard": the HeLM panel and the
+            # strategy auditor read this shape from stored rows.
             evidence["deepeval_scorecard"] = {
                 "faithfulness": {
-                    "score": faithfulness.score if faith_succeeded else None,
-                    "reason": faithfulness.reason if faith_succeeded else None,
-                    "passed": faithfulness.is_successful() if faith_succeeded else False
+                    "score": grounding["faithfulness_score"] if grounding else None,
+                    "reason": grounding["faithfulness_reason"] if grounding else None,
+                    "passed": (grounding["faithfulness_score"] >= FAITHFULNESS_THRESHOLD) if grounding else False,
                 },
                 "relevancy": {
-                    "score": relevancy.score if relevancy_succeeded else None,
-                    "reason": relevancy.reason if relevancy_succeeded else None,
-                    "passed": relevancy.is_successful() if relevancy_succeeded else False
-                }
+                    "score": grounding["relevancy_score"] if grounding else None,
+                    "reason": grounding["relevancy_reason"] if grounding else None,
+                    "passed": (grounding["relevancy_score"] >= RELEVANCY_THRESHOLD) if grounding else False,
+                },
             }
 
             evidence_json = json.dumps(evidence)

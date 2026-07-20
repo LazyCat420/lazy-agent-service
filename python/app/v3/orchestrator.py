@@ -97,7 +97,7 @@ async def run_v3_pipeline(
     )
     try:
         from app.v3.data_report import build_ticker_data_report
-        data_report = await build_ticker_data_report(ticker, emit=emit)
+        data_report = await build_ticker_data_report(ticker, emit=emit, cycle_id=cycle_id)
         emit(
             "analyzing", f"v3_precollect_ok_{ticker}",
             f"📥 {ticker}: Market & news pre-collection complete",
@@ -202,17 +202,11 @@ async def run_v3_pipeline(
                 desk.cycle_metadata["previous_desk_context"] = prev_context
                 
                 # Calculate days old for logging
-                dt_str = previous_desk.created_at
+                from app.utils.tz import ensure_aware
                 days_old = -1
-                if dt_str.endswith("Z"):
-                    dt_str = dt_str[:-1] + "+00:00"
-                try:
-                    dt = datetime.fromisoformat(dt_str)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
+                dt = ensure_aware(previous_desk.created_at)
+                if dt is not None:
                     days_old = (datetime.now(timezone.utc) - dt).days
-                except ValueError:
-                    pass
                 
                 logger.info(
                     "[V3] %s: Injected previous SharedDesk context from %d days ago (%d chars)",
@@ -247,20 +241,44 @@ async def run_v3_pipeline(
         hours_old = 9999
         if desk.cycle_metadata.get("previous_desk_context") and previous_desk:
             try:
-                dt_str = previous_desk.created_at
-                if dt_str.endswith("Z"): dt_str = dt_str[:-1] + "+00:00"
-                dt = datetime.fromisoformat(dt_str)
-                if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
-                hours_old = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+                from app.utils.tz import ensure_aware
+                dt = ensure_aware(previous_desk.created_at)
+                if dt is not None:
+                    hours_old = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
             except Exception as e:
                 logger.warning("[V3] %s: Triage hours_old calculation failed (defaulting to 9999): %s", ticker, e)
 
-        if hours_old >= settings.TRIAGE_DEEP_HOURS or news_count >= settings.TRIAGE_DEEP_NEWS_VOLUME:
+        from app.services.parameter_store import get_param as _get_param
+
+        # A standing cross-agent contradiction on the prior desk (fundamental
+        # vs quant/tournament dissent recorded by the contradiction shadow) is
+        # exactly the case one cheap delta agent should NOT re-affirm alone —
+        # force the full panel so the disagreement gets re-argued.
+        prior_contradictions = 0
+        try:
+            for _t in (getattr(previous_desk, "agent_telemetry", None) or []):
+                if isinstance(_t, dict) and _t.get("contradiction_count"):
+                    prior_contradictions = int(_t.get("contradiction_count") or 0)
+        except Exception:
+            prior_contradictions = 0
+
+        if hours_old >= _get_param("TRIAGE_DEEP_HOURS") or news_count >= _get_param("TRIAGE_DEEP_NEWS_VOLUME"):
             triage_tier = "v3_deep"
-        elif hours_old <= settings.TRIAGE_GLANCE_HOURS and news_count < settings.TRIAGE_DEEP_NEWS_VOLUME:
+        elif prior_contradictions > 0 and hours_old > _get_param("TRIAGE_GLANCE_HOURS") / 8:
+            triage_tier = "v3_deep"
+            logger.info(
+                "[V3] %s: Triage escalated to deep — prior desk carried %d unresolved "
+                "cross-agent contradiction(s)", ticker, prior_contradictions,
+            )
+        elif hours_old <= _get_param("TRIAGE_GLANCE_HOURS") and news_count == 0:
+            # Recently analysed AND nothing new at all → hard skip (cheapest).
             triage_tier = "v3_glance"
         else:
-            triage_tier = "v3_standard"
+            # Recently-ish analysed with some (sub-deep) news, or a modest-age
+            # re-look → the Delta Analyst does ONE cheap pass instead of the full
+            # panel, escalating only if it finds a material change. (Previously
+            # this band ran the full panel or was glance-skipped even with news.)
+            triage_tier = "v3_delta"
 
         emit("analyzing", f"v3_triage_{ticker}", f"🚦 {ticker}: Triage Gate evaluated → {triage_tier} (News: {news_count}, Age: {int(hours_old)}h)", status="ok")
         
@@ -282,6 +300,101 @@ async def run_v3_pipeline(
             result["triage_tier"] = triage_tier
             result["escalated"] = False
             return result
+
+        # ── Delta tier: ONE cheap agent re-looks the prior thesis vs what
+        # changed, and escalates to the full panel only if the change is
+        # material. This is the energy saver for re-looks / Watch Desk wakes.
+        if triage_tier == "v3_delta":
+            from app.v3.agents import delta_analyst
+            emit(
+                "analyzing", f"v3_delta_start_{ticker}",
+                f"⚡ {ticker}: Delta re-look — one agent checks the prior thesis vs "
+                f"what changed (skips the full panel unless material)",
+                status="ok",
+            )
+            try:
+                delta_outcome = await _run_agent_with_circuit_breaker(
+                    desk, delta_analyst, "delta_analyst", breaker, cycle_id, bot_id, emit,
+                )
+            except Exception as de:
+                logger.warning("[V3] %s: Delta agent errored (%s) — escalating to full panel", ticker, de)
+                delta_outcome = None
+
+            delta = desk.delta_report or {}
+            verdict = str(delta.get("verdict") or "").upper()
+            # Conservative: escalate on ESCALATE, an explicit escalate flag, an empty
+            # / failed delta, or any non-success outcome. Never rubber-stamp.
+            escalate = (
+                not delta
+                or bool(delta.get("escalate"))
+                or verdict == "ESCALATE"
+                or delta_outcome != PhaseOutcome.SUCCESS
+            )
+
+            if not escalate:
+                d_action = str(delta.get("action") or "HOLD").upper()
+                d_conf = int(delta.get("confidence") or 0)
+                desk.append_artifact("final_decision", {
+                    "summary": delta.get("summary", f"Delta re-look: {verdict or 'REAFFIRM'}"),
+                    "action": d_action,
+                    "confidence": d_conf,
+                    "reasoning": delta.get("reasoning", "Prior thesis reaffirmed by the delta re-look."),
+                    "persona_used": "Delta Analyst",
+                    "regime": (desk.regime_classification or {}).get("regime", "delta_relook"),
+                    "stop_loss": delta.get("stop_loss"),
+                    "take_profit": delta.get("take_profit"),
+                    "exit_style": delta.get("exit_style"),
+                    "dynamic_trigger": delta.get("dynamic_trigger"),
+                    "position_size_pct": delta.get("position_size_pct"),
+                })
+                emit(
+                    "analyzing", f"v3_delta_done_{ticker}",
+                    f"⚡ {ticker}: Delta {verdict or 'REAFFIRM'} → {d_action}@{d_conf}% "
+                    f"(full panel skipped — energy saved)",
+                    status="ok",
+                )
+                logger.info(
+                    "[V3] %s: Delta re-look %s → %s@%d%% (full panel skipped)",
+                    ticker, verdict or "REAFFIRM", d_action, d_conf,
+                )
+                # Delta cycles used to leave NO memory trace — a re-affirmed
+                # thesis never became an episodic observation, so the memory
+                # system was blind to every energy-saved cycle.
+                try:
+                    from app.services.memory.store import MemoryStore
+                    MemoryStore().add_episodic_observation({
+                        "cycle_id": cycle_id,
+                        "ticker": ticker,
+                        "source_type": "v3_delta",
+                        "observation_text": (
+                            f"Delta re-look for {ticker}: {verdict or 'REAFFIRM'} → "
+                            f"{d_action} @ {d_conf}% confidence. "
+                            f"{str(delta.get('reasoning') or '')[:400]}"
+                        ),
+                        "confidence_at_creation": d_conf / 100.0 if d_conf else 0.0,
+                        "outcome_label": d_action,
+                    })
+                except Exception as mem_err:
+                    logger.warning("[V3] %s: Delta memory write failed (non-fatal): %s", ticker, mem_err)
+                save_desk(desk)
+                elapsed_s = time.monotonic() - t_pipeline
+                result = _build_v1_compatible_result(desk, elapsed_s=elapsed_s)
+                result["triage_tier"] = "v3_delta"
+                result["escalated"] = False
+                return result
+
+            # Material change (or no usable delta) → fall through to the full panel.
+            emit(
+                "analyzing", f"v3_delta_escalate_{ticker}",
+                f"⚡ {ticker}: Delta found a material change → escalating to the full panel",
+                status="ok",
+            )
+            logger.info(
+                "[V3] %s: Delta re-look ESCALATED (%s) → running full panel",
+                ticker, delta.get("material_change", "material change or no prior thesis"),
+            )
+            triage_tier = "v3_delta_escalated"
+            # continue below to the full blackboard panel
 
     # ═══════════════════════════════════════════════════════════════════
     # DYNAMIC BLACKBOARD / P2P COORDINATOR
@@ -612,15 +725,28 @@ async def run_v3_pipeline(
             from app.cognition.contracts.evidence import EvidencePacket
             from app.cognition.contracts.retrieval import StructuredFact
 
+            # fact_type names are chosen to hit PERSONA_EVIDENCE_FILTER keywords
+            # ("fundamental"/"technical"/"news"/"macro"). The old names
+            # (desk_note/quant_report) matched NO Technical or Macro keyword, so
+            # filter_packet_for_persona fell back to the FULL packet for 3 of 4
+            # pitch personas — every persona anchored on the same quant thesis
+            # and the tournament produced 4 near-identical pitches.
             facts = []
-            for artifact_name in ("desk_note", "fundamental_report", "quant_report"):
+            for artifact_name, fact_type in (
+                ("fundamental_report", "fundamental_report"),
+                ("quant_report", "technical_quant_report"),
+                ("desk_note", "news_sentiment_desk_note"),
+                ("regime_classification", "macro_regime_note"),
+            ):
                 artifact = getattr(desk, artifact_name, None)
                 if artifact and isinstance(artifact, dict):
-                    summary = artifact.get("summary", "")
+                    summary = artifact.get("summary") or artifact.get("rationale") or ""
+                    if artifact_name == "regime_classification" and artifact.get("regime"):
+                        summary = f"Regime: {artifact['regime']}. {summary}"
                     if summary:
                         facts.append(
                             StructuredFact(
-                                fact_type=artifact_name,
+                                fact_type=fact_type,
                                 value=summary[:2000],
                                 timestamp=datetime.now(timezone.utc),
                             )
@@ -774,6 +900,34 @@ async def run_v3_pipeline(
             try:
                 from app.services.trade_result_saver import save_trade_result
                 trade_decision = desk.trade_decision or {}
+
+                # Contradiction gate — the shadow's first promotion. Unresolved
+                # cross-desk directional dissent (e.g. board BUY over a BEARISH
+                # quant/tournament verdict) is by definition mixed evidence, so
+                # stated confidence is capped at 60. Deliberately NOT the full
+                # downgrade-to-HOLD: only 1 of 7 flagged trades has resolved so
+                # far, so the shadow keeps collecting the evidence for that.
+                try:
+                    from app.v3.contradiction_shadow import compute_contradiction_shadow
+                    _gate = compute_contradiction_shadow(desk)
+                    _conf = trade_decision.get("confidence")
+                    if (
+                        _gate.get("would_downgrade_to_hold")
+                        and isinstance(_conf, (int, float))
+                        and _conf > 60
+                    ):
+                        trade_decision["confidence_uncapped"] = _conf
+                        trade_decision["confidence"] = 60
+                        trade_decision["confidence_cap_reason"] = (
+                            "contradiction_gate: unresolved cross-desk directional dissent "
+                            f"({_gate.get('sentiment_by_source')})"
+                        )
+                        logger.warning(
+                            "[V3] %s: contradiction gate capped confidence %s -> 60 (%s)",
+                            ticker, _conf, _gate.get("sentiment_by_source"),
+                        )
+                except Exception as gate_err:
+                    logger.warning("[V3] %s: contradiction gate failed (non-fatal): %s", ticker, gate_err)
                 if not trade_decision.get("regime"):
                     trade_decision["regime"] = regime
                 if not trade_decision.get("persona_used"):
@@ -810,6 +964,16 @@ async def run_v3_pipeline(
                     )
                 except Exception as audit_err:
                     logger.warning("[V3] %s: decision audit log failed (non-fatal): %s", ticker, audit_err)
+
+                # Paired challenger (observational): re-decide from the same
+                # desk evidence under the experimental spec, log the pair.
+                # Only runs when CHALLENGER_SPEC is set — see app/v3/challenger.
+                try:
+                    from app.v3.challenger import get_challenger_spec, run_challenger
+                    if get_challenger_spec():
+                        await run_challenger(desk, cycle_id, ticker, trade_decision)
+                except Exception as ch_err:
+                    logger.warning("[V3] %s: challenger failed (non-fatal): %s", ticker, ch_err)
 
                 try:
                     from app.trading.strategy_tracker import record_strategy
@@ -1058,6 +1222,29 @@ async def run_v3_pipeline(
     finally:
         whiteboard.unsubscribe(whiteboard_subscriber)
 
+    # ═══════════════════════════════════════════════════════════════════
+    # CONTRADICTION SHADOW — observation-only first step of the mesh.
+    # Reuses the previously-dead cognition contradiction detector across the
+    # finished desk and records what a "downgrade-to-HOLD on unresolved
+    # dissent" gate WOULD have done — WITHOUT changing this cycle's decision.
+    # Runs BEFORE save_desk so the report persists on the desk row + cycle log.
+    # ═══════════════════════════════════════════════════════════════════
+    try:
+        from app.v3.contradiction_shadow import compute_contradiction_shadow
+        _shadow = compute_contradiction_shadow(desk)
+        desk.record_agent_telemetry(_shadow)
+        if _shadow.get("contradiction_count"):
+            emit(
+                "analyzing", f"v3_shadow_{ticker}",
+                f"🔀 {ticker}: Contradiction shadow — "
+                f"{_shadow['contradiction_count']} cross-agent conflict(s), "
+                f"would_downgrade={_shadow.get('would_downgrade_to_hold')}",
+                status="ok",
+                data=_shadow,
+            )
+    except Exception as e:
+        logger.warning("[V3] %s: contradiction shadow failed (non-fatal): %s", ticker, e)
+
     try:
         if desk.phase == DeskPhase.INIT and desk.has_artifact("final_decision"):
             # JA triage SKIP: research/debate never ran, so INIT is the
@@ -1087,6 +1274,22 @@ async def run_v3_pipeline(
             "outcome_label": action,
         })
         logger.info("[V3] %s: Episodic observation recorded", ticker)
+
+        # Working-memory episodic store: read into EVERY agent prompt
+        # ("Relevant Past Cycles") but its only writer was a class that was
+        # never instantiated — agents saw a permanently empty section.
+        try:
+            from app.services.memory.episodic_memory import episodic_memory_store
+            episodic_memory_store.write_episode(
+                cycle_id=cycle_id,
+                ticker=ticker,
+                summary=f"{action} @ {confidence}% ({regime}): {reasoning[:200]}",
+                key_decisions=json.dumps([action]),
+                outcome="pending",
+                outcome_score=0.0,
+            )
+        except Exception as epi_err:
+            logger.warning("[V3] %s: working-memory episode write failed (non-fatal): %s", ticker, epi_err)
 
         # Consolidation: without this, episodic observations pile up forever
         # and canonical memories are never distilled from cycle experience —
@@ -1177,8 +1380,8 @@ def _apply_policy_gates(desk: SharedDesk) -> str:
     # Dynamic confidence floor (plan 3.1): the board may RAISE the bar for
     # this specific decision, never lower the firm-wide threshold.
     # pipeline_service still enforces the base threshold as belt-and-braces.
-    from app.config.config import settings as _settings
-    floor = _settings.ANALYSIS_CONFIDENCE_THRESHOLD
+    from app.services.parameter_store import get_param as _get_param
+    floor = _get_param("ANALYSIS_CONFIDENCE_THRESHOLD")
     board_floor = board.get("confidence_floor")
     if isinstance(board_floor, (int, float)) and not isinstance(board_floor, bool):
         floor = max(floor, board_floor)
@@ -1192,7 +1395,7 @@ def _apply_policy_gates(desk: SharedDesk) -> str:
     # is poor gets blocked regardless of headline confidence.
     conviction = board.get("conviction_vector") or {}
     data_quality = conviction.get("data_quality") if isinstance(conviction, dict) else None
-    if isinstance(data_quality, (int, float)) and not isinstance(data_quality, bool) and data_quality < 40:
+    if isinstance(data_quality, (int, float)) and not isinstance(data_quality, bool) and data_quality < _get_param("DATA_QUALITY_FLOOR"):
         return "HOLD_POLICY_BLOCKED_DATA_QUALITY"
 
     tournament = getattr(desk, "tournament_result", None) or {}
@@ -1571,6 +1774,7 @@ def _build_v1_compatible_result(
     stop_loss = decision.get("stop_loss")
     take_profit = decision.get("take_profit")
     dynamic_trigger = decision.get("dynamic_trigger")
+    exit_style = decision.get("exit_style")
     # Sizing is situational: the board reasons about position_size_pct; the
     # synthesizer may override it. Execution honors this over any formula.
     _merged = {**(desk.final_decision or {}), **(desk.trade_decision or {})}
@@ -1656,6 +1860,7 @@ def _build_v1_compatible_result(
             "take_profit": take_profit,
             "dynamic_trigger": dynamic_trigger,
             "position_size_pct": position_size_pct,
+            "exit_style": exit_style,
         },
         "c_result": {
             "action": action,

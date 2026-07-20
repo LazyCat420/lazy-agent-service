@@ -22,6 +22,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.db.connection import get_db
+from app.services.parameter_store import get_param
 from app.validation.schedule_validator import ScheduleValidator
 
 logger = logging.getLogger(__name__)
@@ -34,9 +35,9 @@ MAX_PENDING_RESEARCH_NOW = 2     # queued immediate research cycles
 TICKER_COOLDOWN_HOURS = 4        # fresh analysis_results row blocks re-research
 DEFAULT_TTL_DAYS = 7             # every bot schedule expires
 
-# Coarse market-window schedules are RETIRED — Sentinel (set_watch) owns ongoing,
+# Coarse market-window schedules are RETIRED — the Watch Desk (watch_ticker) owns ongoing,
 # condition-driven monitoring now. Any of these as `when` is rejected and the
-# agent is redirected to set_watch.
+# agent is redirected to watch_ticker.
 RETIRED_WINDOWS = (
     "next_pre_market", "next_open", "midday", "pre_close",
     "post_close", "next_trading_day", "next_week",
@@ -61,10 +62,11 @@ def _recently_researched(db, tickers: list[str]) -> list[str]:
     """Tickers with an analysis_results row inside the cooldown window."""
     if not tickers:
         return []
+    cooldown_hours = int(get_param("TICKER_COOLDOWN_HOURS"))
     rows = db.execute(
         "SELECT DISTINCT ticker FROM analysis_results "
-        f"WHERE ticker = ANY(%s) AND created_at >= NOW() - INTERVAL '{TICKER_COOLDOWN_HOURS} hours'",
-        [tickers],
+        "WHERE ticker = ANY(%s) AND created_at >= NOW() - make_interval(hours => %s)",
+        [tickers, cooldown_hours],
     ).fetchall()
     return [r[0] for r in rows]
 
@@ -121,7 +123,7 @@ def _guard_common(db, tickers: list[str], urgency: str) -> str | None:
         if recent:
             return (
                 f"Cooldown: {', '.join(recent)} researched within the last "
-                f"{TICKER_COOLDOWN_HOURS}h. Build on the existing thesis instead of re-running, "
+                f"{int(get_param('TICKER_COOLDOWN_HOURS'))}h. Build on the existing thesis instead of re-running, "
                 "or escalate with urgency='critical' if a genuine catalyst hit."
             )
     return None
@@ -195,7 +197,7 @@ async def schedule_research(
     """Create a one-shot (`once`) scheduled research cycle sniped to a real event.
 
     Coarse market windows and recurring "monitor" schedules are RETIRED — those are
-    now handled by `set_watch` (Sentinel), which monitors a ticker by condition in
+    now handled by `watch_ticker` (the Watch Desk), which monitors a ticker by condition in
     cheap background code and only wakes the agent on a trip.
 
     `when`:
@@ -214,19 +216,19 @@ async def schedule_research(
     when = (when or "").strip()
     now = datetime.now(timezone.utc)
 
-    # Retired paths → redirect to Sentinel.
+    # Retired paths → redirect to the Watch Desk.
     if when.lower() in RETIRED_WINDOWS:
         return {
             "status": "rejected",
             "reason": f"Coarse market-window schedules ({when!r}) are retired. To keep watching a ticker, "
-                      "use set_watch (price/pct/rsi/volume/news/staleness conditions) — it monitors in "
+                      "use watch_ticker (price/pct/rsi/volume/news/staleness conditions) — it monitors in "
                       "cheap background code and wakes a cycle only on a trip. For a known dated event, "
                       "pass an exact ISO datetime or omit `when` to auto-snipe the next earnings.",
         }
     if (review_intent or "").lower() == "monitor":
         return {
             "status": "rejected",
-            "reason": "'monitor' intent is now handled by set_watch (Sentinel), not a scheduled cycle. "
+            "reason": "'monitor' intent is now handled by watch_ticker (the Watch Desk), not a scheduled cycle. "
                       "Leave a watch condition instead.",
         }
 
@@ -254,7 +256,7 @@ async def schedule_research(
             return {
                 "status": "rejected",
                 "reason": f"No upcoming earnings found for {tickers[0]} and no explicit `when` given — can't "
-                          "snipe an unknown event. Use set_watch to monitor by condition, or "
+                          "snipe an unknown event. Use watch_ticker to monitor by condition, or "
                           "request_research_now if the catalyst already hit.",
             }
 
@@ -263,7 +265,7 @@ async def schedule_research(
     if run_at > now + timedelta(days=ONCE_MAX_DAYS):
         return {
             "status": "rejected",
-            "reason": f"The event is more than {ONCE_MAX_DAYS} days out — too far to pin a cycle. Use set_watch "
+            "reason": f"The event is more than {ONCE_MAX_DAYS} days out — too far to pin a cycle. Use watch_ticker "
                       "so a condition (or the earnings date closer in) wakes it instead.",
         }
 
@@ -286,10 +288,11 @@ async def schedule_research(
             "SELECT COUNT(*) FROM cycle_schedules WHERE id LIKE %s AND is_active = TRUE",
             ["sch-bot-%"],
         ).fetchone()[0]
-        if active >= MAX_ACTIVE_BOT_SCHEDULES:
+        max_active = int(get_param("MAX_ACTIVE_BOT_SCHEDULES"))
+        if active >= max_active:
             return {
                 "status": "rejected",
-                "reason": f"{active} bot research schedules already active (max {MAX_ACTIVE_BOT_SCHEDULES}). "
+                "reason": f"{active} bot research schedules already active (max {max_active}). "
                           "Cancel one first or let them run — be picky.",
             }
         daily = db.execute(
@@ -297,10 +300,11 @@ async def schedule_research(
             "WHERE id LIKE %s AND created_at >= NOW() - INTERVAL '24 hours'",
             ["sch-bot-%"],
         ).fetchone()[0]
-        if daily >= MAX_DAILY_BOT_CREATIONS:
+        max_daily = int(get_param("MAX_DAILY_BOT_CREATIONS"))
+        if daily >= max_daily:
             return {
                 "status": "rejected",
-                "reason": f"Daily budget spent ({daily}/{MAX_DAILY_BOT_CREATIONS} schedules in 24h). "
+                "reason": f"Daily budget spent ({daily}/{max_daily} schedules in 24h). "
                           "Only the best research ideas get scheduled — try again tomorrow.",
             }
 
@@ -399,10 +403,10 @@ def list_scheduled_research() -> dict:
         "queued_research_now": pending,
         "recently_researched_48h": [{"ticker": t, "at": str(ts)} for t, ts in recent_rows],
         "limits": {
-            "max_active_schedules": MAX_ACTIVE_BOT_SCHEDULES,
-            "max_daily_creations": MAX_DAILY_BOT_CREATIONS,
+            "max_active_schedules": int(get_param("MAX_ACTIVE_BOT_SCHEDULES")),
+            "max_daily_creations": int(get_param("MAX_DAILY_BOT_CREATIONS")),
             "max_tickers_per_request": MAX_TICKERS_PER_REQUEST,
-            "ticker_cooldown_hours": TICKER_COOLDOWN_HOURS,
+            "ticker_cooldown_hours": int(get_param("TICKER_COOLDOWN_HOURS")),
         },
     }
 

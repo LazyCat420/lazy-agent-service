@@ -30,7 +30,7 @@
         },
         "config": {
           "type": "object",
-          "description": "Widget configuration, by widget_type. stock_card: {symbol} \u2014 ONLY the symbol, e.g. {\"symbol\": \"AAPL\"}; do not copy labels/values/technicals/fundamentals back, the server already has them from html_notes_stock_history. scoreboard: {league} \u2014 ONLY the league, e.g. {\"league\": \"nba\"}. data_card: {title, subtitle?, icon?, image?, content?, items:[{title, description, url?, image?, badge?, meta?}]} \u2014 use items for lists (news headlines, recipes, results), content for prose; 'description' carries the actual text of each item and is REQUIRED \u2014 copy the snippet from the search result into it, and if a snippet is empty call html_notes_read_page on that url to get real text. A data_card whose items have only a title and url renders as a naked hyperlink and is useless. chart: {title, type:'line'|'bar'|'pie', labels:[str], values:[num]} or {title, chart:<full Chart.js config>}. image: {title, url, caption?} or {title, images:[{url, caption?}]}. clock: {timezone}. checklist: {title, items:[str]}. notes: {title, content}. iframe_app: {url, title}. youtube_player: {video_id, title}. mini_music_player: {genre, autoplay}. map: {map_query} \u2014 ONLY the query string, e.g. {\"map_query\": \"fires in California\"}; the server searches, geocodes and drops the markers. weather: {location} \u2014 ONLY the location, e.g. {\"location\": \"Tokyo\"}; the server already has the conditions from html_notes_get_weather."
+          "description": "Widget configuration, by widget_type. stock_card: {symbol} \u2014 ONLY the symbol, e.g. {\"symbol\": \"AAPL\"}; do not copy labels/values/technicals/fundamentals back, the server already has them from html_notes_stock_history. scoreboard: {league} \u2014 ONLY the league, e.g. {\"league\": \"nba\"}. data_card: {title, subtitle?, icon?, image?, answer?, items:[{title, description, url?, image?, badge?, meta?}]} \u2014 use items for lists (news headlines, recipes, results), 'answer' for prose ('content' is accepted as an alias); BETTER for research: pass ONLY a server-side query key and let the server build the card \u2014 {'search_query': '<the query>'} for facts/how-tos/comparisons/product picks (attaches each source WITH ITS PHOTO), {'news_topic': '<topic>'} ONLY for current-events you researched with html_notes_news, {'stock_news_query': '<query>'} for market news; 'description' carries the actual text of each item and is REQUIRED \u2014 copy the snippet from the search result into it, and if a snippet is empty call html_notes_read_page on that url to get real text. A data_card whose items have only a title and url renders as a naked hyperlink and is useless. chart: {title, type:'line'|'bar'|'pie', labels:[str], values:[num]} or {title, chart:<full Chart.js config>}. image: {title, url, caption?} or {title, images:[{url, caption?}]}. clock: {timezone}. checklist: {title, items:[str]}. notes: {title, content}. iframe_app: {url, title}. youtube_player: {video_id, title}. mini_music_player: {genre, autoplay}. map: {map_query} \u2014 ONLY the query string, e.g. {\"map_query\": \"fires in California\"}; the server searches, geocodes and drops the markers. weather: {location} \u2014 ONLY the location, e.g. {\"location\": \"Tokyo\"}; the server already has the conditions from html_notes_get_weather."
         }
       },
       "required": [
@@ -788,6 +788,27 @@
     "agents": []
   },
   {
+    "name": "news_search",
+    "description": "Current news stories for a topic, with REAL publisher URLs and REAL article photos. Rotates across keyed news providers (gnews, worldnewsapi, currentsapi, thenewsapi, newsapi) and returns the first usable result, so no single provider's daily limit blocks a request. Prefer this over a generic web search for anything time-sensitive: web search returns news-site homepages rather than stories, and Google News RSS returns opaque redirect links with no article photo. Each item carries {title, url, image, source, snippet, date}; `url` is the publisher's own page and `image` is that story's photo, so both are safe to show and to cite. An empty items list means no provider had a usable story, not an error.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "What to find stories about, e.g. 'James Webb space telescope' or 'federal reserve rate decision'. Multi-word topics are matched as a phrase."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "How many stories to return (default 6). Some free tiers cap lower and will return fewer."
+        }
+      },
+      "required": [
+        "topic"
+      ]
+    },
+    "owner_app": "shared"
+  },
+  {
     "name": "add_to_watchlist",
     "description": "Add a stock ticker (e.g., from the Discovery list) to the user's active watchlist. Do NOT use this tool to add items TO discovery; discovery is automatic. Requires user confirmation.",
     "parameters": {
@@ -1020,7 +1041,7 @@
   },
   {
     "name": "clear_watch",
-    "description": "Deactivate a Sentinel watch by watch_id, or all active watches for a ticker \u2014 use when the thesis changed and the old triggers no longer apply.",
+    "description": "Deactivate a Watch Desk watch by watch_id, or all active watches for a ticker \u2014 use when the thesis changed and the old triggers no longer apply.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1035,19 +1056,19 @@
       }
     },
     "tier": 1,
-    "source": "sentinel",
+    "source": "watch_desk",
     "permission": "write",
     "fallback_only": false,
     "concurrency_safe": true,
     "max_result_chars": 50000,
     "tags": [
-      "sentinel",
+      "watch-desk",
       "watch",
       "monitor"
     ],
     "domain": "Research & Intelligence",
     "labels": [
-      "sentinel",
+      "watch-desk",
       "monitoring"
     ],
     "owner_app": "trading",
@@ -1559,6 +1580,143 @@
     ]
   },
   {
+    "name": "get_smart_money_leaderboard",
+    "description": "Get the best-performing members of Congress or hedge funds ranked by real risk-adjusted performance (alpha vs SPY), with sample sizes. Use to judge how much weight to give a particular actor's trades.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "congress",
+            "fund"
+          ],
+          "description": "Which cohort. Default congress."
+        },
+        "horizon": {
+          "type": "string",
+          "enum": [
+            "1m",
+            "3m",
+            "6m",
+            "1y"
+          ],
+          "description": "Forward window. Default 1y."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max rows. Default 15."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "smart_money",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider",
+      "v3_junior_analyst"
+    ]
+  },
+  {
+    "name": "get_smart_money_leads",
+    "description": "Find stocks that multiple members of Congress and/or multiple hedge funds have recently bought - ranked research leads based on consensus buying by informed money. Use to discover candidate tickers when you have no specific ticker in mind.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "integer",
+          "description": "Lookback window. Default 180."
+        },
+        "min_buyers": {
+          "type": "integer",
+          "description": "Minimum distinct buyers. Default 3."
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "congress",
+            "fund",
+            "both"
+          ],
+          "description": "Which cohort to mine. Default both."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max leads. Default 15."
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "smart_money",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider",
+      "v3_junior_analyst"
+    ]
+  },
+  {
+    "name": "get_smart_money_signal",
+    "description": "Get smart-money activity for a specific stock: which members of Congress and which hedge funds bought or sold it, when it became public, and how well those actors have historically performed (real alpha vs SPY). Use to check whether informed money is accumulating or exiting a ticker.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Stock ticker symbol"
+        },
+        "days": {
+          "type": "integer",
+          "description": "Lookback window in days. Default 365."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 0,
+    "source": "smart_money",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "Market Data",
+    "labels": [
+      "market-data",
+      "stock-analysis"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_worker_insider",
+      "v3_junior_analyst"
+    ]
+  },
+  {
     "name": "get_technical_indicators",
     "description": "Get computed technical indicators (RSI, MACD, SMA, Bollinger Bands).",
     "parameters": {
@@ -1720,7 +1878,7 @@
   },
   {
     "name": "list_watches",
-    "description": "List active Sentinel watches (optionally for one ticker) \u2014 their triggers, fire counts, and expiry. Check before setting a new watch.",
+    "description": "List active Watch Desk watches (optionally for one ticker) \u2014 their triggers, fire counts, and expiry. Check before setting a new watch.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1731,19 +1889,19 @@
       }
     },
     "tier": 1,
-    "source": "sentinel",
+    "source": "watch_desk",
     "permission": "read_only",
     "fallback_only": false,
     "concurrency_safe": true,
     "max_result_chars": 50000,
     "tags": [
-      "sentinel",
+      "watch-desk",
       "watch",
       "monitor"
     ],
     "domain": "Research & Intelligence",
     "labels": [
-      "sentinel",
+      "watch-desk",
       "monitoring"
     ],
     "owner_app": "trading",
@@ -2121,7 +2279,7 @@
   },
   {
     "name": "schedule_research",
-    "description": "Schedule a ONE-SHOT research cycle (collect + analyze, NEVER trades) sniped to a specific DATED event. Use this ONLY for a known calendar catalyst (earnings, a Fed decision). For ongoing 'keep an eye on this ticker' monitoring, DO NOT schedule \u2014 use set_watch instead (it watches price/news/etc. in cheap background code and wakes a cycle only when a condition trips). `when`: OMIT it to auto-snipe the ticker's next earnings (single ticker; the governor resolves the real date/time for you), OR pass an exact ISO-8601 UTC datetime (e.g. '2026-07-21T21:30:00Z') for a non-earnings event. Fires ONCE then auto-deactivates. Coarse market windows and 'monitor' are rejected \u2014 use set_watch. Governor enforces max 5 active, 10/day, per-ticker dedupe, 4h cooldown; a vague reason is rejected.",
+    "description": "Schedule a ONE-SHOT research cycle (collect + analyze, NEVER trades) sniped to a specific DATED event. Use this ONLY for a known calendar catalyst (earnings, a Fed decision). For ongoing 'keep an eye on this ticker' monitoring, DO NOT schedule \u2014 use watch_ticker instead (it watches price/news/etc. in cheap background code and wakes a cycle only when a condition trips). `when`: OMIT it to auto-snipe the ticker's next earnings (single ticker; the governor resolves the real date/time for you), OR pass an exact ISO-8601 UTC datetime (e.g. '2026-07-21T21:30:00Z') for a non-earnings event. Fires ONCE then auto-deactivates. Coarse market windows and 'monitor' are rejected \u2014 use watch_ticker. Governor enforces max 5 active, 10/day, per-ticker dedupe, 4h cooldown; a vague reason is rejected.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2147,7 +2305,7 @@
             "trade_window",
             "event_followup"
           ],
-          "description": "Why this research exists. Default event_followup. (For monitoring, use set_watch.)"
+          "description": "Why this research exists. Default event_followup. (For monitoring, use watch_ticker.)"
         },
         "urgency": {
           "type": "string",
@@ -2296,8 +2454,8 @@
     "agents": []
   },
   {
-    "name": "set_watch",
-    "description": "Leave a 'wake me if\u2026' note on a ticker so the expensive agent stays OFF until a real, thesis-relevant condition trips \u2014 a cheap background monitor checks it in code (no LLM) and only then re-runs a targeted cycle. Call this at the END of analysing a ticker with the conditions that would change your view. Supersedes any existing watch for the ticker (re-arm). Trigger types: price_above{level}, price_below{level} (target / invalidation levels); pct_change{ref,pct,direction} (moved pct off a reference price; direction up|down|any); rsi{op,value} (op gt|lt); volume_spike{mult} (\u00d7 20d avg); news{categories} (earnings|guidance|downgrade|upgrade|mna|litigation|insider); staleness{max_days} (re-check backstop). Always include an invalidation level and a staleness backstop.",
+    "name": "watch_ticker",
+    "description": "Leave a 'wake me if\u2026' note on a ticker so the expensive agent stays OFF until a real, thesis-relevant condition trips \u2014 the Watch Desk checks it in code (no LLM) and only then re-runs a targeted cycle. Call this at the END of analysing a ticker with the conditions that would change your view. Supersedes any existing watch for the ticker (re-arm). Trigger types: price_above{level}, price_below{level} (target / invalidation levels); pct_change{ref,pct,direction} (moved pct off a reference price; direction up|down|any); rsi{op,value} (op gt|lt); volume_spike{mult} (\u00d7 20d avg); news{categories} (earnings|guidance|downgrade|upgrade|mna|litigation|insider); staleness{max_days} (re-check backstop). Always include an invalidation level and a staleness backstop.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2335,13 +2493,13 @@
       ]
     },
     "tier": 1,
-    "source": "sentinel",
+    "source": "watch_desk",
     "permission": "write",
     "fallback_only": false,
     "concurrency_safe": true,
     "max_result_chars": 50000,
     "tags": [
-      "sentinel",
+      "watch-desk",
       "watch",
       "monitor",
       "alert",
@@ -2349,7 +2507,7 @@
     ],
     "domain": "Research & Intelligence",
     "labels": [
-      "sentinel",
+      "watch-desk",
       "monitoring"
     ],
     "owner_app": "trading",
@@ -2371,6 +2529,10 @@
         "note": {
           "type": "string",
           "description": "Your annotation/comment."
+        },
+        "author": {
+          "type": "string",
+          "description": "YOUR agent name (e.g. v3_quant_analyst) so teammates know who wrote this. Always provide it."
         }
       },
       "required": [
@@ -2480,6 +2642,10 @@
         "content": {
           "type": "string",
           "description": "The content to write (preferably a JSON string or clear text)."
+        },
+        "author": {
+          "type": "string",
+          "description": "YOUR agent name (e.g. v3_quant_analyst) so teammates know who wrote this. Always provide it."
         }
       },
       "required": [

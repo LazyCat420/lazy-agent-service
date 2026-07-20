@@ -45,6 +45,38 @@ def run_migrations(conn):
         except Exception:
             pass
 
+    # ── Runtime parameters (agent-tunable via the Parameter Governor) ──
+    # Append-only history; resolution = latest active non-expired row per key.
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS runtime_parameters (
+                    id          BIGSERIAL PRIMARY KEY,
+                    param_key   TEXT NOT NULL,
+                    value       DOUBLE PRECISION NOT NULL,
+                    set_by      TEXT,
+                    reason      TEXT,
+                    status      TEXT DEFAULT 'active',
+                    expires_at  TIMESTAMPTZ,
+                    created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_runtime_parameters_key_time
+                ON runtime_parameters (param_key, created_at DESC)
+            """)
+            conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+    # ── Agent-owned exits: provenance + targets on positions ──
+    _safe_add_column(conn, "positions", "take_profit_pct", "DOUBLE PRECISION")
+    _safe_add_column(conn, "positions", "stop_source", "TEXT")
+    _safe_add_column(conn, "positions", "exit_style", "TEXT")
+
     # ── Cycle schedules: one-shot at an exact datetime (schedule_type='once')
     _safe_add_column(conn, "cycle_schedules", "run_at", "TIMESTAMPTZ")
 
@@ -111,6 +143,11 @@ def run_migrations(conn):
     _safe_add_column(conn, "sec_13f_holdings", "is_exit", "BOOLEAN")
     _safe_add_column(conn, "sec_13f_holdings", "filing_date", "DATE")
     _safe_add_column(conn, "sec_13f_holdings", "collected_at", "TIMESTAMPTZ")
+    # Provenance: 'edgar' (real 13F filings) vs 'yfinance' (pseudo-CIK holder rows).
+    # Fund aggregates must filter on this — the two sources are not comparable.
+    _safe_add_column(
+        conn, "sec_13f_holdings", "source", "TEXT DEFAULT 'edgar'"
+    )
 
     # ── Scheduler: policy-driven constraints and max_tickers
     _safe_add_column(conn, "cycle_schedules", "max_tickers", "INTEGER")
@@ -3273,6 +3310,56 @@ def _fix_eth_cagr_data(conn):
                     last_calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+            # Smart-money real-alpha tables. The returns engine also ensures
+            # these at run time, but declaring them here means a fresh DB has
+            # them before anything queries them.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS smart_money_trade_scores (
+                    trade_key       TEXT PRIMARY KEY,
+                    actor_type      TEXT NOT NULL,
+                    actor_id        TEXT NOT NULL,
+                    actor_name      TEXT,
+                    ticker          TEXT NOT NULL,
+                    direction       TEXT NOT NULL,
+                    event_date      DATE NOT NULL,
+                    size_est_usd    DOUBLE PRECISION,
+                    size_confidence TEXT,
+                    entry_price     DOUBLE PRECISION,
+                    ret_1m DOUBLE PRECISION, ret_3m DOUBLE PRECISION,
+                    ret_6m DOUBLE PRECISION, ret_1y DOUBLE PRECISION,
+                    alpha_1m DOUBLE PRECISION, alpha_3m DOUBLE PRECISION,
+                    alpha_6m DOUBLE PRECISION, alpha_1y DOUBLE PRECISION,
+                    computed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS smart_money_performance (
+                    actor_type      TEXT NOT NULL,
+                    actor_id        TEXT NOT NULL,
+                    actor_name      TEXT,
+                    horizon         TEXT NOT NULL,
+                    trade_count     INTEGER,
+                    scored_count    INTEGER,
+                    coverage_pct    DOUBLE PRECISION,
+                    avg_return      DOUBLE PRECISION,
+                    avg_alpha       DOUBLE PRECISION,
+                    median_alpha    DOUBLE PRECISION,
+                    win_rate        DOUBLE PRECISION,
+                    total_size_est  DOUBLE PRECISION,
+                    rankable        BOOLEAN DEFAULT FALSE,
+                    computed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (actor_type, actor_id, horizon)
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS price_backfill_progress (
+                    ticker       TEXT PRIMARY KEY,
+                    status       TEXT NOT NULL,
+                    rows_written INTEGER DEFAULT 0,
+                    error        TEXT,
+                    attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS congress_members (
                     bioguide_id VARCHAR PRIMARY KEY,
@@ -3292,7 +3379,7 @@ def _fix_eth_cagr_data(conn):
         except Exception:
             pass
 
-    # ── Sentinel: agent-defined watch conditions + fire log ──────────────────
+    # ── Watch Desk: agent-defined watch conditions + fire log ────────────────
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -3317,8 +3404,28 @@ def _fix_eth_cagr_data(conn):
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ticker_watches_active ON ticker_watches (is_active, ticker);"
             )
+            # Migrate the legacy `sentinel_events` fire log to `watch_events`,
+            # preserving live rows. Robust to schema_pg.sql having already created
+            # an (empty) watch_events: rename when the target is absent, else copy
+            # rows across (id-safe) and drop the orphan. Idempotent — a no-op once
+            # sentinel_events is gone.
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS sentinel_events (
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'sentinel_events') THEN
+                        IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'watch_events') THEN
+                            ALTER TABLE sentinel_events RENAME TO watch_events;
+                            ALTER INDEX IF EXISTS idx_sentinel_events_ticker RENAME TO idx_watch_events_ticker;
+                        ELSE
+                            INSERT INTO watch_events SELECT * FROM sentinel_events
+                                ON CONFLICT (id) DO NOTHING;
+                            DROP TABLE sentinel_events;
+                        END IF;
+                    END IF;
+                END $$;
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS watch_events (
                     id           TEXT PRIMARY KEY,
                     watch_id     TEXT,
                     ticker       TEXT NOT NULL,
@@ -3332,7 +3439,7 @@ def _fix_eth_cagr_data(conn):
                 );
             """)
             cur.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sentinel_events_ticker ON sentinel_events (ticker, fired_at DESC);"
+                "CREATE INDEX IF NOT EXISTS idx_watch_events_ticker ON watch_events (ticker, fired_at DESC);"
             )
             conn.commit()
     except Exception:

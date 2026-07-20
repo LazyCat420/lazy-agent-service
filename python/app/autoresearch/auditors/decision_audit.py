@@ -10,8 +10,34 @@ from app.db.connection import get_db
 
 logger = logging.getLogger(__name__)
 
+# Version stamp for the decision-quality formula. Bump on ANY change to the
+# formula, benchmarks, or cohort definition — the 2026-07-19 re-benchmark moved
+# the score 39.4 → 77.8 with zero system change, and without a version stamp
+# that jump is indistinguishable from an actual improvement.
+#   v3 (2026-07-19): benchmarked scale (wr/0.60, ECE honesty + discrimination,
+#       pf/2), FLATs excluded, resolved_at window.
+#   v4 (2026-07-19): HOLD claims tracked — calibration cohort now includes
+#       HOLD_CORRECT/HOLD_MISS ("all claims"); directional win rate unchanged;
+#       hold_accuracy + cohort provenance surfaced.
+SCORE_VERSION = "v4"
+
 
 def _audit_decisions(cycle_id: str, cycle_summary: dict) -> dict:
+    """Score decision quality from resolved trade outcomes (rolling window).
+
+    score = win_rate_score*0.4 + calibration_score*0.3 + risk_score*0.3, where
+    each term is benchmarked so the 0-100 scale is interpretable:
+      - win_rate_score: ex-flat 7-day directional accuracy / 0.60 (capped).
+        60%+ sustained = full credit (decided-only baseline is a coin flip).
+      - calibration_score: 0.7*honesty (1 - 2*ECE over confidence deciles)
+        + 0.3*discrimination (high-conf beats low-conf). Uniform stated
+        confidence caps this term at 0.85 even when perfectly honest.
+      - risk_score: profit factor / 2.0 (capped). PF 2.0+ = full credit.
+
+    Interpretation: ~90 = sustained 58-60% win rate with honest,
+    differentiated confidence and PF ≥1.9 — an excellent desk. ~75-85 = solid.
+    ~60-75 = mixed. Below 50 = the outcomes argue against the process.
+    """
     buy = cycle_summary.get("buy_count", 0)
     sell = cycle_summary.get("sell_count", 0)
     hold = cycle_summary.get("hold_count", 0)
@@ -52,9 +78,14 @@ def _audit_decisions(cycle_id: str, cycle_summary: dict) -> dict:
 
     try:
         with get_db() as db:
+            # Window on resolved_at, not created_at: a created_at window would
+            # oversample fast-resolving stop-outs (losses resolve in days, wins
+            # in weeks) and read structurally pessimistic. The cohort-age gap
+            # this leaves is surfaced via median_decision_age_days instead.
             resolved = db.execute(
                 """
-                SELECT action, confidence, pnl_pct, outcome
+                SELECT action, confidence, pnl_pct, outcome,
+                       EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at)) / 86400.0
                 FROM decision_outcomes
                 WHERE resolved_at IS NOT NULL AND outcome != 'CANCELED' AND resolved_at > CURRENT_TIMESTAMP - INTERVAL '30 days'
                 ORDER BY resolved_at DESC LIMIT 100
@@ -65,24 +96,72 @@ def _audit_decisions(cycle_id: str, cycle_summary: dict) -> dict:
                 wins = [r for r in resolved if r[3] == "WIN"]
                 losses = [r for r in resolved if r[3] == "LOSS"]
                 flats = [r for r in resolved if r[3] == "FLAT"]
+                holds_correct = [r for r in resolved if r[3] == "HOLD_CORRECT"]
+                holds_miss = [r for r in resolved if r[3] == "HOLD_MISS"]
+                # FLAT = position closed without a meaningful move — no verdict
+                # on the call, so it belongs in neither numerator nor denominator.
+                decided = wins + losses
+                # HOLD claims ("no meaningful move") are checkable too, but they
+                # stay OUT of the directional win rate — folding "price stayed
+                # flat" into win rate would let low volatility read as skill.
+                # They join the CALIBRATION cohort below: a stated confidence is
+                # a stated confidence regardless of the claim's direction.
+                hold_claims = holds_correct + holds_miss
+                claims = decided + hold_claims
+                _CORRECT = {"WIN", "HOLD_CORRECT"}
 
-                win_rate = len(wins) / len(resolved)
+                win_rate = len(wins) / len(decided) if decided else 0.5
                 avg_win_pnl = sum(r[2] for r in wins) / len(wins) if wins else 0
                 avg_loss_pnl = sum(abs(r[2]) for r in losses) / len(losses) if losses else 0
 
-                win_rate_score = min(1.0, win_rate)
-                high_conf = [r for r in resolved if r[1] >= 70]
-                low_conf = [r for r in resolved if r[1] < 50]
+                # Benchmarked, not raw: with the ±1% FLAT band the decided-only
+                # baseline is a coin flip, and sustained 60% directional
+                # accuracy at a 7-day horizon is top-tier for a systematic
+                # desk. Raw scaling made 90+ require a ~90% win rate, which no
+                # real desk posts — the score read as "failing" forever.
+                WIN_RATE_BENCHMARK = 0.60
+                win_rate_score = min(1.0, win_rate / WIN_RATE_BENCHMARK)
 
-                if high_conf and low_conf:
-                    high_win_rate = len([r for r in high_conf if r[3] == "WIN"]) / len(high_conf)
-                    low_win_rate = len([r for r in low_conf if r[3] == "WIN"]) / len(low_conf)
-                    calibration_gap = high_win_rate - low_win_rate
-                    calibration_score = min(1.0, max(0.0, 0.5 + calibration_gap))
-                elif high_conf:
-                    calibration_score = len([r for r in high_conf if r[3] == "WIN"]) / len(high_conf)
+                # A confidence bucket below this size is noise: one lucky
+                # low-conf trade must not be able to zero the whole term.
+                MIN_BUCKET = 5
+
+                def _bucket_win_rate(bucket):
+                    return len([r for r in bucket if r[3] in _CORRECT]) / len(bucket)
+
+                # Calibration = honesty (0.7) + discrimination (0.3).
+                # Honesty: expected calibration error — |stated - realized| per
+                # confidence decile, sample-weighted; full credit at 0, none at
+                # ≥0.5. Discrimination: do high-conf calls beat low-conf calls
+                # (gap on ≥MIN_BUCKET buckets, neutral 0.5 otherwise)? ECE
+                # alone is gameable by stating the base rate on every trade;
+                # the discrimination term means uniform confidence caps this
+                # term at 0.85 — full credit requires differentiating AND
+                # being right.
+                buckets: dict = {}
+                for r in claims:
+                    if r[1] is None:
+                        continue
+                    buckets.setdefault((int(r[1]) // 10) * 10, []).append(r)
+                qualified = {b: rows for b, rows in buckets.items() if len(rows) >= MIN_BUCKET}
+                ece = None
+                if qualified:
+                    n_qual = sum(len(rows) for rows in qualified.values())
+                    ece = sum(
+                        len(rows) / n_qual
+                        * abs((sum(x[1] for x in rows) / len(rows)) / 100.0 - _bucket_win_rate(rows))
+                        for rows in qualified.values()
+                    )
+                honesty_score = max(0.0, 1.0 - 2.0 * ece) if ece is not None else 0.5
+
+                high_conf = [r for r in claims if r[1] is not None and r[1] >= 70]
+                low_conf = [r for r in claims if r[1] is not None and r[1] < 50]
+                if len(high_conf) >= MIN_BUCKET and len(low_conf) >= MIN_BUCKET:
+                    discrimination_score = min(1.0, max(0.0, 0.5 + _bucket_win_rate(high_conf) - _bucket_win_rate(low_conf)))
                 else:
-                    calibration_score = 0.5
+                    discrimination_score = 0.5
+
+                calibration_score = 0.7 * honesty_score + 0.3 * discrimination_score
 
                 if avg_loss_pnl > 0:
                     profit_factor = avg_win_pnl / avg_loss_pnl
@@ -94,25 +173,64 @@ def _audit_decisions(cycle_id: str, cycle_summary: dict) -> dict:
 
                 score = (win_rate_score * 0.4 + calibration_score * 0.3 + risk_score * 0.3)
 
+                # float() matters: EXTRACT(EPOCH ...) comes back as Decimal,
+                # which survives round() and later kills strict json.dumps.
+                ages = sorted(float(r[4]) for r in resolved if r[4] is not None)
+                median_age_days = ages[len(ages) // 2] if ages else None
+
+                hold_accuracy = (
+                    len(holds_correct) / len(hold_claims) if hold_claims else None
+                )
+
                 outcome_stats = {
+                    "score_version": SCORE_VERSION,
                     "total_resolved": len(resolved),
                     "wins": len(wins),
                     "losses": len(losses),
                     "flats": len(flats),
+                    "holds_correct": len(holds_correct),
+                    "holds_miss": len(holds_miss),
+                    "hold_accuracy": round(hold_accuracy, 3) if hold_accuracy is not None else None,
                     "win_rate": round(win_rate, 3),
+                    "win_rate_basis": "ex_flat_ex_hold",
+                    "win_rate_benchmark": WIN_RATE_BENCHMARK,
                     "avg_win_pnl": round(avg_win_pnl, 2),
                     "avg_loss_pnl": round(avg_loss_pnl, 2),
                     "calibration_score": round(calibration_score, 3),
+                    "calibration_basis": "all_claims_incl_holds",
+                    "calibration_ece": round(ece, 3) if ece is not None else None,
+                    "calibration_honesty": round(honesty_score, 3),
+                    "calibration_discrimination": round(discrimination_score, 3),
                     "risk_score": round(risk_score, 3),
+                    # Cohort provenance: the rolling terms are only comparable
+                    # across cycles when the cohort is. When these shift, score
+                    # movement is cohort drift, not system change.
+                    "cohort_n": len(resolved),
+                    "cohort_window_days": 30,
+                    "median_decision_age_days": round(median_age_days, 1) if median_age_days is not None else None,
                     "scoring_method": "outcome_based",
                 }
 
-                if win_rate < 0.40:
-                    issues.append({"issue": f"Low win rate: {win_rate:.0%} ({len(wins)}/{len(resolved)})", "severity": "critical"})
+                if median_age_days is not None and median_age_days > 14:
+                    issues.append({
+                        "issue": f"Stale cohort: median scored decision is {median_age_days:.0f}d old (resolution lag) — score reflects past-era decisions, not current ones",
+                        "severity": "info",
+                    })
+                if win_rate < 0.40 and decided:
+                    issues.append({"issue": f"Low win rate: {win_rate:.0%} ({len(wins)}/{len(decided)} ex-flat)", "severity": "critical"})
                 if avg_loss_pnl > 0 and avg_win_pnl < avg_loss_pnl:
                     issues.append({"issue": f"Avg loss ({avg_loss_pnl:.1f}%) > avg win ({avg_win_pnl:.1f}%)", "severity": "warning"})
-                if calibration_score < 0.35:
-                    issues.append({"issue": "Conviction miscalibrated", "severity": "warning"})
+                if ece is not None and ece > 0.15:
+                    issues.append({
+                        "issue": f"Conviction miscalibrated: stated confidence off realized win rate by {ece:.0%} on average",
+                        "severity": "warning",
+                    })
+                if hold_accuracy is not None and len(hold_claims) >= 10 and hold_accuracy < 0.5:
+                    issues.append({
+                        "issue": f"HOLD calls miss: {hold_accuracy:.0%} of holds stayed inside the ±1% band "
+                                 f"({len(holds_correct)}/{len(hold_claims)}) — the desk is holding through real moves",
+                        "severity": "warning",
+                    })
 
                 try:
                     _backfill_cycle_summaries(db)
@@ -137,8 +255,26 @@ def _audit_decisions(cycle_id: str, cycle_summary: dict) -> dict:
     if critical_issues:
         score *= max(0.5, 1.0 - len(critical_issues) * 0.2)
 
+    # Per-cycle judge subscore: the rolling outcome terms cannot move on a
+    # single cycle (30d cohort), which made 16 consecutive cycles score
+    # byte-identically. This is the fast, this-cycle-only signal alongside it.
+    per_cycle_judge = None
+    try:
+        with get_db() as db:
+            row = db.execute(
+                "SELECT AVG(final_quality_score), COUNT(*) FROM decision_evaluations "
+                "WHERE cycle_id = %s AND final_quality_score IS NOT NULL",
+                [cycle_id],
+            ).fetchone()
+            if row and row[1]:
+                per_cycle_judge = round(float(row[0]) * 20.0, 1)  # 0-5 → 0-100
+    except Exception:
+        pass
+
     return {
         "score": round(score, 3),
+        "score_version": SCORE_VERSION,
+        "per_cycle_judge_score": per_cycle_judge,
         "buy": buy,
         "sell": sell,
         "hold": hold,

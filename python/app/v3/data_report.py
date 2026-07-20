@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -8,7 +9,7 @@ from app.utils.text_utils import format_db_section
 
 logger = logging.getLogger(__name__)
 
-async def build_ticker_data_report(ticker: str, emit: Any = None) -> str:
+async def build_ticker_data_report(ticker: str, emit: Any = None, cycle_id: str | None = None) -> str:
     """Collect core stock datasets in parallel and format them into a markdown report."""
     ticker = ticker.upper().strip()
     
@@ -23,13 +24,24 @@ async def build_ticker_data_report(ticker: str, emit: Any = None) -> str:
     from app.collectors.reddit_collector import collect_for_ticker as collect_reddit
     from app.collectors.youtube_collector import collect_for_ticker as collect_youtube
     
+    # Per-collector outcome tracking — feeds the one-line pre-collect summary
+    # log and the cycle_run_summaries collector_* counters (which read 0
+    # forever because nothing ever recorded them).
+    _outcomes: dict[str, str] = {}   # name -> ok|error (pending names = timed out)
+
     async def run_with_telemetry(name: str, coroutine: Any):
         _emit(f"precollect_{name}_start", f"Scraping {name}...", "running")
         try:
             res = await coroutine
+            _outcomes[name] = "ok"
             _emit(f"precollect_{name}_ok", f"Finished {name}", "ok")
             return res
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
+            _outcomes[name] = "error"
+            logger.warning("[V3][precollect] %s/%s failed: %s: %s",
+                           ticker, name, type(e).__name__, e)
             _emit(f"precollect_{name}_err", f"Failed {name}: {e}", "error")
             return None
 
@@ -75,30 +87,84 @@ async def build_ticker_data_report(ticker: str, emit: Any = None) -> str:
                 )
                 _emit("precollect_prior", "Prior research found — seeding report with last thesis.", "ok")
 
+    _FULL_COLLECTORS = ("yfinance_price", "yfinance_fund", "finnhub_news",
+                        "multi_api_news", "reddit", "youtube")
+
     if is_fast_path:
         # Only run the fast, dynamic scrapers
-        tasks = [
-            run_with_telemetry("yfinance_price", collect_price_history(ticker, period="6mo")),
-            run_with_telemetry("finnhub_news", collect_finnhub_news(ticker, emit_cb=_emit))
-        ]
+        coros = {
+            "yfinance_price": collect_price_history(ticker, period="6mo"),
+            "finnhub_news": collect_finnhub_news(ticker, emit_cb=_emit),
+        }
     else:
         from app.collectors.news_api_rotator import collect_from_all_apis
 
-        tasks = [
-            run_with_telemetry("yfinance_price", collect_price_history(ticker, period="6mo")),
-            run_with_telemetry("yfinance_fund", collect_fundamentals(ticker)),
-            run_with_telemetry("finnhub_news", collect_finnhub_news(ticker, emit_cb=_emit)),
-            run_with_telemetry("multi_api_news", collect_from_all_apis([ticker])),
-            run_with_telemetry("reddit", collect_reddit(ticker)),
-            run_with_telemetry("youtube", collect_youtube(ticker))
-        ]
-    
-    # Execute all collection tasks in parallel (timeout to prevent hanging)
-    try:
-        await asyncio.wait_for(asyncio.gather(*tasks), timeout=45.0)
-    except asyncio.TimeoutError:
-        logger.warning(f"[V3] Pre-collection for {ticker} timed out after 45s.")
-        _emit("precollect_timeout", "Scraping timed out after 45s", "warning")
+        coros = {
+            "yfinance_price": collect_price_history(ticker, period="6mo"),
+            "yfinance_fund": collect_fundamentals(ticker),
+            "finnhub_news": collect_finnhub_news(ticker, emit_cb=_emit),
+            "multi_api_news": collect_from_all_apis([ticker]),
+            "reddit": collect_reddit(ticker),
+            "youtube": collect_youtube(ticker),
+        }
+
+    # Execute all collection tasks in parallel with a hard deadline. asyncio.wait
+    # (not wait_for+gather) so the collectors that DID finish keep their results
+    # and we can name exactly which ones ran out of clock — the old code logged
+    # a single "timed out after 45s" with zero attribution, which hid that
+    # reddit/youtube were blowing the budget on nearly every non-fast-path ticker.
+    t_collect = time.monotonic()
+    task_map = {asyncio.create_task(run_with_telemetry(n, c)): n for n, c in coros.items()}
+    done, pending = await asyncio.wait(task_map.keys(), timeout=45.0)
+    timed_out = sorted(task_map[t] for t in pending)
+    # Don't cancel the stragglers — the report proceeds without them, but they
+    # keep collecting in the background and land in the DB for the NEXT cycle
+    # (reddit/youtube/multi-api news blow the 45s budget on almost every cold
+    # ticker; cancelling threw that half-finished work away every time). A
+    # watchdog still hard-cancels anything running past 5 minutes.
+    for t in pending:
+        name = task_map[t]
+
+        def _late_done(task: "asyncio.Task", _name=name) -> None:
+            if task.cancelled():
+                logger.info("[V3][precollect] %s/%s cancelled by watchdog after 5m", ticker, _name)
+                return
+            exc = task.exception()
+            if exc:
+                logger.warning("[V3][precollect] %s/%s late-failed: %s: %s",
+                               ticker, _name, type(exc).__name__, exc)
+            else:
+                logger.info("[V3][precollect] %s/%s finished late (%.0fs) — data warm for next cycle",
+                            ticker, _name, time.monotonic() - t_collect)
+
+        t.add_done_callback(_late_done)
+
+    if pending:
+        async def _watchdog(tasks=list(pending)):
+            await asyncio.sleep(300)
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+
+        asyncio.create_task(_watchdog())
+
+    ok = sorted(n for n, s in _outcomes.items() if s == "ok")
+    errored = sorted(n for n, s in _outcomes.items() if s == "error")
+    skipped = sorted(set(_FULL_COLLECTORS) - set(coros)) if is_fast_path else []
+    collect_ms = int((time.monotonic() - t_collect) * 1000)
+    logger.info(
+        "[V3][precollect] %s in %dms: ok=%s%s%s%s",
+        ticker, collect_ms, ",".join(ok) or "-",
+        f" error={','.join(errored)}" if errored else "",
+        f" timeout={','.join(timed_out)}" if timed_out else "",
+        f" skipped(fast-path)={','.join(skipped)}" if skipped else "",
+    )
+    if timed_out:
+        _emit("precollect_timeout", f"Timed out after 45s: {', '.join(timed_out)}", "warning")
+
+    from app.v3 import collector_stats
+    collector_stats.record(cycle_id, ticker, ok=ok, errored=errored,
+                           timed_out=timed_out, skipped=skipped)
         
     # 2. Fetch Formatted Markdown via existing tools
     from app.tools.finance_tools import get_market_data, get_finnhub_news, get_technical_indicators
@@ -116,8 +182,9 @@ async def build_ticker_data_report(ticker: str, emit: Any = None) -> str:
         reddit_rows = db.execute(
             """
             SELECT subreddit, title, score, upvote_ratio, comment_count, sentiment_score, summary
-            FROM reddit_posts 
-            WHERE ticker = %s 
+            FROM reddit_posts
+            WHERE ticker = %s
+              AND collected_at > NOW() - INTERVAL '30 days'
             ORDER BY score DESC LIMIT 10
             """,
             [ticker]
@@ -130,11 +197,15 @@ async def build_ticker_data_report(ticker: str, emit: Any = None) -> str:
             )
             
         # YouTube formatting
+        # Recency-windowed: without the filter, three-week-old transcripts (the
+        # collector was starved by the 45s pre-collect cancel from 06-28 to
+        # 07-17) were presented to agents as "Recent YouTube Analyses".
         yt_rows = db.execute(
             """
             SELECT channel, title, published_at, summary
             FROM youtube_transcripts
             WHERE ticker = %s
+              AND published_at > NOW() - INTERVAL '21 days'
             ORDER BY published_at DESC LIMIT 5
             """,
             [ticker]
@@ -183,19 +254,77 @@ async def build_ticker_data_report(ticker: str, emit: Any = None) -> str:
     # If the full report exceeds _MAX_DATA_REPORT_CHARS, drop lower-priority sections first.
     _MAX_DATA_REPORT_CHARS = 10000
 
-    # Sentinel wake context: if this cycle was triggered by a watch tripping,
+    # Watch Desk wake context: if this cycle was triggered by a watch tripping,
     # tell the agent exactly WHAT woke it so it focuses on the change, not a
     # from-scratch review.
     wake_context_md = ""
     try:
-        from app.services.sentinel import consume_wake_context
+        from app.services.watch_desk import consume_wake_context
         _trip = consume_wake_context(ticker)
         if _trip:
             wake_context_md = (
-                f"## 0. WHY YOU WOKE UP (SENTINEL TRIGGER)\n"
+                f"## 0. WHY YOU WOKE UP (WATCH DESK TRIGGER)\n"
                 f"*A background watch condition tripped — this is the specific change to focus on. "
                 f"Assess what it means for the prior thesis, then decide:*\n\n"
                 f"**{_trip}**\n\n"
+            )
+    except Exception:
+        pass
+
+    # Realized-outcome + lesson feedback. The V3 agents saw the prior THESIS
+    # (above) but never the prior P&L: get_ticker_outcome_context only fired
+    # for legacy V2 agent names, and autoresearch lessons were stored +
+    # embedded but had zero retrieval callers. Inject both here — the one
+    # report every V3 agent reads.
+    outcome_md = ""
+    try:
+        from app.agents.base_agent import get_ticker_outcome_context
+        outcome_md = get_ticker_outcome_context(ticker) or ""
+    except Exception:
+        pass
+    # Fleet-wide confidence calibration: stated conviction vs realized win
+    # rate. Per-ticker history alone can't show an agent that its 80% claims
+    # win 67% while its 90% claims win 59%.
+    calibration_md = ""
+    try:
+        from app.agents.base_agent import get_confidence_calibration_context
+        _cal = get_confidence_calibration_context()
+        if _cal:
+            calibration_md = _cal + "\n\n"
+    except Exception:
+        pass
+    lessons_md = ""
+    try:
+        with get_db() as db:
+            # NB: evolution_lessons.timestamp is TEXT (ISO strings) — a
+            # NOW()-interval comparison type-errors. ISO strings sort
+            # lexicographically, so ORDER BY alone gets the freshest.
+            lrows = db.execute(
+                "SELECT lesson_text FROM evolution_lessons "
+                "WHERE status = 'audited' AND lesson_text IS NOT NULL "
+                "AND length(trim(lesson_text)) > 20 "
+                "ORDER BY timestamp DESC NULLS LAST LIMIT 12"
+            ).fetchall()
+        # The audit writes near-identical rephrasings of the same lesson on
+        # consecutive cycles ("downstream engines must wait for
+        # pre-collection" x3) — greedy Jaccard filter keeps 3 DISTINCT ones.
+        picked: list[str] = []
+        for r in lrows:
+            text = str(r[0]).strip()
+            words = set(text.lower().split())
+            if any(
+                len(words & set(p.lower().split())) / max(1, len(words | set(p.lower().split()))) > 0.6
+                for p in picked
+            ):
+                continue
+            picked.append(text)
+            if len(picked) >= 3:
+                break
+        if picked:
+            lessons_md = (
+                "## 0.b LESSONS FROM RECENT CYCLES (autoresearch audit)\n"
+                + "\n".join(f"- {p[:300]}" for p in picked)
+                + "\n\n"
             )
     except Exception:
         pass
@@ -205,6 +334,9 @@ async def build_ticker_data_report(ticker: str, emit: Any = None) -> str:
         f"Generated at: {datetime.now(timezone.utc).isoformat()}\n\n"
         f"{wake_context_md}"
         f"{previous_analysis_md}"
+        f"{outcome_md}"
+        f"{calibration_md}"
+        f"{lessons_md}"
     )
 
     # Build sections in priority order (highest priority first)
