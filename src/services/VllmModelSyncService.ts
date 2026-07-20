@@ -164,12 +164,17 @@ export const VllmModelSyncService = {
           modelKey: "consolidationModel",
           type: "large",
         },
-        {
-          section: "agents",
-          providerKey: "criticProvider",
-          modelKey: "criticModel",
-          type: "large",
-        },
+        // The critic role is deliberately NOT healed like the others — see the
+        // clearing block below the loop. Prism's CriticGate ignores
+        // agents.criticProvider entirely: the review call always runs on the
+        // CONVERSATION's provider (CriticGate.ts builds it from
+        // context.provider) with the pinned model *name*. With single-model
+        // vLLM hosts, any pinned name 404s on every other host — measured 869
+        // failed reviews in 24h, each burning ~4 stream retries (8-12s)
+        // before "Defaulting to approve". Empty criticModel makes the gate
+        // fall back to context.resolvedModel (the conversation's own model),
+        // which is valid on every host. So the only correct heal for this
+        // role is to clear a vLLM pin, never to set one.
         {
           section: "agents",
           providerKey: "subAgentProvider",
@@ -259,6 +264,26 @@ export const VllmModelSyncService = {
         logger.info(`[VllmModelSyncService] Auto-healing ${role.section}.${role.providerKey} and ${role.modelKey} because "${currentModel}" is not loaded on any instance. Selected "${bestCandidate.modelName}" on "${bestCandidate.instanceId}"`);
         dataCopy[role.section][role.providerKey] = bestCandidate.instanceId;
         dataCopy[role.section][role.modelKey] = bestCandidate.modelName;
+        updated = true;
+      }
+
+      // Clear a vLLM-pinned critic model (see the comment in `roles`). A
+      // non-vLLM pin (openai/anthropic) is left alone as an explicit operator
+      // choice, though it suffers the same cross-provider caveat.
+      const agentsSection = dataCopy.agents as
+        | Record<string, string>
+        | undefined;
+      if (
+        agentsSection &&
+        (agentsSection.criticModel || "") !== "" &&
+        (!agentsSection.criticProvider ||
+          isVllmProvider(agentsSection.criticProvider))
+      ) {
+        logger.warn(
+          `[VllmModelSyncService] Clearing agents.criticModel "${agentsSection.criticModel}" — prism's CriticGate runs the critic on the conversation's provider, so a pinned vLLM model 404s on every other host. Empty falls back to the conversation's own model.`,
+        );
+        agentsSection.criticModel = "";
+        agentsSection.criticProvider = "";
         updated = true;
       }
 

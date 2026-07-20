@@ -114,6 +114,17 @@ describe("VllmModelSyncService — auto-healing of stale provider/model settings
     expect(mockSettings.agents.subAgentProvider).toBe("vllm-2");
   });
 
+  it("clears the critic pin instead of healing it", () => {
+    // Prism's CriticGate ignores criticProvider: the review always runs on
+    // the CONVERSATION's provider with the pinned model name, so a pin that
+    // is perfectly valid on the Jetson 404s on every vllm-2 conversation
+    // (measured: 869 failed reviews/24h, ~8-12s of retries each, then
+    // "Defaulting to approve"). Empty falls back to the conversation's own
+    // model, which is valid everywhere.
+    expect(mockSettings.agents.criticModel).toBe("");
+    expect(mockSettings.agents.criticProvider).toBe("");
+  });
+
   it("sends the healed configuration to prism-service via PUT /settings", () => {
     expect(lastPutPayload).not.toBeNull();
     expect(lastPutPayload.memory.extractionProvider).toBe("vllm");
