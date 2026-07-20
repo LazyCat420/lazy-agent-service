@@ -31,8 +31,10 @@ PRE_BUILD() {
   step "Building flat tool_schemas.json from tool_schemas/ split sources"
   python3 "${SCRIPT_DIR}/../trading-service/scripts/build_tool_schemas.py"
 
-  step "Copying tool_schemas.json from lazy-tool-service"
-  cp "${SCRIPT_DIR}/../lazy-tool-service/tool_schemas.json" "${SCRIPT_DIR}/tool_schemas.json"
+  # build_tool_schemas.py already wrote this repo's copy (SCRIPT_DIR is that
+  # repo), so this used to copy the file onto itself via a ../lazy-tool-service
+  # round-trip — which broke outright once the directory was renamed. Nothing to
+  # copy: the build above is the step.
 
   step "Copying projects.json from vault-service"
   cp "${SCRIPT_DIR}/../vault-service/projects.json" "${SCRIPT_DIR}/projects.json"

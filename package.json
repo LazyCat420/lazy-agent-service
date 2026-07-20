@@ -1,5 +1,5 @@
 {
-  "name": "lazy-tool-service",
+  "name": "lazy-agent-service",
   "version": "0.1.0",
   "description": "Unified lazy-agent-service that consolidates Python tools and exposes them via REST and MCP SSE",
   "type": "module",
