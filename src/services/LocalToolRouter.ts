@@ -125,9 +125,15 @@ async function forwardToHtmlNotes(
 ): Promise<unknown> {
   const htmlNotesUrl = CONFIG.HTML_NOTES_URL || "http://10.0.0.16:8035";
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    // Shared secret for HTML-Notes' /internal/execute auth; both services carry
+    // INTERNAL_EXECUTE_TOKEN in their .env. Omitted when unset (compat mode).
+    if (process.env.INTERNAL_EXECUTE_TOKEN) {
+      headers["x-internal-token"] = process.env.INTERNAL_EXECUTE_TOKEN;
+    }
     const apiResponse = await fetch(`${htmlNotesUrl}/internal/execute`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ tool: toolName, args: toolArguments })
     });
     if (apiResponse.ok) {
