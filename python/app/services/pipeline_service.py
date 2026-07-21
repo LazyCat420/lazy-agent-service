@@ -506,6 +506,42 @@ class PipelineService:
                 except Exception as db_sync_err:
                     logger.warning("[PipelineService] Failed to sync progress to DB: %s", db_sync_err)
 
+            def emit_trade(ticker: str, side: str, trade_res, executed: bool, reason: str = ""):
+                """Put order execution on the event stream.
+
+                Execution used to be invisible to every downstream consumer of
+                pipeline_state — the decision was emitted but the fill never
+                was. The office client routes phase='trading' to the Exec
+                Office, so this is what sends an avatar there on a real fill.
+                """
+                payload = trade_res if isinstance(trade_res, dict) else {}
+                data = {
+                    "kind": "trade_executed" if executed else "trade_rejected",
+                    "ticker": ticker,
+                    "side": side,
+                }
+                if executed:
+                    for key in ("qty", "price", "amount", "proceeds", "realized_pnl", "pnl_pct"):
+                        if payload.get(key) is not None:
+                            data[key] = payload[key]
+                    qty, price = data.get("qty"), data.get("price")
+                    detail = (
+                        f"{ticker}: {side} {qty} @ ${price}"
+                        if qty is not None and price is not None
+                        else f"{ticker}: {side} filled"
+                    )
+                else:
+                    if reason:
+                        data["reason"] = reason
+                    detail = f"{ticker}: {side} not executed" + (f" ({reason})" if reason else "")
+                emit(
+                    "trading",
+                    f"trade_{'executed' if executed else 'rejected'}_{ticker}",
+                    detail,
+                    status="done" if executed else "error",
+                    data=data,
+                )
+
             # 1. Run Gatekeeper
 
             try:
@@ -1096,8 +1132,10 @@ class PipelineService:
                             if isinstance(trade_res, dict) and trade_res.get("error"):
                                 result["no_trade_reason"] = resolve_no_trade_reason(trade_res)
                                 logger.warning("[PipelineService] %s: BUY not executed: %s", ticker_name, trade_res["error"])
+                                emit_trade(ticker_name, "BUY", trade_res, False, result["no_trade_reason"])
                             else:
                                 result["trade_executed"] = True
+                                emit_trade(ticker_name, "BUY", trade_res, True)
                     elif action == "SELL":
                         # Pre-attempt position check: a SELL on an unheld
                         # ticker is a guaranteed refusal at the paper trader
@@ -1125,8 +1163,10 @@ class PipelineService:
                             if isinstance(trade_res, dict) and trade_res.get("error"):
                                 result["no_trade_reason"] = resolve_no_trade_reason(trade_res)
                                 logger.warning("[PipelineService] %s: SELL not executed: %s", ticker_name, trade_res["error"])
+                                emit_trade(ticker_name, "SELL", trade_res, False, result["no_trade_reason"])
                             else:
                                 result["trade_executed"] = True
+                                emit_trade(ticker_name, "SELL", trade_res, True)
 
                     # Handle Triggers (limit orders). Policy-blocked decisions
                     # register NOTHING; SELL-side triggers need a real position
@@ -1216,11 +1256,33 @@ class PipelineService:
 
                 return result
 
-            # Build tasks and execute concurrently
-            # We use standard asyncio.gather here because the underlying LLM calls
-            # (inside _run_agent_with_circuit_breaker) are globally throttled by the AdaptiveConcurrencyController.
-            # return_exceptions=True ensures one crashed ticker doesn't kill the whole batch.
-            tasks = [_process_ticker(i, t) for i, t in enumerate(tickers)]
+            # Build tasks and execute concurrently, but cap how many per-ticker
+            # pipelines run at once. The LLM calls are globally throttled by the
+            # AdaptiveConcurrencyController, but each ticker pipeline also borrows
+            # several DB connections (whiteboard, telemetry, desk/artifact saves);
+            # fanning out the whole watchlist (35+) at once exhausted the pool so
+            # hard the STOP_CYCLE poller couldn't get a connection and the loop
+            # deadlocked (2026-07-20). A semaphore makes a large watchlist degrade
+            # to waves instead of hanging. return_exceptions=True ensures one
+            # crashed ticker doesn't kill the whole batch.
+            from app.config.config import settings as _cfg
+            _ticker_limit = max(1, getattr(_cfg, "MAX_CONCURRENT_TICKERS", 6) or 6)
+            _ticker_sem = asyncio.Semaphore(_ticker_limit)
+            logger.info(
+                "[PipelineService] Processing %d tickers with concurrency cap %d",
+                len(tickers), _ticker_limit,
+            )
+
+            async def _process_ticker_guarded(i: int, ticker_name: str):
+                # Don't start a queued ticker after a stop was requested.
+                if cls._stop_requested:
+                    return None
+                async with _ticker_sem:
+                    if cls._stop_requested:
+                        return None
+                    return await _process_ticker(i, ticker_name)
+
+            tasks = [_process_ticker_guarded(i, t) for i, t in enumerate(tickers)]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for t, r in zip(tickers, results):
                 if isinstance(r, Exception):
