@@ -884,6 +884,33 @@
     "agents": []
   },
   {
+    "name": "calculate_hrp_allocation",
+    "description": "Compute Hierarchical Risk Parity target weights over the current holdings (optionally plus a BUY candidate) using a Ledoit-Wolf shrunk covariance \u2014 covariance-aware position sizing. Optional views (simplified Black-Litterman tilt) scale weights by direction and confidence. Returns target weights, dollar allocations, diversification ratio, current-vs-target drift, and >5% drift breaches. Use as the sizing baseline instead of flat cash-percent sizing.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tickers": {
+          "type": "string",
+          "description": "Comma-separated universe. Empty = current holdings."
+        },
+        "candidate_ticker": {
+          "type": "string",
+          "description": "Ticker being considered for a new BUY \u2014 unioned into the universe."
+        },
+        "views": {
+          "type": "string",
+          "description": "JSON list of directional views, e.g. [{\"ticker\":\"NVDA\",\"direction\":\"BULLISH\",\"confidence\":70}]."
+        },
+        "lookback_days": {
+          "type": "integer",
+          "description": "Trading days of history (default 252)."
+        }
+      },
+      "required": []
+    },
+    "owner_app": "trading"
+  },
+  {
     "name": "calculate_position_size",
     "description": "Calculate the number of shares to buy based on risk management rules. Uses the fixed-risk method: risk_amount = cash * risk_percent, shares = risk_amount / (entry_price - stop_loss_price).",
     "parameters": {
@@ -1119,6 +1146,27 @@
     ],
     "owner_app": "trading",
     "agents": []
+  },
+  {
+    "name": "forecast_volatility_garch",
+    "description": "Fit GARCH(1,1) on the ticker's daily returns and forecast NEXT-DAY volatility \u2014 a forward-looking volatility estimate, unlike ATR which only describes the past. Returns predicted vs realized (20d) annualized vol, the prediction premium, and vol_signal: EXPANSION (widen stops, shrink size), CONTRACTION, or NEUTRAL.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Stock ticker (e.g. AAPL)."
+        },
+        "lookback_days": {
+          "type": "integer",
+          "description": "Trading days of history to fit on (default 500)."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "owner_app": "trading"
   },
   {
     "name": "get_congress_trades",
@@ -1451,6 +1499,25 @@
     ]
   },
   {
+    "name": "get_portfolio_covariance",
+    "description": "Estimate the Ledoit-Wolf shrunk covariance/correlation structure of a set of tickers (default: the bot's current holdings) from daily returns history. Returns shrinkage intensity, matrix condition number (>1000 = near-singular), per-ticker annualized vol, average pairwise correlation, and the most/least correlated pairs. Use before sizing a BUY to see whether the candidate actually diversifies the book.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tickers": {
+          "type": "string",
+          "description": "Comma-separated tickers. Empty = current holdings."
+        },
+        "lookback_days": {
+          "type": "integer",
+          "description": "Trading days of history (default 252)."
+        }
+      },
+      "required": []
+    },
+    "owner_app": "trading"
+  },
+  {
     "name": "get_portfolio_state",
     "description": "Get the bot's full portfolio state including cash balance, all open positions with P&L, sector breakdown, and position count. Use this to understand portfolio health and make informed BUY/SELL decisions.",
     "parameters": {
@@ -1724,6 +1791,21 @@
       "v3_worker_insider",
       "v3_junior_analyst"
     ]
+  },
+  {
+    "name": "get_strategy_health",
+    "description": "Model-degradation check, independent of P&L: quality-score history (average + trend) for the decision-critical pipeline agents. Statuses: NORMAL, REDUCE (BUY sizes halved), CUT (new BUYs policy-blocked). Optionally pass one agent_name for detail.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "agent_name": {
+          "type": "string",
+          "description": "Specific agent to check (default: all decision-critical agents)."
+        }
+      },
+      "required": []
+    },
+    "owner_app": "trading"
   },
   {
     "name": "get_technical_indicators",
