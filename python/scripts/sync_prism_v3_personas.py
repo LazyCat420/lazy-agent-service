@@ -31,11 +31,14 @@ import urllib.request
 MCP_PREFIX = "mcp__lazy-tool-service__"
 NONE_SENTINEL = "__no_tools__"
 
-# agent module name -> prism persona agentId. The delta analyst deliberately
-# shares the junior persona (prism_agent_registry routes it there), so that
-# persona gets the UNION of both whitelists.
+# agent module name -> prism persona agentId. One persona per agent: a shared
+# persona would need the UNION of whitelists as availableTools, and any agent
+# whose request enables only ITS OWN subset then has permanent discovery
+# headroom — prism re-attaches the meta-tools (observed live 2026-07-22 when
+# delta shared the junior persona).
 PERSONA_SOURCES: dict[str, list[str]] = {
-    "CUSTOM_V3_JUNIOR_ANALYST": ["v3_junior_analyst", "v3_delta_analyst"],
+    "CUSTOM_V3_JUNIOR_ANALYST": ["v3_junior_analyst"],
+    "CUSTOM_V3_DELTA_ANALYST": ["v3_delta_analyst"],
     "CUSTOM_V3_FUNDAMENTAL_ANALYST": ["v3_fundamental_analyst"],
     "CUSTOM_V3_QUANT_ANALYST": ["v3_quant_analyst"],
     "CUSTOM_V3_REGIME_ENGINE": ["v3_regime_engine"],
@@ -113,8 +116,15 @@ def main() -> int:
             print(f"           + adding   {added}")
 
         if not args.dry_run:
+            # PUT /custom-agents/:id expects the Mongo _id, not the agentId.
+            mongo_id = doc.get("_id")
+            if isinstance(mongo_id, dict):  # extended JSON {"$oid": "..."}
+                mongo_id = mongo_id.get("$oid")
+            if not mongo_id:
+                print(f"           ! no _id on {persona_id}, cannot update")
+                continue
             _request(
-                f"{args.prism}/custom-agents/{persona_id}",
+                f"{args.prism}/custom-agents/{mongo_id}",
                 method="PUT",
                 body={"availableTools": target, "enabledByDefaultTools": target},
             )
