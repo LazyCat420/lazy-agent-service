@@ -112,6 +112,19 @@ export const PYTHON_CWD = process.env.PYTHON_CWD || defaultCwd;
 export const PYTHONPATH = process.env.PYTHONPATH || defaultPythonPath;
 export const LAZY_TOOL_SERVICE_API_KEY = process.env.LAZY_TOOL_SERVICE_API_KEY;
 export const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || "30000");
+// Slow external-fetch tools need a longer bridge deadline than the 30s
+// default: their own internal retry budgets (e.g. lazy_web_search's 20s+10s
+// httpx attempts) meet or exceed it, so the bridge aborted them right before
+// their retry could answer — the #1 tool-failure cause in 7d telemetry
+// (2026-07-23: ~40 "operation was aborted" failures across 9 tools).
+export const SLOW_TOOL_TIMEOUT_MS = Number(process.env.SLOW_TOOL_TIMEOUT_MS || "60000");
+export const SLOW_TOOLS = new Set(
+  (process.env.SLOW_TOOLS ||
+    "lazy_web_search,scrape_url,read_url,get_sec_filings,run_tool_chain,get_market_map_data,get_ticker_summary,get_finnhub_news")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 export const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || "60000");
 // trading-service runs as a separate container — "localhost" inside this
 // container never reaches it; default to the NAS host IP (same as HTML_NOTES_URL).
@@ -145,6 +158,8 @@ const CONFIG = {
   PYTHONPATH,
   LAZY_TOOL_SERVICE_API_KEY,
   EXECUTION_TIMEOUT_MS,
+  SLOW_TOOL_TIMEOUT_MS,
+  SLOW_TOOLS,
   CACHE_TTL_MS,
   TRADING_SERVICE_URL,
   TRADING_SERVICE_API_KEY,

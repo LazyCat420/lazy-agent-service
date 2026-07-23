@@ -75,9 +75,12 @@ const callTradingService = async (
   cacheKey: string
 ): Promise<unknown> => {
   const url = `${CONFIG.TRADING_SERVICE_URL}/api/v1/agent-tools/execute`;
+  const timeoutMs = CONFIG.SLOW_TOOLS.has(toolName)
+    ? CONFIG.SLOW_TOOL_TIMEOUT_MS
+    : CONFIG.EXECUTION_TIMEOUT_MS;
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), CONFIG.EXECUTION_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     const apiResponse = await fetch(url, {
       method: "POST",
       headers: {
@@ -112,7 +115,10 @@ const callTradingService = async (
     }
     return result;
   } catch (fetchError: unknown) {
-    const message = (fetchError as Error).message || String(fetchError);
+    const isAbort = (fetchError as Error)?.name === "AbortError";
+    const message = isAbort
+      ? `bridge timeout after ${timeoutMs}ms`
+      : (fetchError as Error).message || String(fetchError);
     logger.error(`[LocalToolRouter] trading-service execute ${toolName} unreachable: ${message}`);
     return { error: `Failed to reach trading-service at ${url}: ${message}`, is_error: true };
   }
