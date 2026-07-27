@@ -1,486 +1,545 @@
 [
-  {
-    "name": "get_congress_trades",
-    "description": "Fetch recent congressional trading activity for a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "congress",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "user_chat",
-      "v3_worker_insider"
-    ]
+ {
+  "name": "get_congress_trades",
+  "description": "Fetch recent congressional trading activity for a ticker.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_earnings_data",
-    "description": "Fetch upcoming or recent earnings dates and estimates for a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "earnings",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "tournament_pitch",
-      "user_chat",
-      "v3_worker_fundamental"
-    ]
+  "tier": 0,
+  "source": "congress",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "user_chat",
+   "v3_worker_insider"
+  ]
+ },
+ {
+  "name": "get_earnings_data",
+  "description": "Fetch upcoming or recent earnings dates and estimates for a ticker.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_finnhub_news",
-    "description": "Get the latest news articles for a stock from Finnhub.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "finnhub",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "tournament_pitch",
-      "user_chat",
-      "v3_fundamental_analyst",
-      "v3_junior_analyst",
-      "v3_portfolio_manager",
-      "v3_regime_engine",
-      "v3_worker_news"
-    ]
+  "tier": 0,
+  "source": "earnings",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "tournament_pitch",
+   "user_chat",
+   "v3_worker_fundamental"
+  ]
+ },
+ {
+  "name": "get_finnhub_news",
+  "description": "Get the latest news articles for a stock from Finnhub.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string",
+     "description": "The stock ticker symbol"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_finviz_fundamentals",
-    "description": "Fetch fundamental data from Finviz.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "finviz",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "tournament_pitch",
-      "user_chat",
-      "v3_worker_fundamental"
-    ]
+  "tier": 0,
+  "source": "finnhub",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "tournament_pitch",
+   "user_chat",
+   "v3_fundamental_analyst",
+   "v3_junior_analyst",
+   "v3_portfolio_manager",
+   "v3_regime_engine",
+   "v3_worker_news"
+  ]
+ },
+ {
+  "name": "get_finviz_fundamentals",
+  "description": "Fetch fundamental data from Finviz.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_insider_trades",
-    "description": "Fetch recent insider trading activity for a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "insider",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "user_chat",
-      "v3_worker_insider"
-    ]
+  "tier": 0,
+  "source": "finviz",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "tournament_pitch",
+   "user_chat",
+   "v3_worker_fundamental"
+  ]
+ },
+ {
+  "name": "get_insider_trades",
+  "description": "Fetch recent insider trading activity for a ticker.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_market_data",
-    "description": "Get recent price history, fundamentals, financials, and balance sheet for a stock from multiple reliable sources.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol (e.g., AAPL)"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "data_rotator",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "tournament_pitch",
-      "user_chat",
-      "v3_fundamental_analyst",
-      "v3_junior_analyst",
-      "v3_portfolio_manager",
-      "v3_quant_analyst",
-      "v3_regime_engine",
-      "v3_worker_fundamental",
-      "v3_worker_quant"
-    ]
+  "tier": 0,
+  "source": "insider",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "user_chat",
+   "v3_worker_insider"
+  ]
+ },
+ {
+  "name": "get_market_data",
+  "description": "Get recent price history, fundamentals, financials, and balance sheet for a stock from multiple reliable sources.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string",
+     "description": "The stock ticker symbol (e.g., AAPL)"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_options_flow",
-    "description": "Fetch unusual options activity and flow for a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "options",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "tournament_pitch",
-      "user_chat",
-      "v3_quant_analyst",
-      "v3_worker_quant"
-    ]
+  "tier": 0,
+  "source": "data_rotator",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "tournament_pitch",
+   "user_chat",
+   "v3_fundamental_analyst",
+   "v3_junior_analyst",
+   "v3_portfolio_manager",
+   "v3_quant_analyst",
+   "v3_regime_engine",
+   "v3_worker_fundamental",
+   "v3_worker_quant"
+  ]
+ },
+ {
+  "name": "get_options_flow",
+  "description": "Fetch unusual options activity and flow for a ticker.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_polygon_price_history",
-    "description": "Fetch historical OHLCV price data from Polygon.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "polygon",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "tournament_pitch",
-      "user_chat",
-      "v3_quant_analyst",
-      "v3_worker_quant"
-    ]
+  "tier": 0,
+  "source": "options",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "tournament_pitch",
+   "user_chat",
+   "v3_quant_analyst",
+   "v3_worker_quant"
+  ]
+ },
+ {
+  "name": "get_polygon_price_history",
+  "description": "Fetch historical OHLCV price data from Polygon.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_sec_filings",
-    "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "Stock ticker symbol, e.g. 'AAPL'"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "sec",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "tournament_pitch",
-      "user_chat",
-      "v3_worker_fundamental",
-      "v3_worker_insider"
-    ]
+  "tier": 0,
+  "source": "polygon",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "tournament_pitch",
+   "user_chat",
+   "v3_quant_analyst",
+   "v3_worker_quant"
+  ]
+ },
+ {
+  "name": "get_sec_filings",
+  "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string",
+     "description": "Stock ticker symbol, e.g. 'AAPL'"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_smart_money_leaderboard",
-    "description": "Get the best-performing members of Congress or hedge funds ranked by real risk-adjusted performance (alpha vs SPY), with sample sizes. Use to judge how much weight to give a particular actor's trades.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "actor_type": {
-          "type": "string",
-          "enum": [
-            "congress",
-            "fund"
-          ],
-          "description": "Which cohort. Default congress."
-        },
-        "horizon": {
-          "type": "string",
-          "enum": [
-            "1m",
-            "3m",
-            "6m",
-            "1y"
-          ],
-          "description": "Forward window. Default 1y."
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Max rows. Default 15."
-        }
-      },
-      "required": []
+  "tier": 0,
+  "source": "sec",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "tournament_pitch",
+   "user_chat",
+   "v3_worker_fundamental",
+   "v3_worker_insider"
+  ]
+ },
+ {
+  "name": "get_smart_money_leaderboard",
+  "description": "Get the best-performing members of Congress or hedge funds ranked by real risk-adjusted performance (alpha vs SPY), with sample sizes. Use to judge how much weight to give a particular actor's trades.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "actor_type": {
+     "type": "string",
+     "enum": [
+      "congress",
+      "fund"
+     ],
+     "description": "Which cohort. Default congress."
     },
-    "tier": 0,
-    "source": "smart_money",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "user_chat",
-      "v3_worker_insider",
-      "v3_junior_analyst"
-    ]
+    "horizon": {
+     "type": "string",
+     "enum": [
+      "1m",
+      "3m",
+      "6m",
+      "1y"
+     ],
+     "description": "Forward window. Default 1y."
+    },
+    "limit": {
+     "type": "integer",
+     "description": "Max rows. Default 15."
+    }
+   },
+   "required": []
   },
-  {
-    "name": "get_smart_money_leads",
-    "description": "Find stocks that multiple members of Congress and/or multiple hedge funds have recently bought - ranked research leads based on consensus buying by informed money. Use to discover candidate tickers when you have no specific ticker in mind.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "days": {
-          "type": "integer",
-          "description": "Lookback window. Default 180."
-        },
-        "min_buyers": {
-          "type": "integer",
-          "description": "Minimum distinct buyers. Default 3."
-        },
-        "source": {
-          "type": "string",
-          "enum": [
-            "congress",
-            "fund",
-            "both"
-          ],
-          "description": "Which cohort to mine. Default both."
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Max leads. Default 15."
-        }
-      },
-      "required": []
+  "tier": 0,
+  "source": "smart_money",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "user_chat",
+   "v3_worker_insider",
+   "v3_junior_analyst"
+  ]
+ },
+ {
+  "name": "get_smart_money_leads",
+  "description": "Find stocks that multiple members of Congress and/or multiple hedge funds have recently bought - ranked research leads based on consensus buying by informed money. Use to discover candidate tickers when you have no specific ticker in mind.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "days": {
+     "type": "integer",
+     "description": "Lookback window. Default 180."
     },
-    "tier": 0,
-    "source": "smart_money",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "user_chat",
-      "v3_worker_insider",
-      "v3_junior_analyst"
-    ]
+    "min_buyers": {
+     "type": "integer",
+     "description": "Minimum distinct buyers. Default 3."
+    },
+    "source": {
+     "type": "string",
+     "enum": [
+      "congress",
+      "fund",
+      "both"
+     ],
+     "description": "Which cohort to mine. Default both."
+    },
+    "limit": {
+     "type": "integer",
+     "description": "Max leads. Default 15."
+    }
+   },
+   "required": []
   },
-  {
-    "name": "get_smart_money_signal",
-    "description": "Get smart-money activity for a specific stock: which members of Congress and which hedge funds bought or sold it, when it became public, and how well those actors have historically performed (real alpha vs SPY). Use to check whether informed money is accumulating or exiting a ticker.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "Stock ticker symbol"
-        },
-        "days": {
-          "type": "integer",
-          "description": "Lookback window in days. Default 365."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
+  "tier": 0,
+  "source": "smart_money",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "user_chat",
+   "v3_worker_insider",
+   "v3_junior_analyst"
+  ]
+ },
+ {
+  "name": "get_smart_money_signal",
+  "description": "Get smart-money activity for a specific stock: which members of Congress and which hedge funds bought or sold it, when it became public, and how well those actors have historically performed (real alpha vs SPY). Use to check whether informed money is accumulating or exiting a ticker.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string",
+     "description": "Stock ticker symbol"
     },
-    "tier": 0,
-    "source": "smart_money",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "user_chat",
-      "v3_worker_insider",
-      "v3_junior_analyst"
-    ]
+    "days": {
+     "type": "integer",
+     "description": "Lookback window in days. Default 365."
+    }
+   },
+   "required": [
+    "ticker"
+   ]
   },
-  {
-    "name": "get_technical_indicators",
-    "description": "Get computed technical indicators (RSI, MACD, SMA, Bollinger Bands).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker symbol"
-        }
-      },
-      "required": [
-        "ticker"
-      ]
+  "tier": 0,
+  "source": "smart_money",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "user_chat",
+   "v3_worker_insider",
+   "v3_junior_analyst"
+  ]
+ },
+ {
+  "name": "get_technical_indicators",
+  "description": "Get computed technical indicators (RSI, MACD, SMA, Bollinger Bands).",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "ticker": {
+     "type": "string",
+     "description": "The stock ticker symbol"
+    }
+   },
+   "required": [
+    "ticker"
+   ]
+  },
+  "tier": 0,
+  "source": "computed",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 50000,
+  "tags": [],
+  "domain": "Market Data",
+  "labels": [
+   "market-data",
+   "stock-analysis"
+  ],
+  "owner_app": "trading",
+  "agents": [
+   "tournament_pitch",
+   "user_chat",
+   "v3_quant_analyst",
+   "v3_regime_engine",
+   "v3_worker_quant"
+  ]
+ },
+ {
+  "name": "screener_query",
+  "description": "Query the live market screener: 1,000+ tickers x 119 up-to-date fields. Filter/sort/select across: descriptive (sector, industry, market_cap, market_cap_tier, sp500, asset_class, price, change_pct, volume, avg_volume, rel_volume), valuation (pe_ratio, forward_pe, peg_ratio, price_to_sales, price_to_book, price_to_fcf, ev_to_ebitda, ev_to_sales), growth (eps_growth_this_y, eps_growth_next_y, eps_growth_past_5y, eps_growth_qoq, sales_growth_qoq, revenue_growth), profitability (gross_margin, oper_margin, net_margin, roe, roa, roic, debt_to_equity, current_ratio, quick_ratio), dividends/analyst (dividend_yield, payout_ratio, target_price, target_upside_pct, recom_score [1=strong buy..5=strong sell], earnings_date), ownership/short (insider_own_pct, inst_own_pct, shares_float, short_float_pct, short_ratio), technicals (rsi_14, beta, atr_14, sma20/50/200_dist_pct, w52_high/low_dist_pct, perf_week/month/quarter/ytd/year_pct, volatility_month_pct, gap_pct), smart money (funds_holders, funds_new_positions, funds_net_activity, congress_buys_90d, congress_sells_90d, news_count_7d), ETF (etf_category, etf_aum, etf_expense_pct, etf_ret_3y_pct). Percent fields are already in % units. An invalid field name returns the full valid-field list. Keep limit small and request only the columns you need. Example: filters=['sector:eq:Energy','pe_ratio:lt:15'], sort='market_cap', columns=['name','pe_ratio','dividend_yield'].",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "filters": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "Conditions 'field:op:value' (lt/lte/gt/gte/eq/ne/in)"
     },
-    "tier": 0,
-    "source": "computed",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Market Data",
-    "labels": [
-      "market-data",
-      "stock-analysis"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "tournament_pitch",
-      "user_chat",
-      "v3_quant_analyst",
-      "v3_regime_engine",
-      "v3_worker_quant"
-    ]
-  }
+    "sort": {
+     "type": "string",
+     "description": "Field to sort by"
+    },
+    "dir": {
+     "type": "string",
+     "enum": [
+      "asc",
+      "desc"
+     ],
+     "description": "Sort direction (default desc)"
+    },
+    "limit": {
+     "type": "integer",
+     "minimum": 1,
+     "maximum": 50,
+     "description": "Max rows (default 15)"
+    },
+    "columns": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "Fields per row; empty = compact default set"
+    }
+   },
+   "required": []
+  },
+  "tier": 0,
+  "source": "trading-client screener",
+  "permission": "read_only",
+  "fallback_only": false,
+  "concurrency_safe": true,
+  "max_result_chars": 20000,
+  "tags": [
+   "market",
+   "screener"
+  ],
+  "domain": "market-data",
+  "labels": [],
+  "owner_app": "trading",
+  "agents": [
+   "v3_junior_analyst",
+   "v3_fundamental_analyst"
+  ]
+ }
 ]

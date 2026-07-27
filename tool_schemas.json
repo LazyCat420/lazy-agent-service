@@ -2476,6 +2476,65 @@
     ]
   },
   {
+    "name": "screener_query",
+    "description": "Query the live market screener: 1,000+ tickers x 119 up-to-date fields. Filter/sort/select across: descriptive (sector, industry, market_cap, market_cap_tier, sp500, asset_class, price, change_pct, volume, avg_volume, rel_volume), valuation (pe_ratio, forward_pe, peg_ratio, price_to_sales, price_to_book, price_to_fcf, ev_to_ebitda, ev_to_sales), growth (eps_growth_this_y, eps_growth_next_y, eps_growth_past_5y, eps_growth_qoq, sales_growth_qoq, revenue_growth), profitability (gross_margin, oper_margin, net_margin, roe, roa, roic, debt_to_equity, current_ratio, quick_ratio), dividends/analyst (dividend_yield, payout_ratio, target_price, target_upside_pct, recom_score [1=strong buy..5=strong sell], earnings_date), ownership/short (insider_own_pct, inst_own_pct, shares_float, short_float_pct, short_ratio), technicals (rsi_14, beta, atr_14, sma20/50/200_dist_pct, w52_high/low_dist_pct, perf_week/month/quarter/ytd/year_pct, volatility_month_pct, gap_pct), smart money (funds_holders, funds_new_positions, funds_net_activity, congress_buys_90d, congress_sells_90d, news_count_7d), ETF (etf_category, etf_aum, etf_expense_pct, etf_ret_3y_pct). Percent fields are already in % units. An invalid field name returns the full valid-field list. Keep limit small and request only the columns you need. Example: filters=['sector:eq:Energy','pe_ratio:lt:15'], sort='market_cap', columns=['name','pe_ratio','dividend_yield'].",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Conditions 'field:op:value' (lt/lte/gt/gte/eq/ne/in)"
+        },
+        "sort": {
+          "type": "string",
+          "description": "Field to sort by"
+        },
+        "dir": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "description": "Sort direction (default desc)"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Max rows (default 15)"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Fields per row; empty = compact default set"
+        }
+      },
+      "required": []
+    },
+    "tier": 0,
+    "source": "trading-client screener",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 20000,
+    "tags": [
+      "market",
+      "screener"
+    ],
+    "domain": "market-data",
+    "labels": [],
+    "owner_app": "trading",
+    "agents": [
+      "v3_junior_analyst",
+      "v3_fundamental_analyst"
+    ]
+  },
+  {
     "name": "search_equations",
     "description": "Search the shared Quant Equation Library for existing mathematical strategies. Returns equations with their win rates, Sharpe ratios, and code. Use this before writing a new equation to check if one already exists.",
     "parameters": {
