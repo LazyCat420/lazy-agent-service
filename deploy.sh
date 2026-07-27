@@ -39,21 +39,14 @@ PRE_BUILD() {
   step "Copying projects.json from vault-service"
   cp "${SCRIPT_DIR}/../vault-service/projects.json" "${SCRIPT_DIR}/projects.json"
 
-  step "Cleaning and staging Python files for Docker build..."
-  rm -rf "${SCRIPT_DIR}/python"
-  mkdir -p "${SCRIPT_DIR}/python/app"
-
-  # Copy entire python app structure from trading-service
-  cp -r "${SCRIPT_DIR}/../trading-service/app/"* "${SCRIPT_DIR}/python/app/"
-  
-  cp -r "${SCRIPT_DIR}/../trading-service/scripts" "${SCRIPT_DIR}/python/"
-  cp "${SCRIPT_DIR}/../trading-service/requirements.txt" "${SCRIPT_DIR}/python/requirements.txt"
-
-  # Copy lazycat SDK dependencies
-  cp -r "${SCRIPT_DIR}/../lazycat-sdk/lazycat" "${SCRIPT_DIR}/python/"
-
-  # Copy tool_schemas.json into python/ so the docker builder includes it inside /app/python
-  cp "${SCRIPT_DIR}/tool_schemas.json" "${SCRIPT_DIR}/python/tool_schemas.json"
+  # NO python staging. This step used to mirror trading-service/app, its scripts,
+  # requirements.txt and lazycat-sdk/lazycat into ./python — ~12MB and 549 tracked
+  # files — but the runtime image never contained any of it: Dockerfile stage 2
+  # copies only node_modules, dist, package.json, tool_schemas.json and public
+  # onto a bare node:22-slim, so there is no interpreter to run it. The old
+  # subprocess bridge that would have used it was removed (see LocalToolRouter.ts);
+  # every python-backed tool now goes over HTTP to trading-service. Removed
+  # 2026-07-27 — do not reinstate without also adding python to the Dockerfile.
 }
 
 

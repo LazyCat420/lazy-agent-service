@@ -1,80 +1,88 @@
-# HANDOFF — bundled lazycat copy synced to SDK v0.3.0 (2026-07-20)
+# HANDOFF — retired the `python/` mirror, split the two port variables (2026-07-27)
 
-**Commit:** `b60d842`
-**Deployed:** NO — see "Not deployed" below.
-**Companion commits:** lazycat-sdk v0.3.0, trading-service `fa70560`, HTML-Notes `11dbb40`
+**Deployed:** yes — see Verification below.
+**Companion changes:** `lazycat-sdk` (version bump + consumer docs),
+`vault-service/projects.json` (stale repo URL), `sun/.scratch/check_schemas.js`.
 
-## Why this repo needed touching
+## What this repo is (the confusion this change removes)
 
-This repo is unusual: it **bundles its own copy of the SDK** at
-`python/lazycat/`, and its `python/app/` tree is otherwise byte-identical to
-`trading-service/app/` (verified — only `pipeline_service.py`,
-`watch_desk.py`, `v3/orchestrator.py` and `v3/quality_scorer.py` differ).
+One container, two names, both correct. The repo was renamed
+`lazy-tool-service` → `lazy-agent-service` on 2026-07-15; the **deployed
+identity deliberately stayed** `lazy-tool-service` (image, `container_name`, MCP
+registration, prism attribution, telemetry `service_source`). The MCP name is a
+protocol identifier — `mcp__lazy-tool-service__*` derives from it, ~195
+references ecosystem-wide. See the **Names** table at the top of
+`ARCHITECTURE.md`. Do not rename it.
 
-So when the SDK changes, this copy silently goes stale. It was byte-identical
-to the SDK before this sync; it is byte-identical again now.
+`sun/lazy-tool-service/` had also survived the rename as an empty, root-owned
+`data/charts/` directory (docker auto-creates a compose bind-mount source when
+the path is missing). Deleted. There was never a second container.
 
-## What was synced
+## The `python/` tree is gone
 
-- `python/lazycat/` — the whole SDK at v0.3.0. New: `llm_json.py`,
-  `resilience.py`, `cache.py`, `ratelimit.py`, `sse.py`. Modified:
-  `llm/streaming/research/agent` (SSE parsing consolidated),
-  `html_auditor` (no longer silently vouches for HTML it never inspected),
-  `__init__` (exports + version).
-- Five app-side shims matching trading-service:
-  `app/utils/text_utils.py`, `app/utils/resilience.py`, `app/cache.py`,
-  `app/scraper/core/rate_limiter.py`, `app/services/api_rate_limiter.py`.
+It was a deploy-time mirror of `trading-service/app`, its `scripts/`,
+`requirements.txt`, and `lazycat-sdk/lazycat` — 12 MB, **549 tracked files**, and
+the reason the last ten commits here were all `chore(python-mirror): sync …`.
 
-See `lazycat-sdk/HANDOFF.md` for the full description of what v0.3.0 contains
-and `trading-service/HANDOFF.md` for the shim rationale.
+**It never ran.** Verified eight ways:
 
-## Not deployed — read before you deploy
+1. `Dockerfile` stage 2 copies only `node_modules`, `dist`, `package.json`,
+   `tool_schemas.json`, `public` onto a bare `node:22-slim` — no interpreter.
+2. The only subprocess calls in all of `src/` are `ffmpeg` (`utils/media.ts`) and
+   `git` (`harnesses/lifecycle/SandboxExecutor.ts`). Nothing spawns python.
+3. `PYTHON_INTERPRETER` / `PYTHON_EXEC_SCRIPT` / `PYTHON_CWD` / `PYTHONPATH` in
+   `config.ts` had **zero importers**.
+4. The container path they pointed at (`/opt/venv/bin/python`) is never created.
+5. `LocalToolRouter.ts` already said so: the `spawn execute_tool.py` bridge "could
+   never run in the Node-only container and was removed".
+6. `execute_python` the *tool* goes over HTTP — `/utility/python/stream`.
+7. Nothing outside this repo read `lazy-agent-service/python/**`.
+8. `deploy-kit/lib.sh` ships the image only (`docker save | ssh docker load`).
 
-This working tree had **~21 files in flight from a parallel session** when the
-sync was made (base_agent, tool_whitelists, eval_engine, cognition/evolution/*,
-db/migrations, scraper engines, cycle_scheduler, pipeline_service,
-finance_tools, v3/agent_runner, collector_stats, self_healing_watchdog,
-tool_schemas.json, plus three new untracked files).
+Changes: `deploy.sh` `PRE_BUILD()` python-staging block deleted; `python/` added
+to `.gitignore` and `git rm -r --cached`'d; the dead python config block removed
+from `config.ts`; `ARCHITECTURE.md`'s "Python Layer" section replaced.
 
-The sync commit is **path-scoped** — it touches only `python/lazycat/` and the
-five shim files, none of which were in that dirty set. Nothing of the parallel
-session's work was staged or committed.
+**Do not reinstate it** without also adding Python to the Dockerfile.
 
-**Deploying was deliberately left to the session that owns those changes.**
-The sync rides out on their next deploy. If you are that session: the shims
-keep every existing import working, and trading-service ran 892 unit + 157
-integration/regression tests green against the identical change.
+## Two ports, two variables (was one variable, two meanings)
 
-## DO NOT sync `app/utils/resilience.py` on its own
+`LAZY_TOOL_SERVICE_PORT` defaulted to `7778` in `config.ts` but `5591` in
+`PrismRegistrationService.ts`. With the deployed env (which sets it to 5591), the
+self-referential `LAZY_TOOL_SERVICE_URL` resolved to `localhost:5591` — **a port
+nothing listens on inside the container**, where the bind is 7778.
 
-trading-service `811cb69` fixed its dead retry telemetry: it added a real
-class-level `PipelineService.emit()` and registered an emitter with the SDK's
-`set_failure_emitter()` hook.
+Now:
 
-**That fix was deliberately NOT synced here**, because it takes two files that
-must move together:
+| Variable | Meaning | Default |
+|---|---|---|
+| `PORT` | host-side publish port for compose | 5591 |
+| `LAZY_TOOL_BIND_PORT` | what this process listens on in-container | 7778 |
+| `LAZY_TOOL_SERVICE_PORT` | external port advertised to prism/siblings | 5591 |
 
-- `app/services/pipeline_service.py` — one of the four files that genuinely
-  differ between these twins, **and dirty from the parallel session**.
-  This copy's `PipelineService` still has no `emit` method.
-- `app/utils/resilience.py` — clean here, so it looks safe to sync.
+`LAZY_TOOL_SERVICE_URL` is no longer read from the environment — it is derived
+from the bind port as `http://127.0.0.1:<bind>`. `src/index.ts` now imports
+`LAZY_TOOL_BIND_PORT` from `config.ts` instead of re-reading `process.env`.
 
-Copying `resilience.py` alone would register an emitter that calls
-`PipelineService.emit(...)` on a class that doesn't have it — recreating the
-exact silent `AttributeError`-into-`except: pass` bug that fix removed. The SDK
-swallows emitter exceptions, so it would fail silently again, which is how it
-went unnoticed for so long in the first place.
+Also fixed: `src/providers/lm-studio.ts` hardcoded
+`DEFAULT_MCP_SERVER_URL = "http://lazy-tool-service:7778"` — docker-DNS by
+`container_name`, silently coupled to `IMAGE_NAME`, and unresolvable across
+compose projects anyway (no shared `networks:` block exists in this ecosystem).
+It now uses the loopback `LAZY_TOOL_SERVICE_URL`; it is our own `/mcp` endpoint.
 
-When you do sync it: take **both** files, and check
-`tests/unit/test_pipeline_emit.py` from trading-service comes along — it exists
-specifically to stop this rotting again.
+## Verification
 
-## Gotcha to remember
+- `pnpm run typecheck` / `lint` / `test` green; `deploy.sh --dry-run` green.
+- `tool_schemas.json` byte-identical before and after (`md5 af6a0b3b…`) — this is
+  the contract behind all 83 tools, so it must not move.
+- Post-deploy: `:5591/health` ok; prism `GET /mcp-servers` still shows exactly one
+  row, `lazy-tool-service` → `:5591/mcp/sse`, `connected: true`, **`toolCount: 83`**.
+- `docker ps` checked *after* deploy — a healthy endpoint is not a healthy
+  container.
 
-`python/lazycat/` is a *copy*, not a mount. Any future SDK change needs:
+## Gotcha for next time
 
-    cp lazycat-sdk/lazycat/*.py lazy-agent-service/python/lazycat/
-
-Nothing enforces this — the twins just drift, and the failure mode is
-this service quietly running older SDK behaviour than trading-service and
-HTML-Notes, which both mount the live checkout.
+`vault-service/projects.json` is **gitignored** (it holds secrets), so the catalog
+fix there is a live working-tree edit that only reaches the NAS via
+`vault-service`'s own deploy — and this repo's `PRE_BUILD` copies it in at build
+time. If you change it, deploy vault-service too or the change is local-only.

@@ -22,12 +22,17 @@ import logger from "../utils/logger.ts";
 import { resolveArchParams } from "../utils/gguf-arch.ts";
 import {
   TOOLS_SERVICE_URL,
+  LAZY_TOOL_SERVICE_URL,
   LM_STUDIO_EVAL_BATCH_SIZE,
   LM_STUDIO_DEFAULT_MAX_CONTEXT,
 } from "../../config.ts";
 import { TYPES, getDefaultModels } from "../config.ts";
-// Default MCP server URL for ephemeral tool integrations (vault-resolved)
-const DEFAULT_MCP_SERVER_URL = "http://lazy-tool-service:7778";
+// Default MCP server URL for ephemeral tool integrations. This is OUR OWN
+// /mcp endpoint, so address it on loopback via the bind port. It used to be
+// the hardcoded docker-DNS name "http://lazy-tool-service:7778", which only
+// resolved from inside the same compose project (no shared `networks:` block
+// exists in this ecosystem) and was silently coupled to IMAGE_NAME in deploy.sh.
+const DEFAULT_MCP_SERVER_URL = LAZY_TOOL_SERVICE_URL;
 import {
   convertToolsToOpenAI,
   buildPayloadParams,

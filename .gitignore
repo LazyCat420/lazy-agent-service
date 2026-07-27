@@ -32,6 +32,11 @@ __pycache__/
 .pytest_cache/
 .deepeval/
 
+# Retired 2026-07-27: ./python was a mirror of trading-service/app + lazycat-sdk
+# that the runtime image never contained (there is no interpreter in node:22-slim).
+# Ignored rather than merely deleted so a stray local copy can never be re-committed.
+/python/
+
 # Local Secrets File
 projects.json
 

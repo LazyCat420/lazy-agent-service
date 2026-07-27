@@ -82,34 +82,24 @@ export const LM_STUDIO_DEFAULT_MAX_CONTEXT = parseInt(process.env.LM_STUDIO_DEFA
 
 import fs from "node:fs";
 
-// Detect if we are inside the Docker container
-const isDocker = fs.existsSync("/.dockerenv") || fs.existsSync("/opt/venv/bin/python");
+// Detect if we are inside the Docker container. The old second probe
+// (/opt/venv/bin/python) dated from when a python venv was baked into the
+// image; the image is node-only now, so /.dockerenv is the whole signal.
+const isDocker = fs.existsSync("/.dockerenv");
 
-const defaultInterpreter = isDocker
-  ? "/opt/venv/bin/python"
-  : "/home/lazycat/github/projects/sun/trading-service/.venv/bin/python";
+// TWO PORTS, TWO MEANINGS — they are not interchangeable:
+//   LAZY_TOOL_BIND_PORT   (7778) — what this process listens on. Same value
+//                                  src/index.ts binds; compose maps 5591:7778.
+//   LAZY_TOOL_SERVICE_PORT (5591) — the EXTERNAL host port other services and
+//                                  prism dial. Set to 5591 by the vault .env.
+// This used to be one variable defaulting to 7778 here and 5591 in
+// PrismRegistrationService.ts, so with the deployed env set the self-URL below
+// resolved to localhost:5591 — a port nothing listens on inside the container.
+export const LAZY_TOOL_BIND_PORT = Number(process.env.LAZY_TOOL_BIND_PORT || "7778");
+export const LAZY_TOOL_SERVICE_PORT = Number(process.env.LAZY_TOOL_SERVICE_PORT || "5591");
 
-const defaultExecScript = isDocker
-  ? "/app/python/scripts/execute_tool.py"
-  : "/home/lazycat/github/projects/sun/trading-service/scripts/execute_tool.py";
-
-const defaultCwd = isDocker
-  ? "/app/python"
-  : "/home/lazycat/github/projects/sun/trading-service";
-
-const defaultPythonPath = isDocker
-  ? "/app/python"
-  : [
-      "/home/lazycat/github/projects/sun/trading-service",
-      "/home/lazycat/github/projects/sun/trading-client"
-    ].join(process.platform === "win32" ? ";" : ":");
-
-export const LAZY_TOOL_SERVICE_PORT = Number(process.env.LAZY_TOOL_SERVICE_PORT || "7778");
-export const LAZY_TOOL_SERVICE_URL = process.env.LAZY_TOOL_SERVICE_URL || `http://localhost:${LAZY_TOOL_SERVICE_PORT}`;
-export const PYTHON_INTERPRETER = process.env.PYTHON_INTERPRETER || defaultInterpreter;
-export const PYTHON_EXEC_SCRIPT = process.env.PYTHON_EXEC_SCRIPT || defaultExecScript;
-export const PYTHON_CWD = process.env.PYTHON_CWD || defaultCwd;
-export const PYTHONPATH = process.env.PYTHONPATH || defaultPythonPath;
+// Self-referential: always the BIND port, never the external one.
+export const LAZY_TOOL_SERVICE_URL = `http://127.0.0.1:${LAZY_TOOL_BIND_PORT}`;
 export const LAZY_TOOL_SERVICE_API_KEY = process.env.LAZY_TOOL_SERVICE_API_KEY;
 export const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || "30000");
 // Slow external-fetch tools need a longer bridge deadline than the 30s
@@ -149,13 +139,10 @@ export const THENEWSAPI_KEY = process.env.THENEWSAPI_KEY;
 export const NEWSAPI_API_KEY = process.env.NEWSAPI_API_KEY;
 
 const CONFIG = {
+  LAZY_TOOL_BIND_PORT,
   LAZY_TOOL_SERVICE_PORT,
   LAZY_TOOL_SERVICE_URL,
   MONGODB_URI: MONGO_URI,
-  PYTHON_INTERPRETER,
-  PYTHON_EXEC_SCRIPT,
-  PYTHON_CWD,
-  PYTHONPATH,
   LAZY_TOOL_SERVICE_API_KEY,
   EXECUTION_TIMEOUT_MS,
   SLOW_TOOL_TIMEOUT_MS,
