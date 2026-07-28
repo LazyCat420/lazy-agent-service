@@ -182,10 +182,9 @@ async function queryVllmBox(url: string): Promise<string | null> {
   }
 }
 
-/** Extract topics from a prism /agent response */
+/** Extract topics from a prism /chat response */
 export function extractTopicsFromResponse(data: any): string[] {
-  // The /agent response is { text, thinking, provider, model, usage, ... }
-  // Tool calls may be in the response depending on prism's agentic loop
+  // The /chat response is { text, thinking, provider, model, usage, ... }
   const text = data?.text || "";
 
   // Try to parse as JSON first (prism may return the tool call result as text)
@@ -296,24 +295,34 @@ async function resolveProviderAndModel(
   throw new Error("No vLLM boxes are online with loaded models");
 }
 
-/** Call prism /agent endpoint (non-streaming) with no tools */
-async function callPrismAgent(
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+// Backoff before retry attempt N (attempt index 0 → first retry, then capped).
+const RETRY_BACKOFF_MS = [1_000, 4_000];
+const retryDelay = (attempt: number) =>
+  RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length - 1)];
+
+/** Call prism /chat endpoint (non-streaming, no agent persona, no tools).
+ *
+ * Deliberately NOT /agent: that endpoint defaults to the full CODING persona
+ * and attaches every tool schema (~106K tokens), which blows the local vLLM
+ * context window and makes prism skip the model call entirely — returning an
+ * empty 200. /chat is the plain server-to-server completion path. */
+async function callPrismChat(
   model: string,
   provider: string,
   messages: Array<{ role: string; content: string }>,
   temperature: number = 0.1,
   maxTokens: number = 4000,
 ): Promise<any> {
-  const url = `${PRISM_URL}/agent?stream=false`;
-  const body: any = {
+  const url = `${PRISM_URL}/chat?stream=false`;
+  const body = {
     model,
     provider,
     messages,
-    max_tokens: maxTokens,
+    maxTokens, // camelCase — /chat silently drops snake_case max_tokens
     temperature,
-    stream: false,
     thinkingEnabled: false,
-    enabledTools: [], // Restrict/disable all tools for single-roundtrip JSON text completion
+    skipConversation: true, // don't persist a conversation doc per call
   };
 
   const resp = await fetch(url, {
@@ -322,18 +331,29 @@ async function callPrismAgent(
       "Content-Type": "application/json",
       // Prism attributes requests by header only — without these the call is
       // filed under its catch-all "default"/"anonymous" project.
-      ...prismAttributionHeaders(),
+      ...prismAttributionHeaders("youtube-wallgarden"),
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    // Kept below nginx's 110s and the browser's 120s so each layer sees a
+    // real error from the layer below instead of racing its own timer.
+    signal: AbortSignal.timeout(100_000),
   });
 
   if (!resp.ok) {
     const errText = await resp.text().catch(() => "");
-    throw new Error(`Prism /agent returned ${resp.status}: ${errText.substring(0, 300)}`);
+    throw new Error(`Prism /chat returned ${resp.status}: ${errText.substring(0, 300)}`);
   }
 
-  return resp.json();
+  const data: any = await resp.json();
+  // Empty text is a gateway/provider failure, never valid model output —
+  // distinct from "the model answered but we couldn't parse topics".
+  if (!data || typeof data.text !== "string" || !data.text.trim()) {
+    throw new Error(
+      `Prism /chat returned empty text (provider=${data?.provider ?? provider}, ` +
+      `model=${data?.model ?? model}, usage=${JSON.stringify(data?.usage ?? null)})`
+    );
+  }
+  return data;
 }
 
 // ── Public API ──────────────────────────────────────────────
@@ -444,7 +464,7 @@ Suggest ${n} new topics.`;
           0.4,
           0.9 + batchIndex * 0.05 - attempt * 0.25
         );
-        const data = await callPrismAgent(
+        const data = await callPrismChat(
           model,
           provider,
           [
@@ -460,6 +480,7 @@ Suggest ${n} new topics.`;
         logger.warn(
           `[WallgardenService] Brainstorm batch ${batchIndex + 1} attempt ${attempt + 1} failed: ${err.message}`
         );
+        if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
       }
     }
     return [];
@@ -531,42 +552,55 @@ export interface RatedTopic {
 const TIER_WEIGHT: Record<TopicTier, number> = { A: 8, B: 4, C: 0 };
 const RATE_BATCH_SIZE = 25;
 
+export interface RateResult {
+  rated: RatedTopic[];
+  /** Batches whose rating call failed outright — their topics fell back to
+   * tier B. failedBatches === totalBatches means the rater never ran at all. */
+  failedBatches: number;
+  totalBatches: number;
+}
+
 /** Grade topics by domain-anchoring. Unrated topics fall back to tier B. */
 export async function rateTopics(
   topics: string[],
   modelHint?: string,
   providerHint?: string
-): Promise<RatedTopic[]> {
-  if (topics.length === 0) return [];
+): Promise<RateResult> {
+  if (topics.length === 0) return { rated: [], failedBatches: 0, totalBatches: 0 };
   const { model, provider } = await resolveProviderAndModel(modelHint, providerHint);
 
-  const rateBatch = async (chunk: string[]): Promise<Record<string, TopicTier>> => {
-    try {
-      const data = await callPrismAgent(
-        model,
-        provider,
-        [
-          { role: "system", content: RATE_SYSTEM_PROMPT },
-          { role: "user", content: JSON.stringify(chunk) },
-        ],
-        0.1, // grading, not brainstorming — keep it deterministic
-      );
-      const text = data?.text || "";
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) return {};
-      const parsed = JSON.parse(match[0]);
-      const out: Record<string, TopicTier> = {};
-      for (const r of parsed?.ratings || []) {
-        const t = typeof r?.t === "string" ? r.t.trim().toLowerCase() : "";
-        if (t && (r.tier === "A" || r.tier === "B" || r.tier === "C")) {
-          out[t] = r.tier;
+  // null = this batch's LLM call failed (as opposed to rated-but-skipped topics)
+  const rateBatch = async (chunk: string[]): Promise<Record<string, TopicTier> | null> => {
+    const MAX_RETRIES = 1;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const data = await callPrismChat(
+          model,
+          provider,
+          [
+            { role: "system", content: RATE_SYSTEM_PROMPT },
+            { role: "user", content: JSON.stringify(chunk) },
+          ],
+          0.1, // grading, not brainstorming — keep it deterministic
+        );
+        const text = data?.text || "";
+        const match = text.match(/\{[\s\S]*\}/);
+        if (!match) throw new Error("No JSON object in rating response");
+        const parsed = JSON.parse(match[0]);
+        const out: Record<string, TopicTier> = {};
+        for (const r of parsed?.ratings || []) {
+          const t = typeof r?.t === "string" ? r.t.trim().toLowerCase() : "";
+          if (t && (r.tier === "A" || r.tier === "B" || r.tier === "C")) {
+            out[t] = r.tier;
+          }
         }
+        return out;
+      } catch (err: any) {
+        logger.warn(`[WallgardenService] Topic rating batch attempt ${attempt + 1} failed: ${err.message}`);
+        if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
       }
-      return out;
-    } catch (err: any) {
-      logger.warn(`[WallgardenService] Topic rating batch failed: ${err.message}`);
-      return {};
     }
+    return null;
   };
 
   const chunks: string[][] = [];
@@ -574,7 +608,13 @@ export async function rateTopics(
     chunks.push(topics.slice(i, i + RATE_BATCH_SIZE));
   }
   const results = await Promise.all(chunks.map(rateBatch));
-  const ratings: Record<string, TopicTier> = Object.assign({}, ...results);
+  const failedBatches = results.filter(r => r === null).length;
+  if (failedBatches > 0) {
+    logger.error(
+      `[WallgardenService] Topic rating degraded: ${failedBatches}/${chunks.length} batches failed — their topics fall back to tier B`
+    );
+  }
+  const ratings: Record<string, TopicTier> = Object.assign({}, ...results.filter(Boolean));
 
   // A topic the rater skipped is treated as B: keep it, but never let an
   // unrated topic outrank one that actually earned an A.
@@ -588,7 +628,11 @@ export async function rateTopics(
     `${rated.filter(r => r.tier === "A").length}A ` +
     `${rated.filter(r => r.tier === "B").length}B ${dropped}C(dropped)`
   );
-  return rated.filter(r => r.tier !== "C");
+  return {
+    rated: rated.filter(r => r.tier !== "C"),
+    failedBatches,
+    totalBatches: chunks.length,
+  };
 }
 
 // ── Liked-video topic extraction ────────────────────────────
@@ -677,7 +721,7 @@ export async function extractVideoTopics(
       try {
         // Extraction is grounded — start cool and get colder on retries.
         const temperature = Math.max(0.1, 0.3 - attempt * 0.1);
-        const data = await callPrismAgent(
+        const data = await callPrismChat(
           model,
           provider,
           [
@@ -693,6 +737,7 @@ export async function extractVideoTopics(
         logger.warn(
           `[WallgardenService] Extract batch ${batchIndex + 1} attempt ${attempt + 1} failed: ${err.message}`
         );
+        if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
       }
     }
     return [];
@@ -708,7 +753,12 @@ export async function extractVideoTopics(
   // One rating pass over the union, then map tiers back per video. C-tier
   // topics are dropped here exactly like the brainstorm path.
   const uniqueTopics = Array.from(new Set(flat.flatMap(e => e.topics)));
-  const rated = await rateTopics(uniqueTopics, model, provider);
+  const { rated, failedBatches } = await rateTopics(uniqueTopics, model, provider);
+  if (failedBatches > 0) {
+    logger.error(
+      `[WallgardenService] Extraction rating pass degraded (${failedBatches} failed batches)`
+    );
+  }
   const ratedByTopic = new Map(rated.map(r => [r.topic.toLowerCase(), r]));
 
   const out: VideoExtraction[] = [];
@@ -810,7 +860,7 @@ export async function generateTasteProfile(
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const data = await callPrismAgent(
+      const data = await callPrismChat(
         model,
         provider,
         [
@@ -832,6 +882,7 @@ export async function generateTasteProfile(
     } catch (err: any) {
       lastError = err;
       logger.warn(`[WallgardenService] Taste profile attempt ${attempt + 1} failed: ${err.message}`);
+      if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
     }
   }
   throw lastError || new Error("Taste profile generation failed");
@@ -864,47 +915,60 @@ export interface JudgedTopic {
 
 const JUDGE_BATCH_SIZE = 10;
 
+export interface JudgeResult {
+  judged: JudgedTopic[];
+  /** Batches whose judge call failed outright — their topics fell back to
+   * MIXED (fail-open by design; grounding must never brick the feed). */
+  failedBatches: number;
+  totalBatches: number;
+}
+
 export async function judgeTopicGrounding(
   items: GroundingItem[],
   modelHint?: string,
   providerHint?: string
-): Promise<JudgedTopic[]> {
-  if (items.length === 0) return [];
+): Promise<JudgeResult> {
+  if (items.length === 0) return { judged: [], failedBatches: 0, totalBatches: 0 };
   const { model, provider } = await resolveProviderAndModel(modelHint, providerHint);
 
-  const judgeBatch = async (chunk: GroundingItem[]): Promise<Record<string, GroundingVerdict>> => {
+  // null = this batch's LLM call failed (vs. a verdict the judge skipped)
+  const judgeBatch = async (chunk: GroundingItem[]): Promise<Record<string, GroundingVerdict> | null> => {
     const lines = chunk.map(i => {
       const titles = i.titles.slice(0, 8).map(t => `"${t}"`).join(", ");
       const channels = (i.channels || []).slice(0, 8).filter(Boolean);
       const chanPart = channels.length ? ` | channels: ${channels.join(", ")}` : "";
       return `- topic: "${i.topic}" | results: [${titles}]${chanPart}`;
     });
-    try {
-      const data = await callPrismAgent(
-        model,
-        provider,
-        [
-          { role: "system", content: JUDGE_SYSTEM_PROMPT },
-          { role: "user", content: lines.join("\n") },
-        ],
-        0.1, // grading, not brainstorming
-      );
-      const text = data?.text || "";
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) return {};
-      const parsed = JSON.parse(match[0]);
-      const out: Record<string, GroundingVerdict> = {};
-      for (const v of parsed?.verdicts || []) {
-        const t = typeof v?.t === "string" ? v.t.trim().toLowerCase() : "";
-        if (t && (v.verdict === "REAL" || v.verdict === "MIXED" || v.verdict === "SLOP")) {
-          out[t] = v.verdict;
+    const MAX_RETRIES = 1;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const data = await callPrismChat(
+          model,
+          provider,
+          [
+            { role: "system", content: JUDGE_SYSTEM_PROMPT },
+            { role: "user", content: lines.join("\n") },
+          ],
+          0.1, // grading, not brainstorming
+        );
+        const text = data?.text || "";
+        const match = text.match(/\{[\s\S]*\}/);
+        if (!match) throw new Error("No JSON object in judge response");
+        const parsed = JSON.parse(match[0]);
+        const out: Record<string, GroundingVerdict> = {};
+        for (const v of parsed?.verdicts || []) {
+          const t = typeof v?.t === "string" ? v.t.trim().toLowerCase() : "";
+          if (t && (v.verdict === "REAL" || v.verdict === "MIXED" || v.verdict === "SLOP")) {
+            out[t] = v.verdict;
+          }
         }
+        return out;
+      } catch (err: any) {
+        logger.warn(`[WallgardenService] Grounding judge batch attempt ${attempt + 1} failed: ${err.message}`);
+        if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
       }
-      return out;
-    } catch (err: any) {
-      logger.warn(`[WallgardenService] Grounding judge batch failed: ${err.message}`);
-      return {};
     }
+    return null;
   };
 
   const chunks: GroundingItem[][] = [];
@@ -912,7 +976,13 @@ export async function judgeTopicGrounding(
     chunks.push(items.slice(i, i + JUDGE_BATCH_SIZE));
   }
   const results = await Promise.all(chunks.map(judgeBatch));
-  const verdicts: Record<string, GroundingVerdict> = Object.assign({}, ...results);
+  const failedBatches = results.filter(r => r === null).length;
+  if (failedBatches > 0) {
+    logger.error(
+      `[WallgardenService] Grounding judge degraded: ${failedBatches}/${chunks.length} batches failed — their topics default to MIXED`
+    );
+  }
+  const verdicts: Record<string, GroundingVerdict> = Object.assign({}, ...results.filter(Boolean));
 
   const judged = items.map(i => ({
     topic: i.topic,
@@ -924,7 +994,7 @@ export async function judgeTopicGrounding(
     `${judged.filter(j => j.verdict === "MIXED").length} MIXED, ` +
     `${judged.filter(j => j.verdict === "SLOP").length} SLOP`
   );
-  return judged;
+  return { judged, failedBatches, totalBatches: chunks.length };
 }
 
 export async function generateSimilarTopics(ctx: SimilarContext): Promise<string[]> {
@@ -959,7 +1029,7 @@ Suggest ${numTopics} topics related to "${ctx.query}".`;
       }
 
       const temperature = Math.max(0.4, 0.9 - attempt * 0.25);
-      const data = await callPrismAgent(
+      const data = await callPrismChat(
         model,
         provider,
         [
@@ -979,6 +1049,7 @@ Suggest ${numTopics} topics related to "${ctx.query}".`;
     } catch (err: any) {
       lastError = err;
       logger.error(`[WallgardenService] Similar attempt ${attempt + 1} failed: ${err.message}`);
+      if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
     }
   }
 

@@ -29,7 +29,7 @@ router.get("/models", async (_req: Request, res: Response) => {
 });
 
 // ── POST /wallgarden/brainstorm ─────────────────────────────
-// Takes user interests/context, calls vLLM via prism /agent,
+// Takes user interests/context, calls vLLM via prism /chat,
 // returns a clean topic array
 router.post("/brainstorm", async (req: Request, res: Response) => {
   try {
@@ -72,7 +72,7 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
     // Grade for domain-anchoring, drop the floating abstractions, and hand the
     // client a starting weight per topic so specific topics outrank broad ones
     // in the feed queue and the suggestion chips.
-    const rated = await rateTopics(raw, model, provider);
+    const { rated, failedBatches, totalBatches } = await rateTopics(raw, model, provider);
 
     res.json({
       // `topics` stays a plain string[] so older clients keep working.
@@ -80,6 +80,9 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
       rated,
       count: rated.length,
       generated: raw.length,
+      degraded: failedBatches > 0,
+      ratingFailedBatches: failedBatches,
+      ratingTotalBatches: totalBatches,
     });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /brainstorm error: ${err.message}`);
@@ -155,8 +158,14 @@ router.post("/judge-topics", async (req: Request, res: Response) => {
     if (valid.length === 0) {
       return res.status(400).json({ error: "no valid items (each needs topic + titles[])" });
     }
-    const verdicts = await judgeTopicGrounding(valid, model, provider);
-    res.json({ verdicts, count: verdicts.length });
+    const { judged, failedBatches, totalBatches } = await judgeTopicGrounding(valid, model, provider);
+    res.json({
+      verdicts: judged,
+      count: judged.length,
+      degraded: failedBatches > 0,
+      judgeFailedBatches: failedBatches,
+      judgeTotalBatches: totalBatches,
+    });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /judge-topics error: ${err.message}`);
     res.status(500).json({ error: err.message });
