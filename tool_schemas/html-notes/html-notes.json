@@ -520,7 +520,7 @@
   },
   {
     "name": "html_notes_youtube_search",
-    "description": "Search YouTube for videos matching a query. Returns a list of results with video_id, title, and channel. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget.",
+    "description": "Search YouTube for videos matching a query. Returns results with video_id, title, channel and age_days (days since upload), best-first. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget. Respect age_days when the user asked for something recent — never pick a months-old video for a 'new'/'latest' ask. If results carry stale_fallback=true, nothing inside the requested time window was found: pick the top result and say so in your summary sentence.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -540,6 +540,10 @@
             "live"
           ],
           "description": "'relevance' (default), 'date' for newest uploads first, or 'live' to find an actual LIVE STREAM. Use order='live' for any 'X live' / 'live news' / 'watch X live' request — a plain search returns recorded clips, not the stream."
+        },
+        "freshness": {
+          "type": "string",
+          "description": "The user's time constraint, copied VERBATIM from their message when they say things like 'new', 'latest', 'this week', 'yesterday', 'past 3 days', 'since June'. The server parses it and filters/sorts uploads to match. Omit when the user gave no time constraint."
         }
       },
       "required": [
