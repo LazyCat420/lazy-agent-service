@@ -43,6 +43,21 @@ const TOPIC_TOOL_DEFINITION = {
 };
 
 // ── System Prompts ──────────────────────────────────────────
+// Shared across brainstorm/extract so the quality bar can't drift apart.
+const ANCHOR_TEST_BLOCK = `THE ANCHOR TEST — apply to EVERY topic before you emit it:
+Strip away all context and look at the phrase alone. Ask: "how many different industries could this phrase belong to?"
+- ONE field, naming a specific process/object/scene inside it -> KEEP. ("trichome degradation", "raku kiln reduction", "one man sawmill")
+- ONE field but enormous -> keep at most a few. ("chemical reactions", "plant health")
+- ANY field — a floating abstraction that could be aviation, finance, or baking -> DELETE IT. It returns algorithmic slop on YouTube.
+
+Floating abstractions are the #1 failure. They look smart and are worthless. Banned shapes:
+- "<abstract noun> analysis/studies/methods/techniques/systems/protocols/principles/management/theory/development/optimization/control/science"
+  e.g. "hazard analysis", "validation studies", "research methodology", "product development", "recovery protocols", "quality control", "thermal processing science", "material degradation studies"
+- Wellness slop: "self care", "slow living", "chakra balancing", "mindfulness practices", "healing energy"
+- Vague temporals: "long term aging", "environmental stressors"
+- Umbrella filler words — NEVER emit a topic containing: "content", "videos", "guide", "tips", "hacks", "ideas", "basics", "101", "compilation".
+A topic must name a THING — an object, an organism, a named process, a place, a scene, a technique with a practitioner. NEVER merely the ACT OF STUDYING a thing.`;
+
 const BRAINSTORM_SYSTEM_PROMPT = `/no_think
 You are the discovery engine for a personal YouTube curator. Your job: figure out what this person would LOVE to watch next but would never think to search for themselves.
 
@@ -59,18 +74,7 @@ HOW TO THINK:
 4. NAME THE NICHE, NOT THE CATEGORY. "cozy game devlogs" beats "video games". "desert homestead build" beats "construction". A great topic names a specific YouTube subculture, scene, or format that a real fan would type into search.
 5. MOODS AND FORMATS ARE TOPICS TOO: "ambient coding sessions", "silent workshop asmr", "engineering disasters explained", "one man sawmill" are excellent suggestions.
 
-THE ANCHOR TEST — apply to EVERY topic before you emit it:
-Strip away all context and look at the phrase alone. Ask: "how many different industries could this phrase belong to?"
-- ONE field, naming a specific process/object/scene inside it -> KEEP. ("trichome degradation", "raku kiln reduction", "one man sawmill")
-- ONE field but enormous -> keep at most a few. ("chemical reactions", "plant health")
-- ANY field — a floating abstraction that could be aviation, finance, or baking -> DELETE IT. It returns algorithmic slop on YouTube.
-
-Floating abstractions are the #1 failure. They look smart and are worthless. Banned shapes:
-- "<abstract noun> analysis/studies/methods/techniques/systems/protocols/principles/management/theory/development/optimization/control/science"
-  e.g. "hazard analysis", "validation studies", "research methodology", "product development", "recovery protocols", "quality control", "thermal processing science", "material degradation studies"
-- Wellness slop: "self care", "slow living", "chakra balancing", "mindfulness practices", "healing energy"
-- Vague temporals: "long term aging", "environmental stressors"
-A topic must name a THING — an object, an organism, a named process, a place, a scene, a technique with a practitioner. NEVER merely the ACT OF STUDYING a thing.
+${ANCHOR_TEST_BLOCK}
 
 Your LATERAL and WILDCARD leaps must stay recognisably the same PERSON's taste. A leap that lands in a different personality (a cannabis grower does not become a wellness influencer) is a failed leap, not a bold one.
 
@@ -80,6 +84,20 @@ HARD RULES:
 - NEVER suggest single generic words ("music", "gaming", "history") — too broad returns algorithmic slop.
 - Every topic: lowercase, 1-4 words, and must work as a real YouTube search query.
 - Output format: ONLY the raw JSON object {"topics": ["topic one", "topic two", ...]}. No markdown, no commentary, no explanations.`;
+
+const EXTRACT_SYSTEM_PROMPT = `/no_think
+You label videos a user LIKED on YouTube. For each video you receive an id, its title, and its channel. Name 1-3 specific niche topics the video actually belongs to — the YouTube subculture, scene, or format a fan would type into search to find more videos exactly like it.
+
+This is extraction, not brainstorming: name what IS there, grounded in the title. Use the channel name as context for inferring the niche, never as a topic itself.
+
+${ANCHOR_TEST_BLOCK}
+
+HARD RULES:
+- NEVER emit: individual people, character names, episode titles, or channel names.
+- NEVER emit single generic words ("music", "gaming", "history").
+- Every topic: lowercase, 1-4 words, and must work as a real YouTube search query.
+- Emit topics for EVERY video you are given, keyed by its id.
+- Output format: ONLY the raw JSON object {"extractions":[{"id":"<video id>","topics":["topic one","topic two"]}]}. No markdown, no commentary.`;
 
 const SIMILAR_SYSTEM_PROMPT = `/no_think
 You are the discovery engine for a personal YouTube curator. The user just searched for something — treat that query as a doorway and map the interesting rooms behind it.
@@ -116,6 +134,12 @@ export interface BrainstormContext {
   searches?: string[];
   likedVideos?: string[]; // "title (channel)" of videos the user liked
   watchlist?: string[];   // "title (channel)" of watch-later saves
+  tasteProfile?: string;  // LLM-written summary of the whole like history
+  // Liked videos grouped into taste clusters; when present, each brainstorm
+  // batch expands a DIFFERENT cluster instead of one blended context.
+  likedClusters?: { name?: string; videos: string[] }[];
+  // Burned/failed topics rendered as negative few-shots (avoid the SHAPE).
+  failedExamples?: string[];
   numTopics?: number;
   model?: string;
   provider?: string;
@@ -123,6 +147,19 @@ export interface BrainstormContext {
 
 export interface SimilarContext extends BrainstormContext {
   query: string;
+}
+
+export interface LikedVideoInput {
+  id: string;           // youtube video id — used to map results back
+  title: string;
+  channel?: string;
+  durationSecs?: number;
+  ageDays?: number;
+}
+
+export interface VideoExtraction {
+  id: string;
+  topics: RatedTopic[];
 }
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -363,15 +400,36 @@ export async function brainstormTopics(ctx: BrainstormContext): Promise<string[]
   const burnedList = ctx.burnedQueries.slice(-30).join(", ");
   const numTopics = ctx.numTopics || 100;
 
-  const buildMessage = (n: number) => `My interest topics: [${liked}]
-Videos I actually liked (strongest signal): [${likedVideos}]
+  const clusters = (ctx.likedClusters || []).filter(c => c && Array.isArray(c.videos) && c.videos.length > 0);
+  const failedExamples = (ctx.failedExamples || []).slice(-10).join(", ");
+
+  const buildMessage = (n: number, batchIndex: number = 0) => {
+    // When taste clusters are provided, each batch expands a DIFFERENT corner
+    // of the user's taste instead of word-associating on one blended blob.
+    const cluster = clusters.length > 0 ? clusters[batchIndex % clusters.length] : null;
+    const likedLine = cluster
+      ? cluster.videos.slice(0, 10).join("; ")
+      : likedVideos;
+    const clusterInstruction = cluster
+      ? `\nTHIS BATCH: branch out from this specific cluster of my liked videos${cluster.name ? ` ("${cluster.name}")` : ""}. Ignore my other clusters for this batch — go deep and lateral from THIS scene only.`
+      : "";
+    const profileLine = ctx.tasteProfile
+      ? `WHO I AM AS A VIEWER: ${ctx.tasteProfile}\n\n`
+      : "";
+    const failedLine = failedExamples
+      ? `\nTopics that FAILED for this user — study their SHAPE and avoid producing anything of the same shape, not just the same words: [${failedExamples}]`
+      : "";
+
+    return `${profileLine}My interest topics: [${liked}]
+Videos I actually liked (strongest signal): [${likedLine}]
 Videos I saved to watch later (strong signal): [${watchlist}]
 Recent searches: [${searches}]
 Disliked: [${disliked}]
 Recently used (avoid these): [${recentUsed}]
-Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]
+Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]${failedLine}${clusterInstruction}
 
 Suggest ${n} new topics.`;
+  };
 
   /** One batch, with its own retry ladder. Resolves to [] rather than throwing. */
   const runBatch = async (size: number, batchIndex: number): Promise<string[]> => {
@@ -391,7 +449,7 @@ Suggest ${n} new topics.`;
           provider,
           [
             { role: "system", content: BRAINSTORM_SYSTEM_PROMPT },
-            { role: "user", content: buildMessage(size) },
+            { role: "user", content: buildMessage(size, batchIndex) },
           ],
           temperature,
         );
@@ -533,6 +591,342 @@ export async function rateTopics(
   return rated.filter(r => r.tier !== "C");
 }
 
+// ── Liked-video topic extraction ────────────────────────────
+// Turns liked videos into the specific niches they belong to. Grounded in the
+// given titles (temperature low), so unlike the brainstormer this cannot
+// drift: it names what the user demonstrably already loves.
+
+// 8 videos × ≤3 topics = ≤24 topics per call, under the measured 25-topic
+// output ceiling (50+ in one call yields ZERO usable output — see
+// BRAINSTORM_BATCH_SIZE above).
+const EXTRACT_BATCH_SIZE = 8;
+
+/** Parse {"extractions":[{"id","topics":[...]}]} defensively. Exported for tests. */
+export function extractVideoExtractionsFromResponse(data: any): { id: string; topics: string[] }[] {
+  const text = data?.text || "";
+  const clean = (arr: any[]): { id: string; topics: string[] }[] =>
+    arr
+      .map((e: any) => ({
+        id: typeof e?.id === "string" ? e.id.trim() : "",
+        topics: Array.isArray(e?.topics)
+          ? e.topics
+              .map((t: any) => (typeof t === "string" ? t.trim().toLowerCase() : ""))
+              .filter((t: string) => t.length > 1 && t.length < 60)
+          : [],
+      }))
+      .filter(e => e.id && e.topics.length > 0);
+
+  // Direct parse
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed?.extractions)) return clean(parsed.extractions);
+    if (Array.isArray(parsed)) return clean(parsed);
+  } catch { /* fall through */ }
+
+  // Outer-object regex parse (handles markdown fences / prose around it)
+  const objMatch = text.match(/\{[\s\S]*\}/);
+  if (objMatch) {
+    try {
+      const parsed = JSON.parse(objMatch[0]);
+      if (Array.isArray(parsed?.extractions)) return clean(parsed.extractions);
+    } catch { /* fall through */ }
+  }
+
+  // Truncation salvage: scrape complete {"id":...,"topics":[...]} objects out
+  // of a reply that got cut mid-array.
+  const salvaged: { id: string; topics: string[] }[] = [];
+  const objRe = /\{\s*"id"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"topics"\s*:\s*(\[[^\]]*\])\s*\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = objRe.exec(text)) !== null) {
+    try {
+      const topics = JSON.parse(m[2]);
+      if (Array.isArray(topics)) {
+        salvaged.push({ id: m[1], topics });
+      }
+    } catch { /* skip this object */ }
+  }
+  if (salvaged.length > 0) {
+    logger.warn(`[WallgardenService] Extraction response malformed; salvaged ${salvaged.length} entries`);
+    return clean(salvaged);
+  }
+
+  logger.warn("[WallgardenService] Could not extract video extractions from response text");
+  return [];
+}
+
+export async function extractVideoTopics(
+  videos: LikedVideoInput[],
+  modelHint?: string,
+  providerHint?: string
+): Promise<VideoExtraction[]> {
+  if (videos.length === 0) return [];
+  const { model, provider } = await resolveProviderAndModel(modelHint, providerHint);
+
+  const runBatch = async (chunk: LikedVideoInput[], batchIndex: number): Promise<{ id: string; topics: string[] }[]> => {
+    const lines = chunk.map(v => {
+      const bits = [`id: ${v.id}`, `title: ${v.title}`];
+      if (v.channel) bits.push(`channel: ${v.channel}`);
+      if (typeof v.durationSecs === "number") bits.push(`duration: ${Math.round(v.durationSecs / 60)}min`);
+      if (typeof v.ageDays === "number") bits.push(`age: ${Math.round(v.ageDays)}d`);
+      return "- " + bits.join(" | ");
+    });
+    const userMessage = `Videos I liked:\n${lines.join("\n")}\n\nName 1-3 niche topics per video.`;
+
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        // Extraction is grounded — start cool and get colder on retries.
+        const temperature = Math.max(0.1, 0.3 - attempt * 0.1);
+        const data = await callPrismAgent(
+          model,
+          provider,
+          [
+            { role: "system", content: EXTRACT_SYSTEM_PROMPT },
+            { role: "user", content: userMessage },
+          ],
+          temperature,
+        );
+        const extractions = extractVideoExtractionsFromResponse(data);
+        if (extractions.length > 0) return extractions;
+        throw new Error("No extractions parsed from response");
+      } catch (err: any) {
+        logger.warn(
+          `[WallgardenService] Extract batch ${batchIndex + 1} attempt ${attempt + 1} failed: ${err.message}`
+        );
+      }
+    }
+    return [];
+  };
+
+  const chunks: LikedVideoInput[][] = [];
+  for (let i = 0; i < videos.length; i += EXTRACT_BATCH_SIZE) {
+    chunks.push(videos.slice(i, i + EXTRACT_BATCH_SIZE));
+  }
+  const settled = await Promise.all(chunks.map((c, i) => runBatch(c, i)));
+  const flat = settled.flat();
+
+  // One rating pass over the union, then map tiers back per video. C-tier
+  // topics are dropped here exactly like the brainstorm path.
+  const uniqueTopics = Array.from(new Set(flat.flatMap(e => e.topics)));
+  const rated = await rateTopics(uniqueTopics, model, provider);
+  const ratedByTopic = new Map(rated.map(r => [r.topic.toLowerCase(), r]));
+
+  const out: VideoExtraction[] = [];
+  for (const e of flat) {
+    const topics = e.topics
+      .map(t => ratedByTopic.get(t.toLowerCase()))
+      .filter((r): r is RatedTopic => Boolean(r));
+    if (topics.length > 0) out.push({ id: e.id, topics });
+  }
+  logger.info(
+    `[WallgardenService] Extracted topics for ${out.length}/${videos.length} liked videos ` +
+    `(${uniqueTopics.length} unique topics, ${rated.length} survived rating) via ${provider}/${model}`
+  );
+  return out;
+}
+
+// ── Taste profile ───────────────────────────────────────────
+// One call over the user's ENTIRE like history (input-side scaling is safe —
+// the 25-item ceiling is an output-array failure mode). The resulting
+// paragraph is cached client-side and prepended to brainstorm/similar.
+const TASTE_SYSTEM_PROMPT = `/no_think
+You are given every video a person has liked on YouTube ("title (channel)" per line), plus their current interest topics. Write WHO THIS PERSON IS as a viewer.
+
+Rules for the profile:
+- At most 120 words. Concrete, not horoscope-vague: name their recurring obsessions, preferred formats and depth (long-form process video vs quick explainers), aesthetics and eras they gravitate to, and what visibly hooks them.
+- Written in second person plural-free prose ("Watches ...", "Drawn to ..."), no preamble.
+
+Then name their distinct taste clusters (2-6). Each cluster: a short name a YouTube fan would recognise, plus the liked titles that are evidence for it.
+
+Output ONLY the raw JSON object:
+{"profile":"...","clusters":[{"name":"...","evidence":["title one","title two"]}]}
+No markdown, no commentary.`;
+
+export interface TasteProfile {
+  profile: string;
+  clusters: { name: string; evidence: string[] }[];
+}
+
+/** Parse the taste-profile response defensively. Exported for tests. */
+export function extractProfileFromResponse(data: any): TasteProfile | null {
+  const text = data?.text || "";
+  const tryParse = (s: string): TasteProfile | null => {
+    try {
+      const parsed = JSON.parse(s);
+      if (parsed && typeof parsed.profile === "string" && parsed.profile.trim()) {
+        return {
+          profile: parsed.profile.trim(),
+          clusters: Array.isArray(parsed.clusters)
+            ? parsed.clusters
+                .map((c: any) => ({
+                  name: typeof c?.name === "string" ? c.name.trim() : "",
+                  evidence: Array.isArray(c?.evidence)
+                    ? c.evidence.filter((e: any) => typeof e === "string")
+                    : [],
+                }))
+                .filter((c: any) => c.name)
+            : [],
+        };
+      }
+    } catch { /* fall through */ }
+    return null;
+  };
+
+  const direct = tryParse(text);
+  if (direct) return direct;
+  const objMatch = text.match(/\{[\s\S]*\}/);
+  if (objMatch) {
+    const fromMatch = tryParse(objMatch[0]);
+    if (fromMatch) return fromMatch;
+  }
+  // Salvage just the profile string from a truncated reply — the clusters are
+  // nice-to-have, the paragraph is the payload.
+  const profMatch = text.match(/"profile"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (profMatch) {
+    try {
+      const profile = JSON.parse(`"${profMatch[1]}"`);
+      if (profile.trim()) {
+        logger.warn("[WallgardenService] Taste profile response malformed; salvaged profile text only");
+        return { profile: profile.trim(), clusters: [] };
+      }
+    } catch { /* give up */ }
+  }
+  logger.warn("[WallgardenService] Could not extract taste profile from response text");
+  return null;
+}
+
+export async function generateTasteProfile(
+  videos: string[],
+  interests: string[] = [],
+  modelHint?: string,
+  providerHint?: string
+): Promise<TasteProfile> {
+  if (videos.length === 0) throw new Error("No liked videos to profile");
+  const { model, provider } = await resolveProviderAndModel(modelHint, providerHint);
+
+  const userMessage = `Liked videos (${videos.length}):\n${videos.map(v => `- ${v}`).join("\n")}\n\nCurrent interest topics: [${interests.slice(0, 20).join(", ")}]`;
+
+  const MAX_RETRIES = 2;
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const data = await callPrismAgent(
+        model,
+        provider,
+        [
+          { role: "system", content: TASTE_SYSTEM_PROMPT },
+          { role: "user", content: userMessage },
+        ],
+        0.3,
+        1200,
+      );
+      const profile = extractProfileFromResponse(data);
+      if (profile) {
+        logger.info(
+          `[WallgardenService] Taste profile generated from ${videos.length} likes ` +
+          `(${profile.clusters.length} clusters) via ${provider}/${model}`
+        );
+        return profile;
+      }
+      throw new Error("No profile parsed from response");
+    } catch (err: any) {
+      lastError = err;
+      logger.warn(`[WallgardenService] Taste profile attempt ${attempt + 1} failed: ${err.message}`);
+    }
+  }
+  throw lastError || new Error("Taste profile generation failed");
+}
+
+// ── Grounding gate ──────────────────────────────────────────
+// Judges candidate topics by the ACTUAL YouTube results they return —
+// evidence instead of guessing. Fail-open by design: an item the judge
+// skips defaults to MIXED, because grounding must never brick the feed.
+const JUDGE_SYSTEM_PROMPT = `/no_think
+You judge YouTube search topics by their ACTUAL top search results. For each topic you receive the titles (and channels) currently returned for it.
+
+Verdicts:
+- REAL = the results are a coherent niche: enthusiast/practitioner channels, specific recurring scene vocabulary, videos a fan of this topic would genuinely want. The topic names a real YouTube subculture.
+- MIXED = some real signal amid filler; the topic works but isn't sharp.
+- SLOP = generic listicles, clickbait compilations, corporate explainers, or results unrelated to each other — the topic is a floating phrase the algorithm fills with junk.
+
+Judge EVERY topic you are given. Output ONLY the raw JSON object {"verdicts":[{"t":"topic","verdict":"REAL"}]}. No markdown, no commentary.`;
+
+export type GroundingVerdict = "REAL" | "MIXED" | "SLOP";
+export interface GroundingItem {
+  topic: string;
+  titles: string[];
+  channels?: string[];
+}
+export interface JudgedTopic {
+  topic: string;
+  verdict: GroundingVerdict;
+}
+
+const JUDGE_BATCH_SIZE = 10;
+
+export async function judgeTopicGrounding(
+  items: GroundingItem[],
+  modelHint?: string,
+  providerHint?: string
+): Promise<JudgedTopic[]> {
+  if (items.length === 0) return [];
+  const { model, provider } = await resolveProviderAndModel(modelHint, providerHint);
+
+  const judgeBatch = async (chunk: GroundingItem[]): Promise<Record<string, GroundingVerdict>> => {
+    const lines = chunk.map(i => {
+      const titles = i.titles.slice(0, 8).map(t => `"${t}"`).join(", ");
+      const channels = (i.channels || []).slice(0, 8).filter(Boolean);
+      const chanPart = channels.length ? ` | channels: ${channels.join(", ")}` : "";
+      return `- topic: "${i.topic}" | results: [${titles}]${chanPart}`;
+    });
+    try {
+      const data = await callPrismAgent(
+        model,
+        provider,
+        [
+          { role: "system", content: JUDGE_SYSTEM_PROMPT },
+          { role: "user", content: lines.join("\n") },
+        ],
+        0.1, // grading, not brainstorming
+      );
+      const text = data?.text || "";
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) return {};
+      const parsed = JSON.parse(match[0]);
+      const out: Record<string, GroundingVerdict> = {};
+      for (const v of parsed?.verdicts || []) {
+        const t = typeof v?.t === "string" ? v.t.trim().toLowerCase() : "";
+        if (t && (v.verdict === "REAL" || v.verdict === "MIXED" || v.verdict === "SLOP")) {
+          out[t] = v.verdict;
+        }
+      }
+      return out;
+    } catch (err: any) {
+      logger.warn(`[WallgardenService] Grounding judge batch failed: ${err.message}`);
+      return {};
+    }
+  };
+
+  const chunks: GroundingItem[][] = [];
+  for (let i = 0; i < items.length; i += JUDGE_BATCH_SIZE) {
+    chunks.push(items.slice(i, i + JUDGE_BATCH_SIZE));
+  }
+  const results = await Promise.all(chunks.map(judgeBatch));
+  const verdicts: Record<string, GroundingVerdict> = Object.assign({}, ...results);
+
+  const judged = items.map(i => ({
+    topic: i.topic,
+    verdict: verdicts[i.topic.toLowerCase()] || ("MIXED" as GroundingVerdict),
+  }));
+  logger.info(
+    `[WallgardenService] Judged ${judged.length} topics: ` +
+    `${judged.filter(j => j.verdict === "REAL").length} REAL, ` +
+    `${judged.filter(j => j.verdict === "MIXED").length} MIXED, ` +
+    `${judged.filter(j => j.verdict === "SLOP").length} SLOP`
+  );
+  return judged;
+}
+
 export async function generateSimilarTopics(ctx: SimilarContext): Promise<string[]> {
   const { model, provider } = await resolveProviderAndModel(ctx.model, ctx.provider);
 
@@ -544,7 +938,8 @@ export async function generateSimilarTopics(ctx: SimilarContext): Promise<string
   const burnedList = ctx.burnedQueries.slice(-30).join(", ");
   const numTopics = ctx.numTopics || 10;
 
-  const userMessage = `Search query: "${ctx.query}"
+  const profileLine = ctx.tasteProfile ? `WHO I AM AS A VIEWER: ${ctx.tasteProfile}\n\n` : "";
+  const userMessage = `${profileLine}Search query: "${ctx.query}"
 My interest topics: [${liked}]
 Videos I actually liked (strongest signal): [${likedVideos}]
 Videos I saved to watch later (strong signal): [${watchlist}]

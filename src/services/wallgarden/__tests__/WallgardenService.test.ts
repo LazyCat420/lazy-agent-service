@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { extractTopicsFromResponse } from "../WallgardenService.js";
+import {
+  extractTopicsFromResponse,
+  extractVideoExtractionsFromResponse,
+  extractProfileFromResponse,
+} from "../WallgardenService.js";
 
 // Captured verbatim from Gold Spark (gemma-4-26B) when asked for 100 topics.
 // The model emits ~35 good topics, then gives up mid-array and starts
@@ -42,5 +46,72 @@ describe("extractTopicsFromResponse", () => {
 
   it("returns [] for a response with no topics at all", () => {
     expect(extractTopicsFromResponse({ text: "I cannot help with that." })).toEqual([]);
+  });
+});
+
+describe("extractVideoExtractionsFromResponse", () => {
+  it("parses a clean response and lowercases topics", () => {
+    const e = extractVideoExtractionsFromResponse({
+      text: '{"extractions":[{"id":"abc123","topics":["One Man Sawmill","log cabin build"]},{"id":"def456","topics":["machine restoration"]}]}',
+    });
+    expect(e).toEqual([
+      { id: "abc123", topics: ["one man sawmill", "log cabin build"] },
+      { id: "def456", topics: ["machine restoration"] },
+    ]);
+  });
+
+  it("parses a response wrapped in a markdown fence", () => {
+    const e = extractVideoExtractionsFromResponse({
+      text: '```json\n{"extractions":[{"id":"x1","topics":["raku reduction firing"]}]}\n```',
+    });
+    expect(e).toEqual([{ id: "x1", topics: ["raku reduction firing"] }]);
+  });
+
+  it("salvages complete objects from a truncated reply", () => {
+    const e = extractVideoExtractionsFromResponse({
+      text: '{"extractions":[{"id":"x1","topics":["kiln atmosphere control"]},{"id":"x2","topics":["biochar produc',
+    });
+    expect(e).toEqual([{ id: "x1", topics: ["kiln atmosphere control"] }]);
+  });
+
+  it("drops entries without id or topics", () => {
+    const e = extractVideoExtractionsFromResponse({
+      text: '{"extractions":[{"id":"","topics":["a topic here"]},{"id":"ok1","topics":[]},{"id":"ok2","topics":["real niche"]}]}',
+    });
+    expect(e).toEqual([{ id: "ok2", topics: ["real niche"] }]);
+  });
+
+  it("returns [] for prose", () => {
+    expect(extractVideoExtractionsFromResponse({ text: "I cannot help with that." })).toEqual([]);
+  });
+});
+
+describe("extractProfileFromResponse", () => {
+  it("parses a clean profile with clusters", () => {
+    const p = extractProfileFromResponse({
+      text: '{"profile":"Watches long-form restoration and craft process videos.","clusters":[{"name":"machine restoration","evidence":["Restoring a 1950s Lathe"]}]}',
+    });
+    expect(p?.profile).toMatch(/long-form restoration/);
+    expect(p?.clusters).toHaveLength(1);
+    expect(p?.clusters[0].name).toBe("machine restoration");
+  });
+
+  it("parses a fenced profile", () => {
+    const p = extractProfileFromResponse({
+      text: '```json\n{"profile":"Drawn to slow craft videos.","clusters":[]}\n```',
+    });
+    expect(p?.profile).toBe("Drawn to slow craft videos.");
+  });
+
+  it("salvages just the profile string from a truncated reply", () => {
+    const p = extractProfileFromResponse({
+      text: '{"profile":"Watches workshop builds and vintage tool rescues.","clusters":[{"name":"workshop bu',
+    });
+    expect(p?.profile).toBe("Watches workshop builds and vintage tool rescues.");
+    expect(p?.clusters).toEqual([]);
+  });
+
+  it("returns null for prose", () => {
+    expect(extractProfileFromResponse({ text: "no json here" })).toBeNull();
   });
 });
