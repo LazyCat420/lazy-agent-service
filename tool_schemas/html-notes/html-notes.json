@@ -520,7 +520,7 @@
   },
   {
     "name": "html_notes_youtube_search",
-    "description": "Search YouTube for videos matching a query. Returns results with video_id, title, channel and age_days (days since upload), best-first. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget. Respect age_days when the user asked for something recent — never pick a months-old video for a 'new'/'latest' ask. If results carry stale_fallback=true, nothing inside the requested time window was found: pick the top result and say so in your summary sentence.",
+    "description": "Search YouTube for videos matching a query. Returns results with video_id, title, channel, age_days (days since upload) and is_short, best-first. Shorts are excluded unless format='short'. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget. Respect age_days when the user asked for something recent — never pick a months-old video for a 'new'/'latest' ask. If results carry stale_fallback=true, nothing inside the requested time window was found: pick the top result and say so in your summary sentence.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -544,6 +544,15 @@
         "freshness": {
           "type": "string",
           "description": "The user's time constraint, copied VERBATIM from their message when they say things like 'new', 'latest', 'this week', 'yesterday', 'past 3 days', 'since June'. The server parses it and filters/sorts uploads to match. Omit when the user gave no time constraint."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "video",
+            "short",
+            "any"
+          ],
+          "description": "Shorts vs regular videos. Default (omit) = a regular video: a plain 'video'/'watch'/'clip' ask must NEVER be answered with a Short. Pass 'short' ONLY when the user says short/shorts/reel, 'video' when they insist on a full-length upload ('full video', 'not a short'), 'any' when they explicitly want both."
         }
       },
       "required": [
