@@ -588,7 +588,7 @@
   },
   {
     "name": "html_notes_youtube_search",
-    "description": "Search YouTube for videos matching a query. Returns results with video_id, title, channel and age_days (days since upload), best-first. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget. Respect age_days when the user asked for something recent \u2014 never pick a months-old video for a 'new'/'latest' ask. If results carry stale_fallback=true, nothing inside the requested time window was found: pick the top result and say so in your summary sentence.",
+    "description": "Search YouTube for videos matching a query. Returns results with video_id, title, channel, age_days (days since upload) and is_short, best-first. Shorts are excluded unless format='short'. Use this FIRST before adding a youtube_player widget, then pass the chosen video_id to canvas_add_widget. Respect age_days when the user asked for something recent \u2014 never pick a months-old video for a 'new'/'latest' ask. If results carry stale_fallback=true, nothing inside the requested time window was found: pick the top result and say so in your summary sentence.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -612,6 +612,15 @@
         "freshness": {
           "type": "string",
           "description": "The user's time constraint, copied VERBATIM from their message when they say things like 'new', 'latest', 'this week', 'yesterday', 'past 3 days', 'since June'. The server parses it and filters/sorts uploads to match. Omit when the user gave no time constraint."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "video",
+            "short",
+            "any"
+          ],
+          "description": "Shorts vs regular videos. Default (omit) = a regular video: a plain 'video'/'watch'/'clip' ask must NEVER be answered with a Short. Pass 'short' ONLY when the user says short/shorts/reel, 'video' when they insist on a full-length upload ('full video', 'not a short'), 'any' when they explicitly want both."
         }
       },
       "required": [
@@ -2197,7 +2206,7 @@
   },
   {
     "name": "run_equation",
-    "description": "Execute a mathematical equation against live price/technical data for a ticker. You can run a named equation from the library OR provide raw Python code. The code receives 'df' (DataFrame with OHLCV + technicals) and 'params' (dict). Must assign output to 'result'.",
+    "description": "Execute a mathematical equation against live price/technical data for a ticker. You can run a named equation from the library OR provide raw Python code. The code receives 'df' (DataFrame with OHLCV + technicals) and 'params' (dict). Must assign output to 'result'. Statistics helpers are pre-injected (scipy is NOT importable): newey_west_tstat(returns) for an autocorrelation-robust t-stat, stationary_bootstrap_ci(returns) for a block-bootstrap CI, probabilistic_sharpe_ratio(returns) and deflated_sharpe_ratio(returns, n_trials) to correct a Sharpe for skew, kurtosis, sample length and the number of variants tried, min_track_record_length(returns), is_oos_degradation(returns), full_gate(returns) to run all three at once, suggest_lag(n), norm_cdf(x). Use deflated_sharpe_ratio whenever you compare several equations - the best of N tried is inflated by chance.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2211,7 +2220,7 @@
         },
         "code": {
           "type": "string",
-          "description": "Raw Python code if not using a named equation."
+          "description": "Raw Python code if not using a named equation. Has df, params, np, pd and the statistics helpers listed in this tool's description."
         },
         "parameters": {
           "type": "string",
@@ -2288,7 +2297,7 @@
   },
   {
     "name": "save_equation",
-    "description": "Save a new mathematical equation to the shared Quant Equation Library. The equation must be Python code that receives 'df' (price DataFrame) and 'params' (dict), and assigns its output to 'result'. Future agents can reuse this equation.",
+    "description": "Save a new mathematical equation to the shared Quant Equation Library. The equation must be Python code that receives 'df' (price DataFrame) and 'params' (dict), and assigns its output to 'result'. Future agents can reuse it.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2298,7 +2307,7 @@
         },
         "code": {
           "type": "string",
-          "description": "Python code. Must assign output to 'result'. Has access to df, params, np, pd."
+          "description": "Python code. Must assign output to 'result'. Has access to df, params, np, pd, plus statistics helpers (scipy is NOT importable): newey_west_tstat(returns) for an autocorrelation-robust t-stat, stationary_bootstrap_ci(returns) for a block-bootstrap CI, probabilistic_sharpe_ratio(returns) and deflated_sharpe_ratio(returns, n_trials) to correct a Sharpe for skew, kurtosis, sample length and the number of variants tried, min_track_record_length(returns), is_oos_degradation(returns), full_gate(returns) to run all three at once, suggest_lag(n), norm_cdf(x)."
         },
         "description": {
           "type": "string",
