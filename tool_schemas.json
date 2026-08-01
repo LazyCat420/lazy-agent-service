@@ -2583,17 +2583,13 @@
   },
   {
     "name": "sell_stock",
-    "description": "Execute a sell order to close a position for a stock ticker. Requires user confirmation.",
+    "description": "Execute a sell order for a stock ticker. Closes the ENTIRE position \u2014 there is no partial sell. Requires user confirmation.",
     "parameters": {
       "type": "object",
       "properties": {
         "ticker": {
           "type": "string",
           "description": "The stock ticker symbol to sell (e.g., AAPL)."
-        },
-        "qty_pct": {
-          "type": "number",
-          "description": "The percentage of the position to sell (e.g., 1.0 for 100%, 0.5 for 50%). Default is 1.0."
         }
       },
       "required": [
