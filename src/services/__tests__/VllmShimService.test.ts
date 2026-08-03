@@ -36,3 +36,31 @@ describe("VllmShimService.translateChatTemplateKwargs", () => {
     expect(body.chat_template_kwargs).toBe("bogus");
   });
 });
+
+describe("VllmShimService.resolveUpstream", () => {
+  it("routes gold-spark to the DGX", () => {
+    const r = VllmShimService.resolveUpstream("/vllm-shim/gold-spark/v1/chat/completions");
+    expect(r?.upstreamUrl).toBe("http://10.0.0.141:8000");
+    expect(r?.originalPath).toBe("/v1/chat/completions");
+  });
+
+  it("routes jetson and jetson-2 to their ports", () => {
+    expect(VllmShimService.resolveUpstream("/vllm-shim/jetson/v1/models")?.upstreamUrl)
+      .toBe("http://10.0.0.30:8000");
+    expect(VllmShimService.resolveUpstream("/vllm-shim/jetson-2/v1/models")?.upstreamUrl)
+      .toBe("http://10.0.0.30:8001");
+  });
+
+  it("preserves query strings", () => {
+    const r = VllmShimService.resolveUpstream("/vllm-shim/gold-spark/v1/models?x=1");
+    expect(r?.originalPath).toBe("/v1/models?x=1");
+  });
+
+  it("returns null for unknown upstreams", () => {
+    expect(VllmShimService.resolveUpstream("/vllm-shim/nope/v1/models")).toBeNull();
+  });
+
+  it("defaults bare upstream to /", () => {
+    expect(VllmShimService.resolveUpstream("/vllm-shim/jetson")?.originalPath).toBe("/");
+  });
+});

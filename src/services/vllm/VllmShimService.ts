@@ -12,15 +12,27 @@ import logger from "../../logger.js";
  * call), routinely burning the entire output budget and intermittently leaking
  * the reasoning trace into content (flash_briefings 126/127 shipped corrupted).
  *
- * We cannot edit prism (Rod's repo), but prism learns this endpoint's URL at
- * boot from vault-service/projects.json (PROVIDER_VLLM_2_URL) — ours. Pointing
- * that at this shim lets us mirror the Qwen key onto the DeepSeek key in
- * flight. Qwen ignores the unknown extra key, so a swap back is harmless.
+ * We cannot edit prism (Rod's repo — and upstream fixes are a dead end, this
+ * shim is PERMANENT infrastructure), but prism learns endpoint URLs at boot
+ * from vault-service/projects.json (PROVIDER_VLLM_*_URL) — ours. Pointing
+ * them at this shim lets us mirror the Qwen key onto the DeepSeek key in
+ * flight. Qwen ignores the unknown extra key, so any model swap is harmless.
  *
  * Everything else — /v1/models, /metrics, streaming SSE — forwards verbatim.
  */
 
-const UPSTREAM_URL = process.env.VLLM_SHIM_GOLD_SPARK_URL || "http://10.0.0.141:8000";
+/**
+ * Named upstreams — one route per vLLM box, ALL of them behind the shim so a
+ * model swap on ANY endpoint can never silently strand the thinking flag
+ * again (that is exactly how Gold Spark broke: the swap needed no deploy, so
+ * nothing we owned was in the path). Keys are the /vllm-shim/<name> segment;
+ * values match PROVIDER_VLLM_{1,2,3}_URL in vault-service/projects.json.
+ */
+const UPSTREAMS: Record<string, string> = {
+  "gold-spark": process.env.VLLM_SHIM_GOLD_SPARK_URL || "http://10.0.0.141:8000",
+  "jetson": process.env.VLLM_SHIM_JETSON_URL || "http://10.0.0.30:8000",
+  "jetson-2": process.env.VLLM_SHIM_JETSON_2_URL || "http://10.0.0.30:8001",
+};
 
 /**
  * Headers timeout only — cleared once the upstream responds, so long
@@ -49,10 +61,27 @@ export class VllmShimService {
     return body;
   }
 
+  /**
+   * Resolve /vllm-shim/<name>/<rest> to its upstream. Exported for unit
+   * tests; returns null for unknown upstream names.
+   */
+  public static resolveUpstream(originalUrl: string): { upstreamUrl: string; originalPath: string } | null {
+    const match = originalUrl.match(/^\/vllm-shim\/([a-z0-9-]+)(\/.*)?$/);
+    const upstreamUrl = match ? UPSTREAMS[match[1]] : undefined;
+    if (!upstreamUrl) return null;
+    return { upstreamUrl, originalPath: match![2] || "/" };
+  }
+
   public static async handle(req: Request, res: Response) {
-    const originalPath = req.originalUrl.replace(/^\/vllm-shim\/gold-spark/, "");
+    const resolved = this.resolveUpstream(req.originalUrl);
+    if (!resolved) {
+      return res.status(404).json({
+        error: `vllm-shim: unknown upstream in "${req.originalUrl}" (known: ${Object.keys(UPSTREAMS).join(", ")})`,
+      });
+    }
+    const { upstreamUrl, originalPath } = resolved;
     const basePath = originalPath.split("?")[0];
-    const targetUrl = `${UPSTREAM_URL}${originalPath}`;
+    const targetUrl = `${upstreamUrl}${originalPath}`;
 
     let body = req.body;
     if (basePath === "/v1/chat/completions" && req.method === "POST" && body && typeof body === "object") {

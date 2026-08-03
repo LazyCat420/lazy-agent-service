@@ -234,12 +234,14 @@ import { PrismProxyService } from "./services/prism/PrismProxyService.js";
 app.use("/prism-proxy", async (req: Request, res: Response) => {
   await PrismProxyService.handle(req, res);
 });
-// Prism→vLLM translation shim (Gold Spark). Prism's PROVIDER_VLLM_2_URL in the
-// vault points here so its Qwen-spelled thinking flag works on DeepSeek models.
-// Sits BELOW prism: requests still enter prism at :7777 first, so prism's
-// request logging/attribution is unaffected. See VllmShimService for why.
+// Prism→vLLM translation shim. ALL PROVIDER_VLLM_*_URL entries in the vault
+// point here (/vllm-shim/gold-spark, /vllm-shim/jetson, /vllm-shim/jetson-2)
+// so prism's Qwen-spelled thinking flag works on every model family and a
+// model swap on any box can never silently strand it again. Sits BELOW prism:
+// requests still enter prism at :7777 first, so prism's request
+// logging/attribution is unaffected. See VllmShimService for why.
 import { VllmShimService } from "./services/vllm/VllmShimService.js";
-app.use("/vllm-shim/gold-spark", async (req: Request, res: Response) => {
+app.use("/vllm-shim", async (req: Request, res: Response) => {
   await VllmShimService.handle(req, res);
 });
 app.use("/charts", express.static("data/charts"));
