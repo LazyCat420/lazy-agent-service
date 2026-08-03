@@ -234,6 +234,14 @@ import { PrismProxyService } from "./services/prism/PrismProxyService.js";
 app.use("/prism-proxy", async (req: Request, res: Response) => {
   await PrismProxyService.handle(req, res);
 });
+// Prism→vLLM translation shim (Gold Spark). Prism's PROVIDER_VLLM_2_URL in the
+// vault points here so its Qwen-spelled thinking flag works on DeepSeek models.
+// Sits BELOW prism: requests still enter prism at :7777 first, so prism's
+// request logging/attribution is unaffected. See VllmShimService for why.
+import { VllmShimService } from "./services/vllm/VllmShimService.js";
+app.use("/vllm-shim/gold-spark", async (req: Request, res: Response) => {
+  await VllmShimService.handle(req, res);
+});
 app.use("/charts", express.static("data/charts"));
 
 // Wallgarden LLM backend routes
