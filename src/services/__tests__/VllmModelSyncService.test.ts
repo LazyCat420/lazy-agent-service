@@ -61,8 +61,12 @@ const mockFetch = async (url: string | URL | Request, options?: RequestInit): Pr
     return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
   }
 
-  // Jetson
-  if (urlStr.includes("10.0.0.30:8000/v1/models")) {
+  // Jetson — the registry may route through the vllm-shim (all boxes were
+  // repointed at it, 146faa1), so match both the direct and shim-shaped URLs.
+  if (
+    urlStr.includes("10.0.0.30:8000/v1/models") ||
+    urlStr.includes("vllm-shim/jetson/v1/models")
+  ) {
     return new Response(
       JSON.stringify({
         object: "list",
@@ -72,8 +76,11 @@ const mockFetch = async (url: string | URL | Request, options?: RequestInit): Pr
     );
   }
 
-  // DGX Spark
-  if (urlStr.includes("10.0.0.141:8000/v1/models")) {
+  // DGX Spark — same dual matching as the Jetson block above.
+  if (
+    urlStr.includes("10.0.0.141:8000/v1/models") ||
+    urlStr.includes("vllm-shim/gold-spark/v1/models")
+  ) {
     return new Response(
       JSON.stringify({
         object: "list",
