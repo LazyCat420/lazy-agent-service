@@ -61,6 +61,51 @@ export class VllmShimService {
     return body;
   }
 
+  /** Rolling tallies for the thinking-flag arrival report. */
+  private static thinkingSeen = { absent: 0, off: 0, on: 0, alreadyMirrored: 0 };
+  private static thinkingReportedAt = 0;
+
+  /**
+   * Count whether a thinking instruction actually reached the shim, and say so
+   * periodically. Diagnostic only — never alters the request.
+   *
+   * `absent` is the interesting bucket: it means the caller's thinking-off
+   * intent was dropped somewhere ABOVE us, so the mirror never fires and the
+   * model reasons by default.
+   */
+  public static recordThinkingFlag(body: Record<string, unknown>): void {
+    const ctk = body?.chat_template_kwargs as Record<string, unknown> | undefined;
+    if (!ctk || typeof ctk !== "object" || Array.isArray(ctk)) {
+      this.thinkingSeen.absent += 1;
+    } else if ("thinking" in ctk) {
+      this.thinkingSeen.alreadyMirrored += 1;
+    } else if (ctk.enable_thinking === false) {
+      this.thinkingSeen.off += 1;
+    } else if (ctk.enable_thinking === true) {
+      this.thinkingSeen.on += 1;
+    } else {
+      this.thinkingSeen.absent += 1;
+    }
+
+    const now = Date.now();
+    const total =
+      this.thinkingSeen.absent + this.thinkingSeen.off +
+      this.thinkingSeen.on + this.thinkingSeen.alreadyMirrored;
+    if (total > 0 && now - this.thinkingReportedAt > 300_000) {
+      this.thinkingReportedAt = now;
+      const s = this.thinkingSeen;
+      const level = s.absent > 0 ? "warn" : "info";
+      logger[level](
+        `[VllmShim] thinking flag arrivals (last window, ${total} chat calls): ` +
+          `absent=${s.absent} off=${s.off} on=${s.on} already-mirrored=${s.alreadyMirrored}` +
+          (s.absent > 0
+            ? " — 'absent' means the caller's thinking-off intent was dropped upstream; the mirror cannot fire and the model reasons by default"
+            : ""),
+      );
+      this.thinkingSeen = { absent: 0, off: 0, on: 0, alreadyMirrored: 0 };
+    }
+  }
+
   /**
    * Resolve /vllm-shim/<name>/<rest> to its upstream. Exported for unit
    * tests; returns null for unknown upstream names.
@@ -85,6 +130,17 @@ export class VllmShimService {
 
     let body = req.body;
     if (basePath === "/v1/chat/completions" && req.method === "POST" && body && typeof body === "object") {
+      // The mirror can only translate a flag that ARRIVES. When a caller asks
+      // for thinking-off and the request reaches us with no
+      // chat_template_kwargs at all, there is nothing to mirror and DeepSeek's
+      // template defaults to thinking ON — which is indistinguishable, from
+      // here, from a caller that genuinely wanted thinking. Downstream that
+      // shows up as reasoning eating the whole output allowance and no JSON
+      // artifact (trading-service, 2026-08-05, 22-36% analyst artifact loss).
+      //
+      // So record what actually arrives. Sampled, because this path carries
+      // every V3 agent call and a per-request line would bury the log.
+      this.recordThinkingFlag(body as Record<string, unknown>);
       body = this.translateChatTemplateKwargs({ ...req.body });
     }
 
