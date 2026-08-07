@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Lazy Tool Service — Build & Deploy to Synology NAS
+# Lazy Agent Service — Build & Deploy to Synology NAS
 #
 # Thin wrapper — all logic lives in ../deploy-kit/lib.sh
 #
@@ -12,8 +12,20 @@
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-IMAGE_NAME="lazy-tool-service"
-DISPLAY_NAME="Lazy Tool Service"
+# IMAGE_NAME also decides the NAS deploy directory —
+# `DEPLOY_COMPOSE_DIR="${DEPLOY_COMPOSE_ROOT}/${IMAGE_NAME}"` in deploy-kit/lib.sh
+# — so changing it MOVES where this service's .env, projects.json and data live.
+# Renamed lazy-tool-service -> lazy-agent-service 2026-08-07, with the live
+# /volume1/docker/lazy-tool-service copied across first. That order is not
+# optional: a half-finished earlier attempt had left a stale
+# /volume1/docker/lazy-agent-service dating from Jul 13 whose .env held 4 keys
+# against the live 10, missing DATABASE_URL, MONGO_URI, MONGO_STORE_BACKEND,
+# INTERNAL_EXECUTE_TOKEN, TRADING_SERVICE_API_KEY and WALLGARDEN_MONGO_DB.
+# Deploying into it would have come up GREEN — the healthcheck only fetches
+# /health — while every Mongo, Postgres and internal-execute call failed, on the
+# box that fronts every LLM request the desk makes.
+IMAGE_NAME="lazy-agent-service"
+DISPLAY_NAME="Lazy Agent Service"
 PORT=5591
 
 # Intercept exit to introduce a delay on successful build exit.
@@ -32,7 +44,7 @@ PRE_BUILD() {
   python3 "${SCRIPT_DIR}/../trading-service/scripts/build_tool_schemas.py"
 
   # build_tool_schemas.py already wrote this repo's copy (SCRIPT_DIR is that
-  # repo), so this used to copy the file onto itself via a ../lazy-tool-service
+  # repo), so this used to copy the file onto itself via a ../lazy-agent-service
   # round-trip — which broke outright once the directory was renamed. Nothing to
   # copy: the build above is the step.
 

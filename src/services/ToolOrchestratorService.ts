@@ -147,7 +147,20 @@ let cachedWorkspaceRoots: string[] = [];
 /** @type {string[]} Static roots from config.js (immutable, for "pinned" UI) */
 let cachedStaticRoots: string[] = [];
 
-/** Namespace prefix for this service's own local tool catalog on /agent */
+/** Namespace prefix for this service's own local tool catalog on /agent.
+ *
+ * **STILL EMITS THE OLD SPELLING ON PURPOSE.** This prefix is not minted here:
+ * `/mcp` advertises BARE tool names (verified 2026-08-07 — `tools/list`
+ * returns `music_player_suggest_artists`, not a namespaced form), and prism
+ * prepends `mcp__<registered-server-name>__` using `MCP_SERVER_NAME` from
+ * `PrismRegistrationService`. So the emitted spelling changes when the PRISM
+ * REGISTRATION changes, not when this constant does. Flipping this alone would
+ * advertise a name on `/agent` that prism never routes.
+ *
+ * Step one is therefore acceptance-only: `stripMcpPrefix` takes either
+ * spelling, so the new name works the moment the registration moves, and
+ * nothing on the wire changes today.
+ */
 const LOCAL_MCP_PREFIX = "mcp__lazy-tool-service__";
 
 /** Cached MCP-namespaced subset of tool_schemas.json (loaded once) */

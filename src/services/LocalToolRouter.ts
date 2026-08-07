@@ -2,6 +2,7 @@ import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { callKey, guardedRun } from "./ToolCallGuard.ts";
 import { newsSearch, newsProviderStatus } from "./NewsSearchService.ts";
+import { stripMcpPrefix } from "./McpPrefix.ts";
 
 /**
  * LocalToolRouter — single source of truth for executing this service's
@@ -270,10 +271,11 @@ export async function routeLocalTool(
   toolArguments: Record<string, unknown>,
   context: LocalToolContext = {}
 ): Promise<unknown> {
-  let tName = toolName;
-  if (tName.startsWith("mcp__lazy-tool-service__")) {
-    tName = tName.replace("mcp__lazy-tool-service__", "");
-  }
+  // Accepts EITHER namespace — see `ACCEPTED_MCP_PREFIXES`. The hand-rolled
+  // single-prefix check this replaced is why the rename needed a helper: the
+  // same strip was open-coded in more than one file, so adding a spelling in
+  // one place left the others answering "Unknown tool" for it.
+  const tName = stripMcpPrefix(toolName);
   const cycleId = context.cycleId || "";
 
   if (tName.startsWith("music_player_")) {
