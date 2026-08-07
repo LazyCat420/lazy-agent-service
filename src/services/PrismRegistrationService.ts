@@ -41,9 +41,26 @@ async function loadPersona(id: string): Promise<Persona | null> {
   return registry.has(id) ? registry.get(id) : null;
 }
 
-/** How this server identifies itself over MCP (see McpAdapter.ts). */
-export const MCP_SERVER_NAME = "lazy-tool-service";
-const MCP_DISPLAY_NAME = "Lazy Tool Service";
+/** How this server identifies itself over MCP (see McpAdapter.ts).
+ *
+ * Prism MINTS the wire prefix from this name — `mcp__<name>__` — so this
+ * constant, not any UI field, decides what every consumer sees.
+ *
+ * Renaming it in prism's UI does not hold: `registerWithPrism` looks the row
+ * up BY NAME and creates one when it does not find it, so the next boot
+ * recreated `lazy-tool-service` alongside the renamed row. That is how
+ * `coding/admin` ended up with two enabled rows on the same URL serving 84 and
+ * 86 tools — every tool twice, under two prefixes, at double the token cost.
+ * The UI and this constant are two writers of one registry and the code wins
+ * on every restart.
+ *
+ * Changing it does NOT rename the existing rows — it makes this service
+ * register a new one and leave the old enabled. The old rows must be disabled
+ * in the same operation (`enabled: false`; a DELETE emptied all three scopes
+ * on 2026-08-07 while still reporting `connected: true`).
+ */
+export const MCP_SERVER_NAME = "lazy-agent-service";
+const MCP_DISPLAY_NAME = "Lazy Agent Service";
 
 export interface PrismConsumer {
   /** Prism scope — matches the x-project header. */

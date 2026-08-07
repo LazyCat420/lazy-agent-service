@@ -9,6 +9,7 @@ import fs from "fs/promises";
 import path from "path";
 import logger from "../utils/logger.ts";
 import { routeLocalTool } from "./LocalToolRouter.ts";
+import { MCP_SERVER_NAME } from "./PrismRegistrationService.ts";
 
 export default class McpAdapter {
   private sessions = new Map<
@@ -35,7 +36,10 @@ export default class McpAdapter {
   private createMcpServer(): Server {
     const server = new Server(
       {
-        name: "lazy-tool-service",
+        // One constant, so the protocol handshake and the prism registration
+        // can never disagree about what this server is called. They were two
+        // hardcoded copies until 2026-08-07.
+        name: MCP_SERVER_NAME,
         version: "1.0.0",
       },
       {
