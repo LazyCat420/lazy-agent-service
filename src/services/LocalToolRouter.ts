@@ -278,6 +278,20 @@ export async function routeLocalTool(
   const tName = stripMcpPrefix(toolName);
   const cycleId = context.cycleId || "";
 
+  // UNREACHABLE FROM THE AGENT PATH — kept only for direct REST callers.
+  //
+  // These twelve branches have had no schema behind them since c620151
+  // (2026-07-12) dropped the music_player entries from tool_schemas.json, so
+  // they are absent from `tools/list`, from `getMCPToolSchemas`, and therefore
+  // from every persona. music-player's own registration dropped them at the
+  // same time ("the previous registration listed nonexistent tools"), and
+  // nothing in that repo calls `/execute/music_player_*` either. Zero calls in
+  // tool_usage_stats, all time.
+  //
+  // Left in place rather than deleted because `POST /execute/:toolName` is a
+  // public route and this is the only thing standing between an outside caller
+  // and the trading-service bridge fall-through. Delete the branch and the
+  // catalog entry together, or not at all.
   if (tName.startsWith("music_player_")) {
     const musicApiUrl = "http://10.0.0.16:8002";
     let musicApiResponse: globalThis.Response | null = null;

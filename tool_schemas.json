@@ -1478,6 +1478,32 @@
     ]
   },
   {
+    "name": "get_parameters",
+    "description": "List every runtime-tunable trading parameter: current effective value, default, hard min/max bounds, authorization tier, and the most recent change (who/why/expiry). Covers sizing caps, confidence/data-quality floors, drawdown breaker, ATR stop multiplier, take-profit R:R, triage thresholds, research/watch budgets, and cadences. Check this BEFORE reasoning about risk limits \u2014 the live values may differ from your priors.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "tier": 1,
+    "source": "parameter_governance",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_board_of_directors",
+      "v3_portfolio_manager"
+    ]
+  },
+  {
     "name": "get_polygon_price_history",
     "description": "Fetch historical OHLCV price data from Polygon.",
     "parameters": {
@@ -2011,6 +2037,53 @@
     "owner_app": "trading",
     "agents": [
       "user_chat",
+      "v3_portfolio_manager"
+    ]
+  },
+  {
+    "name": "propose_parameter_change",
+    "description": "Propose a new value for a runtime trading parameter (see get_parameters for keys and bounds). The governor enforces hard code-owned bounds, per-key cooldowns, a daily change budget, and authorization tiers (some parameters are board-only). Risk-TIGHTENING changes apply immediately and persist; risk-LOOSENING changes require justification and auto-revert after a TTL unless re-affirmed. Give a specific, evidence-based reason \u2014 vague reasons are rejected.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Parameter key exactly as listed by get_parameters (e.g. MAX_POSITION_SIZE_PCT)."
+        },
+        "value": {
+          "type": "number",
+          "description": "Proposed new value \u2014 must lie inside the parameter's hard bounds."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Specific market/book evidence justifying the change."
+        },
+        "ttl_hours": {
+          "type": "number",
+          "description": "Optional: hours until the change auto-reverts. Loosening changes get a default TTL if omitted."
+        }
+      },
+      "required": [
+        "key",
+        "value",
+        "reason"
+      ]
+    },
+    "tier": 1,
+    "source": "parameter_governance",
+    "permission": "write",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "user_chat",
+      "v3_board_of_directors",
       "v3_portfolio_manager"
     ]
   },

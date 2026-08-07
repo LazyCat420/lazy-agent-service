@@ -22,23 +22,21 @@ import logger from "../utils/logger.ts";
 import { platformQuery, getPlatformPool } from "../db/postgres.ts";
 import { guardStats } from "../services/ToolCallGuard.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
+import { stripMcpPrefix, ACCEPTED_MCP_PREFIXES } from "../services/McpPrefix.ts";
 
 const router = Router();
 
-const MCP_PREFIXES = [
-  "mcp__lazy-agent-service__",
-  "mcp__lazy-tool-service__",
-  "mcp__lazy-tools__",
-  "mcp_",
-];
-
-/** Strip whichever MCP namespace prefix a caller happened to record. */
+/** Strip whichever MCP namespace prefix a caller happened to record.
+ *
+ * The prefix list used to be a fourth local copy. It was also the LONGEST one —
+ * it accepted `mcp__lazy-tools__` and `mcp_`, which `McpPrefix.ts` did not — so
+ * the dashboard canonicalised names that `LocalToolRouter` would then fail to
+ * route. Same list or the counts disagree with the router.
+ *
+ * The old loop also stripped repeatedly instead of returning on first match;
+ * `stripMcpPrefix` strips once, which is what a namespace strip means. */
 function canonicalName(name: string): string {
-  let out = name || "";
-  for (const prefix of MCP_PREFIXES) {
-    if (out.startsWith(prefix)) out = out.slice(prefix.length);
-  }
-  return out;
+  return stripMcpPrefix(name || "");
 }
 
 interface ToolSchema {
@@ -408,7 +406,7 @@ router.get(
       if (project) {
         for (const [name, owner] of owners) {
           if (owner !== project) continue;
-          wanted.push(name, ...MCP_PREFIXES.map((p) => p + name));
+          wanted.push(name, ...ACCEPTED_MCP_PREFIXES.map((p) => p + name));
         }
         if (!wanted.length) return res.json({ calls: [], total: 0 });
       }
