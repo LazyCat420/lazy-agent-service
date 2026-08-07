@@ -150,12 +150,17 @@ let cachedStaticRoots: string[] = [];
 /** Namespace prefix for this service's own local tool catalog on /agent.
  *
  * **STILL EMITS THE OLD SPELLING ON PURPOSE.** This prefix is not minted here:
- * `/mcp` advertises BARE tool names (verified 2026-08-07 — `tools/list`
- * returns `music_player_suggest_artists`, not a namespaced form), and prism
- * prepends `mcp__<registered-server-name>__` using `MCP_SERVER_NAME` from
+ * `/mcp/sse` advertises BARE tool names (re-verified 2026-08-07 against the
+ * live server — `tools/list` returns 86 bare names), and prism prepends
+ * `mcp__<registered-server-name>__` using `MCP_SERVER_NAME` from
  * `PrismRegistrationService`. So the emitted spelling changes when the PRISM
  * REGISTRATION changes, not when this constant does. Flipping this alone would
  * advertise a name on `/agent` that prism never routes.
+ *
+ * The previous revision cited `music_player_suggest_artists` as the observed
+ * bare name. It is not in `tools/list` and has not been since c620151 dropped
+ * the music_player schemas on 2026-07-12 — the claim was carried forward, not
+ * re-measured. "Bare" still holds; the example was stale.
  *
  * Step one is therefore acceptance-only: `stripMcpPrefix` takes either
  * spelling, so the new name works the moment the registration moves, and
