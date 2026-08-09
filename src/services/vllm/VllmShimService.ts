@@ -146,6 +146,20 @@ export class VllmShimService {
   private static readonly EMBED_RESCALE_ATTEMPTS = 3;
 
   /**
+   * Pick the shrink factor for a context-window rejection. vLLM stops
+   * counting at window+1 and reports "at least N" — so a measured count of
+   * exactly window+1 tells us nothing about how far over the input really is
+   * (live probe 2026-08-09: a 22k-char input and a 4.4k-char input both
+   * reported "at least 2049"). An uninformative report gets an aggressive
+   * 0.6 cut; a real measurement gets a proportional cut with 10% margin.
+   * Exported for unit tests.
+   */
+  public static rescaleFactor(windowTokens: number, measuredTokens: number): number {
+    if (measuredTokens <= windowTokens + 1) return 0.6;
+    return (windowTokens / measuredTokens) * 0.9;
+  }
+
+  /**
    * Shrink every string input by `factor`, returning true if anything got
    * shorter. The char clamp above is a heuristic — chars-per-token varies
    * with content, and the desk's dense JSON/ticker text runs ~2.4 chars per
@@ -289,7 +303,7 @@ export class VllmShimService {
           const windowTokens = Number(m[1]);
           const measuredTokens = Number(m[2]);
           if (!(windowTokens > 0) || !(measuredTokens > windowTokens)) break;
-          const factor = (windowTokens / measuredTokens) * 0.9;
+          const factor = this.rescaleFactor(windowTokens, measuredTokens);
           if (!this.shrinkEmbeddingInput(body as Record<string, unknown>, factor, windowTokens)) break;
           this.embedClamped.rescued += 1;
           logger.warn(

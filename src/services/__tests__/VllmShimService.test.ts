@@ -195,3 +195,19 @@ describe("VllmShimService.shrinkEmbeddingInput", () => {
     expect(Number(m![2])).toBe(2049);
   });
 });
+
+describe("VllmShimService.rescaleFactor", () => {
+  // vLLM stops counting at window+1 and reports "at least N" — a capped
+  // report carries no size information, so a proportional cut of
+  // 2048/2049 * 0.9 ≈ 0.9 per attempt cannot rescue genuinely dense text
+  // within the retry budget (live probe 2026-08-09: dense numeric input
+  // still 400 after deploy of the proportional-only version).
+
+  it("cuts 40% on a capped (uninformative) report", () => {
+    expect(VllmShimService.rescaleFactor(2048, 2049)).toBe(0.6);
+  });
+
+  it("cuts proportionally with margin on a real measurement", () => {
+    expect(VllmShimService.rescaleFactor(2048, 4096)).toBeCloseTo(0.45, 5);
+  });
+});
