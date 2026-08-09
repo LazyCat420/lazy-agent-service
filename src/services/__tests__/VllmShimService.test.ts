@@ -107,3 +107,42 @@ describe("thinking-flag arrival accounting", () => {
     expect(JSON.stringify(body)).toBe(before);
   });
 });
+
+describe("VllmShimService.clampEmbeddingInput", () => {
+  // The defect this pins (2026-08-09): prism's memory layer sends whole agent
+  // prompts to a 2,048-token embedder; vLLM rejected 931 such calls in 14
+  // days ("maximum context length is 2048 tokens"), so prism memory was
+  // silently OFF for the trading project. The shim now truncates instead.
+  const BUDGET = 4_900;
+
+  it("truncates a single oversized string input to the budget", () => {
+    const body = VllmShimService.clampEmbeddingInput({ input: "x".repeat(20_000) });
+    expect((body.input as string).length).toBe(BUDGET);
+  });
+
+  it("leaves an in-budget string untouched", () => {
+    const body = VllmShimService.clampEmbeddingInput({ input: "short text" });
+    expect(body.input).toBe("short text");
+  });
+
+  it("clamps each string of an array input independently", () => {
+    const body = VllmShimService.clampEmbeddingInput({
+      input: ["ok", "y".repeat(9_000), "z".repeat(5_000)],
+    });
+    const arr = body.input as string[];
+    expect(arr[0]).toBe("ok");
+    expect(arr[1].length).toBe(BUDGET);
+    expect(arr[2].length).toBe(BUDGET);
+  });
+
+  it("passes token-id arrays through untouched — truncating ids corrupts them", () => {
+    const ids = Array.from({ length: 6000 }, (_, i) => i);
+    const body = VllmShimService.clampEmbeddingInput({ input: ids });
+    expect((body.input as number[]).length).toBe(6000);
+  });
+
+  it("tolerates bodies with no input field", () => {
+    const body = VllmShimService.clampEmbeddingInput({ model: "embeddinggemma" });
+    expect("input" in body).toBe(false);
+  });
+});

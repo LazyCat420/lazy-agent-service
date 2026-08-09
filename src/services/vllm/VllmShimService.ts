@@ -107,6 +107,74 @@ export class VllmShimService {
   }
 
   /**
+   * Character budget for a single embedding input. The embedder behind
+   * jetson-2 (embeddinggemma) has a 2,048-TOKEN window; prism's memory layer
+   * (`memory:embed`, `workflow-query:embed`) sends whole agent prompts at it
+   * and vLLM rejects the call outright — measured 931 failures in the 14 days
+   * to 2026-08-09 (the single largest failure class), which means prism
+   * memory was silently OFF for the trading project the whole time.
+   *
+   * 4,900 chars ≈ 1,200-1,600 tokens depending on content — inside the window
+   * with margin. The value matches trading-service's _EMBED_CHAR_BUDGET
+   * (4,944), derived for this same embedder. A truncated embedding degrades
+   * recall for ONE memory; the rejected call it replaces stored nothing.
+   *
+   * Caveat, deliberate: the clamp applies to /v1/embeddings on EVERY
+   * upstream, so pointing a >2k-window embedder through the shim would get
+   * silently truncated inputs — override the budget via env when that day
+   * comes. Clamping only when over budget keeps the common case untouched.
+   */
+  private static readonly EMBED_CHAR_BUDGET: number =
+    Number(process.env.VLLM_SHIM_EMBED_CHAR_BUDGET) > 0
+      ? Number(process.env.VLLM_SHIM_EMBED_CHAR_BUDGET)
+      : 4_900;
+
+  /** Rolling tally for the periodic clamp report. */
+  private static embedClamped = { calls: 0, clamped: 0, worstChars: 0 };
+  private static embedReportedAt = 0;
+
+  /**
+   * Truncate oversized embedding inputs to EMBED_CHAR_BUDGET. Mutates and
+   * returns the body. Exported for unit tests.
+   *
+   * Handles both OpenAI input shapes: a single string, or an array of
+   * strings. Token-id arrays (arrays of numbers) pass through untouched —
+   * truncating those would corrupt them.
+   */
+  public static clampEmbeddingInput(body: Record<string, unknown>): Record<string, unknown> {
+    const budget = this.EMBED_CHAR_BUDGET;
+    const clampOne = (s: string): string => {
+      this.embedClamped.calls += 1;
+      if (s.length <= budget) return s;
+      this.embedClamped.clamped += 1;
+      this.embedClamped.worstChars = Math.max(this.embedClamped.worstChars, s.length);
+      return s.slice(0, budget);
+    };
+
+    if (typeof body.input === "string") {
+      body.input = clampOne(body.input);
+    } else if (Array.isArray(body.input)) {
+      body.input = (body.input as unknown[]).map((item) =>
+        typeof item === "string" ? clampOne(item) : item,
+      );
+    }
+
+    const now = Date.now();
+    if (this.embedClamped.clamped > 0 && now - this.embedReportedAt > 300_000) {
+      this.embedReportedAt = now;
+      const s = this.embedClamped;
+      logger.warn(
+        `[VllmShim] embed inputs clamped to ${budget} chars: ${s.clamped}/${s.calls} ` +
+          `inputs over budget (worst ${s.worstChars} chars) — the sender is shipping ` +
+          `oversized embedding payloads; before this clamp those calls failed outright ` +
+          `("maximum context length is 2048 tokens").`,
+      );
+      this.embedClamped = { calls: 0, clamped: 0, worstChars: 0 };
+    }
+    return body;
+  }
+
+  /**
    * Resolve /vllm-shim/<name>/<rest> to its upstream. Exported for unit
    * tests; returns null for unknown upstream names.
    */
@@ -142,6 +210,10 @@ export class VllmShimService {
       // every V3 agent call and a per-request line would bury the log.
       this.recordThinkingFlag(body as Record<string, unknown>);
       body = this.translateChatTemplateKwargs({ ...req.body });
+    }
+
+    if (basePath === "/v1/embeddings" && req.method === "POST" && body && typeof body === "object") {
+      body = this.clampEmbeddingInput({ ...req.body });
     }
 
     const upstreamAbortController = new AbortController();
