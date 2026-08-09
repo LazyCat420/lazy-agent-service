@@ -146,3 +146,52 @@ describe("VllmShimService.clampEmbeddingInput", () => {
     expect("input" in body).toBe(false);
   });
 });
+
+describe("VllmShimService.shrinkEmbeddingInput", () => {
+  // The defect this pins (2026-08-09, post-clamp): the 4,900-char clamp is a
+  // heuristic; the desk's dense JSON/ticker text runs ~2.4 chars per token,
+  // so clamped inputs still overflowed the 2,048-token window by a hair
+  // ("at least 2049 input tokens"). The shim now rescales by the embedder's
+  // own token measurement and retries.
+
+  it("shrinks a long string by the factor", () => {
+    const body: Record<string, unknown> = { input: "x".repeat(4_900) };
+    const changed = VllmShimService.shrinkEmbeddingInput(body, 0.9, 2_048);
+    expect(changed).toBe(true);
+    expect((body.input as string).length).toBe(Math.floor(4_900 * 0.9));
+  });
+
+  it("leaves strings at or under the floor untouched — they cannot be the overflow", () => {
+    const body: Record<string, unknown> = { input: ["a".repeat(2_000), "b".repeat(4_900)] };
+    const changed = VllmShimService.shrinkEmbeddingInput(body, 0.5, 2_048);
+    const arr = body.input as string[];
+    expect(changed).toBe(true);
+    expect(arr[0].length).toBe(2_000);
+    expect(arr[1].length).toBe(2_450);
+  });
+
+  it("reports no change when nothing qualifies, so the caller stops retrying", () => {
+    const body: Record<string, unknown> = { input: "short" };
+    expect(VllmShimService.shrinkEmbeddingInput(body, 0.5, 2_048)).toBe(false);
+    expect(body.input).toBe("short");
+  });
+
+  it("passes token-id arrays through untouched", () => {
+    const ids = Array.from({ length: 3000 }, (_, i) => i);
+    const body: Record<string, unknown> = { input: ids };
+    expect(VllmShimService.shrinkEmbeddingInput(body, 0.5, 0)).toBe(false);
+    expect((body.input as number[]).length).toBe(3000);
+  });
+
+  it("parses the live vLLM rejection into window and measured tokens", () => {
+    const live =
+      "This model's maximum context length is 2048 tokens. However, you requested " +
+      "0 output tokens and your prompt contains at least 2049 input tokens, for a " +
+      "total of at least 2049 tokens. Please reduce the length of the input prompt " +
+      "or the number of requested output tokens. (parameter=input_tokens, value=2049)";
+    const m = live.match((VllmShimService as any).CTX_LEN_RE);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBe(2048);
+    expect(Number(m![2])).toBe(2049);
+  });
+});

@@ -130,8 +130,45 @@ export class VllmShimService {
       : 4_900;
 
   /** Rolling tally for the periodic clamp report. */
-  private static embedClamped = { calls: 0, clamped: 0, worstChars: 0 };
+  private static embedClamped = { calls: 0, clamped: 0, worstChars: 0, rescued: 0 };
   private static embedReportedAt = 0;
+
+  /**
+   * vLLM's context-window rejection, with the two numbers needed to rescale:
+   * the model's window and the token count it measured. Live sample
+   * (2026-08-09): "This model's maximum context length is 2048 tokens.
+   * However, you requested 0 output tokens and your prompt contains at least
+   * 2049 input tokens, ..."
+   */
+  private static readonly CTX_LEN_RE = /maximum context length is (\d+) tokens.*?(\d+) input tokens/s;
+
+  /** Retry ceiling for the token-feedback rescale below. */
+  private static readonly EMBED_RESCALE_ATTEMPTS = 3;
+
+  /**
+   * Shrink every string input by `factor`, returning true if anything got
+   * shorter. The char clamp above is a heuristic — chars-per-token varies
+   * with content, and the desk's dense JSON/ticker text runs ~2.4 chars per
+   * token, so a 4,900-char input can still overflow a 2,048-token window.
+   * This is the exact-feedback correction applied when the embedder rejects
+   * the clamped input anyway. Exported for unit tests.
+   */
+  public static shrinkEmbeddingInput(body: Record<string, unknown>, factor: number, floorChars = 0): boolean {
+    let changed = false;
+    const shrinkOne = (s: string): string => {
+      if (s.length <= floorChars) return s;
+      const target = Math.floor(s.length * factor);
+      if (target <= 0 || target >= s.length) return s;
+      changed = true;
+      return s.slice(0, target);
+    };
+    if (typeof body.input === "string") {
+      body.input = shrinkOne(body.input);
+    } else if (Array.isArray(body.input)) {
+      body.input = (body.input as unknown[]).map((item) => (typeof item === "string" ? shrinkOne(item) : item));
+    }
+    return changed;
+  }
 
   /**
    * Truncate oversized embedding inputs to EMBED_CHAR_BUDGET. Mutates and
@@ -160,16 +197,17 @@ export class VllmShimService {
     }
 
     const now = Date.now();
-    if (this.embedClamped.clamped > 0 && now - this.embedReportedAt > 300_000) {
+    if ((this.embedClamped.clamped > 0 || this.embedClamped.rescued > 0) && now - this.embedReportedAt > 300_000) {
       this.embedReportedAt = now;
       const s = this.embedClamped;
       logger.warn(
         `[VllmShim] embed inputs clamped to ${budget} chars: ${s.clamped}/${s.calls} ` +
-          `inputs over budget (worst ${s.worstChars} chars) — the sender is shipping ` +
-          `oversized embedding payloads; before this clamp those calls failed outright ` +
+          `inputs over budget (worst ${s.worstChars} chars), ${s.rescued} rescued via ` +
+          `token-feedback rescale — the sender is shipping oversized embedding payloads; ` +
+          `before this clamp those calls failed outright ` +
           `("maximum context length is 2048 tokens").`,
       );
-      this.embedClamped = { calls: 0, clamped: 0, worstChars: 0 };
+      this.embedClamped = { calls: 0, clamped: 0, worstChars: 0, rescued: 0 };
     }
     return body;
   }
@@ -212,20 +250,19 @@ export class VllmShimService {
       body = this.translateChatTemplateKwargs({ ...req.body });
     }
 
-    if (basePath === "/v1/embeddings" && req.method === "POST" && body && typeof body === "object") {
+    const isEmbedPost = basePath === "/v1/embeddings" && req.method === "POST" && !!body && typeof body === "object";
+    if (isEmbedPost) {
       body = this.clampEmbeddingInput({ ...req.body });
     }
 
     const upstreamAbortController = new AbortController();
-    const headersTimeout = setTimeout(() => {
-      logger.error(`[VllmShim] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
-      upstreamAbortController.abort();
-    }, UPSTREAM_HEADERS_TIMEOUT_MS);
-
-    try {
-      let response: globalThis.Response;
+    const fetchOnce = async (): Promise<globalThis.Response> => {
+      const headersTimeout = setTimeout(() => {
+        logger.error(`[VllmShim] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
+        upstreamAbortController.abort();
+      }, UPSTREAM_HEADERS_TIMEOUT_MS);
       try {
-        response = await fetch(targetUrl, {
+        return await fetch(targetUrl, {
           method: req.method,
           headers: { "Content-Type": req.headers["content-type"] || "application/json" },
           body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(body) : undefined,
@@ -233,6 +270,34 @@ export class VllmShimService {
         });
       } finally {
         clearTimeout(headersTimeout);
+      }
+    };
+
+    try {
+      let response = await fetchOnce();
+
+      // Token-feedback rescale: the char clamp undershoots on token-dense
+      // text (the desk's JSON/ticker prose runs ~2.4 chars per token). When
+      // the embedder measures the overflow for us, resize to fit and retry
+      // instead of forwarding the rejection. Only strings that could
+      // plausibly overflow (longer than the window in chars) are touched.
+      if (isEmbedPost && response.status === 400) {
+        for (let attempt = 1; attempt <= this.EMBED_RESCALE_ATTEMPTS && response.status === 400; attempt++) {
+          const errText = await response.clone().text();
+          const m = errText.match(this.CTX_LEN_RE);
+          if (!m) break;
+          const windowTokens = Number(m[1]);
+          const measuredTokens = Number(m[2]);
+          if (!(windowTokens > 0) || !(measuredTokens > windowTokens)) break;
+          const factor = (windowTokens / measuredTokens) * 0.9;
+          if (!this.shrinkEmbeddingInput(body as Record<string, unknown>, factor, windowTokens)) break;
+          this.embedClamped.rescued += 1;
+          logger.warn(
+            `[VllmShim] embed input still ${measuredTokens} tokens against a ${windowTokens}-token window ` +
+              `after the char clamp — rescaled by ${factor.toFixed(2)} and retried (attempt ${attempt}).`,
+          );
+          response = await fetchOnce();
+        }
       }
 
       res.status(response.status);
