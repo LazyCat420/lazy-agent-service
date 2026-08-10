@@ -42,6 +42,130 @@ const UPSTREAMS: Record<string, string> = {
  */
 const UPSTREAM_HEADERS_TIMEOUT_MS = 900_000;
 
+/**
+ * Per-upstream generation concurrency caps.
+ *
+ * WHY (2026-08-09): Gold Spark collapsed under a trading fan-out — generation
+ * throughput fell 23x in 150 seconds (118.7 -> 5.1 tok/s) with the engine at
+ * `Running: 6, Waiting: 9` and the KV cache at 85.9%. Reconstructed from
+ * prism's ledger, the harness had **16 requests in flight against a box that
+ * runs 6**, and vLLM's own log agrees (6 running + 9 waiting = 15).
+ *
+ * `--max-num-seqs 6` on the server is an ADMISSION ceiling, not a reservation:
+ * if callers never present more than N, the engine never runs more than N. So
+ * the cap can live here, with no vLLM restart — and here is the right place
+ * because this shim carries prism's traffic AND trading-service's. Measured
+ * against vLLM's own request counters, <=7.1% of prompt tokens reach Gold Spark
+ * without passing through prism.
+ *
+ * Past the KV cache's real capacity, extra concurrency does not buy
+ * parallelism — vLLM preempts and re-prefills, which is why prompt throughput
+ * spiked to ~3,700 tok/s while generation fell to 4. Queueing here is strictly
+ * cheaper than thrashing there: waiting costs time, preemption costs the work
+ * already done.
+ *
+ * 0 or unset = unlimited. Override per upstream with
+ * VLLM_SHIM_MAX_CONCURRENT_<NAME>, e.g. VLLM_SHIM_MAX_CONCURRENT_GOLD_SPARK.
+ */
+const DEFAULT_MAX_CONCURRENT: Record<string, number> = {
+  "gold-spark": 4,
+};
+
+/**
+ * How long a request may wait for a slot before being shed with 503.
+ *
+ * This bound is NOT optional. Prism's idle watchdog kills a stream that has
+ * received no bytes for 300s — that is the `Provider stream stalled` class in
+ * the failure census. With a cap of 4 and agent calls running 60-200s, a burst
+ * of 16 would leave the last one queued ~800s, and the cap would manufacture
+ * the exact failure it was added to prevent. A 503 is backpressure a caller can
+ * see and retry; a 300s silent stall is not.
+ */
+const QUEUE_TIMEOUT_MS =
+  Number(process.env.VLLM_SHIM_QUEUE_TIMEOUT_MS) > 0
+    ? Number(process.env.VLLM_SHIM_QUEUE_TIMEOUT_MS)
+    : 120_000;
+
+/** Raised when a request waited past QUEUE_TIMEOUT_MS without getting a slot. */
+export class QueueTimeoutError extends Error {}
+
+/**
+ * FIFO counting semaphore. Deliberately tiny and dependency-free — it sits on
+ * the path every generation takes.
+ *
+ * Exported for unit tests.
+ */
+export class UpstreamSemaphore {
+  private active = 0;
+  private readonly waiters: {
+    resolve: () => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }[] = [];
+
+  constructor(public readonly limit: number) {}
+
+  get inFlight(): number {
+    return this.active;
+  }
+  get queued(): number {
+    return this.waiters.length;
+  }
+
+  /**
+   * Resolve to a release function, or reject with QueueTimeoutError.
+   *
+   * The returned releaser is IDEMPOTENT: the caller releases from a `finally`
+   * that can be reached twice on some error paths, and a double decrement
+   * would silently raise the effective cap — a limiter that loosens itself
+   * under load is worse than none.
+   */
+  async acquire(timeoutMs: number): Promise<() => void> {
+    const releaser = () => {
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        this.release();
+      };
+    };
+
+    if (this.active < this.limit) {
+      this.active += 1;
+      return releaser();
+    }
+
+    return new Promise<() => void>((resolve, reject) => {
+      const entry = {
+        resolve: () => resolve(releaser()),
+        reject,
+        timer: setTimeout(() => {
+          const i = this.waiters.indexOf(entry);
+          if (i >= 0) this.waiters.splice(i, 1);
+          reject(
+            new QueueTimeoutError(
+              `waited ${timeoutMs}ms for a slot (limit ${this.limit}, ${this.waiters.length} still queued)`,
+            ),
+          );
+        }, timeoutMs),
+      };
+      this.waiters.push(entry);
+    });
+  }
+
+  private release(): void {
+    const next = this.waiters.shift();
+    if (next) {
+      // Hand the slot straight over rather than decrementing and re-incrementing
+      // — an intermediate 0 would let an unrelated arrival jump the queue.
+      clearTimeout(next.timer);
+      next.resolve();
+      return;
+    }
+    this.active = Math.max(0, this.active - 1);
+  }
+}
+
 export class VllmShimService {
   /**
    * Mirror Qwen's enable_thinking onto DeepSeek's thinking key.
@@ -132,6 +256,32 @@ export class VllmShimService {
   /** Rolling tally for the periodic clamp report. */
   private static embedClamped = { calls: 0, clamped: 0, worstChars: 0, rescued: 0 };
   private static embedReportedAt = 0;
+
+  /**
+   * Rolling tally for the periodic concurrency report. Without this, "the cap
+   * is binding" is an inference from latency rather than an observation — and
+   * a cap that silently sheds is indistinguishable from a healthy one.
+   */
+  private static queueStats = { admitted: 0, shed: 0, waitedMs: 0, worstWaitMs: 0, worstDepth: 0 };
+  private static queueReportedAt = 0;
+
+  /** Emit the concurrency picture on the same 5-minute cadence as the clamp report. */
+  private static reportQueue(): void {
+    const now = Date.now();
+    const s = this.queueStats;
+    if (s.admitted === 0 && s.shed === 0) return;
+    if (now - this.queueReportedAt <= 300_000) return;
+    this.queueReportedAt = now;
+    const live = [...this.semaphores.entries()]
+      .map(([name, sem]) => `${name} ${sem.inFlight}/${sem.limit}+${sem.queued}q`)
+      .join(", ");
+    logger.info(
+      `[VllmShim] concurrency: ${s.admitted} admitted (mean wait ` +
+        `${Math.round(s.waitedMs / Math.max(1, s.admitted))}ms, worst ${s.worstWaitMs}ms, ` +
+        `deepest queue ${s.worstDepth}), ${s.shed} shed with 503. Live: ${live || "none"}.`,
+    );
+    this.queueStats = { admitted: 0, shed: 0, waitedMs: 0, worstWaitMs: 0, worstDepth: 0 };
+  }
 
   /**
    * vLLM's context-window rejection, with the two numbers needed to rescale:
@@ -230,11 +380,44 @@ export class VllmShimService {
    * Resolve /vllm-shim/<name>/<rest> to its upstream. Exported for unit
    * tests; returns null for unknown upstream names.
    */
-  public static resolveUpstream(originalUrl: string): { upstreamUrl: string; originalPath: string } | null {
+  public static resolveUpstream(
+    originalUrl: string,
+  ): { upstreamUrl: string; originalPath: string; upstreamName: string } | null {
     const match = originalUrl.match(/^\/vllm-shim\/([a-z0-9-]+)(\/.*)?$/);
     const upstreamUrl = match ? UPSTREAMS[match[1]] : undefined;
     if (!upstreamUrl) return null;
-    return { upstreamUrl, originalPath: match![2] || "/" };
+    return { upstreamUrl, originalPath: match![2] || "/", upstreamName: match![1] };
+  }
+
+  /** Per-upstream semaphores, created on first use. Exported for tests. */
+  private static readonly semaphores = new Map<string, UpstreamSemaphore>();
+
+  /**
+   * Resolved concurrency limit for an upstream. 0 means ungated.
+   * Read per call rather than cached so tests (and an env change plus restart)
+   * take effect without a rebuild.
+   */
+  public static limitFor(upstream: string): number {
+    const envKey = `VLLM_SHIM_MAX_CONCURRENT_${upstream.toUpperCase().replace(/-/g, "_")}`;
+    const raw = Number(process.env[envKey]);
+    if (Number.isFinite(raw) && raw > 0) return raw;
+    if (process.env[envKey] !== undefined && raw === 0) return 0; // explicit opt-out
+    return DEFAULT_MAX_CONCURRENT[upstream] ?? 0;
+  }
+
+  public static semaphoreFor(upstream: string): UpstreamSemaphore | null {
+    const limit = this.limitFor(upstream);
+    if (limit <= 0) return null;
+    const existing = this.semaphores.get(upstream);
+    if (existing && existing.limit === limit) return existing;
+    const fresh = new UpstreamSemaphore(limit);
+    this.semaphores.set(upstream, fresh);
+    return fresh;
+  }
+
+  /** Test seam: drop all semaphores so a suite can change the env cleanly. */
+  public static resetSemaphores(): void {
+    this.semaphores.clear();
   }
 
   public static async handle(req: Request, res: Response) {
@@ -244,7 +427,7 @@ export class VllmShimService {
         error: `vllm-shim: unknown upstream in "${req.originalUrl}" (known: ${Object.keys(UPSTREAMS).join(", ")})`,
       });
     }
-    const { upstreamUrl, originalPath } = resolved;
+    const { upstreamUrl, originalPath, upstreamName } = resolved;
     const basePath = originalPath.split("?")[0];
     const targetUrl = `${upstreamUrl}${originalPath}`;
 
@@ -286,6 +469,48 @@ export class VllmShimService {
         clearTimeout(headersTimeout);
       }
     };
+
+    // ── Concurrency gate ────────────────────────────────────────────
+    //
+    // Only GENERATION is gated. /v1/models, /health and /metrics stay ungated
+    // deliberately: trading-service polls /metrics every 5s to drive its own
+    // limiter, and queueing that poll behind four generations would feed it
+    // stale queue depths — which is precisely how the blind-limiter bug behaved
+    // (it read waiting=0 while the box sat at 17).
+    const isGated =
+      req.method === "POST" &&
+      (basePath === "/v1/chat/completions" || basePath === "/v1/embeddings");
+    let release: (() => void) | null = null;
+    if (isGated) {
+      const sem = this.semaphoreFor(upstreamName);
+      if (sem) {
+        const waitStart = Date.now();
+        try {
+          release = await sem.acquire(QUEUE_TIMEOUT_MS);
+        } catch (e: any) {
+          this.queueStats.shed += 1;
+          logger.warn(
+            `[VllmShim] SHED ${originalPath} on ${upstreamName}: ${e.message}. ` +
+              `The cap is holding but the queue is longer than it can drain — ` +
+              `either the box is degraded or the caller's own limiter is too loose.`,
+          );
+          return res
+            .status(503)
+            .setHeader("Retry-After", "5")
+            .json({
+              error:
+                `vllm-shim: no capacity on ${upstreamName} after ${QUEUE_TIMEOUT_MS}ms ` +
+                `(limit ${sem.limit}). Retry.`,
+            });
+        }
+        const waited = Date.now() - waitStart;
+        this.queueStats.admitted += 1;
+        this.queueStats.waitedMs += waited;
+        this.queueStats.worstWaitMs = Math.max(this.queueStats.worstWaitMs, waited);
+        this.queueStats.worstDepth = Math.max(this.queueStats.worstDepth, sem.queued);
+        this.reportQueue();
+      }
+    }
 
     try {
       let response = await fetchOnce();
@@ -358,6 +583,18 @@ export class VllmShimService {
         return res.status(502).json({ error: `vllm-shim upstream failure: ${error.message}` });
       }
       return res.end();
+    } finally {
+      // AFTER THE BODY DRAINS, never at `await fetchOnce()`.
+      //
+      // Measured 2026-08-09 through this shim: vLLM answers headers in ~20ms
+      // and then holds the GPU for 5-10 SECONDS — 99.7% of a streaming request
+      // happens after the fetch promise resolves. Releasing there would cap
+      // header-fetch concurrency and leave GPU concurrency completely
+      // ungoverned: a limiter that passes every test written against a
+      // non-streaming call and does nothing under the load that caused the
+      // incident. This `finally` covers both exits — the SSE pump's own
+      // `finally` above, and the non-stream `res.end(buf)`.
+      release?.();
     }
   }
 }
