@@ -616,21 +616,37 @@
   },
   {
     "name": "save_trading_chart",
-    "description": "Render and save an HTML chart and JSON overlay data from the technical analyst agent.",
+    "description": "Render and save an HTML chart and JSON overlay data from the technical analyst agent. Call this after your technical analysis is complete. Pass your overlays (support/resistance zones, trendlines) as JSON, along with a plain-English analysis summary, the strategy name, your confidence and your reasoning chain \u2014 all four are rendered in the trading client's ticker detail panel under 'AI Analysis Overlays'.",
     "parameters": {
       "type": "object",
       "properties": {
         "ticker": {
           "type": "string",
-          "description": "The stock ticker symbol"
+          "description": "The stock ticker symbol (e.g. AAPL)"
         },
         "overlays": {
           "type": "array",
-          "description": "JSON overlays array from the agent"
+          "description": "List of technical overlay objects. Each object must have: type (support|resistance|trendline|zone|volume_void), y0 (float, lower price), y1 (float, upper price), x0 (optional date string, start), x1 (optional date string, end), color (optional: green|red|blue|purple|yellow), reasoning (string label shown on the chart)"
         },
         "period": {
           "type": "string",
-          "description": "Timeframe of historical data to fetch (e.g., '1mo', '3mo', '6mo', '1y')"
+          "description": "Timeframe of historical data (e.g., '1mo', '3mo', '6mo', '1y'). Default: '6mo'"
+        },
+        "analysis": {
+          "type": "string",
+          "description": "Plain-English summary of the technical analysis shown below the chart"
+        },
+        "strategy_name": {
+          "type": "string",
+          "description": "Name of the strategy or framework used (e.g., 'Breakout + Volume Confirmation')"
+        },
+        "confidence": {
+          "type": "string",
+          "description": "Confidence level (e.g., HIGH, MEDIUM, LOW)"
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Extended step-by-step reasoning chain (shown as collapsible 'Show Reasoning')"
         }
       },
       "required": [

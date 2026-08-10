@@ -277,18 +277,20 @@
  },
  {
   "name": "get_sec_filings",
-  "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
+  "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes a ticker symbol ('symbol' is accepted as an alias, and the ticker under analysis is used when neither is given).",
   "parameters": {
    "type": "object",
    "properties": {
     "ticker": {
      "type": "string",
      "description": "Stock ticker symbol, e.g. 'AAPL'"
+    },
+    "symbol": {
+     "type": "string",
+     "description": "Alias for ticker."
     }
    },
-   "required": [
-    "ticker"
-   ]
+   "required": []
   },
   "tier": 0,
   "source": "sec",
