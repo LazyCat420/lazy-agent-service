@@ -131,6 +131,58 @@ describe("VllmShimService.limitFor", () => {
   });
 });
 
+// ── One GPU, one budget ─────────────────────────────────────────────
+//
+// :8899 is a Python proxy in front of the SAME vLLM engine as :8000 (identical
+// kv_cache_size_tokens and num_gpu_blocks). Two independent caps of 4 would
+// admit 8 concurrent generations to a box that runs 6 — the pile-up returning
+// through the door nobody was watching.
+describe("upstreams that share a GPU share a semaphore", () => {
+  beforeEach(() => {
+    delete process.env.VLLM_SHIM_MAX_CONCURRENT_GOLD_SPARK;
+    VllmShimService.resetSemaphores();
+  });
+
+  it("puts the vision door in the same capacity group as the chat door", () => {
+    expect(VllmShimService.capacityGroup("gold-spark-vision")).toBe("gold-spark");
+    expect(VllmShimService.capacityGroup("gold-spark")).toBe("gold-spark");
+  });
+
+  it("hands both doors the SAME semaphore instance", () => {
+    const a = VllmShimService.semaphoreFor("gold-spark");
+    const b = VllmShimService.semaphoreFor("gold-spark-vision");
+    expect(a).not.toBeNull();
+    expect(b).toBe(a);
+  });
+
+  it("so vision calls consume the shared budget rather than doubling it", async () => {
+    const sem = VllmShimService.semaphoreFor("gold-spark-vision")!;
+    for (let i = 0; i < 4; i++) await sem.acquire(1000);
+    // A chat call now finds the box full, because vision filled it.
+    expect(VllmShimService.semaphoreFor("gold-spark")!.inFlight).toBe(4);
+    await expect(VllmShimService.semaphoreFor("gold-spark")!.acquire(20)).rejects.toBeInstanceOf(
+      QueueTimeoutError,
+    );
+  });
+
+  it("one env knob governs the whole box", () => {
+    process.env.VLLM_SHIM_MAX_CONCURRENT_GOLD_SPARK = "2";
+    expect(VllmShimService.limitFor("gold-spark")).toBe(2);
+    expect(VllmShimService.limitFor("gold-spark-vision")).toBe(2);
+  });
+
+  it("does not group unrelated boxes", () => {
+    expect(VllmShimService.capacityGroup("jetson")).toBe("jetson");
+    expect(VllmShimService.capacityGroup("jetson-2")).toBe("jetson-2");
+  });
+
+  it("routes the vision upstream at all", () => {
+    const r = VllmShimService.resolveUpstream("/vllm-shim/gold-spark-vision/v1/chat/completions");
+    expect(r?.upstreamName).toBe("gold-spark-vision");
+    expect(r?.upstreamUrl).toContain("8899");
+  });
+});
+
 // ── The one that matters ────────────────────────────────────────────
 //
 // Models the real timing: headers resolve fast, the body drains slowly.

@@ -30,8 +30,33 @@ import logger from "../../logger.js";
  */
 const UPSTREAMS: Record<string, string> = {
   "gold-spark": process.env.VLLM_SHIM_GOLD_SPARK_URL || "http://10.0.0.141:8000",
+  // The vision path. :8899 is NOT a second engine — it is a small Python proxy
+  // (Server: BaseHTTP, where :8000 is uvicorn) sitting in front of the SAME
+  // vLLM instance: both report identical kv_cache_size_tokens (1,136,441) and
+  // num_gpu_blocks (12,727). It accepts image payloads, turns them into text,
+  // and forwards; vllm:mm_cache_queries_total stayed 0.0 across ~20 images, so
+  // vLLM itself never sees a picture.
+  //
+  // It is routed here so vision traffic passes through code we own — it is not
+  // part of prism and nothing else was governing it.
+  "gold-spark-vision": process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL || "http://10.0.0.141:8899",
   "jetson": process.env.VLLM_SHIM_JETSON_URL || "http://10.0.0.30:8000",
   "jetson-2": process.env.VLLM_SHIM_JETSON_2_URL || "http://10.0.0.30:8001",
+};
+
+/**
+ * Upstreams that contend for the SAME GPU share one budget.
+ *
+ * This is the correction the routing above forces: `gold-spark` and
+ * `gold-spark-vision` are two doors onto one engine, so two independent caps of
+ * 4 would admit 8 concurrent generations to a box that runs 6 — reintroducing
+ * the pile-up this cap exists to stop, through the door nobody was watching.
+ *
+ * Upstreams absent from this map are their own group.
+ */
+const CAPACITY_GROUPS: Record<string, string> = {
+  "gold-spark": "gold-spark",
+  "gold-spark-vision": "gold-spark",
 };
 
 /**
@@ -392,26 +417,34 @@ export class VllmShimService {
   /** Per-upstream semaphores, created on first use. Exported for tests. */
   private static readonly semaphores = new Map<string, UpstreamSemaphore>();
 
+  /** The GPU an upstream contends for. Exported for tests. */
+  public static capacityGroup(upstream: string): string {
+    return CAPACITY_GROUPS[upstream] ?? upstream;
+  }
+
   /**
-   * Resolved concurrency limit for an upstream. 0 means ungated.
-   * Read per call rather than cached so tests (and an env change plus restart)
-   * take effect without a rebuild.
+   * Resolved concurrency limit for a capacity GROUP. 0 means ungated.
+   * Read per call rather than cached so an env change plus restart takes
+   * effect without a rebuild.
    */
   public static limitFor(upstream: string): number {
-    const envKey = `VLLM_SHIM_MAX_CONCURRENT_${upstream.toUpperCase().replace(/-/g, "_")}`;
+    const group = this.capacityGroup(upstream);
+    const envKey = `VLLM_SHIM_MAX_CONCURRENT_${group.toUpperCase().replace(/-/g, "_")}`;
     const raw = Number(process.env[envKey]);
     if (Number.isFinite(raw) && raw > 0) return raw;
     if (process.env[envKey] !== undefined && raw === 0) return 0; // explicit opt-out
-    return DEFAULT_MAX_CONCURRENT[upstream] ?? 0;
+    return DEFAULT_MAX_CONCURRENT[group] ?? 0;
   }
 
   public static semaphoreFor(upstream: string): UpstreamSemaphore | null {
     const limit = this.limitFor(upstream);
     if (limit <= 0) return null;
-    const existing = this.semaphores.get(upstream);
+    // Keyed on the GROUP, so every door onto one GPU draws from one budget.
+    const group = this.capacityGroup(upstream);
+    const existing = this.semaphores.get(group);
     if (existing && existing.limit === limit) return existing;
     const fresh = new UpstreamSemaphore(limit);
-    this.semaphores.set(upstream, fresh);
+    this.semaphores.set(group, fresh);
     return fresh;
   }
 
