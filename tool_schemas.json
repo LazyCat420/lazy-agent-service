@@ -1,7 +1,7 @@
 [
   {
     "name": "canvas_add_widget",
-    "description": "Spawn a pre-built widget on the canvas dashboard grid. Fetch the data FIRST with the matching data tool, then pass the result into config \u2014 the widget renders server-side, so config IS the finished content. Choosing widget_type:\n\n\u2022 'clock' \u2014 clocks AND timers. config={\"mode\": \"clock\"|\"stopwatch\"|\"countdown\", \"duration_seconds\": N, \"timezone\": \"America/New_York\"}. A TIMER or COUNTDOWN request ('set a timer for 5 minutes', 'pomodoro') is mode='countdown' with duration_seconds (5 minutes \u2192 300) \u2014 NOT a plain clock; it starts automatically with Pause/Reset controls. A STOPWATCH request ('time my run') is mode='stopwatch'. A world/city clock ('time in Tokyo') is mode='clock' with an IANA timezone. Multiple timers/clocks can coexist \u2014 spawn one widget each.\n\n\u2022 'stock_card' \u2014 ANY stock, share price, crypto or ticker ('chart AAPL', 'how is TSLA doing', 'bitcoin price'). Renders the price header, range tabs, chart, technicals and fundamentals together. Call html_notes_stock_history(symbol) first, then pass config={\"symbol\": \"AAPL\"} \u2014 just the symbol; the server fills in everything else. Do NOT use 'chart' for a ticker: 'chart' has no price header, no technicals and no fundamentals, and is the wrong widget for a stock.\n\u2022 'weather' \u2014 ANY current weather or forecast ('weather in Tokyo', 'what's it like in London', 'forecast for Denver'). Call html_notes_get_weather(location) first, then pass config={\"location\": \"Tokyo\"} \u2014 JUST the location; the server fills in the current conditions and 5-day forecast. Do NOT render weather as a data_card and do NOT web-search for it.\n\u2022 'scoreboard' \u2014 ANY sports scores, fixtures, results or standings. Call html_notes_sports_scores(league) first, then pass config={\"league\": \"nba\"} \u2014 just the league. Do NOT render scores as a data_card; a scoreboard has to show who is playing whom.\n\u2022 'data_card' \u2014 the default for fetched text data: news, recipes, search results, weather, facts, lists. Every item needs a 'description' with the actual text; a title+url alone renders as a bare link the user has to click, which is a failure.\n\u2022 'chart' \u2014 generic numbers only (line/bar/pie from labels+values): populations, poll results, revenue by quarter. NOT for tickers \u2014 use 'stock_card'.\n\u2022 'image' \u2014 display picture URLs. 'youtube_player' \u2014 call html_notes_youtube_search first and pass the chosen video_id.\n\u2022 'map' \u2014 ANY 'where is/are', locations, or map request ('where are the fires in California', 'map of recent earthquakes'). Pass config={\"map_query\": \"<the question>\"} \u2014 JUST the query; the server web-searches, geocodes the places and drops the markers. Do NOT type coordinates and do NOT render locations as a data_card. For a live-TRAFFIC map, also pass \"traffic\": true \u2014 the server overlays live traffic-flow tiles (green flowing / red jammed).\n\u2022 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player' \u2014 utility widgets, no data fetch needed.\n\nEDITING: to change an existing widget (retime a timer, restyle a clock's timezone, swap a stock, refresh a chart) call this AGAIN with the SAME widget_id and the full updated config \u2014 it re-renders that widget in place instead of adding a duplicate. This is the correct way to edit a clock/timer/countdown; do NOT use canvas_modify_dom on these server-rendered widgets, it cannot rebuild them.\n\nREUSE, DON'T DUPLICATE: a map or weather widget is a singleton \u2014 there should be at most ONE on the canvas. Before spawning one, check the current canvas (call canvas_read_dom if unsure); if a map/weather is already there, reuse ITS widget_id so the follow-up (another place, a refreshed forecast) UPDATES it in place instead of stacking a second one. Only give a brand-new widget a brand-new id.\n\n\u2022 'versus_card' \u2014 COMPARE 2-4 named things ('AAPL vs MSFT', 'compare these laptops'). config={\"title\": \"X vs Y\", \"entities\": [{\"name\": \"X\", \"caption\"?, \"image\"?}], \"rows\": [{\"label\": \"<metric>\", \"values\": [\"<X val>\", \"<Y val>\"], \"winner\": <0-based index of the better value, or null>}], \"verdict\": \"<one-sentence call>\"} \u2014 aligned columns, per-row winner highlighting. Research the numbers FIRST; never invent values.\n\u2022 'multi_chart' \u2014 overlay 2-8 SERIES on one axis for non-ticker comparisons ('rainfall Seattle vs Portland'). config={\"title\", \"labels\": [<shared x labels>], \"series\": [{\"label\": \"Seattle\", \"values\": [..]}, ..], \"unit\"?, \"normalize\"?: true} \u2014 ONE chart, never one per thing. Tickers keep 'chart' + compare_symbols.\n\u2022 'table' \u2014 structured/ranked rows with typed columns ('top 10 EVs by range and price'). config={\"title\", \"columns\": [{\"key\", \"label\", \"format\"?: \"number\"|\"currency\"|\"percent\"}], \"rows\": [{<key>: value}], \"sort\"?: {\"key\", \"dir\": \"asc\"|\"desc\"}} \u2014 numbers right-align and format; use this instead of a markdown table for 5+ rows.\n\u2022 'kpi_row' \u2014 2-6 headline numbers as big tiles ('how is the US economy doing'). config={\"title\", \"metrics\": [{\"label\", \"value\", \"unit\"?, \"delta\"?: \"-0.3 vs May\", \"good\"?: \"up\"|\"down\", \"spark\"?: [nums]}]} \u2014 'good' says which direction is healthy so the delta colors correctly.\n\u2022 'timeline' \u2014 chronology ('how did X unfold', 'timeline of the merger'). BEST: config={\"timeline_query\": \"<topic>\"} \u2014 the server researches the news and builds dated, sourced events. Hand-build events ONLY from pages you actually read: {\"events\": [{\"date\": \"YYYY-MM-DD\", \"title\", \"description\"?, \"url\"?}]} with absolute dates; NEVER include an image url.\n\u2022 'profile_card' \u2014 person/company/place infobox ('who is Marie Curie'). config={\"profile_query\": \"<subject>\"} \u2014 JUST the subject; the server fetches the portrait + facts. Never type an image url.\n\u2022 'progress' \u2014 goal/quantity bars ('savings goals', 'market share by maker'). config={\"title\", \"items\": [{\"label\", \"value\": 8200, \"target\": 10000, \"unit\"?: \"$\"} or {\"label\", \"pct\": 48}]}.\n\u2022 'converter' \u2014 ONLY when the ask IS the arithmetic: 'convert 10 kg to lb', '40% of 1250', 'what is 15*23', '5 miles in km', '20 usd to eur'. config={\"seed\": \"<the whole ask>\"}. NEVER for a question that merely contains numbers, temperatures or units ('how long until my 145F chicken hits 165', 'is 10 more minutes enough', 'what temp should I pull it at') \u2014 a converter cannot answer a question, it can only convert; those are research asks, use 'data_card' with a search_query.\n\u2022 'reminder' \u2014 config={\"label\", \"offset_seconds\"?, \"at_time\"?: \"HH:MM\"}.",
+    "description": "Spawn a pre-built widget on the canvas dashboard grid. Fetch the data FIRST with the matching data tool, then pass the result into config \u2014 the widget renders server-side, so config IS the finished content. Choosing widget_type:\n\n\u2022 'clock' \u2014 clocks AND timers. config={\"mode\": \"clock\"|\"stopwatch\"|\"countdown\", \"duration_seconds\": N, \"timezone\": \"America/New_York\"}. A TIMER or COUNTDOWN request ('set a timer for 5 minutes', 'pomodoro') is mode='countdown' with duration_seconds (5 minutes \u2192 300) \u2014 NOT a plain clock; it starts automatically with Pause/Reset controls. A STOPWATCH request ('time my run') is mode='stopwatch'. A world/city clock ('time in Tokyo') is mode='clock' with an IANA timezone. Multiple timers/clocks can coexist \u2014 spawn one widget each.\n\n\u2022 'stock_card' \u2014 ANY stock, share price, crypto or ticker ('chart AAPL', 'how is TSLA doing', 'bitcoin price'). Renders the price header, range tabs, chart, technicals and fundamentals together. Call html_notes_stock_history(symbol) first, then pass config={\"symbol\": \"AAPL\"} \u2014 just the symbol; the server fills in everything else. Do NOT use 'chart' for a ticker: 'chart' has no price header, no technicals and no fundamentals, and is the wrong widget for a stock.\n\u2022 'weather' \u2014 ANY current weather or forecast ('weather in Tokyo', 'what's it like in London', 'forecast for Denver'). Call html_notes_get_weather(location) first, then pass config={\"location\": \"Tokyo\"} \u2014 JUST the location; the server fills in the current conditions and 5-day forecast. Do NOT render weather as a data_card and do NOT web-search for it.\n\u2022 'scoreboard' \u2014 ANY sports scores, fixtures, results or standings. Call html_notes_sports_scores(league) first, then pass config={\"league\": \"nba\"} \u2014 just the league. Do NOT render scores as a data_card; a scoreboard has to show who is playing whom.\n\u2022 'data_card' \u2014 the default for fetched text data: news, recipes, search results, weather, facts, lists. Every item needs a 'description' with the actual text; a title+url alone renders as a bare link the user has to click, which is a failure.\n\u2022 'chart' \u2014 generic numbers only (line/bar/pie from labels+values): populations, poll results, revenue by quarter. NOT for tickers \u2014 use 'stock_card'.\n\u2022 'image' \u2014 display picture URLs. 'youtube_player' \u2014 call html_notes_youtube_search first and pass the chosen video_id.\n\u2022 'map' \u2014 ANY 'where is/are', locations, or map request ('where are the fires in California', 'map of recent earthquakes'). Pass config={\"map_query\": \"<the question>\"} \u2014 JUST the query; the server web-searches, geocodes the places and drops the markers. Do NOT type coordinates and do NOT render locations as a data_card. For a live-TRAFFIC map, also pass \"traffic\": true \u2014 the server overlays live traffic-flow tiles (green flowing / red jammed).\n\u2022 'checklist', 'clock', 'notes', 'iframe_app', 'mini_music_player' \u2014 utility widgets, no data fetch needed.\n\nEDITING: to change an existing widget (retime a timer, restyle a clock's timezone, swap a stock, refresh a chart) call this AGAIN with the SAME widget_id and the full updated config \u2014 it re-renders that widget in place instead of adding a duplicate. This is the correct way to edit a clock/timer/countdown; do NOT use canvas_modify_dom on these server-rendered widgets, it cannot rebuild them.\n\nREUSE, DON'T DUPLICATE: a map or weather widget is a singleton \u2014 there should be at most ONE on the canvas. Before spawning one, check the current canvas (call canvas_read_dom if unsure); if a map/weather is already there, reuse ITS widget_id so the follow-up (another place, a refreshed forecast) UPDATES it in place instead of stacking a second one. Only give a brand-new widget a brand-new id.\n\n\u2022 'versus_card' \u2014 COMPARE 2-4 named things ('AAPL vs MSFT', 'compare these laptops'). config={\"title\": \"X vs Y\", \"entities\": [{\"name\": \"X\", \"caption\"?, \"image\"?}], \"rows\": [{\"label\": \"<metric>\", \"values\": [\"<X val>\", \"<Y val>\"], \"winner\": <0-based index of the better value, or null>}], \"verdict\": \"<one-sentence call>\"} \u2014 aligned columns, per-row winner highlighting. Research the numbers FIRST; never invent values.\n\u2022 'multi_chart' \u2014 overlay 2-8 SERIES on one axis for non-ticker comparisons ('rainfall Seattle vs Portland'). config={\"title\", \"labels\": [<shared x labels>], \"series\": [{\"label\": \"Seattle\", \"values\": [..]}, ..], \"unit\"?, \"normalize\"?: true} \u2014 ONE chart, never one per thing. Tickers keep 'chart' + compare_symbols.\n\u2022 'table' \u2014 structured/ranked rows with typed columns ('top 10 EVs by range and price'). config={\"title\", \"columns\": [{\"key\", \"label\", \"format\"?: \"number\"|\"currency\"|\"percent\"}], \"rows\": [{<key>: value}], \"sort\"?: {\"key\", \"dir\": \"asc\"|\"desc\"}} \u2014 numbers right-align and format; use this instead of a markdown table for 5+ rows.\n\u2022 'kpi_row' \u2014 2-6 headline numbers as big tiles ('how is the US economy doing'). config={\"title\", \"metrics\": [{\"label\", \"value\", \"unit\"?, \"delta\"?: \"-0.3 vs May\", \"good\"?: \"up\"|\"down\", \"spark\"?: [nums]}]} \u2014 'good' says which direction is healthy so the delta colors correctly.\n\u2022 'timeline' \u2014 chronology ('how did X unfold', 'timeline of the merger'). BEST: config={\"timeline_query\": \"<topic>\"} \u2014 the server researches the news and builds dated, sourced events. Hand-build events ONLY from pages you actually read: {\"events\": [{\"date\": \"YYYY-MM-DD\", \"title\", \"description\"?, \"url\"?}]} with absolute dates; NEVER include an image url.\n\u2022 'profile_card' \u2014 person/company/place infobox ('who is Marie Curie'). config={\"profile_query\": \"<subject>\"} \u2014 JUST the subject; the server fetches the portrait + facts. Never type an image url.\n\u2022 'progress' \u2014 goal/quantity bars ('savings goals', 'market share by maker'). config={\"title\", \"items\": [{\"label\", \"value\": 8200, \"target\": 10000, \"unit\"?: \"$\"} or {\"label\", \"pct\": 48}]}.\n\u2022 'converter' \u2014 ONLY when the ask IS the arithmetic: 'convert 10 kg to lb', '40% of 1250', 'what is 15*23', '5 miles in km', '20 usd to eur'. config={\"seed\": \"<the whole ask>\"}. NEVER for a question that merely contains numbers, temperatures or units ('how long until my 145F chicken hits 165', 'is 10 more minutes enough', 'what temp should I pull it at') \u2014 a converter cannot answer a question, it can only convert; those are research asks, use 'data_card' with a search_query.\n\u2022 'reminder' \u2014 config={\"label\", \"offset_seconds\"?, \"at_time\"?: \"HH:MM\"}.\n\n\u2022 'app_grid' \u2014 the user's App Hub: a launcher grid of their OWN running services/apps from portal-service, with live status dots. config={} \u2014 the server fills the app list; NEVER hand-build it. Use for 'show my apps', 'app hub', 'what's running'. Singleton: one per canvas.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -29,7 +29,8 @@
             "progress",
             "multi_chart",
             "converter",
-            "reminder"
+            "reminder",
+            "app_grid"
           ],
           "description": "The pre-built widget type to spawn"
         },
@@ -239,6 +240,40 @@
     "agents": []
   },
   {
+    "name": "html_notes_curate_app",
+    "description": "Hide/unhide or pin/unpin one app tile on the user's App Hub. Runtime-persistent (survives restarts, no redeploy). Pass only the flags you are changing. Hiding never touches the actual service \u2014 it only removes the tile from the launcher.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "description": "Portal app id or name"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "true = remove from the hub, false = restore"
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "true = pin to the front, false = unpin"
+        }
+      },
+      "required": [
+        "app_id"
+      ]
+    },
+    "permission": "write",
+    "tier": 0,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": [],
+    "concurrency_safe": true
+  },
+  {
     "name": "html_notes_get_note",
     "description": "Retrieve the details and full HTML content of a specific note by its ID.",
     "parameters": {
@@ -330,6 +365,43 @@
     "agents": []
   },
   {
+    "name": "html_notes_list_services",
+    "description": "The user's OWN services/apps, live from portal-service: id, name, description, status (healthy/unhealthy/unknown), launch_url, pinned, project_type, device. Use it to answer 'what's running?', to find the right app_id before html_notes_open_app, or before curating. To SHOW the hub visually, call canvas_add_widget(widget_type='app_grid', config={}) instead \u2014 the server bakes this same list in.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Optional substring filter over id/name/description, e.g. 'trading'"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "healthy",
+            "unhealthy",
+            "unknown"
+          ],
+          "description": "Optional: only apps in this state"
+        },
+        "include_hidden": {
+          "type": "boolean",
+          "description": "Include tiles the user has hidden from the hub (default false)"
+        }
+      },
+      "required": []
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": [],
+    "concurrency_safe": true
+  },
+  {
     "name": "html_notes_news",
     "description": "Get current news as a ready-to-render data_card of stories, each with a real photo, a tightened headline and a written 2-3 sentence summary. Sourced from live news feeds (GDELT / Google News), so it returns TODAY'S stories with images \u2014 unlike html_notes_web_search, which returns news-site homepages and no photos. Use THIS for any 'news', 'headlines', 'latest on X', or 'top stories' request. Pass topic='' for general top stories, or a subject like topic='artificial intelligence'. Then render it with canvas_add_widget(widget_type='data_card', config={'news_topic': '<the same topic>'}) \u2014 the server rehydrates the stories, so do NOT re-type the items.",
     "parameters": {
@@ -354,6 +426,32 @@
     "source": "html-notes",
     "owner_app": "html-notes",
     "agents": []
+  },
+  {
+    "name": "html_notes_open_app",
+    "description": "Open ONE of the user's own apps in a NEW BROWSER TAB. app_id is the portal app id or its human name ('trading-client', 'music player'); only approved catalog apps can open \u2014 never a raw URL. On success the browser opens it automatically (a clickable link appears if the popup is blocked) \u2014 just confirm in one short sentence. If the result carries 'candidates', the name was ambiguous: ASK the user which one, never guess. This is the ONLY way to open an app \u2014 never paste URLs into prose expecting them to open, and never use iframe_app for this.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "description": "Portal app id or name, e.g. 'trading-client', 'music player'"
+        }
+      },
+      "required": [
+        "app_id"
+      ]
+    },
+    "permission": "write",
+    "tier": 0,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": [],
+    "concurrency_safe": true
   },
   {
     "name": "html_notes_read_page",
@@ -1661,18 +1759,20 @@
   },
   {
     "name": "get_sec_filings",
-    "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes ONLY a ticker symbol.",
+    "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes a ticker symbol ('symbol' is accepted as an alias, and the ticker under analysis is used when neither is given).",
     "parameters": {
       "type": "object",
       "properties": {
         "ticker": {
           "type": "string",
           "description": "Stock ticker symbol, e.g. 'AAPL'"
+        },
+        "symbol": {
+          "type": "string",
+          "description": "Alias for ticker."
         }
       },
-      "required": [
-        "ticker"
-      ]
+      "required": []
     },
     "tier": 0,
     "source": "sec",
@@ -2416,21 +2516,37 @@
   },
   {
     "name": "save_trading_chart",
-    "description": "Render and save an HTML chart and JSON overlay data from the technical analyst agent.",
+    "description": "Render and save an HTML chart and JSON overlay data from the technical analyst agent. Call this after your technical analysis is complete. Pass your overlays (support/resistance zones, trendlines) as JSON, along with a plain-English analysis summary, the strategy name, your confidence and your reasoning chain \u2014 all four are rendered in the trading client's ticker detail panel under 'AI Analysis Overlays'.",
     "parameters": {
       "type": "object",
       "properties": {
         "ticker": {
           "type": "string",
-          "description": "The stock ticker symbol"
+          "description": "The stock ticker symbol (e.g. AAPL)"
         },
         "overlays": {
           "type": "array",
-          "description": "JSON overlays array from the agent"
+          "description": "List of technical overlay objects. Each object must have: type (support|resistance|trendline|zone|volume_void), y0 (float, lower price), y1 (float, upper price), x0 (optional date string, start), x1 (optional date string, end), color (optional: green|red|blue|purple|yellow), reasoning (string label shown on the chart)"
         },
         "period": {
           "type": "string",
-          "description": "Timeframe of historical data to fetch (e.g., '1mo', '3mo', '6mo', '1y')"
+          "description": "Timeframe of historical data (e.g., '1mo', '3mo', '6mo', '1y'). Default: '6mo'"
+        },
+        "analysis": {
+          "type": "string",
+          "description": "Plain-English summary of the technical analysis shown below the chart"
+        },
+        "strategy_name": {
+          "type": "string",
+          "description": "Name of the strategy or framework used (e.g., 'Breakout + Volume Confirmation')"
+        },
+        "confidence": {
+          "type": "string",
+          "description": "Confidence level (e.g., HIGH, MEDIUM, LOW)"
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Extended step-by-step reasoning chain (shown as collapsible 'Show Reasoning')"
         }
       },
       "required": [
