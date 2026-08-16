@@ -43,6 +43,11 @@ const HTML_NOTES_TOOLS = [
   "mcp__lazy-tool-service__html_notes_news",
   "mcp__lazy-tool-service__html_notes_get_weather",
   "mcp__lazy-tool-service__html_notes_stock_news",
+  // App Hub: list the user's own services (portal-service inventory), open one
+  // in a new browser tab (approved catalog ids only), hide/pin hub tiles.
+  "mcp__lazy-tool-service__html_notes_list_services",
+  "mcp__lazy-tool-service__html_notes_open_app",
+  "mcp__lazy-tool-service__html_notes_curate_app",
 ];
 
 export const HtmlNotesPersona: Persona = {
