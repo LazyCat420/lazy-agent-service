@@ -86,3 +86,31 @@ It now uses the loopback `LAZY_TOOL_SERVICE_URL`; it is our own `/mcp` endpoint.
 fix there is a live working-tree edit that only reaches the NAS via
 `vault-service`'s own deploy — and this repo's `PRE_BUILD` copies it in at build
 time. If you change it, deploy vault-service too or the change is local-only.
+
+## Open items (2026-08-16, App Hub session)
+
+1. **Persona path returns an EMPTY stream in the ported agentic-loop harness.**
+   Any `/agent` request with `agent: "HTML_NOTES"` dies on iteration 1:
+   `[AgenticLoop] Empty model output — text=0, thinking=0, toolCalls=0`,
+   0 input tokens, **no `POST /vllm-shim/.../chat/completions` ever logged**,
+   0.31s total. The identical payload with the `agent` field dropped (or
+   renamed to the ignored `agentId`) works and completes a full tool-calling
+   turn. Bisected live against the deployed `2c6cd46` — the field is the only
+   variable. Observed adjacent log line: `[vLLM] TEMP PATCH: Rewriting
+   non-primary system message to user role` (persona adds a second system
+   message, so the persona path is what exercises the rewrite; unproven
+   whether the patch itself or the persona plumbing swallows the request —
+   no `[ReActHarness] Loop error` is logged either way, so whatever fails is
+   being eaten silently). Until fixed, HTML-Notes calls the gateway
+   persona-less (`HTML-Notes app/routes/message.py`, 2026-08-16 comment).
+
+2. **`/agent` without `maxTokens` sends `max_tokens: -1` to vLLM**, which
+   400s (`max_tokens must be at least 1, got -1`) and surfaces as a 500.
+   Callers that set `maxTokens` are unaffected; a default floor belongs in
+   the harness.
+
+3. **prism (:7777) has zero local provider instances registered** — its
+   `/config-local` returns `{}` models, so any prism-mode caller that
+   discovers provider/model pairs falls into hardcoded fallbacks and gets
+   `Unknown provider "vllm-2"`. Prism is Rod's — surface upstream rather
+   than patching; HTML-Notes flipped to gateway mode meanwhile.
