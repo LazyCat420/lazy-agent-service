@@ -8,10 +8,12 @@ import {
   extractVideoTopics,
   generateTasteProfile,
   judgeTopicGrounding,
+  classifyCandidateVideos,
   type BrainstormContext,
   type SimilarContext,
   type LikedVideoInput,
   type GroundingItem,
+  type ClassifyCandidatesInput,
 } from "../services/wallgarden/WallgardenService.js";
 
 const router = Router();
@@ -211,6 +213,56 @@ router.post("/similar", async (req: Request, res: Response) => {
     res.json({ topics, count: topics.length });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /similar error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /wallgarden/classify-candidates ───────────────────
+// Classifies candidate videos against topic intent to filter out novelty/off-topic content.
+router.post("/classify-candidates", async (req: Request, res: Response) => {
+  try {
+    const {
+      topic,
+      intent,
+      includeFacets = [],
+      excludeFacets = [],
+      candidates = [],
+      model,
+      provider,
+    } = req.body as ClassifyCandidatesInput;
+
+    if (!topic || typeof topic !== "string" || !topic.trim()) {
+      return res.status(400).json({ error: "topic string is required" });
+    }
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      return res.status(400).json({ error: "candidates array is required and must be non-empty" });
+    }
+    if (candidates.length > 50) {
+      return res.status(400).json({ error: "at most 50 candidates per request" });
+    }
+
+    const valid = candidates.filter(c => c && typeof c.id === "string" && typeof c.title === "string" && c.title.trim());
+    if (valid.length === 0) {
+      return res.status(400).json({ error: "no valid candidates (each needs id + title)" });
+    }
+
+    const result = await classifyCandidateVideos({
+      topic: topic.trim(),
+      intent,
+      includeFacets,
+      excludeFacets,
+      candidates: valid,
+      model,
+      provider,
+    });
+
+    res.json({
+      classifications: result.classifications,
+      count: result.classifications.length,
+      failed: result.failed,
+    });
+  } catch (err: any) {
+    logger.error(`[WallgardenRoutes] /classify-candidates error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

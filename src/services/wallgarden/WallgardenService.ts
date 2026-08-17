@@ -1055,3 +1055,198 @@ Suggest ${numTopics} topics related to "${ctx.query}".`;
 
   throw lastError || new Error("Similar topic generation failed after all retries");
 }
+
+// ── Candidate Classification Gate ───────────────────────────
+// Classifies candidate videos against a specific topic intent to filter
+// out novelty builds (e.g. LEGO/Minecraft fish tanks), off-topic crossover,
+// and low-quality results before they enter the feed ranking.
+const CLASSIFY_CANDIDATES_SYSTEM_PROMPT = `/no_think
+You are the semantic relevance gate for a curated YouTube feed.
+Given a target TOPIC, its intended DOMAIN/INTENT, and any EXCLUSIONS, evaluate whether candidate video titles/channels are genuinely on-topic or whether they are novelty/crossover bait, off-topic, or low-quality.
+
+Classifications:
+- ON_TOPIC: Genuinely represents the intended craft, enthusiast domain, practitioner scene, or informational subject. (e.g. for "fish tanks" [aquariums]: aquascaping guides, planted tank filtration, freshwater fish care).
+- ADJACENT: Closely related enthusiast topic from a neighboring scene that an enthusiast would still welcome (e.g. for "fish tanks": aquatic plant propagation, pond building).
+- NOVELTY: Novelty builds, toy/crossover content, viral spectacle, prank/experiment stunts, or gimmick projects that hijack the topic words without belonging to the actual hobby/niche (e.g. for "fish tanks": "I built a fish tank entirely from LEGO", "Minecraft working aquarium", "giant gummy fish tank challenge").
+- OFF_TOPIC: Unrelated subject, completely different domain (e.g. "military tank battle", "synthesis" meaning corporate mergers when intended music production).
+
+For each candidate video, return:
+- id: video id
+- classification: "ON_TOPIC" | "ADJACENT" | "NOVELTY" | "OFF_TOPIC"
+- reason: brief 3-8 word explanation
+
+Output ONLY the raw JSON object:
+{"classifications":[{"id":"<id>","classification":"ON_TOPIC","reason":"aquascaping tutorial"}]}
+No markdown, no commentary.`;
+
+export type CandidateClassification = "ON_TOPIC" | "ADJACENT" | "NOVELTY" | "OFF_TOPIC";
+
+export interface CandidateItem {
+  id: string;
+  title: string;
+  channel?: string;
+  durationSecs?: number;
+}
+
+export interface CandidateClassificationResult {
+  id: string;
+  classification: CandidateClassification;
+  reason?: string;
+}
+
+export interface ClassifyCandidatesInput {
+  topic: string;
+  intent?: string;
+  includeFacets?: string[];
+  excludeFacets?: string[];
+  candidates: CandidateItem[];
+  model?: string;
+  provider?: string;
+}
+
+/** Parse candidate classifications defensively from model response */
+export function extractCandidateClassificationsFromResponse(
+  data: any
+): CandidateClassificationResult[] {
+  const text = data?.text || "";
+  const clean = (arr: any[]): CandidateClassificationResult[] =>
+    arr
+      .map((c: any) => {
+        const id = typeof c?.id === "string" ? c.id.trim() : "";
+        const rawClass = typeof c?.classification === "string" ? c.classification.toUpperCase().trim() : "";
+        const classification: CandidateClassification =
+          rawClass === "ON_TOPIC" || rawClass === "ADJACENT" || rawClass === "NOVELTY" || rawClass === "OFF_TOPIC"
+            ? rawClass
+            : "ADJACENT";
+        const reason = typeof c?.reason === "string" ? c.reason.trim() : undefined;
+        return { id, classification, reason };
+      })
+      .filter(c => c.id);
+
+  // Direct parse
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed?.classifications)) return clean(parsed.classifications);
+    if (Array.isArray(parsed)) return clean(parsed);
+  } catch { /* fall through */ }
+
+  // Outer-object regex match
+  const objMatch = text.match(/\{[\s\S]*\}/);
+  if (objMatch) {
+    try {
+      const parsed = JSON.parse(objMatch[0]);
+      if (Array.isArray(parsed?.classifications)) return clean(parsed.classifications);
+    } catch { /* fall through */ }
+  }
+
+  // Truncation salvage
+  const salvaged: CandidateClassificationResult[] = [];
+  const objRe = /\{\s*"id"\s*:\s*"([^"]+)"\s*,\s*"classification"\s*:\s*"([^"]+)"(?:\s*,\s*"reason"\s*:\s*"([^"]*)")?\s*\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = objRe.exec(text)) !== null) {
+    const id = m[1];
+    const rawClass = m[2].toUpperCase();
+    const classification: CandidateClassification =
+      rawClass === "ON_TOPIC" || rawClass === "ADJACENT" || rawClass === "NOVELTY" || rawClass === "OFF_TOPIC"
+        ? rawClass
+        : "ADJACENT";
+    salvaged.push({ id, classification, reason: m[3] || undefined });
+  }
+
+  if (salvaged.length > 0) {
+    logger.warn(`[WallgardenService] Classify candidates response malformed; salvaged ${salvaged.length} entries`);
+    return clean(salvaged);
+  }
+
+  logger.warn("[WallgardenService] Could not extract classifications from response text");
+  return [];
+}
+
+const CLASSIFY_BATCH_SIZE = 15;
+
+export async function classifyCandidateVideos(
+  input: ClassifyCandidatesInput
+): Promise<{ classifications: CandidateClassificationResult[]; failed: boolean }> {
+  if (!input.candidates || input.candidates.length === 0) {
+    return { classifications: [], failed: false };
+  }
+
+  const { model, provider } = await resolveProviderAndModel(input.model, input.provider);
+
+  const intentPart = input.intent ? `\nTarget Domain/Intent: ${input.intent}` : "";
+  const incPart = input.includeFacets && input.includeFacets.length ? `\nInclude Facets: [${input.includeFacets.join(", ")}]` : "";
+  const excPart = input.excludeFacets && input.excludeFacets.length ? `\nExclude / Novelty Patterns: [${input.excludeFacets.join(", ")}]` : "";
+
+  const runBatch = async (
+    chunk: CandidateItem[],
+    batchIndex: number
+  ): Promise<CandidateClassificationResult[]> => {
+    const lines = chunk.map(c => {
+      const parts = [`id: ${c.id}`, `title: "${c.title}"`];
+      if (c.channel) parts.push(`channel: "${c.channel}"`);
+      if (typeof c.durationSecs === "number") parts.push(`duration: ${Math.round(c.durationSecs / 60)}min`);
+      return "- " + parts.join(" | ");
+    });
+
+    const userMessage = `Target Topic: "${input.topic}"${intentPart}${incPart}${excPart}
+
+Candidate Videos to classify:
+${lines.join("\n")}
+
+Classify each video as ON_TOPIC, ADJACENT, NOVELTY, or OFF_TOPIC.`;
+
+    const MAX_RETRIES = 1;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const data = await callPrismChat(
+          model,
+          provider,
+          [
+            { role: "system", content: CLASSIFY_CANDIDATES_SYSTEM_PROMPT },
+            { role: "user", content: userMessage },
+          ],
+          0.1, // deterministic grading
+          1200
+        );
+
+        const results = extractCandidateClassificationsFromResponse(data);
+        if (results.length > 0) return results;
+        throw new Error("No classifications parsed from response");
+      } catch (err: any) {
+        logger.warn(
+          `[WallgardenService] Classify candidates batch ${batchIndex + 1} attempt ${attempt + 1} failed: ${err.message}`
+        );
+        if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
+      }
+    }
+    return [];
+  };
+
+  const chunks: CandidateItem[][] = [];
+  for (let i = 0; i < input.candidates.length; i += CLASSIFY_BATCH_SIZE) {
+    chunks.push(input.candidates.slice(i, i + CLASSIFY_BATCH_SIZE));
+  }
+
+  const settled = await Promise.all(chunks.map((c, i) => runBatch(c, i)));
+  const flat = settled.flat();
+  const failed = flat.length === 0 && input.candidates.length > 0;
+
+  // Map results back by ID; candidates skipped or unclassified fall back to ADJACENT
+  const byId = new Map(flat.map(r => [r.id, r]));
+  const fullResults = input.candidates.map(c => byId.get(c.id) || {
+    id: c.id,
+    classification: "ADJACENT" as CandidateClassification,
+    reason: "unclassified",
+  });
+
+  logger.info(
+    `[WallgardenService] Classified ${fullResults.length} candidates for "${input.topic}": ` +
+    `${fullResults.filter(r => r.classification === "ON_TOPIC").length} ON_TOPIC, ` +
+    `${fullResults.filter(r => r.classification === "ADJACENT").length} ADJACENT, ` +
+    `${fullResults.filter(r => r.classification === "NOVELTY").length} NOVELTY, ` +
+    `${fullResults.filter(r => r.classification === "OFF_TOPIC").length} OFF_TOPIC`
+  );
+
+  return { classifications: fullResults, failed };
+}
+

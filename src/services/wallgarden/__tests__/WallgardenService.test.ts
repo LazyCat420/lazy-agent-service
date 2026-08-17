@@ -3,6 +3,7 @@ import {
   extractTopicsFromResponse,
   extractVideoExtractionsFromResponse,
   extractProfileFromResponse,
+  extractCandidateClassificationsFromResponse,
 } from "../WallgardenService.js";
 
 // Captured verbatim from Gold Spark (gemma-4-26B) when asked for 100 topics.
@@ -115,3 +116,47 @@ describe("extractProfileFromResponse", () => {
     expect(extractProfileFromResponse({ text: "no json here" })).toBeNull();
   });
 });
+
+describe("extractCandidateClassificationsFromResponse", () => {
+  it("parses clean candidate classifications", () => {
+    const raw = JSON.stringify({
+      classifications: [
+        { id: "vid1", classification: "ON_TOPIC", reason: "aquascaping tutorial" },
+        { id: "vid2", classification: "NOVELTY", reason: "LEGO build spectacle" },
+        { id: "vid3", classification: "OFF_TOPIC", reason: "military battle tanks" },
+        { id: "vid4", classification: "ADJACENT", reason: "pond filtration" },
+      ],
+    });
+    const c = extractCandidateClassificationsFromResponse({ text: raw });
+    expect(c).toEqual([
+      { id: "vid1", classification: "ON_TOPIC", reason: "aquascaping tutorial" },
+      { id: "vid2", classification: "NOVELTY", reason: "LEGO build spectacle" },
+      { id: "vid3", classification: "OFF_TOPIC", reason: "military battle tanks" },
+      { id: "vid4", classification: "ADJACENT", reason: "pond filtration" },
+    ]);
+  });
+
+  it("parses markdown fenced response", () => {
+    const text = '```json\n{"classifications":[{"id":"v1","classification":"ON_TOPIC","reason":"planted tank"}]}\n```';
+    const c = extractCandidateClassificationsFromResponse({ text });
+    expect(c).toEqual([{ id: "v1", classification: "ON_TOPIC", reason: "planted tank" }]);
+  });
+
+  it("salvages classifications from truncated reply", () => {
+    const text = '{"classifications":[{"id":"v1","classification":"ON_TOPIC","reason":"planted tank"},{"id":"v2","classification":"NOVELTY","reason":"lego build';
+    const c = extractCandidateClassificationsFromResponse({ text });
+    expect(c).toEqual([{ id: "v1", classification: "ON_TOPIC", reason: "planted tank" }]);
+  });
+
+  it("normalizes unknown classifications to ADJACENT and drops items without id", () => {
+    const raw = JSON.stringify({
+      classifications: [
+        { id: "v1", classification: "UNKNOWN_TYPE" },
+        { id: "", classification: "ON_TOPIC" },
+      ],
+    });
+    const c = extractCandidateClassificationsFromResponse({ text: raw });
+    expect(c).toEqual([{ id: "v1", classification: "ADJACENT", reason: undefined }]);
+  });
+});
+
