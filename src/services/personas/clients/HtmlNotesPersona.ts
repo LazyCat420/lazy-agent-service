@@ -48,6 +48,9 @@ const HTML_NOTES_TOOLS = [
   "mcp__lazy-tool-service__html_notes_list_services",
   "mcp__lazy-tool-service__html_notes_open_app",
   "mcp__lazy-tool-service__html_notes_curate_app",
+  // Control plane: run registered actions on the user's other containers.
+  "mcp__lazy-tool-service__html_notes_app_action",
+  "mcp__lazy-tool-service__html_notes_list_actions",
 ];
 
 export const HtmlNotesPersona: Persona = {

@@ -667,5 +667,65 @@
     "owner_app": "html-notes",
     "agents": [],
     "concurrency_safe": true
+  },
+  {
+    "name": "html_notes_list_actions",
+    "description": "Every action the canvas can run on the user's own containers (start a trading cycle, ask wallgarden for a video suggestion, record a play, …). Each row carries app_id, action, params and whether it is destructive. The same list is already summarised in YOUR APPS / YOU CAN DO in the system prompt — call this only when you need the exact parameter names.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "description": "Optional: only actions for this app."
+        }
+      },
+      "required": []
+    },
+    "permission": "read_only",
+    "tier": 0,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": [],
+    "concurrency_safe": true
+  },
+  {
+    "name": "html_notes_app_action",
+    "description": "Run ONE registered action on one of the user's containers. This is how the canvas DRIVES the ecosystem — prefer it over telling the user to go do something themselves.\n\n• SAFE actions run immediately and return the result.\n• DESTRUCTIVE actions (marked [CONFIRM REQUIRED]) are NOT executed. The server parks them and puts a confirm card on the canvas. When the result says confirmation_required, say in one short sentence that it needs their click — NEVER claim it started, and never call the action again to 'retry'.\n\nVideo asks: for a SPECIFIC request ('bloomberg live news feed') just search normally with html_notes_youtube_search. For a VAGUE one ('something to watch', 'find me something good'), call youtube-wallgarden.suggest_videos first so the pick is informed by the user's own taste, then play it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "description": "e.g. 'trading-client', 'youtube-wallgarden', 'music-player'"
+        },
+        "action": {
+          "type": "string",
+          "description": "e.g. 'start_cycle', 'cycle_status', 'suggest_videos'"
+        },
+        "params": {
+          "type": "object",
+          "description": "Action parameters; see html_notes_list_actions for names.",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "app_id",
+        "action"
+      ]
+    },
+    "permission": "write",
+    "tier": 0,
+    "domain": "HTML Notes",
+    "labels": [
+      "tool"
+    ],
+    "source": "html-notes",
+    "owner_app": "html-notes",
+    "agents": [],
+    "concurrency_safe": true
   }
 ]
