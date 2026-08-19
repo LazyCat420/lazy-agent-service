@@ -1,116 +1,124 @@
-# HANDOFF — retired the `python/` mirror, split the two port variables (2026-07-27)
+# HANDOFF — Postgres is gone, and `/platform/*` could never have worked (2026-08-19)
 
-**Deployed:** yes — see Verification below.
-**Companion changes:** `lazycat-sdk` (version bump + consumer docs),
-`vault-service/projects.json` (stale repo URL), `sun/.scratch/check_schemas.js`.
+**Deployed:** no. Committed on `remove-postgres` (`8a813c1`) and pushed; the
+merge and deploy are the owner's call, and this service is due to go out in the
+trading cutover window (see *Deploy ordering* below).
+**Companion changes:** none required. `trading-service` and `trading-client`
+carry the rest of the Postgres→Mongo migration on their own branches.
 
-## What this repo is (the confusion this change removes)
+## What this change is
 
-One container, two names, both correct. The repo was renamed
-`lazy-tool-service` → `lazy-agent-service` on 2026-07-15; the **deployed
-identity deliberately stayed** `lazy-tool-service` (image, `container_name`, MCP
-registration, prism attribution, telemetry `service_source`). The MCP name is a
-protocol identifier — `mcp__lazy-tool-service__*` derives from it, ~195
-references ecosystem-wide. See the **Names** table at the top of
-`ARCHITECTURE.md`. Do not rename it.
+This service's only Postgres surface was the platform dashboard: four read-only
+endpoints over `tool_usage_stats`, plus `src/db/postgres.ts`. The conversion to
+Mongo had been **written but never committed** — it sat in the primary
+checkout's working tree on `main` while this branch carried only the `pg`
+dependency removal. It is now on the branch, finished, with the defect that
+made it unusable fixed.
 
-`sun/lazy-tool-service/` had also survived the rename as an empty, root-owned
-`data/charts/` directory (docker auto-creates a compose bind-mount source when
-the path is missing). Deleted. There was never a second container.
+## The defect: four endpoints, 500 on every call
 
-## The `python/` tree is gone
+`tool_usage_stats` lives in the **trading** database, a different database from
+prism's on the same server. The rewrite reached it with:
 
-It was a deploy-time mirror of `trading-service/app`, its `scripts/`,
-`requirements.txt`, and `lazycat-sdk/lazycat` — 12 MB, **549 tracked files**, and
-the reason the last ten commits here were all `chore(python-mirror): sync …`.
+```ts
+const db = MongoWrapper.getDb(TRADING_MONGO_DB);   // "trading_bot"
+```
 
-**It never ran.** Verified eight ways:
+`MongoWrapper.getDb` → `MongoManager.getDatabase(name)`, which looks the name up
+in a registry populated only by `createClient()`. `src/index.ts` registered
+exactly one:
 
-1. `Dockerfile` stage 2 copies only `node_modules`, `dist`, `package.json`,
-   `tool_schemas.json`, `public` onto a bare `node:22-slim` — no interpreter.
-2. The only subprocess calls in all of `src/` are `ffmpeg` (`utils/media.ts`) and
-   `git` (`harnesses/lifecycle/SandboxExecutor.ts`). Nothing spawns python.
-3. `PYTHON_INTERPRETER` / `PYTHON_EXEC_SCRIPT` / `PYTHON_CWD` / `PYTHONPATH` in
-   `config.ts` had **zero importers**.
-4. The container path they pointed at (`/opt/venv/bin/python`) is never created.
-5. `LocalToolRouter.ts` already said so: the `spawn execute_tool.py` bridge "could
-   never run in the Node-only container and was removed".
-6. `execute_python` the *tool* goes over HTTP — `/utility/python/stream`.
-7. Nothing outside this repo read `lazy-agent-service/python/**`.
-8. `deploy-kit/lib.sh` ships the image only (`docker save | ssh docker load`).
+```ts
+await MongoWrapper.createClient(MONGO_DB_NAME, MONGO_URI);   // "prism"
+```
 
-Changes: `deploy.sh` `PRE_BUILD()` python-staging block deleted; `python/` added
-to `.gitignore` and `git rm -r --cached`'d; the dead python config block removed
-from `config.ts`; `ARCHITECTURE.md`'s "Python Layer" section replaced.
+`getDatabase` does **not** return an empty database for an unregistered name —
+it throws `Database not connected: trading_bot`. So the first line of every one
+of the four handlers raised, the generic catch turned it into a 500, and
+`/platform/stats`, `/storms`, `/recent` and `/services` were broken in every
+environment for as long as the rewrite existed.
 
-**Do not reinstate it** without also adding Python to the Dockerfile.
+This is the failure mode where a wrong answer would have been *better*: an empty
+database would have rendered a dashboard with zeroes, which someone would have
+questioned. A 500 on a telemetry page reads as "the dashboard is flaky".
 
-## Two ports, two variables (was one variable, two meanings)
+### The fix, and why it is at boot
 
-`LAZY_TOOL_SERVICE_PORT` defaulted to `7778` in `config.ts` but `5591` in
-`PrismRegistrationService.ts`. With the deployed env (which sets it to 5591), the
-self-referential `LAZY_TOOL_SERVICE_URL` resolved to `localhost:5591` — **a port
-nothing listens on inside the container**, where the bind is 7778.
+```ts
+await MongoWrapper.createClient(MONGO_DB_NAME, MONGO_URI);        // prism, first
+if (MONGO_URI) {
+  try { await MongoWrapper.createClient(TRADING_MONGO_DB, MONGO_URI); }
+  catch (e) { logger.error(...) }                                  // 503, not a dead boot
+}
+```
 
-Now:
+Two things are load-bearing:
 
-| Variable | Meaning | Default |
-|---|---|---|
-| `PORT` | host-side publish port for compose | 5591 |
-| `LAZY_TOOL_BIND_PORT` | what this process listens on in-container | 7778 |
-| `LAZY_TOOL_SERVICE_PORT` | external port advertised to prism/siblings | 5591 |
+* **Order.** `MongoManager` takes the FIRST connection as the default for
+  name-less `getDb()` calls (`if (!defaultName) defaultName = name`). Register
+  the trading database first and every unnamed prism read silently addresses
+  the wrong database.
+* **The try/catch.** This service is a dashboard over another project's
+  collection, not the trading cycle. An unreachable trading database must not
+  abort the boot of the box that fronts every LLM request the desk makes.
 
-`LAZY_TOOL_SERVICE_URL` is no longer read from the environment — it is derived
-from the bind port as `http://127.0.0.1:<bind>`. `src/index.ts` now imports
-`LAZY_TOOL_BIND_PORT` from `config.ts` instead of re-reading `process.env`.
+Per request, `tradingDb(res)` now answers **503 with a reason** rather than a
+500 — restoring what the deleted `getPlatformPool()` null-check used to do.
+"The data source is not configured here" is this service's honest answer about
+someone else's collection; a 500 blames the wrong side.
 
-Also fixed: `src/providers/lm-studio.ts` hardcoded
-`DEFAULT_MCP_SERVER_URL = "http://lazy-tool-service:7778"` — docker-DNS by
-`container_name`, silently coupled to `IMAGE_NAME`, and unresolvable across
-compose projects anyway (no shared `networks:` block exists in this ecosystem).
-It now uses the loopback `LAZY_TOOL_SERVICE_URL`; it is our own `/mcp` endpoint.
+## `GET /platform/registry` is restored
 
-## Verification
+It reads `tool_schemas.json` off disk and has never touched a database, so it
+was removed as collateral in a Postgres rewrite rather than deliberately.
+Deleting it turns "which project owns this tool" into a 404 for every caller.
 
-- `pnpm run typecheck` / `lint` / `test` green; `deploy.sh --dry-run` green.
-- `tool_schemas.json` byte-identical before and after (`md5 af6a0b3b…`) — this is
-  the contract behind all 83 tools, so it must not move.
-- Post-deploy: `:5591/health` ok; prism `GET /mcp-servers` still shows exactly one
-  row, `lazy-tool-service` → `:5591/mcp/sse`, `connected: true`, **`toolCount: 83`**.
-- `docker ps` checked *after* deploy — a healthy endpoint is not a healthy
-  container.
+## What was verified, and how
 
-## Gotcha for next time
+| claim | evidence |
+|---|---|
+| an unregistered database throws rather than reading empty | `MongoManager.getDatabase` source; asserted in `PlatformRoutesTradingDb.test.ts` |
+| the guard is what produces the 503 | **sabotage**: reverting `tradingDb(res)` to a bare `getDb()` turns the 503 assertion into `expected 500 to be 503` |
+| boot registers the trading database, after prism's | source-order assertion on `src/index.ts` |
+| an unreachable trading database does not kill the boot | the registration is inside try/catch, asserted |
+| nothing else regressed | `npm test` 557 passed (was 553), `npm run typecheck` clean |
 
-`vault-service/projects.json` is **gitignored** (it holds secrets), so the catalog
-fix there is a live working-tree edit that only reaches the NAS via
-`vault-service`'s own deploy — and this repo's `PRE_BUILD` copies it in at build
-time. If you change it, deploy vault-service too or the change is local-only.
+The boot-order test matters more than the 503 test: **a 503 guard on its own is
+a tidy error message on a permanently broken endpoint.** Only the registration
+makes the endpoints work.
 
-## Open items (2026-08-16, App Hub session)
+## Configuration
 
-1. **Persona path returns an EMPTY stream in the ported agentic-loop harness.**
-   Any `/agent` request with `agent: "HTML_NOTES"` dies on iteration 1:
-   `[AgenticLoop] Empty model output — text=0, thinking=0, toolCalls=0`,
-   0 input tokens, **no `POST /vllm-shim/.../chat/completions` ever logged**,
-   0.31s total. The identical payload with the `agent` field dropped (or
-   renamed to the ignored `agentId`) works and completes a full tool-calling
-   turn. Bisected live against the deployed `2c6cd46` — the field is the only
-   variable. Observed adjacent log line: `[vLLM] TEMP PATCH: Rewriting
-   non-primary system message to user role` (persona adds a second system
-   message, so the persona path is what exercises the rewrite; unproven
-   whether the patch itself or the persona plumbing swallows the request —
-   no `[ReActHarness] Loop error` is logged either way, so whatever fails is
-   being eaten silently). Until fixed, HTML-Notes calls the gateway
-   persona-less (`HTML-Notes app/routes/message.py`, 2026-08-16 comment).
+`TRADING_MONGO_DB` (default `trading_bot`) is documented in `.env.example` and
+staged in the compose file. The deploy script's comment notes that
+`DATABASE_URL` is no longer one of this service's keys.
 
-2. **`/agent` without `maxTokens` sends `max_tokens: -1` to vLLM**, which
-   400s (`max_tokens must be at least 1, got -1`) and surfaces as a 500.
-   Callers that set `maxTokens` are unaffected; a default floor belongs in
-   the harness.
+`pg` and `@types/pg` were already dropped on this branch (`6bdf69c`).
 
-3. **prism (:7777) has zero local provider instances registered** — its
-   `/config-local` returns `{}` models, so any prism-mode caller that
-   discovers provider/model pairs falls into hardcoded fallbacks and gets
-   `Unknown provider "vllm-2"`. Prism is Rod's — surface upstream rather
-   than patching; HTML-Notes flipped to gateway mode meanwhile.
+**The "rebuild `dist/`" worry does not apply here.** The trading migration plan
+warns that a stale `dist/` would still import `pg` and run the SQL. The
+Dockerfile runs `pnpm run build` over the copied working tree, so the image
+compiles `dist` from source at build time, and this checkout has no `dist/` at
+all.
+
+## Deploy ordering
+
+Per the trading cutover runbook, this service goes out **in the cutover window,
+after both trading containers are up and before the Postgres quiescence
+baseline is taken** — its four endpoints must be answering 200 before the soak
+starts measuring who is still touching Postgres, or its own reads would be
+mistaken for the cycle's.
+
+## Open items
+
+1. **Not deployed.** The branch is committed and pushed, not merged. Nothing in
+   production has changed; the four endpoints are still 500 until it ships.
+2. **The primary checkout still carries the same edits, uncommitted on `main`**
+   (`config.ts`, `src/routes/PlatformRoutes.ts`, deleted `src/db/postgres.ts`).
+   They predate this session and are now redundant with `8a813c1`. They were
+   left alone rather than discarded; whoever owns them should drop them before
+   the merge, or the same change will arrive twice.
+3. **No test covers the happy path** — a real `tool_usage_stats` read. The four
+   tests here pin the failure modes (unregistered → 503, boot order, non-fatal
+   boot); asserting the aggregation's output needs a Mongo fixture this repo
+   does not have.
