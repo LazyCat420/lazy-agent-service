@@ -21,6 +21,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # /volume1/docker/lazy-agent-service dating from Jul 13 whose .env held 4 keys
 # against the live 10, missing DATABASE_URL, MONGO_URI, MONGO_STORE_BACKEND,
 # INTERNAL_EXECUTE_TOKEN, TRADING_SERVICE_API_KEY and WALLGARDEN_MONGO_DB.
+# (Historical: as of 2026-08-19 this service reads no Postgres at all, so
+# DATABASE_URL is no longer one of its keys — TRADING_MONGO_DB replaced it.)
 # Deploying into it would have come up GREEN — the healthcheck only fetches
 # /health — while every Mongo, Postgres and internal-execute call failed, on the
 # box that fronts every LLM request the desk makes.

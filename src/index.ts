@@ -17,6 +17,7 @@ import {
   LAZY_TOOL_BIND_PORT,
   MONGO_URI,
   MONGO_DB_NAME,
+  TRADING_MONGO_DB,
   MINIO_ENDPOINT,
   MINIO_ACCESS_KEY,
   MINIO_SECRET_KEY,
@@ -260,6 +261,29 @@ setupWebSocket(wss);
 // Start
 (async () => {
   await MongoWrapper.createClient(MONGO_DB_NAME, MONGO_URI as string);
+
+  // The platform dashboard reads `tool_usage_stats` out of the TRADING
+  // database, which is a different database on the same server — and
+  // MongoManager keys its connections by NAME, so a database nobody registered
+  // is not "empty", it THROWS: `Database not connected: trading_bot`. Before
+  // this line the four /platform endpoints returned 500 on every call.
+  //
+  // Registered second on purpose: MongoManager takes the FIRST connection as
+  // the default for name-less getDb() calls, and that has to stay prism's.
+  // Failing to reach the trading DB is not fatal to this service — it is a
+  // dashboard, not the cycle — so the endpoints degrade to 503 instead of
+  // taking the process down at boot.
+  if (MONGO_URI) {
+    try {
+      await MongoWrapper.createClient(TRADING_MONGO_DB, MONGO_URI as string);
+    } catch (e) {
+      logger.error(
+        `[Platform] trading database ${TRADING_MONGO_DB} unavailable — ` +
+          `/platform endpoints will answer 503: ${e}`,
+      );
+    }
+  }
+
   await MemoryService.ensureIndexes();
 
   // ── Ensure collection indexes ──────────────────────────────────

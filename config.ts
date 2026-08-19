@@ -57,6 +57,7 @@ export const PROVIDER_LLAMA_CPP = parseProviderInstances("PROVIDER_LLAMA_CPP");
 // ── MongoDB ────────────────────────────────────────────────────
 export const MONGO_URI = process.env.MONGO_URI;
 export const MONGO_DB_NAME = process.env.PRISM_SERVICE_MONGO_DB_NAME || process.env.PRISM_MONGO_DB_NAME || process.env.MONGO_DB_NAME || "prism";
+export const TRADING_MONGO_DB = process.env.TRADING_MONGO_DB || "trading_bot";
 
 // ── MinIO (Optional — files stored inline in MongoDB if not set) ──
 export const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT;

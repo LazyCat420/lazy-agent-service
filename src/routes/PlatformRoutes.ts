@@ -9,8 +9,10 @@
  * `owner_app === "trading"`.
  *
  * Tool names are recorded with assorted MCP prefixes depending on which caller
- * executed them; `canonicalName()` mirrors the normalisation the SQL side does
- * so registry lookups and usage rows agree on a single key.
+ * executed them; `canonicalName()` mirrors the normalisation so registry lookups
+ * and usage rows agree on a single key.
+ *
+ * Data source: 100% Native MongoDB collection `tool_usage_stats` (in TRADING_MONGO_DB).
  */
 
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
@@ -19,22 +21,38 @@ import { promises as fs } from "fs";
 import path from "path";
 
 import logger from "../utils/logger.ts";
-import { platformQuery, getPlatformPool } from "../db/postgres.ts";
 import { guardStats } from "../services/ToolCallGuard.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import { stripMcpPrefix, ACCEPTED_MCP_PREFIXES } from "../services/McpPrefix.ts";
+import MongoWrapper from "../wrappers/MongoWrapper.ts";
+import { TRADING_MONGO_DB } from "../../config.ts";
 
 const router = Router();
 
-/** Strip whichever MCP namespace prefix a caller happened to record.
+/**
+ * The trading database, or a 503 — never a 500.
  *
- * The prefix list used to be a fourth local copy. It was also the LONGEST one —
- * it accepted `mcp__lazy-tools__` and `mcp_`, which `McpPrefix.ts` did not — so
- * the dashboard canonicalised names that `LocalToolRouter` would then fail to
- * route. Same list or the counts disagree with the router.
- *
- * The old loop also stripped repeatedly instead of returning on first match;
- * `stripMcpPrefix` strips once, which is what a namespace strip means. */
+ * MongoManager keys connections by NAME and THROWS `Database not connected`
+ * for one nobody registered, so an unconfigured trading database used to reach
+ * the generic catch and answer 500 "Database not connected: trading_bot". That
+ * is a lie about whose fault it is: this service is a dashboard over another
+ * project's collection, and "the data source is not configured here" is a 503,
+ * exactly as the old `getPlatformPool()` null-check answered before the
+ * Postgres path was removed.
+ */
+function tradingDb(res: Response) {
+  try {
+    return MongoWrapper.getDb(TRADING_MONGO_DB);
+  } catch (e) {
+    logger.error(`[Platform] trading database unavailable: ${e}`);
+    res.status(503).json({
+      error: `trading database (${TRADING_MONGO_DB}) is not connected`,
+      hint: "set MONGO_URI and TRADING_MONGO_DB, then restart the service",
+    });
+    return null;
+  }
+}
+
 function canonicalName(name: string): string {
   return stripMcpPrefix(name || "");
 }
@@ -64,20 +82,16 @@ async function loadRegistry(): Promise<ToolSchema[]> {
   }
 }
 
-/** tool name -> owning app, for attributing usage rows to a project. */
-async function ownerIndex(): Promise<Map<string, string>> {
-  const tools = await loadRegistry();
-  const index = new Map<string, string>();
-  for (const t of tools) {
-    if (t?.name) index.set(canonicalName(t.name), t.owner_app || "unknown");
-  }
-  return index;
-}
-
 /**
  * GET /platform/registry
  * The tool registry grouped by owning app — the canonical answer to
  * "which project owns which tools".
+ *
+ * RESTORED 2026-08-19. It reads `tool_schemas.json` off disk and has never
+ * touched a database, so it was removed as collateral in the Postgres->Mongo
+ * rewrite rather than deliberately. A read-only filesystem endpoint is not
+ * part of that migration; deleting it silently turns "which project owns this
+ * tool" into a 404 for every caller.
  */
 router.get(
   "/registry",
@@ -109,416 +123,355 @@ router.get(
   }),
 );
 
-/**
- * GET /platform/stats?hours=24
- * Per-tool usage rolled up per owning project. Reads the shared
- * `tool_usage_stats` table (written by every service that executes a tool).
- */
+// ── GET /stats ─────────────────────────────────────────────────────────────
+// Cross-project usage, latencies, failure rates, and owner_app attribution.
 router.get(
   "/stats",
   asyncHandler(async (req: Request, res: Response) => {
-    const hours = Math.min(
-      Math.max(parseInt(String(req.query.hours ?? "24"), 10) || 24, 1),
-      720,
-    );
+    const hours = Math.max(1, Math.min(168, parseInt((req.query.hours as string) || "24", 10)));
+    const ownerFilter = (req.query.owner_app as string) || undefined;
+    const serviceFilter = (req.query.service as string) || undefined;
 
-    if (!getPlatformPool()) {
-      return res.status(503).json({
-        error: "DATABASE_URL is not configured — platform telemetry unavailable",
-        projects: [],
-      });
+    const schemas = await loadRegistry();
+    const schemaMap = new Map<string, ToolSchema>();
+    for (const s of schemas) {
+      schemaMap.set(canonicalName(s.name), s);
     }
 
     try {
-      const rows = await platformQuery<{
-        tool_name: string;
-        service_source: string;
-        total_calls: string;
-        success_count: string;
-        avg_ms: string | null;
-        max_ms: number | null;
-        last_called: Date | null;
-      }>(
-        `SELECT
-            tool_name,
-            COALESCE(service_source, 'unknown') AS service_source,
-            COUNT(*)                            AS total_calls,
-            SUM(CASE WHEN success THEN 1 ELSE 0 END) AS success_count,
-            ROUND(AVG(execution_ms)::numeric, 1)     AS avg_ms,
-            MAX(execution_ms)                        AS max_ms,
-            MAX(called_at)                           AS last_called
-         FROM tool_usage_stats
-         WHERE called_at > NOW() - INTERVAL '1 hour' * $1
-         GROUP BY 1, 2`,
-        [hours],
-      );
-
-      const owners = await ownerIndex();
-
-      interface Agg {
-        tool_name: string;
-        project: string;
-        total_calls: number;
-        success_count: number;
-        avg_ms: number;
-        max_ms: number;
-        last_called: string | null;
-        service_sources: Set<string>;
+      const db = tradingDb(res);
+      if (!db) return;
+      const since = new Date(Date.now() - hours * 3600 * 1000);
+      const match: Record<string, any> = {
+        called_at: { $gte: since },
+        service_source: { $ne: "probe" },
+      };
+      if (serviceFilter) {
+        match.service_source = serviceFilter;
       }
-      const byTool = new Map<string, Agg>();
 
-      for (const r of rows) {
-        const name = canonicalName(r.tool_name);
-        const calls = Number(r.total_calls) || 0;
-        const existing = byTool.get(name);
-        const avg = r.avg_ms ? Number(r.avg_ms) : 0;
-        if (existing) {
-          // Weighted mean so multi-source tools report an honest average.
-          const totalCalls = existing.total_calls + calls;
-          existing.avg_ms = totalCalls
-            ? (existing.avg_ms * existing.total_calls + avg * calls) / totalCalls
-            : 0;
-          existing.total_calls = totalCalls;
-          existing.success_count += Number(r.success_count) || 0;
-          existing.max_ms = Math.max(existing.max_ms, r.max_ms || 0);
-          existing.service_sources.add(r.service_source);
-          const last = r.last_called ? new Date(r.last_called).toISOString() : null;
-          if (last && (!existing.last_called || last > existing.last_called)) {
-            existing.last_called = last;
-          }
+      const pipeline: any[] = [
+        { $match: match },
+        {
+          $group: {
+            _id: "$tool_name",
+            total_calls: { $sum: 1 },
+            success_count: { $sum: { $cond: ["$success", 1, 0] } },
+            failure_count: { $sum: { $cond: ["$success", 0, 1] } },
+            avg_ms: { $avg: "$execution_ms" },
+            last_called: { $max: "$called_at" },
+            last_error: { $last: "$error_message" },
+            sources: { $addToSet: "$service_source" },
+          },
+        },
+      ];
+
+      const docs = await db.collection("tool_usage_stats").aggregate(pipeline).toArray();
+
+      const combined = new Map<
+        string,
+        {
+          tool_name: string;
+          canonical_name: string;
+          total_calls: number;
+          success_count: number;
+          failure_count: number;
+          avg_ms: number;
+          last_called: string | null;
+          last_error: string | null;
+          sources: string[];
+        }
+      >();
+
+      for (const d of docs) {
+        const cName = canonicalName(d._id);
+        const existing = combined.get(cName);
+        if (!existing) {
+          combined.set(cName, {
+            tool_name: cName,
+            canonical_name: cName,
+            total_calls: Number(d.total_calls || 0),
+            success_count: Number(d.success_count || 0),
+            failure_count: Number(d.failure_count || 0),
+            avg_ms: Number(d.avg_ms || 0),
+            last_called: d.last_called ? new Date(d.last_called).toISOString() : null,
+            last_error: d.last_error || null,
+            sources: (d.sources || []).filter(Boolean),
+          });
         } else {
-          byTool.set(name, {
-            tool_name: name,
-            project: owners.get(name) || "unregistered",
-            total_calls: calls,
-            success_count: Number(r.success_count) || 0,
-            avg_ms: avg,
-            max_ms: r.max_ms || 0,
-            last_called: r.last_called ? new Date(r.last_called).toISOString() : null,
-            service_sources: new Set([r.service_source]),
+          const newTotal = existing.total_calls + Number(d.total_calls || 0);
+          const weightedMs =
+            newTotal > 0
+              ? (existing.avg_ms * existing.total_calls + Number(d.avg_ms || 0) * Number(d.total_calls || 0)) / newTotal
+              : 0;
+          existing.total_calls = newTotal;
+          existing.success_count += Number(d.success_count || 0);
+          existing.failure_count += Number(d.failure_count || 0);
+          existing.avg_ms = weightedMs;
+          if (d.last_called && (!existing.last_called || new Date(d.last_called) > new Date(existing.last_called))) {
+            existing.last_called = new Date(d.last_called).toISOString();
+            existing.last_error = d.last_error || existing.last_error;
+          }
+          for (const s of d.sources || []) {
+            if (s && !existing.sources.includes(s)) existing.sources.push(s);
+          }
+        }
+      }
+
+      for (const [cName, schema] of schemaMap.entries()) {
+        if (!combined.has(cName)) {
+          combined.set(cName, {
+            tool_name: schema.name,
+            canonical_name: cName,
+            total_calls: 0,
+            success_count: 0,
+            failure_count: 0,
+            avg_ms: 0,
+            last_called: null,
+            last_error: null,
+            sources: [],
           });
         }
       }
 
-      // Registered-but-silent tools, per project — the useful half of the
-      // picture that a pure usage query can never show.
-      const registry = await loadRegistry();
-      const called = new Set(byTool.keys());
+      const enriched = Array.from(combined.values())
+        .map((row) => {
+          const schema = schemaMap.get(row.canonical_name);
+          const total = row.total_calls;
+          const successRate = total > 0 ? row.success_count / total : 1.0;
+          const ownerApp = schema?.owner_app || "shared";
 
-      const projects = new Map<
-        string,
-        {
-          project: string;
-          total_calls: number;
-          success_count: number;
-          tools: Array<Record<string, unknown>>;
-          never_called: string[];
-          registered: number;
-        }
-      >();
-
-      const ensure = (project: string) => {
-        let p = projects.get(project);
-        if (!p) {
-          p = {
-            project,
-            total_calls: 0,
-            success_count: 0,
-            tools: [],
-            never_called: [],
-            registered: 0,
+          return {
+            ...row,
+            owner_app: ownerApp,
+            domain: schema?.domain || "general",
+            tier: schema?.tier || "read_only",
+            permission: schema?.permission || "read_only",
+            description: schema?.description || "",
+            in_registry: Boolean(schema),
+            success_rate: Math.round(successRate * 1000) / 1000,
+            avg_latency_ms: Math.round(row.avg_ms * 10) / 10,
           };
-          projects.set(project, p);
-        }
-        return p;
-      };
+        })
+        .filter((row) => !ownerFilter || row.owner_app === ownerFilter);
 
-      for (const t of registry) {
-        const p = ensure(t.owner_app || "unknown");
-        p.registered += 1;
-        if (!called.has(canonicalName(t.name))) p.never_called.push(t.name);
+      const byOwner: Record<string, { total_calls: number; failures: number; tools: number }> = {};
+      for (const row of enriched) {
+        const o = row.owner_app;
+        if (!byOwner[o]) byOwner[o] = { total_calls: 0, failures: 0, tools: 0 };
+        byOwner[o].total_calls += row.total_calls;
+        byOwner[o].failures += row.failure_count;
+        byOwner[o].tools += 1;
       }
 
-      for (const agg of byTool.values()) {
-        const p = ensure(agg.project);
-        p.total_calls += agg.total_calls;
-        p.success_count += agg.success_count;
-        p.tools.push({
-          tool_name: agg.tool_name,
-          total_calls: agg.total_calls,
-          success_count: agg.success_count,
-          failure_count: agg.total_calls - agg.success_count,
-          success_rate: agg.total_calls
-            ? Math.round((agg.success_count / agg.total_calls) * 1000) / 10
-            : 0,
-          avg_ms: Math.round(agg.avg_ms * 10) / 10,
-          max_ms: agg.max_ms,
-          last_called: agg.last_called,
-          service_sources: [...agg.service_sources].sort().join(","),
-        });
-      }
-
-      const projectList = [...projects.values()]
-        .map((p) => ({
-          ...p,
-          never_called: p.never_called.sort(),
-          tools: p.tools.sort(
-            (a, b) => (b.total_calls as number) - (a.total_calls as number),
-          ),
-          success_rate: p.total_calls
-            ? Math.round((p.success_count / p.total_calls) * 1000) / 10
-            : 0,
-        }))
-        .sort((a, b) => b.total_calls - a.total_calls);
-
-      const totalCalls = projectList.reduce((s, p) => s + p.total_calls, 0);
-      const totalSuccess = projectList.reduce((s, p) => s + p.success_count, 0);
+      const totalCalls = enriched.reduce((sum, r) => sum + r.total_calls, 0);
+      const totalFailures = enriched.reduce((sum, r) => sum + r.failure_count, 0);
 
       res.json({
-        period_hours: hours,
-        summary: {
-          total_calls: totalCalls,
-          total_success: totalSuccess,
-          success_rate: totalCalls
-            ? Math.round((totalSuccess / totalCalls) * 1000) / 10
-            : 0,
-          unique_tools_used: byTool.size,
-          total_registered: registry.length,
-          projects: projectList.length,
-        },
-        projects: projectList,
+        hours,
+        total_registered: schemas.length,
+        total_active: enriched.filter((r) => r.total_calls > 0).length,
+        total_calls: totalCalls,
+        total_failures: totalFailures,
+        overall_success_rate:
+          totalCalls > 0 ? Math.round(((totalCalls - totalFailures) / totalCalls) * 1000) / 1000 : 1.0,
+        by_owner: byOwner,
+        guards: guardStats(),
+        tools: enriched,
       });
     } catch (e) {
-      logger.warn(`[Platform] stats query failed: ${getErrorMessage(e)}`);
-      res.status(500).json({ error: getErrorMessage(e), projects: [] });
+      logger.error(`[Platform] /stats failed: ${e}`);
+      res.status(500).json({ error: getErrorMessage(e) });
     }
   }),
 );
 
-/**
- * GET /platform/storms?hours=&threshold=
- * Minutes where a single tool exceeded `threshold` calls — the signature of a
- * runaway caller. On 2026-07-14 one harness hit 285 calls/min of
- * get_sec_filings for a single ticker, saturating the bridge until everything
- * timed out; nothing surfaced it at the time. Also reports live guard state so
- * the coalescing/repeat/concurrency layers can be seen working.
- */
+// ── GET /storms ────────────────────────────────────────────────────────────
+// Rapid sequential failures: detects loops where an agent hammers a failing tool.
 router.get(
   "/storms",
   asyncHandler(async (req: Request, res: Response) => {
-    const hours = Math.min(
-      Math.max(parseInt(String(req.query.hours ?? "24"), 10) || 24, 1),
-      720,
-    );
-    const threshold = Math.max(
-      parseInt(String(req.query.threshold ?? "60"), 10) || 60,
-      1,
-    );
-
-    if (!getPlatformPool()) {
-      return res.status(503).json({
-        error: "DATABASE_URL is not configured — platform telemetry unavailable",
-        storms: [],
-        guard: guardStats(),
-      });
-    }
+    const hours = Math.max(1, Math.min(72, parseInt((req.query.hours as string) || "6", 10)));
+    const minFailures = Math.max(2, parseInt((req.query.min_failures as string) || "3", 10));
 
     try {
-      const rows = await platformQuery<{
-        minute: Date;
+      const db = tradingDb(res);
+      if (!db) return;
+      const since = new Date(Date.now() - hours * 3600 * 1000);
+
+      const docs = await db
+        .collection("tool_usage_stats")
+        .find(
+          { called_at: { $gte: since }, service_source: { $ne: "probe" } },
+          { sort: { agent_name: 1, cycle_id: 1, called_at: 1 } },
+        )
+        .toArray();
+
+      const storms: Array<{
         tool_name: string;
-        calls: string;
-        failures: string;
-        distinct_tickers: string;
-      }>(
-        `SELECT date_trunc('minute', called_at) AS minute,
-                tool_name,
-                COUNT(*)                                  AS calls,
-                COUNT(*) FILTER (WHERE NOT success)       AS failures,
-                COUNT(DISTINCT NULLIF(ticker, ''))        AS distinct_tickers
-           FROM tool_usage_stats
-          WHERE called_at > NOW() - INTERVAL '1 hour' * $1
-          GROUP BY 1, 2
-         HAVING COUNT(*) >= $2
-          ORDER BY calls DESC
-          LIMIT 50`,
-        [hours, threshold],
-      );
+        agent_name: string;
+        cycle_id: string;
+        service_source: string;
+        failures: number;
+        first_failure: string;
+        last_failure: string;
+        span_seconds: number;
+        last_error: string;
+      }> = [];
+
+      let curKey = "";
+      let failStreak = 0;
+      let firstFailTime: Date | null = null;
+      let lastFailTime: Date | null = null;
+      let lastErr = "";
+      let curTool = "";
+      let curAgent = "";
+      let curCycle = "";
+      let curSource = "";
+
+      function flush() {
+        if (failStreak >= minFailures && firstFailTime && lastFailTime) {
+          storms.push({
+            tool_name: canonicalName(curTool),
+            agent_name: curAgent,
+            cycle_id: curCycle,
+            service_source: curSource,
+            failures: failStreak,
+            first_failure: firstFailTime.toISOString(),
+            last_failure: lastFailTime.toISOString(),
+            span_seconds: Math.round((lastFailTime.getTime() - firstFailTime.getTime()) / 1000),
+            last_error: lastErr,
+          });
+        }
+        failStreak = 0;
+        firstFailTime = null;
+        lastFailTime = null;
+        lastErr = "";
+      }
+
+      for (const d of docs) {
+        const key = `${d.agent_name || ""}|${d.cycle_id || ""}|${canonicalName(d.tool_name)}`;
+        if (key !== curKey) {
+          flush();
+          curKey = key;
+          curTool = d.tool_name || "";
+          curAgent = d.agent_name || "";
+          curCycle = d.cycle_id || "";
+          curSource = d.service_source || "";
+        }
+
+        if (!d.success) {
+          failStreak += 1;
+          const dt = new Date(d.called_at);
+          if (!firstFailTime) firstFailTime = dt;
+          lastFailTime = dt;
+          lastErr = d.error_message || "";
+        } else {
+          flush();
+        }
+      }
+      flush();
 
       res.json({
-        period_hours: hours,
-        threshold_calls_per_minute: threshold,
-        storms: rows.map((r) => {
-          const calls = Number(r.calls) || 0;
-          const failures = Number(r.failures) || 0;
-          const tickers = Number(r.distinct_tickers) || 0;
-          return {
-            minute: r.minute ? new Date(r.minute).toISOString() : null,
-            tool_name: canonicalName(r.tool_name),
-            calls,
-            failures,
-            failure_rate: calls ? Math.round((failures / calls) * 1000) / 10 : 0,
-            distinct_tickers: tickers,
-            // Many calls against almost no distinct subjects is the tell-tale
-            // of a retry loop rather than legitimate breadth of work.
-            likely_runaway: calls >= threshold && tickers <= 2,
-          };
-        }),
-        guard: guardStats(),
+        hours,
+        min_failures: minFailures,
+        total_storms: storms.length,
+        storms: storms.sort((a, b) => b.failures - a.failures),
       });
     } catch (e) {
-      logger.warn(`[Platform] storms query failed: ${getErrorMessage(e)}`);
-      res.status(500).json({ error: getErrorMessage(e), storms: [], guard: guardStats() });
+      logger.error(`[Platform] /storms failed: ${e}`);
+      res.status(500).json({ error: getErrorMessage(e) });
     }
   }),
 );
 
-/**
- * GET /platform/recent?project=&tool=&limit=
- * Recent individual calls, optionally scoped to one project or tool.
- */
+// ── GET /recent ────────────────────────────────────────────────────────────
+// Last N tool invocations across all services.
 router.get(
   "/recent",
   asyncHandler(async (req: Request, res: Response) => {
-    const limit = Math.min(
-      Math.max(parseInt(String(req.query.limit ?? "50"), 10) || 50, 1),
-      200,
-    );
-    const project = req.query.project ? String(req.query.project) : null;
-    const tool = req.query.tool ? String(req.query.tool) : null;
-
-    if (!getPlatformPool()) {
-      return res.status(503).json({
-        error: "DATABASE_URL is not configured — platform telemetry unavailable",
-        calls: [],
-      });
-    }
+    const limit = Math.max(1, Math.min(200, parseInt((req.query.limit as string) || "50", 10)));
+    const toolFilter = (req.query.tool as string) || undefined;
+    const failuresOnly = req.query.failures_only === "true" || req.query.failures_only === "1";
 
     try {
-      const owners = await ownerIndex();
-
-      // Attribution lives in the registry file, not the database, so a project
-      // filter has to be translated into the set of tool names that project
-      // owns and pushed into SQL. Filtering in JS after a LIMIT would starve
-      // low-volume projects: html-notes' handful of calls never appear in the
-      // most recent N rows once trading has thousands.
-      const wanted: string[] = [];
-      if (project) {
-        for (const [name, owner] of owners) {
-          if (owner !== project) continue;
-          wanted.push(name, ...ACCEPTED_MCP_PREFIXES.map((p) => p + name));
-        }
-        if (!wanted.length) return res.json({ calls: [], total: 0 });
+      const db = tradingDb(res);
+      if (!db) return;
+      const match: Record<string, any> = { service_source: { $ne: "probe" } };
+      if (toolFilter) {
+        match.tool_name = { $regex: toolFilter, $options: "i" };
+      }
+      if (failuresOnly) {
+        match.success = false;
       }
 
-      const where = project ? "WHERE tool_name = ANY($2)" : "";
-      const params: unknown[] = project ? [limit, wanted] : [limit];
+      const docs = await db
+        .collection("tool_usage_stats")
+        .find(match, { sort: { called_at: -1 }, limit })
+        .toArray();
 
-      const rows = await platformQuery<{
-        tool_name: string;
-        agent_name: string | null;
-        cycle_id: string | null;
-        success: boolean;
-        execution_ms: number | null;
-        error_message: string | null;
-        called_at: Date | null;
-        service_source: string | null;
-      }>(
-        `SELECT tool_name, agent_name, cycle_id, success, execution_ms,
-                error_message, called_at, service_source
-           FROM tool_usage_stats
-           ${where}
-          ORDER BY called_at DESC
-          LIMIT $1`,
-        params,
-      );
-
-      let calls = rows.map((r) => {
-        const name = canonicalName(r.tool_name);
-        return {
-          tool_name: name,
-          project: owners.get(name) || "unregistered",
-          agent_name: r.agent_name || "",
-          cycle_id: r.cycle_id || "",
-          success: r.success,
-          execution_ms: r.execution_ms ?? 0,
-          error_message: r.error_message || null,
-          called_at: r.called_at ? new Date(r.called_at).toISOString() : null,
-          service_source: r.service_source || "unknown",
-        };
+      res.json({
+        limit,
+        total: docs.length,
+        calls: docs.map((d) => ({
+          id: d.id,
+          tool_name: d.tool_name,
+          canonical_name: canonicalName(d.tool_name),
+          agent_name: d.agent_name,
+          cycle_id: d.cycle_id,
+          service_source: d.service_source,
+          execution_ms: d.execution_ms,
+          success: d.success,
+          error_message: d.error_message,
+          args_hash: d.args_hash,
+          was_blocked: d.was_blocked,
+          called_at: d.called_at ? new Date(d.called_at).toISOString() : null,
+        })),
       });
-
-      if (tool) calls = calls.filter((c) => c.tool_name === tool);
-
-      res.json({ calls: calls.slice(0, limit), total: Math.min(calls.length, limit) });
     } catch (e) {
-      logger.warn(`[Platform] recent query failed: ${getErrorMessage(e)}`);
-      res.status(500).json({ error: getErrorMessage(e), calls: [] });
+      logger.error(`[Platform] /recent failed: ${e}`);
+      res.status(500).json({ error: getErrorMessage(e) });
     }
   }),
 );
 
-/**
- * GET /platform/services?hours=24
- * Which executing service actually ran the calls (trading-service,
- * lazy-tool-service, prism, …) — the SDK/runtime half of the picture.
- */
+// ── GET /services ──────────────────────────────────────────────────────────
+// List known `service_source` values with call counts in the window.
 router.get(
   "/services",
   asyncHandler(async (req: Request, res: Response) => {
-    const hours = Math.min(
-      Math.max(parseInt(String(req.query.hours ?? "24"), 10) || 24, 1),
-      720,
-    );
-
-    if (!getPlatformPool()) {
-      return res.status(503).json({
-        error: "DATABASE_URL is not configured — platform telemetry unavailable",
-        services: [],
-      });
-    }
+    const hours = Math.max(1, Math.min(168, parseInt((req.query.hours as string) || "24", 10)));
 
     try {
-      const rows = await platformQuery<{
-        service_source: string;
-        total_calls: string;
-        success_count: string;
-        avg_ms: string | null;
-        distinct_tools: string;
-        last_called: Date | null;
-      }>(
-        `SELECT COALESCE(service_source, 'unknown') AS service_source,
-                COUNT(*)                                 AS total_calls,
-                SUM(CASE WHEN success THEN 1 ELSE 0 END) AS success_count,
-                ROUND(AVG(execution_ms)::numeric, 1)     AS avg_ms,
-                COUNT(DISTINCT tool_name)                AS distinct_tools,
-                MAX(called_at)                           AS last_called
-           FROM tool_usage_stats
-          WHERE called_at > NOW() - INTERVAL '1 hour' * $1
-          GROUP BY 1
-          ORDER BY 2 DESC`,
-        [hours],
-      );
+      const db = tradingDb(res);
+      if (!db) return;
+      const since = new Date(Date.now() - hours * 3600 * 1000);
+      const pipeline = [
+        { $match: { called_at: { $gte: since }, service_source: { $ne: "probe" } } },
+        {
+          $group: {
+            _id: "$service_source",
+            calls: { $sum: 1 },
+            failures: { $sum: { $cond: ["$success", 0, 1] } },
+            last_active: { $max: "$called_at" },
+          },
+        },
+      ];
+
+      const docs = await db.collection("tool_usage_stats").aggregate(pipeline).toArray();
 
       res.json({
-        period_hours: hours,
-        services: rows.map((r) => {
-          const calls = Number(r.total_calls) || 0;
-          const ok = Number(r.success_count) || 0;
-          return {
-            service_source: r.service_source,
-            total_calls: calls,
-            success_count: ok,
-            success_rate: calls ? Math.round((ok / calls) * 1000) / 10 : 0,
-            avg_ms: r.avg_ms ? Number(r.avg_ms) : 0,
-            distinct_tools: Number(r.distinct_tools) || 0,
-            last_called: r.last_called ? new Date(r.last_called).toISOString() : null,
-          };
-        }),
+        hours,
+        services: docs.map((d) => ({
+          service: d._id || "unknown",
+          calls: Number(d.calls || 0),
+          failures: Number(d.failures || 0),
+          last_active: d.last_active ? new Date(d.last_active).toISOString() : null,
+        })),
       });
     } catch (e) {
-      logger.warn(`[Platform] services query failed: ${getErrorMessage(e)}`);
-      res.status(500).json({ error: getErrorMessage(e), services: [] });
+      logger.error(`[Platform] /services failed: ${e}`);
+      res.status(500).json({ error: getErrorMessage(e) });
     }
   }),
 );
