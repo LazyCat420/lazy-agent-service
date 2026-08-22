@@ -14,15 +14,18 @@ import {
   type LikedVideoInput,
   type GroundingItem,
   type ClassifyCandidatesInput,
+  JETSON_PROVIDER,
 } from "../services/wallgarden/WallgardenService.js";
 
 const router = Router();
 
 // ── GET /wallgarden/models ──────────────────────────────────
-// Discovers what models are loaded on each vLLM box
+// Discovers what model is loaded on the Jetson. Only the Jetson is returned:
+// wallgarden is pinned to it, so advertising any other box would put a choice
+// in the dashboard dropdown that the backend refuses to honour.
 router.get("/models", async (_req: Request, res: Response) => {
   try {
-    const boxes = await discoverModels();
+    const boxes = (await discoverModels()).filter(b => b.id === JETSON_PROVIDER);
     res.json({ boxes });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /models error: ${err.message}`);

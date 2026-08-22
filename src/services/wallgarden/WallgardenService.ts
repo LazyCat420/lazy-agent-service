@@ -261,38 +261,67 @@ export function extractTopicsFromResponse(data: any): string[] {
   return [];
 }
 
-/** Resolve which provider/model to use — Gold Spark first, Jetson fallback */
+/**
+ * Resolve which provider/model to use — ALWAYS the Jetson.
+ *
+ * Wallgarden is pinned to the Jetson (`vllm`, 10.0.0.30:8000) and deliberately
+ * has NO fallback to Gold Spark (`vllm-2`) or to "any online box". Gold Spark
+ * is shared with the trading stack; wallgarden's topic churn is background
+ * work that must not contend for it. If the Jetson is down, these routes fail
+ * loudly — the dashboard already toasts the failure and backs the refill loop
+ * off exponentially, which is the correct behaviour for a non-urgent feature.
+ *
+ * The model id is DISCOVERED from the box's /v1/models rather than hardcoded:
+ * this Jetson has been re-provisioned before (it served gemma-4-31B until
+ * 2026-08), and prism routes by model NAME — so a stale hardcoded string would
+ * silently re-home the job onto whichever box does serve that name.
+ * EXPECTED_JETSON_MODEL is an assertion, not the source of truth.
+ */
+export const JETSON_PROVIDER = "vllm";
+export const EXPECTED_JETSON_MODEL = "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit";
+
 async function resolveProviderAndModel(
   preferredModel?: string,
   preferredProvider?: string
 ): Promise<{ model: string; provider: string }> {
-  // If user explicitly specified both, use them
-  if (preferredModel && preferredProvider) {
-    return { model: preferredModel, provider: preferredProvider };
-  }
-
-  // Discover what's available
   const boxes = await discoverModels();
-  
-  // Prefer Gold Spark (vllm-2)
-  const goldSpark = boxes.find(b => b.id === "vllm-2" && b.status === "online" && b.model);
-  if (goldSpark && goldSpark.model) {
-    return { model: goldSpark.model, provider: "vllm-2" };
+  const jetson = boxes.find(
+    b => b.id === JETSON_PROVIDER && b.status === "online" && b.model
+  );
+
+  if (!jetson || !jetson.model) {
+    const seen = boxes.map(b => `${b.nickname}=${b.status}`).join(", ") || "none";
+    throw new Error(
+      `Jetson (${JETSON_PROVIDER}) is offline or has no model loaded. Wallgarden is ` +
+      `pinned to the Jetson and does not fall back to another box. Discovered: ${seen}`
+    );
   }
 
-  // Fallback to Jetson (vllm)
-  const jetson = boxes.find(b => b.id === "vllm" && b.status === "online" && b.model);
-  if (jetson && jetson.model) {
-    return { model: jetson.model, provider: "vllm" };
+  // A caller-supplied model/provider is only honoured when it names the Jetson.
+  // Browsers persist their last `provider::model` pick in localStorage and send
+  // it on EVERY request; before this pin those saved values were taken verbatim,
+  // so an old tab holding "vllm-2::…" would keep driving Gold Spark no matter
+  // what the server preferred. Server wins.
+  if (
+    (preferredProvider && preferredProvider !== JETSON_PROVIDER) ||
+    (preferredModel && preferredModel !== jetson.model)
+  ) {
+    logger.warn(
+      `[WallgardenService] Ignoring client model hint ` +
+      `${preferredProvider ?? "?"}::${preferredModel ?? "?"} — pinned to ` +
+      `${JETSON_PROVIDER}::${jetson.model}`
+    );
   }
 
-  // Fallback to any online vllm box
-  const anyOnline = boxes.find(b => b.status === "online" && b.model);
-  if (anyOnline && anyOnline.model) {
-    return { model: anyOnline.model, provider: anyOnline.id };
+  if (jetson.model !== EXPECTED_JETSON_MODEL) {
+    logger.warn(
+      `[WallgardenService] Jetson is serving "${jetson.model}", expected ` +
+      `"${EXPECTED_JETSON_MODEL}" — the box was re-provisioned. Prompts and ` +
+      `batch sizes are tuned for the expected model.`
+    );
   }
 
-  throw new Error("No vLLM boxes are online with loaded models");
+  return { model: jetson.model, provider: JETSON_PROVIDER };
 }
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
