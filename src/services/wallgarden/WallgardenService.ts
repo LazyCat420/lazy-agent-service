@@ -126,6 +126,73 @@ HARD RULES:
 - Output format: ONLY the raw JSON object {"topics": ["topic one", "topic two", ...]}. No markdown, no commentary, no explanations.`;
 
 // ── Context interface ───────────────────────────────────────
+/** Measured performance of past suggestions, derived from the client's ledger. */
+export interface TopicOutcomes {
+  /** Topics whose videos the user liked or repeatedly played. */
+  proven?: { t: string; likes?: number; plays?: number; opens?: number }[];
+  /** Topics shown repeatedly and never once acted on — a MEASURED failure. */
+  ignored?: { t: string; shown?: number }[];
+  /** Topics whose real YouTube results the grounding gate judged generic. */
+  slop?: string[];
+}
+
+/**
+ * Render measured outcomes as an instruction, not a data dump.
+ *
+ * Every other field in this prompt restates what the user SAYS they like. This
+ * one is the only feedback the model gets about what its own past suggestions
+ * actually did — until now the system computed all of it (grounding verdicts,
+ * A/B tiers, engagement) and threw it away.
+ *
+ * The `ignored` list is the valuable half and is why this is worth the tokens:
+ * those topics looked right to a previous run of this very prompt, were shown
+ * to the user repeatedly, and were never touched. The user never rejected them
+ * by hand, so they appear in no blacklist. Only the counters know.
+ *
+ * Returns "" when there is nothing measured to say, so a new account gets the
+ * plain prompt rather than a block full of empty brackets.
+ */
+export function buildOutcomesBlock(outcomes?: TopicOutcomes): string {
+  if (!outcomes) return "";
+  const proven = (outcomes.proven || []).filter(p => p && p.t);
+  const ignored = (outcomes.ignored || []).filter(p => p && p.t);
+  const slop = (outcomes.slop || []).filter(Boolean);
+  if (!proven.length && !ignored.length && !slop.length) return "";
+
+  const parts: string[] = ["\n\nMEASURED RESULTS OF PAST SUGGESTIONS — this is what actually happened, not what I said:"];
+
+  if (proven.length) {
+    const lines = proven
+      .map(p => {
+        const bits = [];
+        if (p.likes) bits.push(`${p.likes} liked`);
+        if (p.plays) bits.push(`${p.plays} played`);
+        return `  - "${p.t}"${bits.length ? ` (${bits.join(", ")})` : ""}`;
+      })
+      .join("\n");
+    parts.push(
+      `\nWORKED — I played or liked videos from these. Infer WHY each one landed ` +
+      `(the scene, the format, the depth) and aim at that:\n${lines}`
+    );
+  }
+
+  if (ignored.length) {
+    const lines = ignored.map(p => `  - "${p.t}"${p.shown ? ` (shown ${p.shown}x, never played)` : ""}`).join("\n");
+    parts.push(
+      `\nIGNORED — you suggested these before, I was shown them repeatedly, and I ` +
+      `never once watched them. They are not merely unlucky: they are the SHAPE of ` +
+      `topic that looks right for me and is not. Do not produce anything of the ` +
+      `same shape:\n${lines}`
+    );
+  }
+
+  if (slop.length) {
+    parts.push(`\nSLOP — real YouTube results for these were generic filler: [${slop.join(", ")}]`);
+  }
+
+  return parts.join("\n");
+}
+
 export interface BrainstormContext {
   interests: string[];
   disliked: string[];
@@ -140,6 +207,13 @@ export interface BrainstormContext {
   likedClusters?: { name?: string; videos: string[] }[];
   // Burned/failed topics rendered as negative few-shots (avoid the SHAPE).
   failedExamples?: string[];
+  // MEASURED outcomes from the client's signal ledger. Unlike every other field
+  // here, these describe what HAPPENED to previous suggestions rather than
+  // restating the user's declared taste — see buildOutcomesBlock.
+  topicOutcomes?: TopicOutcomes;
+  // "stats" | "flat" — which context shape the client built. Echoed to the
+  // caller so the two arms can be told apart when scoring them.
+  promptVariant?: string;
   numTopics?: number;
   model?: string;
   provider?: string;
@@ -468,6 +542,7 @@ export async function brainstormTopics(ctx: BrainstormContext): Promise<string[]
     const failedLine = failedExamples
       ? `\nTopics that FAILED for this user — study their SHAPE and avoid producing anything of the same shape, not just the same words: [${failedExamples}]`
       : "";
+    const outcomesBlock = buildOutcomesBlock(ctx.topicOutcomes);
 
     return `${profileLine}My interest topics: [${liked}]
 Videos I actually liked (strongest signal): [${likedLine}]
@@ -475,7 +550,7 @@ Videos I saved to watch later (strong signal): [${watchlist}]
 Recent searches: [${searches}]
 Disliked: [${disliked}]
 Recently used (avoid these): [${recentUsed}]
-Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]${failedLine}${clusterInstruction}
+Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]${failedLine}${outcomesBlock}${clusterInstruction}
 
 Suggest ${n} new topics.`;
   };
@@ -1044,7 +1119,7 @@ Videos I actually liked (strongest signal): [${likedVideos}]
 Videos I saved to watch later (strong signal): [${watchlist}]
 Disliked: [${disliked}]
 Recently used (avoid these): [${recentUsed}]
-Failed queries (don't reuse these exact phrases): [${burnedList}]
+Failed queries (don't reuse these exact phrases): [${burnedList}]${buildOutcomesBlock(ctx.topicOutcomes)}
 
 Suggest ${numTopics} topics related to "${ctx.query}".`;
 
