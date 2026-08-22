@@ -1,3 +1,72 @@
+# HANDOFF — measured outcomes now reach the topic prompts (2026-08-22)
+
+**Deployed:** yes, `561c62a` on `main`, live 23:04Z.
+**Companion:** `youtube-wallgarden@ed93812` derives the outcomes and owns the
+A/B instrumentation.
+
+## What this change is
+
+Three classes of MEASURED result are rendered into the brainstorm and similar
+prompts by `buildOutcomesBlock` — WORKED (liked/played), IGNORED (shown
+repeatedly, never touched), SLOP (grounding gate said the real results were
+generic).
+
+Until now this service computed all of that and threw it away: grounding
+verdicts were returned to the client and never fed back, A/B tiers likewise,
+and `failedExamples` — the one field that instructs the model to *"study their
+SHAPE"* — was being handed `burnedQueries.slice(-10)`, the same array the model
+already receives one line further up the prompt.
+
+IGNORED is the half worth the tokens. Those topics were produced by a previous
+run of this very prompt, surfaced repeatedly, and never touched. The user never
+rejected them by hand, so they appear in no blacklist.
+
+Also fixed: `/similar` destructured `failedExamples` away, so a field the client
+has always sent never reached the model on that route.
+
+## The result: no measurable difference (yet)
+
+Three paired runs against the live Jetson, same seeds, synthetic outcomes:
+
+| arm | n | filler-shaped | tier-A |
+|---|---|---|---|
+| flat | 30 | 3 (10%) | 29 (96%) |
+| stats | 30 | 3 (10%) | 28 (93%) |
+
+Within noise. The first pair looked better for the stats arm by eye and that
+did not survive n=30.
+
+This is a real result, not a failed deploy: the block demonstrably reaches the
+model (the tests assert on the outbound `/chat` body, not on the builder's
+return value), it costs under 1k tokens against a 65,536 window, and it is
+withheld entirely when there is nothing measured to say. It is simply **not yet
+shown to beat the free context**. The client ships `wgPromptAB()` to settle it
+on real engagement once the counters fill.
+
+## Traps this encodes
+
+- **Assert on the outbound body, not the builder.** A block that is built and
+  then dropped is a failure mode this repo has hit twice — `failedExamples` on
+  `/similar` (fixed here) and `topicPolicies`, which the wallgarden client
+  pushes to the sync service to this day and which goes nowhere because it is
+  not in `SYNC_FIELDS`.
+- **Adding a field is three edits, not one:** the interface, the route
+  destructure, AND the forward call. I left a duplicated identifier in the
+  brainstorm destructure on the first pass and the forward call still did not
+  have it; `tsc` caught the duplicate, nothing would have caught the omission
+  but the test.
+- Input scaling stays safe: a full brainstorm was ~2k tokens and the worst-case
+  outcomes block is capped near 1k, against 65,536.
+
+## Open items (carried forward)
+
+- No shim concurrency cap for the Jetson — `VLLM_SHIM_MAX_CONCURRENT_JETSON`
+  is the lever if parallel batches thrash.
+- `VllmModelSyncService.test.ts` still has 5 failures, confirmed pre-existing
+  against pristine HEAD.
+
+---
+
 # HANDOFF — wallgarden is pinned to the Jetson, and a client hint could outvote the server (2026-08-22)
 
 **Deployed:** yes. `8456371` on `main`, live on synology at 22:11Z, verified
