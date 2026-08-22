@@ -1,3 +1,125 @@
+# HANDOFF — wallgarden is pinned to the Jetson, and a client hint could outvote the server (2026-08-22)
+
+**Deployed:** yes. `8456371` on `main`, live on synology at 22:11Z, verified
+against the Jetson's own GPU counters (below).
+**Companion change:** `youtube-wallgarden@b29bdf0` — the dashboard side.
+
+## What this change is
+
+Every wallgarden LLM call now runs on the **Jetson** (`vllm`,
+10.0.0.30:8000, `cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit`). Gold Spark (`vllm-2`) is
+deliberately **not** a fallback: it is shared with the trading stack, and
+wallgarden's background topic churn should not contend for it. If the Jetson is
+down these routes now throw, which the dashboard already toasts and backs off
+exponentially — the correct behaviour for a non-urgent feature.
+
+All seven LLM entry points (`brainstormTopics`, `rateTopics`,
+`extractVideoTopics`, `generateTasteProfile`, `judgeTopicGrounding`,
+`generateSimilarTopics`, `classifyCandidateVideos`) share one resolver, so this
+is a single-seam change.
+
+## The defect: a server "preference" any client could silently outvote
+
+`resolveProviderAndModel` opened with this, before it looked at a single box:
+
+```ts
+if (preferredModel && preferredProvider) {
+  return { model: preferredModel, provider: preferredProvider };
+}
+```
+
+The dashboard persists its last dropdown pick as `provider::model` in
+localStorage (`state.settings.llmModel`) and `buildLlmContext()` replays it on
+**every** request. So the box that actually ran the work was decided by whatever
+each browser had saved. The server's ordered preference list only ever applied
+to a first-time tab.
+
+**This is the part worth remembering: flipping the server's preference would
+have measured as "fixed" on a clean browser profile and changed nothing in any
+real tab.** A caller hint is now honoured only when it names the Jetson;
+anything else is ignored and logged at WARN.
+
+Second half of the same bug: `GET /wallgarden/models` advertised every box, so
+the settings dropdown offered a choice the backend would now refuse — a UI that
+lies about what it can do. It returns only the Jetson.
+
+## The model id stays discovered, not hardcoded
+
+`queryVllmBox` still reads the live id from the box's `/v1/models`.
+`EXPECTED_JETSON_MODEL` is an **assertion that warns on drift, not the source of
+truth**. Two reasons this matters here:
+
+- This Jetson has been re-provisioned before (it served gemma-4-31B until
+  2026-08).
+- Prism resolves a request by model **name** and re-homes it to whichever box
+  serves that name, ignoring the caller's provider slug. A stale hardcoded
+  string would therefore not fail — it would quietly run the job somewhere else.
+
+## What proved it — the GPU's own counter, not our own logs
+
+A service that reports `provider=vllm` is reporting its own intent. The
+independent oracle is each box's `vllm:request_success_total` in `/metrics`,
+sampled before and after. Sending `provider=vllm-2` and
+`model=deepseek-v4-flash-0731` **explicitly** — exactly what a stale tab
+replays:
+
+```
+brainstorm + rateTopics:                             jetson +2   goldspark +0
+taste-profile / judge-topics / classify-candidates:  jetson +3   goldspark +0
+```
+
+Gold Spark's counter sat at 113 across every probe. Crucially, it was **online
+and idle** in the same log line that shows the hint being refused — so this is a
+deliberate refusal, not a fallback firing because the other box happened to be
+down. That distinction is the entire test; without it the evidence is worthless:
+
+```
+Discovered 3 vLLM boxes: Jetson=online (cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit),
+  Gold Spark=online (deepseek-v4-flash-0731), Jetson=online (embeddinggemma)
+WARN  Ignoring client model hint vllm-2::deepseek-v4-flash-0731
+      — pinned to vllm::cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit
+INFO  Brainstorm returned 10 unique topics from 1/1 batches
+      via vllm/cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit
+```
+
+Note the third discovered box is **also nicknamed "Jetson"** but serves
+`embeddinggemma` on :8001. The filter keys on `id === "vllm"`; filtering on the
+nickname would have selected the embedding model.
+
+## Tests
+
+`src/services/wallgarden/__tests__/JetsonPin.test.ts` drives the real seam —
+discovery, resolution and the outbound prism body — through a `fetch` stub,
+because the bug is invisible to a parser test. All four assertions were
+confirmed **red** against the previous resolver before being accepted:
+
+| assertion | failure on old code |
+| --- | --- |
+| sends the Jetson model while Gold Spark is online | got `deepseek-v4-flash-0731` |
+| ignores a stale Gold Spark client hint | got `deepseek-v4-flash-0731` |
+| fails loudly when the Jetson is down | resolved instead of rejecting |
+| only advertises the Jetson | got `[]` |
+
+A green test that never fails on the unfixed code proves nothing; that column is
+the point of the table.
+
+## Open items
+
+- **No shim concurrency cap for the Jetson.** `DEFAULT_MAX_CONCURRENT` in
+  `src/services/vllm/VllmShimService.ts` caps only `gold-spark` at 4. The Jetson
+  is the slower box (~25 tok/s) and `brainstormTopics` fans out parallel
+  batches. If batches start thrashing, set
+  `VLLM_SHIM_MAX_CONCURRENT_JETSON` — the lever already exists and is read per
+  call, so it needs a restart but no rebuild.
+- **`VllmModelSyncService.test.ts` has 5 failing tests.** Confirmed
+  **pre-existing** by running that file in a detached worktree at pristine
+  HEAD — identical 5 failures. Unrelated to this change and left alone; it
+  concerns prism settings auto-healing.
+- `max_model_len` on the Jetson is **65536**. Several notes across these repos
+  still assume 8192 / 16384 / 100k — all stale.
+
+---
+
 # HANDOFF — Postgres is gone, and `/platform/*` could never have worked (2026-08-19)
 
 **Deployed:** no. Committed on `remove-postgres` (`8a813c1`) and pushed; the
