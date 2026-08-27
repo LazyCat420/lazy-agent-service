@@ -108,7 +108,21 @@ export const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || "
 // httpx attempts) meet or exceed it, so the bridge aborted them right before
 // their retry could answer — the #1 tool-failure cause in 7d telemetry
 // (2026-07-23: ~40 "operation was aborted" failures across 9 tools).
-export const SLOW_TOOL_TIMEOUT_MS = Number(process.env.SLOW_TOOL_TIMEOUT_MS || "60000");
+//
+// ⚠ Ceiling: prism's MCP client gives up at a fixed 60s (SDK default, never
+// overridden on its agentic path). 2026-08-26: this was 60000 — an exact tie
+// the client always wins because its clock starts first, so a slow tool
+// surfaced as protocol error -32001 instead of a structured tool result
+// (cycle-v3-1787786020/KSS: two -32001s → empty-output death spiral). The
+// budget must satisfy: SLOW_TOOL_TIMEOUT_MS + ToolCallGuard's 15s acquire
+// wait <= MCP_TOOL_DEADLINE_MS < 60s. Pinned by McpDeadline.test.ts.
+export const SLOW_TOOL_TIMEOUT_MS = Number(process.env.SLOW_TOOL_TIMEOUT_MS || "40000");
+// Hard deadline for one MCP tool call as seen by the MCP server adapter
+// (McpAdapter). Strictly below prism's 60s so WE answer with a structured
+// TOOL_TIMEOUT result the model can act on, instead of the MCP client
+// cancelling with -32001 — which reads as an unanswerable protocol failure
+// and (2026-08-26) fed prism's empty-output recovery loop.
+export const MCP_TOOL_DEADLINE_MS = Number(process.env.MCP_TOOL_DEADLINE_MS || "55000");
 export const SLOW_TOOLS = new Set(
   (process.env.SLOW_TOOLS ||
     "lazy_web_search,scrape_url,read_url,get_sec_filings,run_tool_chain,get_market_map_data,get_ticker_summary,get_finnhub_news")
@@ -147,6 +161,7 @@ const CONFIG = {
   LAZY_TOOL_SERVICE_API_KEY,
   EXECUTION_TIMEOUT_MS,
   SLOW_TOOL_TIMEOUT_MS,
+  MCP_TOOL_DEADLINE_MS,
   SLOW_TOOLS,
   CACHE_TTL_MS,
   TRADING_SERVICE_URL,

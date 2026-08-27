@@ -210,6 +210,74 @@ export class VllmShimService {
     return body;
   }
 
+  /**
+   * Repair the degenerate message tails prism's in-loop recovery produces,
+   * and normalize mid-conversation system turns for chat templates that only
+   * honor a leading system message. Exported for unit tests. Pure /
+   * copy-on-write: returns the SAME body object when nothing needs rewriting.
+   *
+   * Why (2026-08-26, cycle-v3-1787786020/KSS): after two tool timeouts,
+   * prism's empty-output recovery appended up to four IDENTICAL
+   * `<empty-output-recovery>` role:"system" messages with no assistant/user
+   * turn between them — a degenerate suffix DeepSeek answered with a lone EOS,
+   * four times (34,048/34,342 input tokens cache-read; outputTokens=1).
+   * Prism demotes non-leading system messages only for models matching
+   * "qwen3.6" (its own TEMP PATCH in vllm.ts), so every other model gets the
+   * raw stack. Prism is read-only upstream; this shim carries ALL prism→vLLM
+   * traffic, so the repair lives here:
+   *
+   *   1. collapse CONSECUTIVE duplicate `<empty-output-recovery>` messages
+   *      into one (identical content, same role);
+   *   2. demote non-leading role:"system" → role:"user" — unconditionally,
+   *      for every model (idempotent where prism already did it).
+   *
+   * Kill switch: VLLM_SHIM_REWRITE_MESSAGES=false restores pass-through.
+   */
+  public static rewriteMessages(body: Record<string, unknown>): Record<string, unknown> {
+    if ((process.env.VLLM_SHIM_REWRITE_MESSAGES || "true").toLowerCase() === "false") return body;
+    const messages = body?.messages;
+    if (!Array.isArray(messages) || messages.length === 0) return body;
+
+    let collapsed = 0;
+    let demoted = 0;
+    const rewritten: unknown[] = [];
+    for (const raw of messages) {
+      const msg = raw as { role?: unknown; content?: unknown };
+      const prev = rewritten[rewritten.length - 1] as { role?: unknown; content?: unknown } | undefined;
+
+      // 1. Collapse a consecutive exact duplicate of an empty-output-recovery
+      //    nudge. Only that tag: it is the one message prism provably stacks,
+      //    and an exact-duplicate constraint keeps this transform inert for
+      //    every legitimate repeated message shape we have not seen.
+      if (
+        prev &&
+        typeof msg?.content === "string" &&
+        msg.content.includes("<empty-output-recovery>") &&
+        prev.role === msg.role &&
+        prev.content === msg.content
+      ) {
+        collapsed += 1;
+        continue;
+      }
+      rewritten.push(raw);
+    }
+
+    const out = rewritten.map((raw, index) => {
+      const msg = raw as { role?: unknown };
+      if (index !== 0 && msg?.role === "system") {
+        demoted += 1;
+        return { ...(raw as Record<string, unknown>), role: "user" };
+      }
+      return raw;
+    });
+
+    if (collapsed === 0 && demoted === 0) return body;
+    logger.warn(
+      `[VllmShim] rewriteMessages: collapsed ${collapsed} duplicate empty-output-recovery message(s), demoted ${demoted} non-leading system message(s) to user (${messages.length} → ${out.length} messages)`,
+    );
+    return { ...body, messages: out };
+  }
+
   /** Rolling tallies for the thinking-flag arrival report. */
   private static thinkingSeen = { absent: 0, off: 0, on: 0, alreadyMirrored: 0 };
   private static thinkingReportedAt = 0;
@@ -478,6 +546,9 @@ export class VllmShimService {
       // every V3 agent call and a per-request line would bury the log.
       this.recordThinkingFlag(body as Record<string, unknown>);
       body = this.translateChatTemplateKwargs({ ...req.body });
+      // Repair degenerate recovery tails + non-leading system turns before
+      // the chat template sees them (copy-on-write; identity when clean).
+      body = this.rewriteMessages(body as Record<string, unknown>);
     }
 
     const isEmbedPost = basePath === "/v1/embeddings" && req.method === "POST" && !!body && typeof body === "object";
