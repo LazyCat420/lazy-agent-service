@@ -711,8 +711,8 @@
       "type": "object",
       "properties": {
         "entry_id": {
-          "type": "integer",
-          "description": "The exact entry_id (from whiteboard_read) to annotate."
+          "type": "string",
+          "description": "The exact entry_id from whiteboard_read (a string like 'wb_1a2b3c4d5e')."
         },
         "note": {
           "type": "string",
