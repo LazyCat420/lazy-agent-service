@@ -211,6 +211,102 @@ export class VllmShimService {
   }
 
   /**
+   * DeepSeek DSML tool call tags:
+   * Supports both full-width vertical bar (｜) and standard ASCII (|):
+   * <｜tool calls｜> ... <｜tool_call｜> ... <｜end of tool call｜>
+   */
+  private static readonly DEEPSEEK_TOOL_CALLS_HEADER_RE = /<[｜|]tool calls[｜|]>/i;
+  private static readonly DEEPSEEK_TOOL_CALL_BLOCK_RE =
+    /<[｜|]tool_call[｜|]>([\s\S]*?)<[｜|]end of tool call[｜|]>/gi;
+
+  /**
+   * Normalizes DeepSeek DSML tool calls embedded in `choices[0].message.content`
+   * into standard OpenAI `tool_calls: [...]` format.
+   *
+   * If `tool_calls` is already present or no DSML tool tags are found, the response
+   * is returned unmodified.
+   */
+  public static normalizeToolCalls<T extends Record<string, any>>(response: T): T {
+    if (!response || !Array.isArray(response.choices)) {
+      return response;
+    }
+
+    let modified = false;
+    const choices = response.choices.map((choice: any) => {
+      const msg = choice?.message;
+      if (!msg || typeof msg.content !== "string") {
+        return choice;
+      }
+
+      // If tool_calls already exists and is non-empty, do not overwrite.
+      if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+        return choice;
+      }
+
+      const content: string = msg.content;
+      if (!VllmShimService.DEEPSEEK_TOOL_CALLS_HEADER_RE.test(content) && !content.includes("tool_call")) {
+        return choice;
+      }
+
+      const toolCalls: Array<{
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+      }> = [];
+
+      let match: RegExpExecArray | null;
+      VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.lastIndex = 0;
+      while ((match = VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.exec(content)) !== null) {
+        let rawCall = match[1].trim();
+        // Strip markdown fences if present (e.g. ```json ... ```)
+        if (rawCall.startsWith("```")) {
+          rawCall = rawCall.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        }
+
+        try {
+          const parsed = JSON.parse(rawCall);
+          const toolName = parsed.name || parsed.function?.name || parsed.tool_name;
+          const toolArgs = parsed.arguments ?? parsed.parameters ?? parsed.args ?? {};
+          if (toolName) {
+            toolCalls.push({
+              id: `call_${Math.random().toString(36).slice(2, 11)}`,
+              type: "function",
+              function: {
+                name: String(toolName),
+                arguments: typeof toolArgs === "string" ? toolArgs : JSON.stringify(toolArgs),
+              },
+            });
+          }
+        } catch (err: any) {
+          logger.warn(`[VllmShim] Failed to parse DeepSeek DSML tool call: ${err.message}. Raw: ${rawCall}`);
+        }
+      }
+
+      if (toolCalls.length === 0) {
+        return choice;
+      }
+
+      modified = true;
+      // Clean content by removing <｜tool calls｜> and all <｜tool_call｜>...<｜end of tool call｜> blocks
+      let cleanedContent = content
+        .replace(/<[｜|]tool calls[｜|]>/gi, "")
+        .replace(VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE, "")
+        .trim();
+
+      return {
+        ...choice,
+        message: {
+          ...msg,
+          content: cleanedContent.length > 0 ? cleanedContent : null,
+          tool_calls: toolCalls,
+        },
+      };
+    });
+
+    return modified ? ({ ...response, choices } as T) : response;
+  }
+
+  /**
    * Repair the degenerate message tails prism's in-loop recovery produces,
    * and normalize mid-conversation system turns for chat templates that only
    * honor a leading system message. Exported for unit tests. Pure /
@@ -677,9 +773,24 @@ export class VllmShimService {
         return res.end();
       }
 
-      // Non-stream: forward the raw body untouched (no JSON re-encode — keeps
-      // /metrics text and any non-JSON upstream responses byte-identical).
+      // Non-stream: if application/json and /v1/chat/completions, normalize any
+      // DeepSeek DSML tool calls back into standard OpenAI tool_calls schema.
       const buf = Buffer.from(await response.arrayBuffer());
+      if (
+        upstreamContentType.includes("application/json") &&
+        originalPath.includes("/chat/completions")
+      ) {
+        try {
+          const text = buf.toString("utf8");
+          if (text.includes("tool_call") || text.includes("tool calls")) {
+            const parsed = JSON.parse(text);
+            const normalized = VllmShimService.normalizeToolCalls(parsed);
+            return res.end(JSON.stringify(normalized));
+          }
+        } catch {
+          // If JSON parse fails, fall through and send raw buf
+        }
+      }
       return res.end(buf);
     } catch (error: any) {
       logger.error(`[VllmShim] Failed to proxy ${originalPath}: ${error.message}`);
