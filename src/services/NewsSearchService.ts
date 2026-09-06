@@ -43,6 +43,11 @@
 // ============================================================
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
+import {
+  CATEGORIES,
+  editorialStatus,
+  topHeadlines,
+} from "./EditorialHeadlinesService.ts";
 
 export interface NewsItem {
   title: string;
@@ -51,6 +56,26 @@ export interface NewsItem {
   source: string;
   snippet: string;
   date: string;
+  /** Section the story was found in. Top-headlines path only. */
+  category?: string;
+  /** How many independent newsrooms led with it. Top-headlines path only. */
+  consensus?: number;
+  /** A Google redirect link: do not scrape it, it has no article photo. */
+  stub?: boolean;
+}
+
+export interface NewsSearchResult {
+  items: NewsItem[];
+  /** Which mechanism answered: "editorial" | "editorial:stale" | a provider name | "". */
+  source: string;
+}
+
+/** Options that exist for the bench and the provider audit, not for callers. */
+export interface NewsSearchDebug {
+  /** Pin the mechanism: "keyed" skips the editorial feeds entirely. */
+  source?: string;
+  /** Pin one keyed provider by name, ignoring rotation order and budgets. */
+  provider?: string;
 }
 
 interface Provider {
@@ -341,23 +366,48 @@ export async function newsSearch(
   topic: string,
   limit = 6,
   country = DEFAULT_COUNTRY,
-): Promise<NewsItem[]> {
+  category = "",
+  debug: NewsSearchDebug = {},
+): Promise<NewsSearchResult> {
   const query = (topic || "").trim();
   const region = (country || "").trim().toLowerCase();
+  const section = (category || "").trim().toLowerCase();
   // An EMPTY topic is a real request — "what's going on in the news" — and it
   // must go to each provider's top-headlines endpoint, never to a keyword
   // search. It used to be turned into a search for the literal words "top
   // stories" by the caller, which matches roundup pages containing that phrase.
   const wantTop = !query;
 
+  // THE TOP-HEADLINES PATH IS EDITORIAL. A keyed provider's "top" endpoint is
+  // whatever that vendor decided the words mean, and at least one of them
+  // (currentsapi /latest-news) means "published in the last few minutes" —
+  // which served a Ruth's Chris solo-show listing and a college football recap
+  // as the top stories of the day, scoring 0.00 against eight independent
+  // newsrooms while Google's own front page scored 0.75 on the same minute.
+  // The keyed providers stay exactly as they are for a TOPIC search, where
+  // they are the better instrument, and remain the fallback here.
+  if (wantTop && debug.source !== "keyed") {
+    try {
+      const ed = await topHeadlines({ country: region, category: section, limit });
+      if (ed.items.length) {
+        return { items: ed.items, source: ed.stale ? "editorial:stale" : "editorial" };
+      }
+      logger.warn("[NewsSearch] editorial feeds returned nothing; falling back to keyed providers");
+    } catch (err) {
+      logger.warn(`[NewsSearch] editorial path threw, falling back to keyed: ${String(err)}`);
+    }
+  }
+
   const now = Date.now();
-  const usable = candidates(now).filter((p) => (wantTop ? !!p.top : true));
+  const usable = candidates(now)
+    .filter((p) => (wantTop ? !!p.top : true))
+    .filter((p) => !debug.provider || p.name === debug.provider);
   if (!usable.length) {
     logger.warn(
       `[NewsSearch] no usable provider for ${wantTop ? "top headlines" : `"${query}"`} ` +
         "(no keys, all cooling down, at budget, or none serves top headlines)",
     );
-    return [];
+    return { items: [], source: "" };
   }
 
   for (const p of usable) {
@@ -373,7 +423,7 @@ export async function newsSearch(
             `(${items.filter((i) => i.image).length} with images` +
             `${region ? `, country=${region}` : ", worldwide"})`,
         );
-        return items.slice(0, limit);
+        return { items: items.slice(0, limit), source: p.name };
       }
       // An empty-but-successful answer is a miss for this topic, not a fault —
       // no cooldown, just move on.
@@ -394,7 +444,7 @@ export async function newsSearch(
   logger.warn(
     `[NewsSearch] every provider missed for ${wantTop ? "top headlines" : `"${query}"`}`,
   );
-  return [];
+  return { items: [], source: "" };
 }
 
 /** Exposed for the health surface: which providers could serve a request now. */
@@ -407,5 +457,7 @@ export function newsProviderStatus(): Record<string, unknown> {
       .filter(([, until]) => until > now)
       .map(([name]) => name),
     usedToday: Object.fromEntries(PROVIDERS.map((p) => [p.name, used(p.name, now)])),
+    editorial: editorialStatus(),
+    categories: CATEGORIES,
   };
 }

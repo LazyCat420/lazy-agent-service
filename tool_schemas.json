@@ -969,26 +969,39 @@
   },
   {
     "name": "news_search",
-    "description": "Current news stories for a topic, with REAL publisher URLs and REAL article photos. Rotates across keyed news providers (gnews, worldnewsapi, currentsapi, thenewsapi, newsapi) and returns the first usable result, so no single provider's daily limit blocks a request. Prefer this over a generic web search for anything time-sensitive: web search returns news-site homepages rather than stories, and Google News RSS returns opaque redirect links with no article photo. Each item carries {title, url, image, source, snippet, date}; `url` is the publisher's own page and `image` is that story's photo, so both are safe to show and to cite. Results are limited to the US by default; pass country='gb'/'in'/etc for another market, or country='' for worldwide. An empty items list means no provider had a usable story, not an error.",
+    "description": "Current news stories, with REAL publisher URLs and REAL article photos. TWO MODES. (1) Leave `topic` EMPTY for TODAY'S TOP HEADLINES: these come from editorial front pages (Google News plus NYT/BBC/NPR/ABC), ranked by how many independent newsrooms led with the same story, and optionally narrowed with `category`. An empty topic is a VALID request and is the RIGHT way to ask for the top stories \u2014 do NOT search for the words 'top stories', which matches roundup pages containing that phrase rather than the news. (2) Give a `topic` to SEARCH: this rotates across keyed providers (gnews, worldnewsapi, currentsapi, thenewsapi, newsapi) so no single provider's daily limit blocks a request. Prefer this tool over a generic web search for anything time-sensitive: web search returns news-site homepages rather than stories. Each item carries {title, url, image, source, snippet, date}; top-headline items also carry {category, consensus, stub}. `consensus` is how many newsrooms carried the story \u2014 2 or more means it is genuinely a top story. `stub: true` marks a Google redirect link: it is safe to SHOW and to link, but it has no article photo and must NOT be scraped. Results default to the US; pass country='gb'/'in'/etc for another market, or country='' for worldwide. An empty items list means no source had a usable story, not an error.",
     "parameters": {
       "type": "object",
       "properties": {
         "topic": {
           "type": "string",
-          "description": "What to find stories about, e.g. 'James Webb space telescope' or 'federal reserve rate decision'. Multi-word topics are matched as a phrase."
+          "description": "What to find stories about, e.g. 'James Webb space telescope' or 'federal reserve rate decision'. Multi-word topics are matched as a phrase. LEAVE EMPTY (or omit) to get today's top headlines instead of a keyword search."
         },
         "limit": {
           "type": "integer",
-          "description": "How many stories to return (default 6). Some free tiers cap lower and will return fewer."
+          "description": "How many stories to return (default 6, max 30). Some keyed free tiers cap lower and will return fewer."
         },
         "country": {
           "type": "string",
           "description": "Two-letter region for the news lookup, e.g. 'us', 'gb', 'in'. Defaults to 'us'. Pass an empty string for worldwide. This is a REGION filter, not a language one: the providers are already English-only, and English-language outlets from any country match a generic query, so 'stock market' without a country returns whichever market publishes the most English copy."
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "top",
+            "us",
+            "world",
+            "business",
+            "technology",
+            "science",
+            "health",
+            "sports",
+            "entertainment"
+          ],
+          "description": "Section for the TOP-HEADLINES mode (only meaningful when `topic` is empty). Omit or use 'top' for a front page blending US, world, business and technology. Ignored when `topic` is given."
         }
       },
-      "required": [
-        "topic"
-      ]
+      "required": []
     },
     "owner_app": "shared"
   },

@@ -2,6 +2,7 @@ import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { callKey, guardedRun } from "./ToolCallGuard.ts";
 import { newsSearch, newsProviderStatus } from "./NewsSearchService.ts";
+import { CATEGORIES } from "./EditorialHeadlinesService.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 
 /**
@@ -431,16 +432,40 @@ export async function routeLocalTool(
     const country = String(
       toolArguments.country ?? toolArguments.region ?? "",
     ).trim().toLowerCase();
-    const items = country
-      ? await newsSearch(topic, limit, country)
-      : await newsSearch(topic, limit);
+    // A SECTION for the top-headlines path: world, business, technology…
+    // Without it every general ask was one undifferentiated call, so "world
+    // news" and "us news today" returned the same three stories as "top
+    // stories". Anything not a known section is ignored rather than passed on,
+    // so a model's invented category degrades to the front page.
+    const rawCategory = String(toolArguments.category ?? toolArguments.section ?? "")
+      .trim()
+      .toLowerCase();
+    const category = (CATEGORIES as readonly string[]).includes(rawCategory)
+      ? rawCategory
+      : "";
+    // Debug-only pins, deliberately absent from the tool schema so no model can
+    // reach them. They exist because the first run of the provider audit printed
+    // six identical "per provider" rows — it had no way to pin anything, and a
+    // comparison whose numbers cannot move is a statement about the probe.
+    const debug = {
+      source: String(toolArguments._source ?? "").trim().toLowerCase(),
+      provider: String(toolArguments._provider ?? "").trim().toLowerCase(),
+    };
+    const result = country
+      ? await newsSearch(topic, limit, country, category, debug)
+      : await newsSearch(topic, limit, undefined, category, debug);
     return {
       topic,
       country: country || "(default)",
-      count: items.length,
+      category: category || "(top)",
+      // Which mechanism actually answered — "editorial", "editorial:stale", or a
+      // keyed provider's name. Without it a caller cannot tell a front page from
+      // a recency feed, which is exactly how the wrong one went unnoticed.
+      source: result.source,
+      count: result.items.length,
       // An empty list is a real answer ("nothing usable right now"), not an
       // error — the caller has its own fallback and needs to tell the two apart.
-      items,
+      items: result.items,
       providers: newsProviderStatus(),
     };
   }
