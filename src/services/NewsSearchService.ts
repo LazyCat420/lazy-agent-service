@@ -59,6 +59,19 @@ interface Provider {
   dailyLimit: number;
   key: () => string | undefined;
   fetch: (topic: string, limit: number, key: string, country: string) => Promise<NewsItem[]>;
+  /**
+   * Headlines with NO topic. Optional: a provider without one is skipped for
+   * general asks rather than being handed a fake query.
+   *
+   * This exists because "what's going on in the news" used to be turned into a
+   * keyword search for the literal string "top stories", which matches ROUNDUP
+   * pages that happen to contain that phrase. Measured 2026-09-05, the general
+   * news card returned "Alix Earle sheds light on her feud with Alex Cooper and
+   * other TOP STORIES highlighted by Us for September 4" — the phrase was the
+   * match. Searching for the words "top stories" is not the same request as
+   * asking for the top stories.
+   */
+  top?: (limit: number, key: string, country: string) => Promise<NewsItem[]>;
 }
 
 /** Per-provider call counts, reset when the UTC day rolls over. */
@@ -163,6 +176,20 @@ const PROVIDERS: Provider[] = [
         date: str(a.publishedAt),
       }));
     },
+    top: async (limit, key, country) => {
+      const j = await getJson("https://gnews.io/api/v4/top-headlines", {
+        lang: "en", max: String(limit), apikey: key,
+        ...(country ? { country } : {}),
+      });
+      return mapItems(j.articles, (a) => ({
+        title: str(a.title),
+        url: str(a.url),
+        image: str(a.image),
+        source: str((a.source as Record<string, unknown>)?.name) || hostOf(str(a.url)),
+        snippet: str(a.description),
+        date: str(a.publishedAt),
+      }));
+    },
   },
   {
     name: "worldnewsapi",
@@ -202,6 +229,20 @@ const PROVIDERS: Provider[] = [
         date: str(a.published),
       }));
     },
+    top: async (limit, key, country) => {
+      const j = await getJson("https://api.currentsapi.services/v1/latest-news", {
+        language: "en", page_size: String(limit), apiKey: key,
+        ...(country ? { country: country.toUpperCase() } : {}),
+      });
+      return mapItems(j.news, (a) => ({
+        title: str(a.title),
+        url: str(a.url),
+        image: str(a.image) === "None" ? "" : str(a.image),
+        source: hostOf(str(a.url)),
+        snippet: str(a.description),
+        date: str(a.published),
+      }));
+    },
   },
   {
     name: "thenewsapi",
@@ -210,6 +251,20 @@ const PROVIDERS: Provider[] = [
     fetch: async (topic, limit, key, country) => {
       const j = await getJson("https://api.thenewsapi.com/v1/news/all", {
         search: topic, language: "en", limit: String(Math.min(limit, 3)), api_token: key,
+        ...(country ? { locale: country } : {}),
+      });
+      return mapItems(j.data, (a) => ({
+        title: str(a.title),
+        url: str(a.url),
+        image: str(a.image_url),
+        source: str(a.source) || hostOf(str(a.url)),
+        snippet: str(a.description) || str(a.snippet),
+        date: str(a.published_at),
+      }));
+    },
+    top: async (limit, key, country) => {
+      const j = await getJson("https://api.thenewsapi.com/v1/news/top", {
+        language: "en", limit: String(Math.min(limit, 3)), api_token: key,
         ...(country ? { locale: country } : {}),
       });
       return mapItems(j.data, (a) => ({
@@ -233,6 +288,21 @@ const PROVIDERS: Provider[] = [
       const j = await getJson("https://newsapi.org/v2/everything", {
         q: topic, language: "en", pageSize: String(limit),
         sortBy: "relevancy", apiKey: key,
+      });
+      return mapItems(j.articles, (a) => ({
+        title: str(a.title),
+        url: str(a.url),
+        image: str(a.urlToImage),
+        source: str((a.source as Record<string, unknown>)?.name) || hostOf(str(a.url)),
+        snippet: str(a.description),
+        date: str(a.publishedAt),
+      }));
+    },
+    top: async (limit, key, country) => {
+      // /top-headlines DOES take a country, unlike /everything above.
+      const j = await getJson("https://newsapi.org/v2/top-headlines", {
+        language: "en", pageSize: String(limit), apiKey: key,
+        ...(country ? { country } : {}),
       });
       return mapItems(j.articles, (a) => ({
         title: str(a.title),
@@ -273,13 +343,20 @@ export async function newsSearch(
   country = DEFAULT_COUNTRY,
 ): Promise<NewsItem[]> {
   const query = (topic || "").trim();
-  if (!query) return [];
   const region = (country || "").trim().toLowerCase();
+  // An EMPTY topic is a real request — "what's going on in the news" — and it
+  // must go to each provider's top-headlines endpoint, never to a keyword
+  // search. It used to be turned into a search for the literal words "top
+  // stories" by the caller, which matches roundup pages containing that phrase.
+  const wantTop = !query;
 
   const now = Date.now();
-  const usable = candidates(now);
+  const usable = candidates(now).filter((p) => (wantTop ? !!p.top : true));
   if (!usable.length) {
-    logger.warn("[NewsSearch] no usable provider (no keys, all cooling down, or budget spent)");
+    logger.warn(
+      `[NewsSearch] no usable provider for ${wantTop ? "top headlines" : `"${query}"`} ` +
+        "(no keys, all cooling down, at budget, or none serves top headlines)",
+    );
     return [];
   }
 
@@ -287,7 +364,9 @@ export async function newsSearch(
     const started = Date.now();
     try {
       noteUse(p.name, started);
-      const items = await p.fetch(query, limit, p.key()!, region);
+      const items = wantTop
+        ? await p.top!(limit, p.key()!, region)
+        : await p.fetch(query, limit, p.key()!, region);
       if (items.length) {
         logger.info(
           `[NewsSearch] ${p.name} -> ${items.length} items in ${Date.now() - started}ms ` +
@@ -298,16 +377,23 @@ export async function newsSearch(
       }
       // An empty-but-successful answer is a miss for this topic, not a fault —
       // no cooldown, just move on.
-      logger.info(`[NewsSearch] ${p.name} returned 0 items for "${query}"`);
+      logger.info(
+        `[NewsSearch] ${p.name} returned 0 items for ${wantTop ? "top headlines" : `"${query}"`}`,
+      );
     } catch (err) {
       // Quota exhaustion and outages look the same from here, and both mean
       // "stop asking for a while".
       cooldown.set(p.name, Date.now() + COOLDOWN_MS);
-      logger.warn(`[NewsSearch] ${p.name} failed (${Date.now() - started}ms): ${String(err)}`);
+      logger.warn(
+        `[NewsSearch] ${p.name} ${wantTop ? "top" : "search"} failed ` +
+          `(${Date.now() - started}ms): ${String(err)}`,
+      );
     }
   }
 
-  logger.warn(`[NewsSearch] every provider missed for "${query}"`);
+  logger.warn(
+    `[NewsSearch] every provider missed for ${wantTop ? "top headlines" : `"${query}"`}`,
+  );
   return [];
 }
 

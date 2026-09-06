@@ -421,9 +421,10 @@ export async function routeLocalTool(
   if (tName === "news_search") {
     const topic = String(toolArguments.topic ?? toolArguments.query ?? "").trim();
     const limit = Number(toolArguments.limit ?? 6) || 6;
-    if (!topic) {
-      return { error: "news_search requires a 'topic'", is_error: true };
-    }
+    // An empty topic is VALID and means "top headlines" — it routes to each
+    // provider's top-headlines endpoint. Rejecting it forced callers to invent a
+    // query, and html-notes invented the literal string "top stories", which
+    // keyword-matched roundup pages that contain that phrase.
     // Region, not just language. Every provider was being asked for English and
     // no country, and English is not a region — a generic query came back
     // dominated by Indian English-language outlets. Empty string = worldwide.
