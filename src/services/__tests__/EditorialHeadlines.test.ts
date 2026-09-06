@@ -112,6 +112,45 @@ describe("mergeAndRank", () => {
     expect(out.find((i) => /Republican midterms/i.test(i.title))!.category).toBe("top");
   });
 
+  it("a SECTION ask returns that section's stories, not the front page's", () => {
+    // Live 2026-09-05, the first build of this answered `category=business`
+    // with Putin/Iran/the arch/Nepal floods: the publisher front pages were
+    // fetched alongside the Business section and, carrying more consensus,
+    // outranked every business story. A section ask must be ANSWERED by the
+    // section — publisher feeds may only enrich and confirm what it carried.
+    const out = mergeAndRank(feeds(), { limit: 10, seedFeeds: ["google:world"] });
+    expect(out.length).toBeGreaterThan(0);
+    for (const item of out) {
+      expect(item.category).toBe("world");
+    }
+    // and enrichment still happened: the tankers story is in google:world and
+    // in NYT, so it keeps the real article URL and gains consensus.
+    const tankers = out.find((i) => /tankers/i.test(i.title))!;
+    expect(tankers.url).toContain("nytimes.com");
+    expect(tankers.consensus).toBe(2);
+  });
+
+  it("drops shopping and deals posts, which the section feeds carry as news", () => {
+    // Google's BUSINESS and TECHNOLOGY sections mix commerce in with reporting.
+    // Live, `category=technology` returned a Sonos soundbar at "a record low"
+    // and "5 Excellent 90+ Rated Steam Games For Under $25" — real posts, and
+    // not the technology news anyone asked for.
+    const shop = parseFeed(
+      `<rss><channel>
+       <item><title>Amazon Labor Day sales worth adding to your cart: Deals from Apple</title><link>https://x.com/a</link></item>
+       <item><title>Sonos Arc Ultra Dolby Atmos Soundbar Drops Back to a Record Low</title><link>https://x.com/b</link></item>
+       <item><title>You Can Get 5 Excellent 90+ Rated Steam Games For Under $25 Right Now</title><link>https://x.com/c</link></item>
+       <item><title>Best cordless vacuum deals for the long weekend</title><link>https://x.com/d</link></item>
+       <item><title>OpenAI acknowledges wiki incident and need for more transparency</title><link>https://x.com/e</link></item>
+       </channel></rss>`,
+      "google:technology",
+    );
+    const out = mergeAndRank({ "google:technology": shop }, { limit: 10 });
+    expect(out.map((i) => i.title)).toEqual([
+      "OpenAI acknowledges wiki incident and need for more transparency",
+    ]);
+  });
+
   it("never returns the same story twice, and honours the limit", () => {
     const out = mergeAndRank(feeds(), { limit: 3 });
     expect(out).toHaveLength(3);

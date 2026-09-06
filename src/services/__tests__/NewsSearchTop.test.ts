@@ -92,3 +92,30 @@ describe("newsSearch: an empty topic means today's headlines", () => {
     expect(topHeadlines).not.toHaveBeenCalled();
   });
 });
+
+describe("keyed providers repeat themselves", () => {
+  it("returns each story once", async () => {
+    // Live 2026-09-05: eight rows, six of them the same 10,000 Maniacs article;
+    // and on the topic path five rows, three of them one Supreme Court story.
+    topHeadlines.mockResolvedValue({ items: [], stale: false, feeds: [] });
+    const dupes = {
+      articles: [
+        { title: "Supreme Court sides with Republicans in fight over broadcast ad rates",
+          url: "https://a.com/1", image: "", description: "", publishedAt: "x",
+          source: { name: "A" } },
+        { title: "Supreme Court sides with Republicans in fight over broadcast ad rates",
+          url: "https://a.com/2", image: "", description: "", publishedAt: "x",
+          source: { name: "A" } },
+        { title: "Emerging Market Currencies Rally For Longest Streak Since 2007",
+          url: "https://a.com/3", image: "", description: "", publishedAt: "x",
+          source: { name: "B" } },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true, json: async () => dupes, text: async () => "",
+    })));
+    const out = await newsSearch("supreme court", 6);
+    const titles = out.items.map((i) => i.title);
+    expect(new Set(titles).size).toBe(titles.length);
+  });
+});

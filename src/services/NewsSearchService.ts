@@ -46,6 +46,8 @@ import logger from "../utils/logger.ts";
 import {
   CATEGORIES,
   editorialStatus,
+  sameStory,
+  titleTokens,
   topHeadlines,
 } from "./EditorialHeadlinesService.ts";
 
@@ -157,15 +159,36 @@ async function getJson(
   }
 }
 
+/**
+ * Rows -> items, with the same story never returned twice.
+ *
+ * The providers repeat themselves and nothing here used to notice. Measured
+ * 2026-09-05, one live call for the top stories returned eight rows of which
+ * SIX were the same 10,000 Maniacs article, and a topic search returned five
+ * rows of which three were one Supreme Court story. A card built from that
+ * shows the user one story pretending to be six, and every downstream count —
+ * "8 stories" in a subtitle — is a lie told confidently.
+ */
 function mapItems(
   rows: unknown,
   f: (r: Record<string, unknown>) => NewsItem,
 ): NewsItem[] {
   if (!Array.isArray(rows)) return [];
-  return rows
-    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
-    .map(f)
-    .filter((i) => i.title && i.url);
+  const out: NewsItem[] = [];
+  const seenUrl = new Set<string>();
+  const seenTokens: Array<Set<string>> = [];
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    const item = f(r as Record<string, unknown>);
+    if (!item.title || !item.url) continue;
+    if (seenUrl.has(item.url)) continue;
+    const tokens = titleTokens(item.title);
+    if (seenTokens.some((t) => sameStory(t, tokens))) continue;
+    seenUrl.add(item.url);
+    seenTokens.push(tokens);
+    out.push(item);
+  }
+  return out;
 }
 
 // Every provider was being sent `language: "en"` and NO country, and English is

@@ -250,6 +250,33 @@ export function sameStory(a: Set<string>, b: Set<string>, ratio = 0.3): boolean 
   return shared / Math.min(a.size, b.size) >= ratio;
 }
 
+/**
+ * Commerce wearing a news feed's clothes.
+ *
+ * Google's BUSINESS and TECHNOLOGY sections mix affiliate roundups in with
+ * reporting, and they are indistinguishable from news by every structural
+ * signal — real publisher, real date, real photo, high in the feed. Live
+ * 2026-09-05 a technology ask returned a Sonos soundbar "back to a record low"
+ * and "5 Excellent 90+ Rated Steam Games For Under $25". Matched on the title,
+ * because that is where the tell is.
+ */
+const SHOPPING = [
+  /\bdeals?\b/i,
+  /\bsales?\b.*\b(cart|shop|buy|save)\b/i,
+  /\b(labor day|black friday|cyber monday|prime day)\b.*\b(sale|deal|shop)/i,
+  /\brecord low\b/i,
+  /\b\d+% off\b/i,
+  /\bworth adding to your cart\b/i,
+  /\byou can get\b.*\bfor (under|just) \$/i,
+  /\bbest\b.*\b(deals|discounts|prices)\b/i,
+  /\b(save|snag|grab) \$?\d+/i,
+  /\bcoupon\b/i,
+];
+
+export function isShopping(title: string): boolean {
+  return SHOPPING.some((re) => re.test(title || ""));
+}
+
 /** "google:world" -> "google". Consensus counts newsrooms, not feeds. */
 function newsroomOf(feed: string): string {
   return feed.split(":")[0];
@@ -270,9 +297,19 @@ function categoryOf(feed: string): string {
  */
 export function mergeAndRank(
   feeds: Record<string, EditorialItem[]>,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; seedFeeds?: string[] } = {},
 ): EditorialItem[] {
   const limit = opts.limit ?? 10;
+  // Which feeds may INTRODUCE a story, as opposed to merely confirming one.
+  //
+  // For a section ask the answer must come from that section. The publisher
+  // front pages are still fetched — they supply the real article URL, the photo
+  // and the second opinion that makes consensus meaningful — but they carry the
+  // day's biggest general news, which outranks anything sector-specific. Live,
+  // the first build answered "business news" with Putin, Iran, a triumphal arch
+  // and the Nepal floods, none of which is business news.
+  const seeds = opts.seedFeeds;
+  const canSeed = (feed: string) => !seeds || seeds.includes(feed);
   const merged: Array<EditorialItem & { rooms: Set<string>; tokens: Set<string> }> = [];
 
   for (const [feed, items] of Object.entries(feeds)) {
@@ -280,6 +317,7 @@ export function mergeAndRank(
       const tokens = titleTokens(item.title);
       const hit = merged.find((m) => sameStory(m.tokens, tokens));
       if (!hit) {
+        if (!canSeed(feed) || isShopping(item.title)) continue;
         merged.push({
           ...item,
           feed,
@@ -420,7 +458,11 @@ export async function topHeadlines(opts: {
 
   // Merge generously, then cache the long list so a later smaller limit is a
   // cache hit rather than a refetch.
-  const ranked = mergeAndRank(feeds, { limit: 30 });
+  const sectionAsked = Boolean(category && GOOGLE_SECTION[category]);
+  const ranked = mergeAndRank(feeds, {
+    limit: 30,
+    seedFeeds: sectionAsked ? [`google:${category}`] : undefined,
+  });
   cache.set(key, { items: ranked, at: now });
 
   const consensus = ranked.filter((i) => (i.consensus ?? 0) >= 2).length;
