@@ -58,7 +58,7 @@ interface Provider {
   /** Free-tier requests per day. Used to spread load, not enforced by the API. */
   dailyLimit: number;
   key: () => string | undefined;
-  fetch: (topic: string, limit: number, key: string) => Promise<NewsItem[]>;
+  fetch: (topic: string, limit: number, key: string, country: string) => Promise<NewsItem[]>;
 }
 
 /** Per-provider call counts, reset when the UTC day rolls over. */
@@ -67,6 +67,9 @@ const usage = new Map<string, { day: string; count: number }>();
 const cooldown = new Map<string, number>();
 
 const COOLDOWN_MS = 10 * 60 * 1000;
+
+/** Region for news lookups when the caller does not name one. Empty = worldwide. */
+const DEFAULT_COUNTRY = (CONFIG.NEWS_DEFAULT_COUNTRY ?? "us").trim().toLowerCase();
 
 function utcDay(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
@@ -127,14 +130,29 @@ function mapItems(
     .filter((i) => i.title && i.url);
 }
 
+// Every provider was being sent `language: "en"` and NO country, and English is
+// not a region. Indian English-language outlets — Economic Times, Hindustan
+// Times, Times of India — publish enormous volume, so a generic query like
+// "stock market" or an empty top-stories query was reliably dominated by them.
+// Measured 2026-09-05, "stock market news" through html-notes returned
+// "7.8% GDP growth fails to lift Indian indices", "Former Tata Technologies CEO
+// sells Rs 165 crore stake" and economictimes.indiatimes.com. Those ARE stock
+// market stories — just not the caller's market, which is why no amount of
+// relevance filtering downstream could fix it: the articles are on-topic and
+// still wrong.
+//
+// Each API spells the region differently, and newsapi's /everything has no
+// country parameter at all, so it stays unfiltered (it is already the
+// last-resort backstop). Empty country = worldwide, the previous behaviour.
 const PROVIDERS: Provider[] = [
   {
     name: "gnews",
     dailyLimit: 100,
     key: () => CONFIG.GNEWS_API_KEY,
-    fetch: async (topic, limit, key) => {
+    fetch: async (topic, limit, key, country) => {
       const j = await getJson("https://gnews.io/api/v4/search", {
         q: topic, lang: "en", max: String(limit), apikey: key,
+        ...(country ? { country } : {}),
       });
       return mapItems(j.articles, (a) => ({
         title: str(a.title),
@@ -150,9 +168,10 @@ const PROVIDERS: Provider[] = [
     name: "worldnewsapi",
     dailyLimit: 300,
     key: () => CONFIG.WORLDNEWSAPI_KEY,
-    fetch: async (topic, limit, key) => {
+    fetch: async (topic, limit, key, country) => {
       const j = await getJson("https://api.worldnewsapi.com/search-news", {
         text: topic, language: "en", number: String(limit), "api-key": key,
+        ...(country ? { "source-country": country } : {}),
       });
       return mapItems(j.news, (a) => ({
         title: str(a.title),
@@ -168,9 +187,10 @@ const PROVIDERS: Provider[] = [
     name: "currentsapi",
     dailyLimit: 600,
     key: () => CONFIG.CURRENTS_API_KEY,
-    fetch: async (topic, limit, key) => {
+    fetch: async (topic, limit, key, country) => {
       const j = await getJson("https://api.currentsapi.services/v1/search", {
         keywords: topic, language: "en", page_size: String(limit), apiKey: key,
+        ...(country ? { country: country.toUpperCase() } : {}),
       });
       return mapItems(j.news, (a) => ({
         title: str(a.title),
@@ -187,9 +207,10 @@ const PROVIDERS: Provider[] = [
     name: "thenewsapi",
     dailyLimit: 150,
     key: () => CONFIG.THENEWSAPI_KEY,
-    fetch: async (topic, limit, key) => {
+    fetch: async (topic, limit, key, country) => {
       const j = await getJson("https://api.thenewsapi.com/v1/news/all", {
         search: topic, language: "en", limit: String(Math.min(limit, 3)), api_token: key,
+        ...(country ? { locale: country } : {}),
       });
       return mapItems(j.data, (a) => ({
         title: str(a.title),
@@ -246,9 +267,14 @@ function candidates(now: number): Provider[] {
  * what to fall back to, because the fallback differs per consumer (html-notes
  * still has its Google News RSS path).
  */
-export async function newsSearch(topic: string, limit = 6): Promise<NewsItem[]> {
+export async function newsSearch(
+  topic: string,
+  limit = 6,
+  country = DEFAULT_COUNTRY,
+): Promise<NewsItem[]> {
   const query = (topic || "").trim();
   if (!query) return [];
+  const region = (country || "").trim().toLowerCase();
 
   const now = Date.now();
   const usable = candidates(now);
@@ -261,11 +287,12 @@ export async function newsSearch(topic: string, limit = 6): Promise<NewsItem[]> 
     const started = Date.now();
     try {
       noteUse(p.name, started);
-      const items = await p.fetch(query, limit, p.key()!);
+      const items = await p.fetch(query, limit, p.key()!, region);
       if (items.length) {
         logger.info(
           `[NewsSearch] ${p.name} -> ${items.length} items in ${Date.now() - started}ms ` +
-            `(${items.filter((i) => i.image).length} with images)`,
+            `(${items.filter((i) => i.image).length} with images` +
+            `${region ? `, country=${region}` : ", worldwide"})`,
         );
         return items.slice(0, limit);
       }

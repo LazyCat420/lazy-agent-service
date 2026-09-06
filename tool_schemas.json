@@ -969,7 +969,7 @@
   },
   {
     "name": "news_search",
-    "description": "Current news stories for a topic, with REAL publisher URLs and REAL article photos. Rotates across keyed news providers (gnews, worldnewsapi, currentsapi, thenewsapi, newsapi) and returns the first usable result, so no single provider's daily limit blocks a request. Prefer this over a generic web search for anything time-sensitive: web search returns news-site homepages rather than stories, and Google News RSS returns opaque redirect links with no article photo. Each item carries {title, url, image, source, snippet, date}; `url` is the publisher's own page and `image` is that story's photo, so both are safe to show and to cite. An empty items list means no provider had a usable story, not an error.",
+    "description": "Current news stories for a topic, with REAL publisher URLs and REAL article photos. Rotates across keyed news providers (gnews, worldnewsapi, currentsapi, thenewsapi, newsapi) and returns the first usable result, so no single provider's daily limit blocks a request. Prefer this over a generic web search for anything time-sensitive: web search returns news-site homepages rather than stories, and Google News RSS returns opaque redirect links with no article photo. Each item carries {title, url, image, source, snippet, date}; `url` is the publisher's own page and `image` is that story's photo, so both are safe to show and to cite. Results are limited to the US by default; pass country='gb'/'in'/etc for another market, or country='' for worldwide. An empty items list means no provider had a usable story, not an error.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -980,6 +980,10 @@
         "limit": {
           "type": "integer",
           "description": "How many stories to return (default 6). Some free tiers cap lower and will return fewer."
+        },
+        "country": {
+          "type": "string",
+          "description": "Two-letter region for the news lookup, e.g. 'us', 'gb', 'in'. Defaults to 'us'. Pass an empty string for worldwide. This is a REGION filter, not a language one: the providers are already English-only, and English-language outlets from any country match a generic query, so 'stock market' without a country returns whichever market publishes the most English copy."
         }
       },
       "required": [

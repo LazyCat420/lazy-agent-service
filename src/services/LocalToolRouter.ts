@@ -424,9 +424,18 @@ export async function routeLocalTool(
     if (!topic) {
       return { error: "news_search requires a 'topic'", is_error: true };
     }
-    const items = await newsSearch(topic, limit);
+    // Region, not just language. Every provider was being asked for English and
+    // no country, and English is not a region — a generic query came back
+    // dominated by Indian English-language outlets. Empty string = worldwide.
+    const country = String(
+      toolArguments.country ?? toolArguments.region ?? "",
+    ).trim().toLowerCase();
+    const items = country
+      ? await newsSearch(topic, limit, country)
+      : await newsSearch(topic, limit);
     return {
       topic,
+      country: country || "(default)",
       count: items.length,
       // An empty list is a real answer ("nothing usable right now"), not an
       // error — the caller has its own fallback and needs to tell the two apart.

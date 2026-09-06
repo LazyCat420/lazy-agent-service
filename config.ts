@@ -148,6 +148,10 @@ export const TREESEARCH_SERVICE_URL = process.env.TREESEARCH_SERVICE_URL || "htt
 // no secrets in this file. A provider without a key is simply skipped, so it is
 // fine for only some of these to be set.
 export const GNEWS_API_KEY = process.env.GNEWS_API_KEY;
+// Default region for news_search. "us" unless overridden; empty string means
+// worldwide (the pre-2026-09-05 behaviour, which let Indian English-language
+// outlets dominate every generic query).
+export const NEWS_DEFAULT_COUNTRY = process.env.NEWS_DEFAULT_COUNTRY ?? "us";
 export const WORLDNEWSAPI_KEY = process.env.WORLDNEWSAPI_KEY;
 export const CURRENTS_API_KEY = process.env.CURRENTS_API_KEY;
 export const THENEWSAPI_KEY = process.env.THENEWSAPI_KEY;
@@ -169,6 +173,7 @@ const CONFIG = {
   HTML_NOTES_URL,
   TREESEARCH_SERVICE_URL,
   GNEWS_API_KEY,
+  NEWS_DEFAULT_COUNTRY,
   WORLDNEWSAPI_KEY,
   CURRENTS_API_KEY,
   THENEWSAPI_KEY,
