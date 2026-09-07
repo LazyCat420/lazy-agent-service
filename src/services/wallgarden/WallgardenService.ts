@@ -66,17 +66,16 @@ You receive their taste profile: interest topics, titles of videos they actually
 HOW TO THINK:
 1. INFER THE PERSON, NOT THE LIST. Ask yourself: what kind of person likes these things? What underlying tastes connect them — aesthetics, eras, moods, level of depth, sense of humor? Generate topics for THAT person, not word-associations on the list.
 2. WEIGHT THE SIGNALS. Liked videos and watchlist saves are the strongest evidence of real taste — read their titles carefully and reverse-engineer what hooked the user. Interest topics are broader hints. Searches show current curiosity.
-3. SPREAD ACROSS THE LADDER OF DISTANCE:
-   - ~25% ADJACENT: same scene, new angle (likes "restoring old bikes" → "barn find restoration")
-   - ~40% LATERAL: same spirit, different domain (→ "antique tool restoration", "japanese joinery")
-   - ~25% WILDCARD: a bold leap that shares a deeper taste (→ "urban exploration", "industrial archaeology")
-   - ~10% TIME/CULTURE SHIFT: the same taste in another decade or country (→ "70s custom van culture", "soviet engineering")
+3. THIS REQUEST HAS ONE ROLE, stated at the end of the message. Obey it exactly:
+   - CORE: more of exactly what I already watch. Every topic must be a sub-niche, format, sub-community, or practitioner corner INSIDE a scene that is visibly in my liked videos. If I could not plausibly have already searched it myself, it is not core.
+   - ADJACENT: same scene, new angle — one step away (likes "restoring old bikes" → "barn find restoration", "vintage moped rebuild"). Same person, same room, different shelf.
+   - EXPLORE: a lateral or wildcard leap, or the same taste in another decade or country (→ "antique tool restoration", "70s custom van culture"). This is a small experiment slot: bold, but still recognisably this person.
 4. NAME THE NICHE, NOT THE CATEGORY. "cozy game devlogs" beats "video games". "desert homestead build" beats "construction". A great topic names a specific YouTube subculture, scene, or format that a real fan would type into search.
 5. MOODS AND FORMATS ARE TOPICS TOO: "ambient coding sessions", "silent workshop asmr", "engineering disasters explained", "one man sawmill" are excellent suggestions.
 
 ${ANCHOR_TEST_BLOCK}
 
-Your LATERAL and WILDCARD leaps must stay recognisably the same PERSON's taste. A leap that lands in a different personality (a cannabis grower does not become a wellness influencer) is a failed leap, not a bold one.
+Your ADJACENT and EXPLORE leaps must stay recognisably the same PERSON's taste. A leap that lands in a different personality (a cannabis grower does not become a wellness influencer) is a failed leap, not a bold one.
 
 HARD RULES:
 - NEVER suggest: individual people, character names, episode titles, cast members, or channel names.
@@ -89,6 +88,7 @@ const EXTRACT_SYSTEM_PROMPT = `/no_think
 You label videos a user LIKED on YouTube. For each video you receive an id, its title, and its channel. Name 1-3 specific niche topics the video actually belongs to — the YouTube subculture, scene, or format a fan would type into search to find more videos exactly like it.
 
 This is extraction, not brainstorming: name what IS there, grounded in the title. Use the channel name as context for inferring the niche, never as a topic itself.
+Duration and age are context: a 40-minute video is a process/long-form scene, a 3-minute one is a clip format; name the format when it is the point.
 
 ${ANCHOR_TEST_BLOCK}
 
@@ -106,10 +106,10 @@ You receive the search query plus their taste profile: interest topics, titles o
 
 HOW TO THINK:
 1. ASK WHY they searched this, given their taste profile. The same query means different things to different people — use their liked videos and watchlist to pick the right interpretation, then expand in THAT direction.
-2. SPREAD ACROSS THE LADDER OF DISTANCE from the query:
-   - ~30% ADJACENT: same subject, different angle, era, or format
-   - ~40% LATERAL: the same underlying appeal in a neighboring domain
-   - ~30% WILDCARD: a bold but taste-consistent leap they'd never search themselves
+2. The seeds are things I ALREADY engaged with — stay close; this is not a brainstorm. SPREAD from the query:
+   - ~60% ADJACENT: same subject, different angle, era, or format
+   - ~30% LATERAL: the same underlying appeal in a neighboring domain
+   - ~10% WILDCARD: a bold but taste-consistent leap they'd never search themselves
 3. NAME THE NICHE, NOT THE CATEGORY. Suggest specific YouTube subcultures, scenes, and formats a real fan would type — "cab view train rides" beats "trains".
 4. MOODS AND FORMATS ARE TOPICS TOO: "night drive pov", "process documentaries", "restoration timelapse" are excellent suggestions.
 
@@ -204,7 +204,7 @@ export interface BrainstormContext {
   tasteProfile?: string;  // LLM-written summary of the whole like history
   // Liked videos grouped into taste clusters; when present, each brainstorm
   // batch expands a DIFFERENT cluster instead of one blended context.
-  likedClusters?: { name?: string; videos: string[] }[];
+  likedClusters?: { name?: string; videos: string[]; size?: number }[];
   // Burned/failed topics rendered as negative few-shots (avoid the SHAPE).
   failedExamples?: string[];
   // MEASURED outcomes from the client's signal ledger. Unlike every other field
@@ -214,6 +214,8 @@ export interface BrainstormContext {
   // "stats" | "flat" — which context shape the client built. Echoed to the
   // caller so the two arms can be told apart when scoring them.
   promptVariant?: string;
+  // false = skip the FIT rubric in rateTopics (the free-baseline arm).
+  rateFit?: boolean;
   numTopics?: number;
   model?: string;
   provider?: string;
@@ -221,6 +223,9 @@ export interface BrainstormContext {
 
 export interface SimilarContext extends BrainstormContext {
   query: string;
+  // Every seed the ledger flushed, strongest first. `query` is seeds[0] for
+  // older clients; the model sees all of them.
+  seeds?: string[];
 }
 
 export interface LikedVideoInput {
@@ -511,7 +516,89 @@ export async function discoverModels(): Promise<VllmBoxInfo[]> {
 // faster than the single doomed call it replaces.
 const BRAINSTORM_BATCH_SIZE = 25;
 
-export async function brainstormTopics(ctx: BrainstormContext): Promise<string[]> {
+// ── Roles: decided by the BATCH, not by the model ───────────
+// The old prompt asked every batch for 25% adjacent / 40% lateral / 25%
+// wildcard / 10% time-shift — 75% of every call told to leave the user's
+// scene, at temperature 0.9-1.05, each batch seeing ONE liked cluster and
+// told to ignore the others. That quota was the manufacturer of "random
+// topics". Exploration is now a small dedicated slot instead of a share of
+// every call, and a topic's role is stamped from which batch produced it —
+// asking the model to self-label would break the truncation salvage in
+// extractTopicsFromResponse.
+export type TopicRole = "core" | "adjacent" | "explore";
+export interface BrainstormedTopic { topic: string; role: TopicRole; cluster?: string }
+export const BRAINSTORM_ROLE_MIX = { core: 0.35, adjacent: 0.50, explore: 0.15 } as const;
+export const BRAINSTORM_MAX_TOPICS = 100;   // server clamp; the client asks for 60
+export const BRAINSTORM_MAX_BATCHES = 6;
+export const ROLE_TEMPERATURE: Record<TopicRole, number> = { core: 0.6, adjacent: 0.7, explore: 0.9 };
+const MIN_BATCH = 5;
+
+type ClusterIn = { name?: string; videos: string[]; size?: number };
+export interface PlannedBatch { role: TopicRole; size: number; cluster?: ClusterIn; temperature: number }
+
+/** Integer slots per bucket by largest remainder; sums exactly to n. */
+function largestRemainder(n: number, shares: number[]): number[] {
+  const total = shares.reduce((a, b) => a + b, 0) || 1;
+  const exact = shares.map(sh => (n * sh) / total);
+  const floors = exact.map(Math.floor);
+  let left = n - floors.reduce((a, b) => a + b, 0);
+  const order = exact.map((x, i) => ({ i, frac: x - floors[i] })).sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (const { i } of order) { if (left <= 0) break; floors[i] += 1; left -= 1; }
+  return floors;
+}
+
+/**
+ * One blended CORE batch (all clusters), ADJACENT batches allocated across
+ * clusters in proportion to their size (Steck-style calibration on the topic
+ * side), and one small EXPLORE batch once there is room for it. Pure.
+ */
+export function planBrainstormBatches(requested: number, clusters: ClusterIn[]): PlannedBatch[] {
+  const n = Math.max(1, Math.min(BRAINSTORM_MAX_TOPICS, Math.floor(requested) || 0));
+  const core = Math.min(BRAINSTORM_BATCH_SIZE, Math.max(1, Math.round(n * BRAINSTORM_ROLE_MIX.core)));
+  const explore = n >= 20
+    ? Math.min(BRAINSTORM_BATCH_SIZE, Math.max(MIN_BATCH, Math.round(n * BRAINSTORM_ROLE_MIX.explore)))
+    : 0;
+  const adjacent = Math.max(0, n - core - explore);
+  const batches: PlannedBatch[] = [{ role: "core", size: core, temperature: ROLE_TEMPERATURE.core }];
+
+  if (adjacent > 0) {
+    const maxAdjBatches = BRAINSTORM_MAX_BATCHES - 1 - (explore ? 1 : 0);
+    const usable = (clusters || [])
+      .filter(c => c && Array.isArray(c.videos) && c.videos.length > 0)
+      .map(c => ({ c, size: Math.max(1, c.size ?? c.videos.length) }))
+      .sort((a, b) => b.size - a.size);
+    // The largest clusters get their own batch; everything else pools into one
+    // mixed adjacent batch so a long tail of tiny clusters cannot fan out.
+    const targeted = usable.slice(0, Math.max(0, maxAdjBatches - 1));
+    const pooledSize = usable.slice(targeted.length).reduce((a, s) => a + s.size, 0);
+    const shares = targeted.map(s => s.size).concat(pooledSize > 0 ? [pooledSize] : []);
+    const alloc = shares.length ? largestRemainder(adjacent, shares) : [adjacent];
+    let mixed = pooledSize > 0 && shares.length ? alloc[alloc.length - 1] : (targeted.length ? 0 : adjacent);
+    const adj: PlannedBatch[] = [];
+    targeted.forEach((s, i) => {
+      const want = alloc[i];
+      if (want < MIN_BATCH) { mixed += want; return; }
+      const size = Math.min(BRAINSTORM_BATCH_SIZE, want);
+      mixed += want - size;
+      adj.push({ role: "adjacent", size, cluster: s.c, temperature: ROLE_TEMPERATURE.adjacent + adj.length * 0.03 });
+    });
+    // A remainder too small to be its own call folds into the first cluster
+    // batch (bounded by the batch ceiling) rather than becoming a 3-topic call.
+    if (mixed > 0 && mixed < MIN_BATCH && adj.length && adj[0].size + mixed <= BRAINSTORM_BATCH_SIZE) {
+      adj[0].size += mixed; mixed = 0;
+    }
+    while (mixed > 0) {
+      const size = Math.min(BRAINSTORM_BATCH_SIZE, mixed);
+      adj.push({ role: "adjacent", size, temperature: ROLE_TEMPERATURE.adjacent + adj.length * 0.03 });
+      mixed -= size;
+    }
+    batches.push(...adj);
+  }
+  if (explore > 0) batches.push({ role: "explore", size: explore, temperature: ROLE_TEMPERATURE.explore });
+  return batches;
+}
+
+export async function brainstormTopics(ctx: BrainstormContext): Promise<BrainstormedTopic[]> {
   const { model, provider } = await resolveProviderAndModel(ctx.model, ctx.provider);
 
   const liked = ctx.interests.slice(0, 15).join(", ");
@@ -526,16 +613,14 @@ export async function brainstormTopics(ctx: BrainstormContext): Promise<string[]
   const clusters = (ctx.likedClusters || []).filter(c => c && Array.isArray(c.videos) && c.videos.length > 0);
   const failedExamples = (ctx.failedExamples || []).slice(-10).join(", ");
 
-  const buildMessage = (n: number, batchIndex: number = 0) => {
-    // When taste clusters are provided, each batch expands a DIFFERENT corner
-    // of the user's taste instead of word-associating on one blended blob.
-    const cluster = clusters.length > 0 ? clusters[batchIndex % clusters.length] : null;
-    const likedLine = cluster
-      ? cluster.videos.slice(0, 10).join("; ")
-      : likedVideos;
-    const clusterInstruction = cluster
-      ? `\nTHIS BATCH: branch out from this specific cluster of my liked videos${cluster.name ? ` ("${cluster.name}")` : ""}. Ignore my other clusters for this batch — go deep and lateral from THIS scene only.`
-      : "";
+  // The CORE batch sees every cluster at once — the blended centre of gravity
+  // that no single-cluster batch could ever show the model.
+  const blendedLikedLine = clusters.length > 0
+    ? clusters.map(c => `${c.name ? c.name + ": " : ""}${c.videos.slice(0, 6).join("; ")}`).join(" | ")
+    : likedVideos;
+
+  const buildMessage = (batch: PlannedBatch) => {
+    const likedLine = batch.role === "core" ? blendedLikedLine : likedVideos;
     const profileLine = ctx.tasteProfile
       ? `WHO I AM AS A VIEWER: ${ctx.tasteProfile}\n\n`
       : "";
@@ -543,6 +628,17 @@ export async function brainstormTopics(ctx: BrainstormContext): Promise<string[]
       ? `\nTopics that FAILED for this user — study their SHAPE and avoid producing anything of the same shape, not just the same words: [${failedExamples}]`
       : "";
     const outcomesBlock = buildOutcomesBlock(ctx.topicOutcomes);
+    let roleBlock: string;
+    if (batch.role === "core") {
+      roleBlock = `\nTHIS BATCH — CORE. Stay INSIDE the scenes in the liked videos above (all of my clusters are listed). Name what a long-time fan of each scene watches next. No leaps.`;
+    } else if (batch.role === "adjacent" && batch.cluster) {
+      const name = batch.cluster.name ? ` ("${batch.cluster.name}")` : "";
+      roleBlock = `\nTHIS BATCH — ADJACENT, from this cluster of my liked videos${name}: [${batch.cluster.videos.slice(0, 10).join("; ")}]. One step away from THIS scene only; the other clusters are context, not targets.`;
+    } else if (batch.role === "adjacent") {
+      roleBlock = `\nTHIS BATCH — ADJACENT. One step away from the scenes in the liked videos above.`;
+    } else {
+      roleBlock = `\nTHIS BATCH — EXPLORE. Lateral leaps, wildcards, and time/culture shifts that share the deeper taste. Every topic must still pass: "would this person, not a generic viewer, click it?"`;
+    }
 
     return `${profileLine}My interest topics: [${liked}]
 Videos I actually liked (strongest signal): [${likedLine}]
@@ -550,30 +646,26 @@ Videos I saved to watch later (strong signal): [${watchlist}]
 Recent searches: [${searches}]
 Disliked: [${disliked}]
 Recently used (avoid these): [${recentUsed}]
-Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]${failedLine}${outcomesBlock}${clusterInstruction}
+Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]${failedLine}${outcomesBlock}${roleBlock}
 
-Suggest ${n} new topics.`;
+Suggest ${batch.size} new topics.`;
   };
 
   /** One batch, with its own retry ladder. Resolves to [] rather than throwing. */
-  const runBatch = async (size: number, batchIndex: number): Promise<string[]> => {
+  const runBatch = async (batch: PlannedBatch, batchIndex: number): Promise<string[]> => {
     const MAX_RETRIES = 2;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        // Start hot for creative variety; cool down on retries so a model that
-        // failed to produce valid JSON becomes more deterministic. Nudge the
-        // temperature per batch so parallel batches don't collapse onto the
-        // same suggestions.
-        const temperature = Math.max(
-          0.4,
-          0.9 + batchIndex * 0.05 - attempt * 0.25
-        );
+        // Role sets the heat (core is cool, explore is hot); retries cool
+        // further so a model that failed to produce valid JSON gets more
+        // deterministic.
+        const temperature = Math.max(0.4, batch.temperature - attempt * 0.25);
         const data = await callPrismChat(
           model,
           provider,
           [
             { role: "system", content: BRAINSTORM_SYSTEM_PROMPT },
-            { role: "user", content: buildMessage(size, batchIndex) },
+            { role: "user", content: buildMessage(batch) },
           ],
           temperature,
         );
@@ -582,7 +674,7 @@ Suggest ${n} new topics.`;
         throw new Error("No topics extracted from response");
       } catch (err: any) {
         logger.warn(
-          `[WallgardenService] Brainstorm batch ${batchIndex + 1} attempt ${attempt + 1} failed: ${err.message}`
+          `[WallgardenService] Brainstorm batch ${batchIndex + 1} (${batch.role}) attempt ${attempt + 1} failed: ${err.message}`
         );
         if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
       }
@@ -590,35 +682,32 @@ Suggest ${n} new topics.`;
     return [];
   };
 
-  const batchCount = Math.max(1, Math.ceil(numTopics / BRAINSTORM_BATCH_SIZE));
-  const batches = Array.from({ length: batchCount }, (_, i) =>
-    runBatch(
-      Math.min(BRAINSTORM_BATCH_SIZE, numTopics - i * BRAINSTORM_BATCH_SIZE),
-      i
-    )
-  );
-  const settled = await Promise.all(batches);
+  const plan = planBrainstormBatches(numTopics, clusters);
+  const settled = await Promise.all(plan.map((b, i) => runBatch(b, i)));
 
-  // Merge, dedupe (batches run blind to each other and will overlap).
+  // Merge, dedupe. Batches run blind to each other and will overlap; the
+  // plan is ordered core -> adjacent -> explore, so the first role wins and a
+  // topic the core batch also produced is core.
   const seen = new Set<string>();
-  const topics: string[] = [];
-  for (const batch of settled) {
-    for (const t of batch) {
-      if (!seen.has(t)) {
-        seen.add(t);
-        topics.push(t);
-      }
+  const topics: BrainstormedTopic[] = [];
+  plan.forEach((batch, i) => {
+    for (const t of settled[i]) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      topics.push({ topic: t, role: batch.role, cluster: batch.cluster?.name });
     }
-  }
+  });
 
   if (topics.length === 0) {
     throw new Error("Brainstorm failed: every batch returned no topics");
   }
 
   const okBatches = settled.filter(b => b.length > 0).length;
+  const byRole = topics.reduce((m, t) => { m[t.role] = (m[t.role] || 0) + 1; return m; }, {} as Record<string, number>);
   logger.info(
     `[WallgardenService] Brainstorm returned ${topics.length} unique topics ` +
-    `from ${okBatches}/${batchCount} batches via ${provider}/${model}`
+    `(${JSON.stringify(byRole)}) from ${okBatches}/${plan.length} batches ` +
+    `${ctx.promptVariant ? `[${ctx.promptVariant}] ` : ""}via ${provider}/${model}`
   );
   return topics;
 }
@@ -642,11 +731,39 @@ C = ANY field. A floating abstraction, a corporate/academic process word, or a w
 
 Rate EVERY topic you are given. Output ONLY the raw JSON object {"ratings":[{"t":"topic","tier":"A"}]}. No markdown, no commentary.`;
 
+// Appended to the rubric only when the caller supplies taste evidence. The
+// anchoring rater alone cannot see the viewer: "raku kiln reduction" is a
+// perfect A for a finance viewer. This is the second question.
+const RATE_FIT_BLOCK = `
+You ALSO rate FIT — does this topic belong to THIS viewer, given who they are and what they liked?
+HIGH = a fan of the liked videos would plausibly search this; it sits in or beside a scene in evidence.
+MED = same broad taste but a different scene; a maybe.
+LOW = a different person's taste (a finance viewer does not want "raku kiln reduction" no matter how well-anchored it is), or wellness/lifestyle drift.
+Output ONLY the raw JSON object {"ratings":[{"t":"topic","tier":"A","fit":"HIGH"}]}. No markdown, no commentary.`;
+
 export type TopicTier = "A" | "B" | "C";
+export type TopicFit = "HIGH" | "MED" | "LOW";
 export interface RatedTopic {
   topic: string;
   tier: TopicTier;
   weight: number;
+  fit?: TopicFit;
+  role?: TopicRole;
+  cluster?: string;
+  /** The rater never graded this topic (batch failed or it was skipped). */
+  unrated?: boolean;
+}
+
+export interface TasteEvidence {
+  tasteProfile?: string;
+  likedTitles?: string[];
+  interests?: string[];
+}
+export interface RateOptions {
+  /** When present, the FIT rubric runs and LOW-fit topics are dropped. */
+  taste?: TasteEvidence;
+  /** Role per topic (lowercased); explore topics survive LOW fit at the floor. */
+  roles?: Map<string, TopicRole>;
 }
 
 // Tier -> starting weight in the client's topic pool. Tier C is not returned at
@@ -654,6 +771,16 @@ export interface RatedTopic {
 // reactions" are worth watching, they simply must not crowd out the specific
 // ones.
 const TIER_WEIGHT: Record<TopicTier, number> = { A: 8, B: 4, C: 0 };
+// With taste evidence the weight is a function of BOTH questions.
+const WEIGHT_TABLE: Record<"A" | "B", Record<TopicFit, number>> = {
+  A: { HIGH: 8, MED: 6, LOW: 0 },
+  B: { HIGH: 4, MED: 3, LOW: 0 },
+};
+// Explore is allowed to look wrong — it gets the floor, not the drop.
+export const EXPLORE_LOW_FIT_WEIGHT = 2;
+// A rater failure must not INFLATE: unrated used to fall back to B (4), which
+// let a dead Jetson upgrade junk. Lowest positive weight instead.
+export const UNRATED_WEIGHT = 2;
 const RATE_BATCH_SIZE = 25;
 
 export interface RateResult {
@@ -664,17 +791,34 @@ export interface RateResult {
   totalBatches: number;
 }
 
-/** Grade topics by domain-anchoring. Unrated topics fall back to tier B. */
+/**
+ * Grade topics by domain-anchoring, and — when taste evidence is supplied —
+ * by fit for this viewer. Without evidence the prompt and message are
+ * byte-identical to the anchoring-only rater (the extract path).
+ */
 export async function rateTopics(
   topics: string[],
   modelHint?: string,
-  providerHint?: string
+  providerHint?: string,
+  opts?: RateOptions
 ): Promise<RateResult> {
   if (topics.length === 0) return { rated: [], failedBatches: 0, totalBatches: 0 };
   const { model, provider } = await resolveProviderAndModel(modelHint, providerHint);
+  const taste = opts?.taste;
+  const withFit = Boolean(taste);
+  const systemPrompt = withFit ? RATE_SYSTEM_PROMPT + RATE_FIT_BLOCK : RATE_SYSTEM_PROMPT;
+  const evidenceHeader = withFit
+    ? [
+        taste?.tasteProfile ? `WHO THEY ARE: ${taste.tasteProfile}` : "",
+        `VIDEOS THEY LIKED: [${(taste?.likedTitles || []).slice(-15).join("; ")}]`,
+        `INTERESTS: [${(taste?.interests || []).slice(0, 15).join(", ")}]`,
+        "TOPICS TO RATE: ",
+      ].filter(Boolean).join("\n")
+    : "";
 
+  type Grade = { tier: TopicTier; fit?: TopicFit };
   // null = this batch's LLM call failed (as opposed to rated-but-skipped topics)
-  const rateBatch = async (chunk: string[]): Promise<Record<string, TopicTier> | null> => {
+  const rateBatch = async (chunk: string[]): Promise<Record<string, Grade> | null> => {
     const MAX_RETRIES = 1;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
@@ -682,8 +826,8 @@ export async function rateTopics(
           model,
           provider,
           [
-            { role: "system", content: RATE_SYSTEM_PROMPT },
-            { role: "user", content: JSON.stringify(chunk) },
+            { role: "system", content: systemPrompt },
+            { role: "user", content: evidenceHeader + JSON.stringify(chunk) },
           ],
           0.1, // grading, not brainstorming — keep it deterministic
         );
@@ -691,11 +835,12 @@ export async function rateTopics(
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) throw new Error("No JSON object in rating response");
         const parsed = JSON.parse(match[0]);
-        const out: Record<string, TopicTier> = {};
+        const out: Record<string, Grade> = {};
         for (const r of parsed?.ratings || []) {
           const t = typeof r?.t === "string" ? r.t.trim().toLowerCase() : "";
           if (t && (r.tier === "A" || r.tier === "B" || r.tier === "C")) {
-            out[t] = r.tier;
+            const fit = (r.fit === "HIGH" || r.fit === "MED" || r.fit === "LOW") ? r.fit : undefined;
+            out[t] = { tier: r.tier, fit };
           }
         }
         return out;
@@ -715,25 +860,44 @@ export async function rateTopics(
   const failedBatches = results.filter(r => r === null).length;
   if (failedBatches > 0) {
     logger.error(
-      `[WallgardenService] Topic rating degraded: ${failedBatches}/${chunks.length} batches failed — their topics fall back to tier B`
+      `[WallgardenService] Topic rating degraded: ${failedBatches}/${chunks.length} batches failed — their topics fall back to ` +
+      (withFit ? `weight ${UNRATED_WEIGHT} (unrated)` : "tier B")
     );
   }
-  const ratings: Record<string, TopicTier> = Object.assign({}, ...results.filter(Boolean));
+  const ratings: Record<string, Grade> = Object.assign({}, ...results.filter(Boolean));
 
-  // A topic the rater skipped is treated as B: keep it, but never let an
-  // unrated topic outrank one that actually earned an A.
-  const rated = topics.map(t => {
-    const tier: TopicTier = ratings[t.toLowerCase()] || "B";
-    return { topic: t, tier, weight: TIER_WEIGHT[tier] };
+  const rated: RatedTopic[] = topics.map(t => {
+    const key = t.toLowerCase();
+    const g = ratings[key];
+    const role = opts?.roles?.get(key);
+    if (!withFit) {
+      // Legacy contract (extract path): a skipped topic is B — keep it, but
+      // never let an unrated topic outrank one that actually earned an A.
+      const tier: TopicTier = g?.tier || "B";
+      return { topic: t, tier, weight: TIER_WEIGHT[tier], role };
+    }
+    if (!g) {
+      return { topic: t, tier: "B", weight: UNRATED_WEIGHT, role, unrated: true };
+    }
+    if (g.tier === "C") return { topic: t, tier: "C", weight: 0, fit: g.fit, role };
+    if (!g.fit) {
+      return { topic: t, tier: g.tier, weight: UNRATED_WEIGHT, role, unrated: true };
+    }
+    let weight = WEIGHT_TABLE[g.tier][g.fit];
+    if (g.fit === "LOW" && role === "explore") weight = EXPLORE_LOW_FIT_WEIGHT;
+    return { topic: t, tier: g.tier, weight, fit: g.fit, role };
   });
   const dropped = rated.filter(r => r.tier === "C").length;
+  const lowFitDropped = rated.filter(r => r.tier !== "C" && r.fit === "LOW" && r.weight === 0).length;
   logger.info(
     `[WallgardenService] Rated ${topics.length} topics: ` +
     `${rated.filter(r => r.tier === "A").length}A ` +
-    `${rated.filter(r => r.tier === "B").length}B ${dropped}C(dropped)`
+    `${rated.filter(r => r.tier === "B").length}B ${dropped}C(dropped)` +
+    (withFit ? ` | fit: ${rated.filter(r => r.fit === "HIGH").length}H ${rated.filter(r => r.fit === "MED").length}M ` +
+      `${rated.filter(r => r.fit === "LOW").length}L (${lowFitDropped} dropped) ${rated.filter(r => r.unrated).length} unrated` : "")
   );
   return {
-    rated: rated.filter(r => r.tier !== "C"),
+    rated: rated.filter(r => r.tier !== "C" && r.weight > 0),
     failedBatches,
     totalBatches: chunks.length,
   };
@@ -997,20 +1161,30 @@ export async function generateTasteProfile(
 // evidence instead of guessing. Fail-open by design: an item the judge
 // skips defaults to MIXED, because grounding must never brick the feed.
 const JUDGE_SYSTEM_PROMPT = `/no_think
-You judge YouTube search topics by their ACTUAL top search results. For each topic you receive the titles (and channels) currently returned for it.
+You judge YouTube search topics by their ACTUAL top search results. For each topic you receive the titles (and channels) currently returned for it, with view counts and upload years when known.
 
 Verdicts:
 - REAL = the results are a coherent niche: enthusiast/practitioner channels, specific recurring scene vocabulary, videos a fan of this topic would genuinely want. The topic names a real YouTube subculture.
 - MIXED = some real signal amid filler; the topic works but isn't sharp.
 - SLOP = generic listicles, clickbait compilations, corporate explainers, or results unrelated to each other — the topic is a floating phrase the algorithm fills with junk.
+- DEAD = results exist but nobody is making this any more: nearly all under ~500 views and nothing uploaded in the last five years.
 
 Judge EVERY topic you are given. Output ONLY the raw JSON object {"verdicts":[{"t":"topic","verdict":"REAL"}]}. No markdown, no commentary.`;
 
-export type GroundingVerdict = "REAL" | "MIXED" | "SLOP";
+export type GroundingVerdict = "REAL" | "MIXED" | "SLOP" | "DEAD";
+export interface GroundingResult {
+  title: string;
+  channel?: string;
+  views?: number;
+  year?: number;
+}
 export interface GroundingItem {
   topic: string;
   titles: string[];
   channels?: string[];
+  // Richer evidence (views + upload year) from clients that have it; titles
+  // and channels stay for the ones that do not.
+  results?: GroundingResult[];
 }
 export interface JudgedTopic {
   topic: string;
@@ -1037,7 +1211,18 @@ export async function judgeTopicGrounding(
 
   // null = this batch's LLM call failed (vs. a verdict the judge skipped)
   const judgeBatch = async (chunk: GroundingItem[]): Promise<Record<string, GroundingVerdict> | null> => {
+    const fmtViews = (n: number) => n >= 1e6 ? `${Math.round(n / 1e5) / 10}M` : n >= 1e3 ? `${Math.round(n / 100) / 10}k` : String(n);
     const lines = chunk.map(i => {
+      const rich = (i.results || []).filter(r => r && r.title).slice(0, 8);
+      if (rich.length) {
+        const parts = rich.map(r => {
+          const meta = [typeof r.views === "number" ? `${fmtViews(r.views)} views` : "", r.year ? String(r.year) : ""].filter(Boolean);
+          return `"${r.title}"${meta.length ? ` (${meta.join(", ")})` : ""}`;
+        });
+        const channels = Array.from(new Set(rich.map(r => r.channel).filter(Boolean)));
+        const chanPart = channels.length ? ` | channels: ${channels.join(", ")}` : "";
+        return `- topic: "${i.topic}" | results: [${parts.join(", ")}]${chanPart}`;
+      }
       const titles = i.titles.slice(0, 8).map(t => `"${t}"`).join(", ");
       const channels = (i.channels || []).slice(0, 8).filter(Boolean);
       const chanPart = channels.length ? ` | channels: ${channels.join(", ")}` : "";
@@ -1062,7 +1247,7 @@ export async function judgeTopicGrounding(
         const out: Record<string, GroundingVerdict> = {};
         for (const v of parsed?.verdicts || []) {
           const t = typeof v?.t === "string" ? v.t.trim().toLowerCase() : "";
-          if (t && (v.verdict === "REAL" || v.verdict === "MIXED" || v.verdict === "SLOP")) {
+          if (t && (v.verdict === "REAL" || v.verdict === "MIXED" || v.verdict === "SLOP" || v.verdict === "DEAD")) {
             out[t] = v.verdict;
           }
         }
@@ -1096,7 +1281,8 @@ export async function judgeTopicGrounding(
     `[WallgardenService] Judged ${judged.length} topics: ` +
     `${judged.filter(j => j.verdict === "REAL").length} REAL, ` +
     `${judged.filter(j => j.verdict === "MIXED").length} MIXED, ` +
-    `${judged.filter(j => j.verdict === "SLOP").length} SLOP`
+    `${judged.filter(j => j.verdict === "SLOP").length} SLOP, ` +
+    `${judged.filter(j => j.verdict === "DEAD").length} DEAD`
   );
   return { judged, failedBatches, totalBatches: chunks.length };
 }
@@ -1113,15 +1299,28 @@ export async function generateSimilarTopics(ctx: SimilarContext): Promise<string
   const numTopics = ctx.numTopics || 10;
 
   const profileLine = ctx.tasteProfile ? `WHO I AM AS A VIEWER: ${ctx.tasteProfile}\n\n` : "";
-  const userMessage = `${profileLine}Search query: "${ctx.query}"
+  const seeds = Array.from(new Set(
+    [ctx.query].concat(ctx.seeds || []).map(x => (x || "").trim()).filter(Boolean)
+  )).slice(0, 8);
+  const seedLine = seeds.length > 1
+    ? `\nSeed topics I have shown real interest in, strongest first: [${seeds.map(x => `"${x}"`).join(", ")}]`
+    : "";
+  const failedExamples = (ctx.failedExamples || []).slice(-10).join(", ");
+  const failedLine = failedExamples
+    ? `\nTopics that FAILED for this user — study their SHAPE and avoid producing anything of the same shape, not just the same words: [${failedExamples}]`
+    : "";
+  const ask = seeds.length > 1
+    ? `Suggest ${numTopics} topics related to these seeds — at least half must be directly adjacent to "${seeds[0]}".`
+    : `Suggest ${numTopics} topics related to "${ctx.query}".`;
+  const userMessage = `${profileLine}Search query: "${ctx.query}"${seedLine}
 My interest topics: [${liked}]
 Videos I actually liked (strongest signal): [${likedVideos}]
 Videos I saved to watch later (strong signal): [${watchlist}]
 Disliked: [${disliked}]
 Recently used (avoid these): [${recentUsed}]
-Failed queries (don't reuse these exact phrases): [${burnedList}]${buildOutcomesBlock(ctx.topicOutcomes)}
+Failed queries (don't reuse these exact phrases): [${burnedList}]${failedLine}${buildOutcomesBlock(ctx.topicOutcomes)}
 
-Suggest ${numTopics} topics related to "${ctx.query}".`;
+${ask}`;
 
   const MAX_RETRIES = 2;
   let lastError: Error | null = null;
@@ -1132,7 +1331,8 @@ Suggest ${numTopics} topics related to "${ctx.query}".`;
         logger.info(`[WallgardenService] Similar retry ${attempt + 1}/${MAX_RETRIES + 1}`);
       }
 
-      const temperature = Math.max(0.4, 0.9 - attempt * 0.25);
+      // Adjacent-first, so cooler than the old 0.9 brainstorm heat.
+      const temperature = Math.max(0.4, 0.7 - attempt * 0.25);
       const data = await callPrismChat(
         model,
         provider,
@@ -1190,6 +1390,8 @@ export interface CandidateItem {
   title: string;
   channel?: string;
   durationSecs?: number;
+  // First ~200 chars of the results-card snippet (scraper 2026-09-06).
+  description?: string;
 }
 
 export interface CandidateClassificationResult {
@@ -1289,6 +1491,7 @@ export async function classifyCandidateVideos(
       const parts = [`id: ${c.id}`, `title: "${c.title}"`];
       if (c.channel) parts.push(`channel: "${c.channel}"`);
       if (typeof c.durationSecs === "number") parts.push(`duration: ${Math.round(c.durationSecs / 60)}min`);
+      if (typeof c.description === "string" && c.description.trim()) parts.push(`desc: "${c.description.trim().slice(0, 200)}"`);
       return "- " + parts.join(" | ");
     });
 

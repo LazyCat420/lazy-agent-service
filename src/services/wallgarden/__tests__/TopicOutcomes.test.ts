@@ -106,7 +106,13 @@ describe("outcomes reach the outbound prompt", () => {
     expect(user).not.toContain("MEASURED RESULTS");
     // The rest of the prompt must survive untouched — this block is additive.
     expect(user).toContain("My interest topics:");
-    expect(user).toContain("Suggest 5 new topics.");
+    // Roles split the request across batches now (core + adjacent for n=5),
+    // so the ask is per batch and the batch sizes sum to the request.
+    expect(user).toMatch(/Suggest \d+ new topics\./);
+    const asked = chatBodies
+      .map((b: any) => Number((b.messages.find((m: any) => m.role === "user").content.match(/Suggest (\d+) new topics/) || [])[1]))
+      .reduce((a: number, n: number) => a + n, 0);
+    expect(asked).toBe(5);
   });
 
   it("similar carries the block too — it is the path browsing signals feed", async () => {

@@ -51,6 +51,7 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
       failedExamples,
       topicOutcomes,
       promptVariant,
+      rateFit,
       numTopics,
       model,
       provider,
@@ -72,25 +73,43 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
       likedClusters,
       failedExamples,
       topicOutcomes,
+      // Forwarded (it used to die here) so the arm shows in the service log.
+      promptVariant,
       numTopics,
       model,
       provider,
     });
 
-    // Grade for domain-anchoring, drop the floating abstractions, and hand the
-    // client a starting weight per topic so specific topics outrank broad ones
-    // in the feed queue and the suggestion chips.
-    const { rated, failedBatches, totalBatches } = await rateTopics(raw, model, provider);
+    // Grade for domain-anchoring AND fit for this viewer, drop the floating
+    // abstractions and the other-person topics, and hand the client a
+    // starting weight per topic. `rateFit: false` is the free-baseline arm.
+    const withFit = rateFit !== false;
+    const roles = new Map(raw.map(t => [t.topic.toLowerCase(), t.role] as const));
+    const byTopic = new Map(raw.map(t => [t.topic.toLowerCase(), t] as const));
+    const { rated, failedBatches, totalBatches } = await rateTopics(
+      raw.map(t => t.topic),
+      model,
+      provider,
+      withFit
+        ? { taste: { tasteProfile, likedTitles: likedVideos, interests }, roles }
+        : { roles },
+    );
+    const enriched = rated.map(r => {
+      const src = byTopic.get(r.topic.toLowerCase());
+      return { ...r, role: r.role || src?.role, cluster: src?.cluster };
+    });
 
     res.json({
       // `topics` stays a plain string[] so older clients keep working.
-      topics: rated.map(r => r.topic),
-      rated,
-      count: rated.length,
+      topics: enriched.map(r => r.topic),
+      rated: enriched,
+      count: enriched.length,
       generated: raw.length,
       degraded: failedBatches > 0,
       ratingFailedBatches: failedBatches,
       ratingTotalBatches: totalBatches,
+      promptVariant: promptVariant || null,
+      rateFit: withFit,
     });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /brainstorm error: ${err.message}`);
@@ -195,6 +214,8 @@ router.post("/similar", async (req: Request, res: Response) => {
       tasteProfile,
       failedExamples,
       topicOutcomes,
+      seeds,
+      rateFit,
       numTopics,
       model,
       provider,
@@ -206,6 +227,7 @@ router.post("/similar", async (req: Request, res: Response) => {
 
     const topics = await generateSimilarTopics({
       query,
+      seeds: Array.isArray(seeds) ? seeds.filter(x => typeof x === "string") : undefined,
       interests,
       disliked,
       recentUsed,
@@ -222,7 +244,28 @@ router.post("/similar", async (req: Request, res: Response) => {
       provider,
     });
 
-    res.json({ topics, count: topics.length });
+    // /similar output used to enter the client's pool ungraded at weight 4.
+    // Same rater as brainstorm; these are adjacent to something the user
+    // already engaged with, so every one is role "adjacent".
+    const withFit = rateFit !== false;
+    const roles = new Map(topics.map(t => [t.toLowerCase(), "adjacent" as const]));
+    const { rated, failedBatches, totalBatches } = await rateTopics(
+      topics,
+      model,
+      provider,
+      withFit ? { taste: { tasteProfile, likedTitles: likedVideos, interests }, roles } : { roles },
+    );
+
+    res.json({
+      // `topics` keeps the ungraded list so older clients see no change.
+      topics,
+      count: topics.length,
+      rated,
+      degraded: failedBatches > 0,
+      ratingFailedBatches: failedBatches,
+      ratingTotalBatches: totalBatches,
+      rateFit: withFit,
+    });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /similar error: ${err.message}`);
     res.status(500).json({ error: err.message });
