@@ -1,3 +1,4 @@
+import { prepareTradingRequest } from "../learning/TradingLearningBoundary.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
 import { getToolSchemas } from "../ToolSchemaService.js";
@@ -119,6 +120,12 @@ export class PrismProxyService {
       // Respect the client's explicit tool whitelist. Do not inject all tools, 
       // as this overwhelms the LLM context window (~130k tokens).
       body.enabledTools = originalEnabledTools;
+      try {
+        body = prepareTradingRequest(body);
+      } catch (error) {
+        res.status(422).json({ error: String(error) });
+        return;
+      }
     }
 
     // Apply Qwen non-leading system message rewrite patch (workaround for Qwen

@@ -1,3 +1,4 @@
+import { filterTradingPayload, recordPayload } from "../learning/TradingLearningBoundary.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
 
@@ -641,7 +642,15 @@ export class VllmShimService {
       // So record what actually arrives. Sampled, because this path carries
       // every V3 agent call and a per-request line would bury the log.
       this.recordThinkingFlag(body as Record<string, unknown>);
-      body = this.translateChatTemplateKwargs({ ...req.body });
+      let boundary;
+      try {
+        boundary = filterTradingPayload(req.body);
+      } catch (error) {
+        res.status(422).json({ error: String(error) });
+        return;
+      }
+      await recordPayload(boundary.receipt);
+      body = this.translateChatTemplateKwargs({ ...boundary.body });
       // Repair degenerate recovery tails + non-leading system turns before
       // the chat template sees them (copy-on-write; identity when clean).
       body = this.rewriteMessages(body as Record<string, unknown>);
