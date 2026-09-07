@@ -1,7 +1,7 @@
 [
   {
     "name": "watch_ticker",
-    "description": "Leave a 'wake me if…' note on a ticker so the expensive agent stays OFF until a real, thesis-relevant condition trips — the Watch Desk checks it in code (no LLM) and only then re-runs a targeted cycle. Call this at the END of analysing a ticker with the conditions that would change your view. Supersedes any existing watch for the ticker (re-arm). Trigger types: price_above{level}, price_below{level} (target / invalidation levels); pct_change{ref,pct,direction} (moved pct off a reference price; direction up|down|any); rsi{op,value} (op gt|lt); volume_spike{mult} (× 20d avg); news{categories} (earnings|guidance|downgrade|upgrade|mna|litigation|insider); staleness{max_days} (re-check backstop). Always include an invalidation level and a staleness backstop.",
+    "description": "Leave a 'wake me if…' note on a ticker so the expensive agent stays OFF until a real, thesis-relevant condition trips — the Watch Desk checks it in code (no LLM) and only then re-runs a targeted cycle. Call this at the END of analysing a ticker with the conditions that would change your view. Supersedes any existing watch for the ticker (re-arm). Trigger types: price_above{level}, price_below{level} (target / invalidation levels); pct_change{ref,pct,direction} (moved pct off a reference price; direction up|down|any); rsi{op,value} (op gt|lt); volume_spike{mult} (× 20d avg); news{categories} (earnings|guidance|downgrade|upgrade|mna|litigation|insider); staleness{max_days} (re-check backstop). Always include an invalidation level and a staleness backstop. ALWAYS pass resolution_condition — without it the desk cannot tell a headline that answers your open question from one that merely names the company, and ANY category-matching headline will wake a full trading cycle.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -13,6 +13,21 @@
         },
         "reason": {"type": "string", "description": "Why you're watching (the thesis hook)."},
         "thesis_summary": {"type": "string", "description": "Optional 1-2 line current thesis to seed the wake."},
+        "resolution_condition": {
+          "type": "object",
+          "description": "REQUIRED IN PRACTICE. What you do not know, and what would settle it — this is what incoming news is screened against. {open_question: 'Does Q3 net interest margin hold above 3.4%?', resolving_fact: 'Q3 net interest margin on the October earnings call', resolves_by: '2026-10-14T20:30:00Z', invalidates_if: {type:'price_below', level:61.0}, becomes_if_true: 'BUY', becomes_if_false: 'SELL'}. State the question in SPECIFIC words — 'will they beat earnings' matches every headline ever written and screens nothing.",
+          "properties": {
+            "open_question": {"type": "string", "description": "What you do not know."},
+            "resolving_fact": {"type": "string", "description": "The observable fact that would settle it."},
+            "resolves_by": {"type": "string", "description": "ISO-8601 when that fact is expected."},
+            "invalidates_if": {"type": "object", "description": "The machine-checkable trigger, when one exists."},
+            "becomes_if_true": {"type": "string", "description": "The decision if the fact confirms the thesis."},
+            "becomes_if_false": {"type": "string", "description": "The decision if it refutes it."}
+          },
+          "required": ["open_question", "resolving_fact"]
+        },
+        "decision_action": {"type": "string", "description": "The decision this watch descends from: BUY|SELL|HOLD."},
+        "decision_confidence": {"type": "number", "description": "Your confidence in that decision (0-1)."},
         "cooldown_minutes": {"type": "integer", "description": "Min minutes between wakes (debounce). Default 240."},
         "expiry_days": {"type": "integer", "description": "Auto-expire the watch after N days. Default 30."}
       },
