@@ -360,14 +360,32 @@ export async function routeLocalTool(
   ) {
     const { WidgetTemplateRegistry } = await import("./WidgetTemplateRegistry.ts");
     const { default: ToolContext } = await import("./ToolContext.ts");
+    const { evaluateWidgetPlan, checkCreateAgainstPlan, CREATE_CONSTRAINTS } =
+      await import("./WidgetPlanGate.ts");
 
     if (tName === "plan_widget") {
+      // A plan is a contract, not a checkbox: type + title + a real
+      // description, remembered so create_widget can be held to it.
+      const verdict = evaluateWidgetPlan(toolArguments);
+      if (verdict.ok === false) {
+        return {
+          success: false,
+          error: "PLAN_INCOMPLETE",
+          missing: verdict.missing,
+          message: verdict.message,
+        };
+      }
       if (cycleId) {
+        ToolContext.set(cycleId, "widgetPlan", verdict.plan);
         ToolContext.set(cycleId, "widgetPlanApproved", true);
       }
       return {
         success: true,
-        message: "Widget plan registered and approved. You are now authorized to call create_widget."
+        plan: verdict.plan,
+        message:
+          `Plan registered for a '${verdict.plan.widgetType}' widget "${verdict.plan.title}". ` +
+          `Now call create_widget with widgetType='${verdict.plan.widgetType}' and the same title. ` +
+          CREATE_CONSTRAINTS,
       };
     }
 
@@ -390,14 +408,11 @@ export async function routeLocalTool(
     // create_widget / update_widget
     if (tName === "create_widget" && cycleId) {
       // The plan gate is only enforceable when we have a session id to track
-      // approval against (MCP CallTool and some agent contexts have none).
-      const isApproved = ToolContext.get<boolean>(cycleId, "widgetPlanApproved");
-      if (!isApproved) {
-        return {
-          success: false,
-          error: "PLANNING_REQUIRED",
-          message: "You must first call plan_widget with a structured design plan before calling create_widget."
-        };
+      // the plan against (MCP CallTool and some agent contexts have none).
+      const plan = ToolContext.get<import("./WidgetPlanGate.ts").WidgetPlan>(cycleId, "widgetPlan");
+      const check = checkCreateAgainstPlan(plan, toolArguments);
+      if (check.ok === false) {
+        return { success: false, error: check.error, message: check.message };
       }
     }
 
