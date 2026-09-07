@@ -1,3 +1,72 @@
+# HANDOFF — topic roles by batch, a FIT rating, seeds that reach the model (2026-09-06)
+
+**Deployed:** see the youtube-wallgarden handoff for the live verification;
+this service's commit is `feat(wallgarden): topic roles by batch, a FIT rating,
+seeds that reach the model`.
+**Companion:** `youtube-wallgarden` (roles + composed queue + era-aware slate)
+and `trading-service` scraper (upload dates on every search row).
+
+## What this change is
+
+An audit of "why does the feed pull random topics" traced 75% of every
+brainstorm batch to a prompt quota that told the model to LEAVE the user's
+scene (40% lateral, 25% wildcard, 10% time-shift), at temperature 0.9–1.05,
+with each batch seeing ONE liked cluster and told to ignore the rest. The
+rater then graded phrase anchoring with no idea who the viewer was, so an
+on-anchor, off-taste topic rated A / weight 8.
+
+- **Roles are decided by the BATCH.** `planBrainstormBatches` (pure) makes one
+  blended CORE batch that sees every cluster at 0.6, ADJACENT batches
+  allocated across clusters by their `size` (largest remainder; tiny clusters
+  pool into one mixed batch), and one small EXPLORE batch at 0.9 once
+  `n >= 20`. Server clamp: 100 topics, 6 batches. `brainstormTopics` now
+  returns `{topic, role, cluster}`; on a duplicate the first role wins. The
+  model is never asked to self-label — that would break the truncation
+  salvage in `extractTopicsFromResponse`.
+- **FIT next to ANCHORING.** `rateTopics(topics, model, provider, {taste,
+  roles})` appends the FIT rubric and sends the profile, liked titles and
+  interests. Weight = f(tier, fit): A/HIGH 8, A/MED 6, B/HIGH 4, B/MED 3; LOW
+  is dropped unless the role is explore (floor 2); a topic the rater never
+  graded gets `UNRATED_WEIGHT = 2` with `unrated: true`, not B's 4. Without
+  `taste` the prompt is byte-identical to before (the extract path).
+  `rateFit: false` on the request is the control arm.
+- `/similar` renders every seed strongest-first and the failed-shape line it
+  has accepted-and-dropped since it was written; quota 60/30/10 at 0.7; its
+  output is rated (role adjacent) and returned as `rated` next to the
+  unchanged `topics`.
+- `promptVariant` is forwarded and echoed. Grounding evidence renders view
+  counts and upload years when the client sends `results[]`, and the judge
+  may answer `DEAD`. Candidate classification accepts `description`.
+
+Old clients see no change: `topics` stays `string[]` on both routes and every
+new input is optional.
+
+## Verify
+
+```bash
+npx tsc --noEmit && npx vitest run src/services/wallgarden
+```
+
+`TopicRoles.test.ts` asserts on the OUTBOUND `/chat` bodies: exactly one CORE
+body listing every cluster, exactly one EXPLORE, no body carries the old
+"~40% LATERAL" quota, every body carries the anchor test, core is cooler than
+explore, FIT evidence appears only with taste, LOW/explore/unrated weights,
+`/similar` carries all seeds + FAILED + "60% ADJACENT", DEAD is accepted.
+
+## Traps
+
+- `VllmModelSyncService.test.ts` fails in a worktree that symlinks
+  `node_modules` (it saves `globalThis.fetch` at module load and shares it);
+  it passes in the primary checkout. Not touched by this change.
+- `JetsonPin.test.ts` has a 5 s per-test timeout that trips when four test
+  files cold-import the service on a loaded box; `--no-file-parallelism`
+  makes it deterministic.
+- The brainstorm call count is now `<= 6` generation batches + rating
+  batches. Brainstorm is manual-only on the client, so this is acceptable,
+  but `BRAINSTORM_MAX_BATCHES` is the knob if the Jetson thrashes.
+
+---
+
 # HANDOFF — measured outcomes now reach the topic prompts (2026-08-22)
 
 **Deployed:** yes, `561c62a` on `main`, live 23:04Z.
