@@ -17,6 +17,9 @@ export function bindToolResponse(response: any, token: string): any {
 /** Incremental UTF-8/SSE transform. Content/reasoning/usage are forwarded;
  * only tool arguments wait for their finish event so signed context can be
  * attached deterministically, outside model generation and token accounting.
+ * Nonempty argument fragments emit JSON whitespace while buffered: the provider
+ * ignores empty fragments, which otherwise makes active generation look idle.
+ * This is driven only by upstream argument bytes, never a timed heartbeat.
  */
 export class TradingToolStream {
   private decoder = new TextDecoder();
@@ -67,7 +70,7 @@ export class TradingToolStream {
           state.args += chunk.function?.arguments || "";
           if (state.args.length > 1_000_000) throw new Error("Trading tool arguments exceed bound");
           calls!.set(index, state);
-          return { ...chunk, ...(chunk.function ? { function: { ...chunk.function, arguments: "" } } : {}) };
+          return { ...chunk, ...(chunk.function ? { function: { ...chunk.function, arguments: chunk.function.arguments ? " " : "" } } : {}) };
         });
       }
       if (choice.finish_reason && this.calls.has(ci)) {

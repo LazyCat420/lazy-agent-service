@@ -64,3 +64,32 @@ it.each(["", "## Cycle:\ncycle-observe-123", "## Cycle: cycle-observe-123 extra"
   expect(verifyToolContext(extracted.token).cycleId).toBe("");
   expect(() => authorizeTradingTool("whiteboard_read", { [TOOL_CONTEXT_ARG]: extracted.token })).toThrow("explicit cycle");
 });
+
+it("keeps provider-visible progress during long argument generation without releasing unsigned arguments", () => {
+  const token = signToolContext(context());
+  const stream = new TradingToolStream(token);
+  let argumentsText = "";
+  let lastProgress = 0;
+  const pieces = ['{"content":"', 'first ', 'second ', 'third ', 'fourth', '"}'];
+  for (const [i, argumentsPart] of pieces.entries()) {
+    const now = i * 100_000;
+    const chunk = { index: 0, ...(i === 0 ? { id: "long-call" } : {}),
+      function: { ...(i === 0 ? { name: "whiteboard_write" } : {}), arguments: argumentsPart } };
+    const output = stream.push(Buffer.from(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [chunk] } }] })}\n\n`));
+    const frame = JSON.parse(output.slice(6));
+    const emitted = frame.choices[0].delta.tool_calls[0].function.arguments;
+    // The provider yields progress for a tool start or nonempty arguments.
+    // Empty SSE frames/comments do not reset its 300s watchdog.
+    if (i === 0 || emitted.length) lastProgress = now;
+    expect(now - lastProgress).toBeLessThan(300_000);
+    expect(emitted.trim()).toBe("");
+    expect(output).not.toContain(token);
+    argumentsText += emitted;
+  }
+  const final = stream.push(Buffer.from('data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n'));
+  for (const event of final.trim().split("\n\n")) {
+    for (const call of JSON.parse(event.slice(6)).choices[0].delta?.tool_calls || []) argumentsText += call.function.arguments;
+  }
+  expect(JSON.parse(argumentsText)).toEqual({ content: "first second third fourth", [TOOL_CONTEXT_ARG]: token });
+  expect(stream.finish()).toBe("");
+});
