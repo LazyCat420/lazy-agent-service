@@ -75,4 +75,13 @@ EXTRA_SSH_SYNC() {
   ok "remote NAS .env updated"
 }
 
+# This adapter carries every trading model request; restarting it mid-cycle
+# interrupts research just as restarting the cycle worker does.
+PRE_RESTART() {
+  local trading_dir="${SCRIPT_DIR}/../trading-service"
+  local preflight_python="${trading_dir}/.venv/bin/python"
+  [ -x "$preflight_python" ] || preflight_python="python3"
+  "$preflight_python" "${trading_dir}/scripts/deploy_preflight.py"
+}
+
 source "${SCRIPT_DIR}/../deploy-kit/lib.sh"

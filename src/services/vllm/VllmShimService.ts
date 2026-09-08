@@ -1,3 +1,4 @@
+import { applyTradingToolProtocol } from "../TradingToolProtocol.ts";
 import { extractToolContext } from "../TradingToolContext.ts";
 import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 import { filterTradingPayload, recordPayload } from "../learning/TradingLearningBoundary.ts";
@@ -649,7 +650,13 @@ export class VllmShimService {
       try {
         const execution = extractToolContext(req.body);
         toolContextToken = execution.token;
-        boundary = filterTradingPayload(execution.body);
+        const protocol = execution.token ? applyTradingToolProtocol(execution.body) : null;
+        boundary = filterTradingPayload(protocol?.body || execution.body);
+        if (boundary.receipt && protocol) {
+          boundary.receipt.tool_protocol_version = 1;
+          boundary.receipt.reasoning_tools_removed = protocol.removedTools;
+          boundary.receipt.reasoning_acknowledgements_corrected = protocol.correctedAcknowledgements;
+        }
       } catch (error) {
         res.status(422).json({ error: String(error) });
         return;

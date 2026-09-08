@@ -30,10 +30,12 @@ for (const streaming of [false, true]) it(`binds real shim -> dispatch -> bridge
   const fetchMock = vi.fn().mockResolvedValueOnce(new Response(wire, { headers: { "content-type": streaming ? "text/event-stream" : "application/json" } })).mockResolvedValueOnce(new Response('{"ok":true}'));
   vi.stubGlobal("fetch", fetchMock);
   const res = response();
-  await VllmShimService.handle({ originalUrl: "/vllm-shim/gold-spark/v1/chat/completions", method: "POST", headers: {}, body: { model: "offline", stream: streaming, messages: [{ role: "system", content: prepared.systemPrompt }, ...prepared.messages] } } as any, res as any);
+  await VllmShimService.handle({ originalUrl: "/vllm-shim/gold-spark/v1/chat/completions", method: "POST", headers: {}, body: { model: "offline", stream: streaming, tools: [{ type: "function", function: { name: "think" } }, { type: "function", function: { name: "whiteboard_write" } }], messages: [{ role: "system", content: prepared.systemPrompt }, ...prepared.messages] } } as any, res as any);
   expect(res.statusCode).toBe(200);
   const upstream = JSON.parse(fetchMock.mock.calls[0][1].body);
   expect(JSON.stringify(upstream)).not.toContain("TRADING_TOOL_CONTEXT");
+  expect(upstream.tools.map((t: any) => t.function.name)).toEqual(["whiteboard_write"]);
+  expect(upstream.messages[0].content).toContain("TRADING TOOL EXECUTION CONTRACT v1");
   let argumentsText = "";
   if (!streaming) argumentsText = JSON.parse(res.output).choices[0].message.tool_calls[0].function.arguments;
   else for (const event of res.output.split("\n\n")) {
@@ -52,4 +54,17 @@ it("rejects bad request identity before contacting a model", async () => {
   const res = response();
   await VllmShimService.handle({ originalUrl: "/vllm-shim/gold-spark/v1/chat/completions", method: "POST", headers: {}, body: { messages: [{ role: "system", content: "<TRADING_TOOL_CONTEXT_V1>bad.signature</TRADING_TOOL_CONTEXT_V1>" }] } } as any, res as any);
   expect(res.statusCode).toBe(422); expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("leaves the tool catalog and acknowledgements of non-trading callers untouched", async () => {
+  const body = { model: "offline", tools: [{ type: "function", function: { name: "think" } }],
+    messages: [{ role: "system", content: "ordinary agent" },
+      { role: "assistant", tool_calls: [{ id: "a", function: { name: "think", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "a", content: "ack" }] };
+  const fetchMock = vi.fn().mockResolvedValue(new Response('{"choices":[{"message":{"content":"done"}}]}', { headers: { "content-type": "application/json" } }));
+  vi.stubGlobal("fetch", fetchMock);
+  await VllmShimService.handle({ originalUrl: "/vllm-shim/gold-spark/v1/chat/completions", method: "POST", headers: {}, body } as any, response() as any);
+  const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+  expect(sent.tools).toEqual(body.tools);
+  expect(sent.messages).toEqual(body.messages);
 });
