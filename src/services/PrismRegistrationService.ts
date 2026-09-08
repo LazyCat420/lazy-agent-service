@@ -1,3 +1,4 @@
+import { signMcpClient } from "./TradingToolContext.ts";
 // ============================================================
 // PrismRegistrationService
 //
@@ -77,6 +78,7 @@ export interface PrismConsumer {
 }
 
 interface McpServerDoc {
+  headers?: Record<string, string>;
   id?: string;
   _id?: string;
   name?: string;
@@ -193,6 +195,7 @@ async function registerMcpServer(
     displayName: MCP_DISPLAY_NAME,
     transport: "sse",
     url: mcpUrl,
+    headers: { ...existing?.headers, "x-lazy-tool-client": signMcpClient(consumer.project) },
     enabled: true,
   };
 
@@ -209,7 +212,7 @@ async function registerMcpServer(
     }
     id = docId((await res.json()) as McpServerDoc);
     logger.info(`[Prism-Reg] [${label}] created MCP registration ${id}`);
-  } else if (existing.url !== mcpUrl || existing.enabled !== true) {
+  } else if (existing.url !== mcpUrl || existing.enabled !== true || existing.headers?.["x-lazy-tool-client"] !== payload.headers["x-lazy-tool-client"]) {
     // Our host/port moved, or somebody disabled us. Repair in place — a new
     // row under the same name would shadow this one.
     const res = await callPrism(base, `/mcp-servers/${id}`, {

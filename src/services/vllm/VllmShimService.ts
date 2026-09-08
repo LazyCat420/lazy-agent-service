@@ -1,3 +1,5 @@
+import { extractToolContext } from "../TradingToolContext.ts";
+import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 import { filterTradingPayload, recordPayload } from "../learning/TradingLearningBoundary.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
@@ -630,6 +632,7 @@ export class VllmShimService {
     const targetUrl = `${upstreamUrl}${originalPath}`;
 
     let body = req.body;
+    let toolContextToken: string | undefined;
     if (basePath === "/v1/chat/completions" && req.method === "POST" && body && typeof body === "object") {
       // The mirror can only translate a flag that ARRIVES. When a caller asks
       // for thinking-off and the request reaches us with no
@@ -644,7 +647,9 @@ export class VllmShimService {
       this.recordThinkingFlag(body as Record<string, unknown>);
       let boundary;
       try {
-        boundary = filterTradingPayload(req.body);
+        const execution = extractToolContext(req.body);
+        toolContextToken = execution.token;
+        boundary = filterTradingPayload(execution.body);
       } catch (error) {
         res.status(422).json({ error: String(error) });
         return;
@@ -762,6 +767,7 @@ export class VllmShimService {
 
         if (response.body) {
           const reader = (response.body as any).getReader();
+          const toolStream = toolContextToken ? new TradingToolStream(toolContextToken) : null;
           let clientDisconnected = false;
           const handleClientDisconnect = () => {
             clientDisconnected = true;
@@ -772,8 +778,9 @@ export class VllmShimService {
             while (true) {
               const { done, value } = await reader.read();
               if (done || clientDisconnected) break;
-              res.write(value);
+              res.write(toolStream ? toolStream.push(value) : value);
             }
+            if (toolStream && !clientDisconnected) res.write(toolStream.finish());
           } finally {
             res.off("close", handleClientDisconnect);
             reader.cancel?.().catch(() => {});
@@ -794,10 +801,12 @@ export class VllmShimService {
           if (text.includes("tool_call") || text.includes("tool calls")) {
             const parsed = JSON.parse(text);
             const normalized = VllmShimService.normalizeToolCalls(parsed);
-            return res.end(JSON.stringify(normalized));
+            return res.end(JSON.stringify(toolContextToken ? bindToolResponse(normalized, toolContextToken) : normalized));
           }
-        } catch {
-          // If JSON parse fails, fall through and send raw buf
+        } catch (error) {
+          // Never pass through an unbound trading tool call on a binding error.
+          if (toolContextToken) throw error;
+          // Non-trading compatibility: malformed JSON still passes through.
         }
       }
       return res.end(buf);

@@ -9,7 +9,9 @@ import fs from "fs/promises";
 import path from "path";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
-import { routeLocalTool } from "./LocalToolRouter.ts";
+import { dispatchTool } from "./ToolDispatch.ts";
+import { classifyToolResult } from "./ToolResult.ts";
+import { verifyMcpClient } from "./TradingToolContext.ts";
 import { MCP_SERVER_NAME } from "./PrismRegistrationService.ts";
 
 // One MCP tool result, in the shape the CallToolRequestSchema handler returns.
@@ -34,8 +36,9 @@ type McpToolResult = {
 // retry guidance, not just describe the timeout.
 //
 // The underlying execution is NOT cancelled on expiry — same abandoned-work
-// semantics the -32001 path already had, and ToolCallGuard's in-flight
-// coalescing means a repeat call attaches to it rather than duplicating work.
+// semantics the -32001 path already had. Reusable reads may coalesce; writes
+// do not. A timed-out write has an unknown outcome and must not be retried
+// as though cancellation or rollback had occurred.
 export function raceToolDeadline(
   toolName: string,
   execution: Promise<McpToolResult>,
@@ -91,7 +94,7 @@ export default class McpAdapter {
     }
   }
 
-  private createMcpServer(): Server {
+  private createMcpServer(authenticatedProject?: string): Server {
     const server = new Server(
       {
         // One constant, so the protocol handshake and the prism registration
@@ -133,7 +136,8 @@ export default class McpAdapter {
         // TOOL_TIMEOUT result instead of protocol error -32001.
         return await raceToolDeadline(
           toolName,
-          routeLocalTool(toolName, toolArgs).then((result) => ({
+          dispatchTool(toolName, toolArgs, { transport: "mcp", authenticatedProject }).then((result) => ({
+            isError: !classifyToolResult(result).success,
             content: [
               {
                 type: "text" as const,
@@ -162,7 +166,7 @@ export default class McpAdapter {
   public async handleSse(req: Request, res: Response) {
     logger.info("[McpAdapter] New SSE connection request received");
     const transport = new SSEServerTransport("/mcp/messages", res);
-    const server = this.createMcpServer();
+    const server = this.createMcpServer(verifyMcpClient(req.headers["x-lazy-tool-client"]));
 
     this.sessions.set(transport.sessionId, { server, transport });
 

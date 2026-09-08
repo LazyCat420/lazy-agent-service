@@ -1,10 +1,12 @@
+import { TOOL_CONTEXT_ARG, verifyToolContext } from "../services/TradingToolContext.ts";
+import { classifyToolResult } from "../services/ToolResult.ts";
 import { Router, Request, Response, RequestHandler } from "express";
 import fs from "node:fs";
 import path from "node:path";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { PrismProxyService } from "../services/prism/PrismProxyService.ts";
-import { routeLocalTool } from "../services/LocalToolRouter.ts";
+import { dispatchTool } from "../services/ToolDispatch.ts";
 
 const router = Router();
 
@@ -51,53 +53,7 @@ async function reportUsage(payload: Record<string, unknown>) {
  *
  * Only affects the telemetry classification — never the response payload.
  */
-export function classifyToolResult(result: unknown): {
-  success: boolean;
-  errorMessage?: string;
-} {
-  let value: unknown = result;
-
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed.startsWith("{")) return { success: true };
-    try {
-      value = JSON.parse(trimmed);
-    } catch {
-      return { success: true };
-    }
-  }
-
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { success: true };
-  }
-
-  const record = value as Record<string, unknown>;
-  const hasErrorKey =
-    record.error !== undefined && record.error !== null && record.error !== false;
-  const hasIsErrorFlag = record.is_error === true || record.isError === true;
-  const hasErrorStatus = record.status === "error";
-
-  if (!hasErrorKey && !hasIsErrorFlag && !hasErrorStatus) {
-    return { success: true };
-  }
-
-  let errorMessage: string;
-  if (typeof record.error === "string" && record.error) {
-    errorMessage = record.error;
-  } else if (
-    typeof record.error === "object" &&
-    record.error !== null &&
-    typeof (record.error as Record<string, unknown>).message === "string"
-  ) {
-    errorMessage = (record.error as Record<string, unknown>).message as string;
-  } else if (typeof record.message === "string" && record.message) {
-    errorMessage = record.message;
-  } else {
-    errorMessage = "tool_returned_error";
-  }
-
-  return { success: false, errorMessage };
-}
+export { classifyToolResult } from "../services/ToolResult.ts";
 
 const handleExecuteRoute: RequestHandler = async (request, response) => {
   const { toolName } = request.params;
@@ -107,12 +63,22 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
   }
   const startTime = Date.now();
 
-  const agentName = String(request.headers["x-agent"] || request.headers["x-username"] || "");
-  const cycleId = String(request.headers["x-conversation-id"] || request.headers["x-request-id"] || "");
-  const ticker = String(request.headers["x-ticker"] || toolArguments.ticker || toolArguments.Ticker || "");
+  let agentName = String(request.headers["x-agent"] || request.headers["x-username"] || "");
+  let cycleId = String(request.headers["x-conversation-id"] || request.headers["x-request-id"] || "");
+  let ticker = String(request.headers["x-ticker"] || toolArguments.ticker || toolArguments.Ticker || "");
+
+  // Signed identity is authoritative for attribution. Invalid capabilities are
+  // rejected by dispatchTool; never record their unverified claims as identity.
+  const hasCapability = Object.hasOwn(toolArguments, TOOL_CONTEXT_ARG);
+  if (hasCapability) {
+    try {
+      const verified = verifyToolContext(toolArguments[TOOL_CONTEXT_ARG]);
+      agentName = verified.agentName; cycleId = verified.cycleId; ticker = verified.ticker;
+    } catch { /* common dispatch returns the refusal */ }
+  }
 
   // Check if tool is authorized for this conversation session (Prism Proxy)
-  if (cycleId && !PrismProxyService.isToolAllowed(cycleId as string, (toolName || "") as string)) {
+  if (!hasCapability && cycleId && !PrismProxyService.isToolAllowed(cycleId as string, (toolName || "") as string)) {
     const errorMsg = `The tool "${toolName}" is not whitelisted for your agent role. You must reason using the data in the 'Pre-Collected Data Report' instead of calling unauthorized tools.`;
     logger.warn(`[PrismProxy] Intercepted unauthorized tool call for conversation ${cycleId}: ${toolName}`);
 
@@ -137,12 +103,12 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
   }
 
   try {
-    logger.info(JSON.stringify({ event: "tool_start", toolName, args: toolArguments }));
+    logger.info(JSON.stringify({ event: "tool_start", toolName, args: Object.fromEntries(Object.entries(toolArguments).filter(([key]) => key !== TOOL_CONTEXT_ARG)) }));
 
-    const result = await routeLocalTool(
+    const result = await dispatchTool(
       toolName as string,
       toolArguments,
-      { agentName, cycleId, ticker }
+      { agentName, cycleId, ticker, project: String(request.headers["x-project"] || ""), transport: "rest" }
     );
 
     // Gated widget refusals (planning/validation) are still refusals — report

@@ -16,7 +16,7 @@
  * call fails. Three deterministic layers, cheapest first:
  *
  *   1. COALESCE  identical in-flight call → await the existing promise.
- *                Always safe, and alone it collapses a stampede to one call.
+ *                Enabled only for reusable reads by the local bridge.
  *   2. LEDGER    identical (tool, args) repeats inside a rolling window get
  *                escalating friction: cached-with-a-note, then a refusal whose
  *                text tells the model what to do instead. The detection is
@@ -223,6 +223,8 @@ export interface GuardedRunOptions<T> {
   scope?: GuardScope;
   /** Cached value, if the caller has one. */
   cached?: () => T | undefined;
+  coalesce?: boolean;
+  repeatGuard?: boolean;
   run: () => Promise<T>;
 }
 
@@ -238,7 +240,7 @@ export function guardedRun<T>(opts: GuardedRunOptions<T>): Promise<T | Record<st
   const { toolName, key, scope, cached, run } = opts;
 
   // 1. Coalesce — an identical call is already running; ride along with it.
-  const existing = inFlight.get(key);
+  const existing = opts.coalesce === false ? undefined : inFlight.get(key);
   if (existing) {
     logger.info(JSON.stringify({ event: "tool_coalesced", toolName }));
     return existing as Promise<T>;
@@ -247,7 +249,7 @@ export function guardedRun<T>(opts: GuardedRunOptions<T>): Promise<T | Record<st
   // 2. Ledger — how many identical calls has this scope already made?
   //    Coalesced callers never reach here, which is correct: riding along with
   //    an in-flight call is one call, not a repeat.
-  const decision = recordAttempt(toolName, key, scope);
+  const decision = opts.repeatGuard === false ? { verdict: "allow", count: 0 } : recordAttempt(toolName, key, scope);
   if (decision.verdict !== "allow") {
     const hit = cached?.();
     if (hit !== undefined) {
@@ -280,6 +282,7 @@ export function guardedRun<T>(opts: GuardedRunOptions<T>): Promise<T | Record<st
     }
   })();
 
+  if (opts.coalesce === false) return promise;
   inFlight.set(key, promise);
   // Clear on settle either way; a leaked entry would pin a stale result.
   void promise.then(

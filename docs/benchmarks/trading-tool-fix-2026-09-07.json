@@ -1,0 +1,2889 @@
+{
+  "baseline_revision": "c35fbd7",
+  "component": {
+    "before": {
+      "arm": "before",
+      "backend_latency_ms": 3,
+      "repetitions": 30,
+      "rows": [
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 0,
+          "elapsed_ms": 51.93336399999998,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 0,
+          "elapsed_ms": 4.203305999999998,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 0,
+          "elapsed_ms": 8.301827000000003,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 0,
+          "elapsed_ms": 4.2423,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 0,
+          "elapsed_ms": 3.494860000000017,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 1,
+          "elapsed_ms": 7.1267740000000686,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 1,
+          "elapsed_ms": 4.197516999999948,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 1,
+          "elapsed_ms": 9.213313999999968,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 1,
+          "elapsed_ms": 4.585778000000005,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 1,
+          "elapsed_ms": 3.7455489999999827,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 2,
+          "elapsed_ms": 9.184114000000022,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 2,
+          "elapsed_ms": 4.572619999999915,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 2,
+          "elapsed_ms": 8.214345999999978,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 2,
+          "elapsed_ms": 4.128443999999945,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 2,
+          "elapsed_ms": 3.8738200000000234,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 3,
+          "elapsed_ms": 8.843489999999974,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 3,
+          "elapsed_ms": 4.215967999999975,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 3,
+          "elapsed_ms": 8.380823000000078,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 3,
+          "elapsed_ms": 3.7739010000000235,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 3,
+          "elapsed_ms": 3.874967999999967,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 4,
+          "elapsed_ms": 9.293287000000078,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 4,
+          "elapsed_ms": 4.159978000000024,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 4,
+          "elapsed_ms": 7.806968000000097,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 4,
+          "elapsed_ms": 3.814959999999928,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 4,
+          "elapsed_ms": 3.848969000000011,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 5,
+          "elapsed_ms": 8.658003000000008,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 5,
+          "elapsed_ms": 4.246976000000018,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 5,
+          "elapsed_ms": 7.850485000000049,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 5,
+          "elapsed_ms": 4.451225000000022,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 5,
+          "elapsed_ms": 3.7471669999999904,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 6,
+          "elapsed_ms": 7.658671000000027,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 6,
+          "elapsed_ms": 4.431801000000064,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 6,
+          "elapsed_ms": 7.14713299999994,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 6,
+          "elapsed_ms": 4.187292999999954,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 6,
+          "elapsed_ms": 3.908396000000039,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 7,
+          "elapsed_ms": 6.940589999999929,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 7,
+          "elapsed_ms": 4.410969999999907,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 7,
+          "elapsed_ms": 7.854046000000039,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 7,
+          "elapsed_ms": 3.6354949999999917,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 7,
+          "elapsed_ms": 3.5695839999999635,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 8,
+          "elapsed_ms": 7.862651000000028,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 8,
+          "elapsed_ms": 4.84923399999991,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 8,
+          "elapsed_ms": 8.659223999999995,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 8,
+          "elapsed_ms": 3.868145000000027,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 8,
+          "elapsed_ms": 3.9712670000000116,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 9,
+          "elapsed_ms": 6.8278660000000855,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 9,
+          "elapsed_ms": 4.652580999999941,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 9,
+          "elapsed_ms": 7.905368999999951,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 9,
+          "elapsed_ms": 3.833814000000075,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 9,
+          "elapsed_ms": 3.5349800000000187,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 10,
+          "elapsed_ms": 8.643835000000081,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 10,
+          "elapsed_ms": 4.328390000000013,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 10,
+          "elapsed_ms": 8.109814000000028,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 10,
+          "elapsed_ms": 4.129486000000043,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 10,
+          "elapsed_ms": 3.632863999999927,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 11,
+          "elapsed_ms": 7.915094999999951,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 11,
+          "elapsed_ms": 4.476109999999949,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 11,
+          "elapsed_ms": 8.750618000000031,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 11,
+          "elapsed_ms": 3.773078000000055,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 11,
+          "elapsed_ms": 3.6456150000000207,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 12,
+          "elapsed_ms": 7.4486630000000105,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 12,
+          "elapsed_ms": 4.256982999999991,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 12,
+          "elapsed_ms": 7.525245000000041,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 12,
+          "elapsed_ms": 4.413058999999976,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 12,
+          "elapsed_ms": 3.933926999999926,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 13,
+          "elapsed_ms": 6.270447999999988,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 13,
+          "elapsed_ms": 4.260314999999991,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 13,
+          "elapsed_ms": 6.545620999999983,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 13,
+          "elapsed_ms": 3.787268999999924,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 13,
+          "elapsed_ms": 3.7408810000000585,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 14,
+          "elapsed_ms": 6.71708799999999,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 14,
+          "elapsed_ms": 4.512230000000045,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 14,
+          "elapsed_ms": 8.173594999999978,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 14,
+          "elapsed_ms": 3.2806459999999333,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 14,
+          "elapsed_ms": 3.729421000000002,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 15,
+          "elapsed_ms": 5.57147400000008,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 15,
+          "elapsed_ms": 3.6479000000001633,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 15,
+          "elapsed_ms": 7.529013000000077,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 15,
+          "elapsed_ms": 3.8714319999999134,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 15,
+          "elapsed_ms": 3.6912469999999757,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 16,
+          "elapsed_ms": 5.386649999999918,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 16,
+          "elapsed_ms": 3.9516929999999775,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 16,
+          "elapsed_ms": 6.789643000000069,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 16,
+          "elapsed_ms": 4.236022999999932,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 16,
+          "elapsed_ms": 3.9943660000001273,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 17,
+          "elapsed_ms": 4.72193500000003,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 17,
+          "elapsed_ms": 4.21359399999983,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 17,
+          "elapsed_ms": 7.452833999999939,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 17,
+          "elapsed_ms": 3.7076130000000376,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 17,
+          "elapsed_ms": 3.433571000000029,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 18,
+          "elapsed_ms": 4.724283999999898,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 18,
+          "elapsed_ms": 3.646295000000009,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 18,
+          "elapsed_ms": 7.921109000000115,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 18,
+          "elapsed_ms": 3.962914999999839,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 18,
+          "elapsed_ms": 3.8952569999999014,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 19,
+          "elapsed_ms": 5.2654059999999845,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 19,
+          "elapsed_ms": 3.7422509999998965,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 19,
+          "elapsed_ms": 7.258775999999898,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 19,
+          "elapsed_ms": 3.5848069999999552,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 19,
+          "elapsed_ms": 3.4941290000001572,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 20,
+          "elapsed_ms": 5.465641000000005,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 20,
+          "elapsed_ms": 4.099137000000155,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 20,
+          "elapsed_ms": 7.5956290000001445,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 20,
+          "elapsed_ms": 4.027227000000039,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 20,
+          "elapsed_ms": 3.637411999999813,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 21,
+          "elapsed_ms": 5.608108000000129,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 21,
+          "elapsed_ms": 3.8448490000000675,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 21,
+          "elapsed_ms": 7.138214000000062,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 21,
+          "elapsed_ms": 3.5425920000000133,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 21,
+          "elapsed_ms": 3.7325690000000122,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 22,
+          "elapsed_ms": 4.925183999999945,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 22,
+          "elapsed_ms": 3.7319740000000365,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 22,
+          "elapsed_ms": 8.24709800000005,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 22,
+          "elapsed_ms": 4.027123000000074,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 22,
+          "elapsed_ms": 3.87552299999993,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 23,
+          "elapsed_ms": 6.796218999999837,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 23,
+          "elapsed_ms": 3.9170420000000377,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 23,
+          "elapsed_ms": 8.494304000000056,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 23,
+          "elapsed_ms": 3.940108999999893,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 23,
+          "elapsed_ms": 3.7237740000000485,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 24,
+          "elapsed_ms": 5.425756999999976,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 24,
+          "elapsed_ms": 4.093350999999984,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 24,
+          "elapsed_ms": 7.408591999999999,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 24,
+          "elapsed_ms": 4.110963999999967,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 24,
+          "elapsed_ms": 3.6401939999998376,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 25,
+          "elapsed_ms": 6.157535999999936,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 25,
+          "elapsed_ms": 4.8711329999998725,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 25,
+          "elapsed_ms": 8.75546600000007,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 25,
+          "elapsed_ms": 3.859087000000045,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 25,
+          "elapsed_ms": 3.8924279999998816,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 26,
+          "elapsed_ms": 8.45063899999991,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 26,
+          "elapsed_ms": 4.037673000000041,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 26,
+          "elapsed_ms": 7.660360999999966,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 26,
+          "elapsed_ms": 3.8373249999999643,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 26,
+          "elapsed_ms": 3.6602280000001883,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 27,
+          "elapsed_ms": 6.327440000000024,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 27,
+          "elapsed_ms": 4.080193000000008,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 27,
+          "elapsed_ms": 8.231216000000131,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 27,
+          "elapsed_ms": 4.011457000000064,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 27,
+          "elapsed_ms": 3.6157419999999547,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 28,
+          "elapsed_ms": 9.052172000000155,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 28,
+          "elapsed_ms": 4.314850999999862,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 28,
+          "elapsed_ms": 7.928124999999909,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 28,
+          "elapsed_ms": 3.9706229999999323,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 28,
+          "elapsed_ms": 3.891832000000022,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "healthy_read_burst",
+          "repeat": 29,
+          "elapsed_ms": 7.04022800000007,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "cross_cycle_write",
+          "repeat": 29,
+          "elapsed_ms": 3.9517479999999523,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "whiteboard_handoff",
+          "repeat": 29,
+          "elapsed_ms": 8.148161000000073,
+          "backend_requests": 2,
+          "success": false,
+          "first_error_flag": null
+        },
+        {
+          "arm": "before",
+          "scenario": "transient_read_failure",
+          "repeat": 29,
+          "elapsed_ms": 3.788770999999997,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": false
+        },
+        {
+          "arm": "before",
+          "scenario": "unauthorized_write",
+          "repeat": 29,
+          "elapsed_ms": 3.7538929999998345,
+          "backend_requests": 1,
+          "success": false,
+          "first_error_flag": null
+        }
+      ]
+    },
+    "after": {
+      "arm": "after",
+      "backend_latency_ms": 3,
+      "repetitions": 30,
+      "rows": [
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 0,
+          "elapsed_ms": 37.568309,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 0,
+          "elapsed_ms": 9.842452999999978,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 0,
+          "elapsed_ms": 12.582313,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 0,
+          "elapsed_ms": 8.481865999999968,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 0,
+          "elapsed_ms": 0.4576640000000225,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 1,
+          "elapsed_ms": 10.955249000000094,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 1,
+          "elapsed_ms": 8.362064000000032,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 1,
+          "elapsed_ms": 12.372607000000016,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 1,
+          "elapsed_ms": 8.711297999999942,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 1,
+          "elapsed_ms": 0.9525790000000143,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 2,
+          "elapsed_ms": 10.94497899999999,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 2,
+          "elapsed_ms": 9.181901000000039,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 2,
+          "elapsed_ms": 11.645175999999992,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 2,
+          "elapsed_ms": 8.045676000000071,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 2,
+          "elapsed_ms": 0.42810800000006566,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 3,
+          "elapsed_ms": 9.506412000000068,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 3,
+          "elapsed_ms": 7.699269000000072,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 3,
+          "elapsed_ms": 11.95979299999999,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 3,
+          "elapsed_ms": 8.438868999999954,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 3,
+          "elapsed_ms": 0.583180000000084,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 4,
+          "elapsed_ms": 11.438227999999981,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 4,
+          "elapsed_ms": 8.638098000000014,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 4,
+          "elapsed_ms": 11.993052000000034,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 4,
+          "elapsed_ms": 8.297383999999965,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 4,
+          "elapsed_ms": 0.7921670000000631,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 5,
+          "elapsed_ms": 10.788796000000048,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 5,
+          "elapsed_ms": 9.117167999999992,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 5,
+          "elapsed_ms": 11.482310999999982,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 5,
+          "elapsed_ms": 7.577487000000019,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 5,
+          "elapsed_ms": 0.30551200000002154,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 6,
+          "elapsed_ms": 7.6479810000000725,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 6,
+          "elapsed_ms": 8.020916000000057,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 6,
+          "elapsed_ms": 11.500507999999968,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 6,
+          "elapsed_ms": 6.360981999999922,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 6,
+          "elapsed_ms": 0.44208000000003267,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 7,
+          "elapsed_ms": 8.127059999999915,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 7,
+          "elapsed_ms": 8.277104000000008,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 7,
+          "elapsed_ms": 11.502882999999997,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 7,
+          "elapsed_ms": 7.6557359999999335,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 7,
+          "elapsed_ms": 0.4444699999999102,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 8,
+          "elapsed_ms": 9.719648000000007,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 8,
+          "elapsed_ms": 7.976053999999976,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 8,
+          "elapsed_ms": 12.196233000000007,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 8,
+          "elapsed_ms": 8.453055000000063,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 8,
+          "elapsed_ms": 0.34650600000009035,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 9,
+          "elapsed_ms": 10.030055000000061,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 9,
+          "elapsed_ms": 7.314883000000009,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 9,
+          "elapsed_ms": 11.765491999999995,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 9,
+          "elapsed_ms": 8.173925000000054,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 9,
+          "elapsed_ms": 0.3865089999999327,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 10,
+          "elapsed_ms": 9.268529999999828,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 10,
+          "elapsed_ms": 7.83676800000012,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 10,
+          "elapsed_ms": 11.190753000000086,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 10,
+          "elapsed_ms": 7.5379199999999855,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 10,
+          "elapsed_ms": 0.23240899999996145,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 11,
+          "elapsed_ms": 8.85288700000001,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 11,
+          "elapsed_ms": 8.111005000000205,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 11,
+          "elapsed_ms": 12.154588999999987,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 11,
+          "elapsed_ms": 6.306976999999961,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 11,
+          "elapsed_ms": 0.35605599999985316,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 12,
+          "elapsed_ms": 8.144611999999825,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 12,
+          "elapsed_ms": 6.61888399999998,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 12,
+          "elapsed_ms": 12.004605000000083,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 12,
+          "elapsed_ms": 8.117520999999897,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 12,
+          "elapsed_ms": 0.37208000000009633,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 13,
+          "elapsed_ms": 7.163193999999976,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 13,
+          "elapsed_ms": 8.399638000000095,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 13,
+          "elapsed_ms": 12.147975999999971,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 13,
+          "elapsed_ms": 7.5677089999999225,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 13,
+          "elapsed_ms": 0.2843809999999394,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 14,
+          "elapsed_ms": 7.974586000000045,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 14,
+          "elapsed_ms": 8.08752400000003,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 14,
+          "elapsed_ms": 11.314993000000186,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 14,
+          "elapsed_ms": 6.382162999999991,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 14,
+          "elapsed_ms": 0.31939600000009705,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 15,
+          "elapsed_ms": 7.02470100000005,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 15,
+          "elapsed_ms": 7.917220000000043,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 15,
+          "elapsed_ms": 11.338989999999967,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 15,
+          "elapsed_ms": 7.746124000000009,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 15,
+          "elapsed_ms": 0.4320750000001681,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 16,
+          "elapsed_ms": 7.1837410000000546,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 16,
+          "elapsed_ms": 8.504781999999977,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 16,
+          "elapsed_ms": 10.93306500000017,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 16,
+          "elapsed_ms": 6.7937879999999495,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 16,
+          "elapsed_ms": 0.2050299999998515,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 17,
+          "elapsed_ms": 6.788433999999825,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 17,
+          "elapsed_ms": 8.035622000000103,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 17,
+          "elapsed_ms": 10.374491999999918,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 17,
+          "elapsed_ms": 7.4837230000000545,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 17,
+          "elapsed_ms": 0.3793790000001991,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 18,
+          "elapsed_ms": 6.164140999999972,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 18,
+          "elapsed_ms": 7.805385999999999,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 18,
+          "elapsed_ms": 11.224040000000059,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 18,
+          "elapsed_ms": 7.183367000000089,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 18,
+          "elapsed_ms": 0.39881500000001324,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 19,
+          "elapsed_ms": 6.016732000000047,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 19,
+          "elapsed_ms": 7.739072999999962,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 19,
+          "elapsed_ms": 12.142689999999902,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 19,
+          "elapsed_ms": 8.154676999999992,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 19,
+          "elapsed_ms": 0.3999060000001009,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 20,
+          "elapsed_ms": 7.181581999999935,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 20,
+          "elapsed_ms": 8.212067999999817,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 20,
+          "elapsed_ms": 12.575983999999835,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 20,
+          "elapsed_ms": 8.009898000000021,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 20,
+          "elapsed_ms": 0.36582300000009127,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 21,
+          "elapsed_ms": 7.61224500000003,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 21,
+          "elapsed_ms": 7.734719999999925,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 21,
+          "elapsed_ms": 11.844585000000052,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 21,
+          "elapsed_ms": 8.167896000000155,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 21,
+          "elapsed_ms": 0.5544219999999314,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 22,
+          "elapsed_ms": 9.773132000000032,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 22,
+          "elapsed_ms": 7.933383999999933,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 22,
+          "elapsed_ms": 11.31971899999985,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 22,
+          "elapsed_ms": 7.153479999999945,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 22,
+          "elapsed_ms": 0.2630110000000059,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 23,
+          "elapsed_ms": 7.124896999999919,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 23,
+          "elapsed_ms": 7.875119999999924,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 23,
+          "elapsed_ms": 11.435332000000017,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 23,
+          "elapsed_ms": 7.764656999999943,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 23,
+          "elapsed_ms": 0.29387999999994463,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 24,
+          "elapsed_ms": 6.2463390000000345,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 24,
+          "elapsed_ms": 7.513536000000158,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 24,
+          "elapsed_ms": 11.185183000000052,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 24,
+          "elapsed_ms": 7.6509759999999005,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 24,
+          "elapsed_ms": 0.45235299999990275,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 25,
+          "elapsed_ms": 7.933667999999898,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 25,
+          "elapsed_ms": 8.070001999999931,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 25,
+          "elapsed_ms": 11.264186999999993,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 25,
+          "elapsed_ms": 9.573501000000078,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 25,
+          "elapsed_ms": 0.4407209999999395,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 26,
+          "elapsed_ms": 11.15894400000002,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 26,
+          "elapsed_ms": 6.683242999999948,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 26,
+          "elapsed_ms": 11.669398000000001,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 26,
+          "elapsed_ms": 9.01028899999983,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 26,
+          "elapsed_ms": 0.6206579999998212,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 27,
+          "elapsed_ms": 8.895946999999978,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 27,
+          "elapsed_ms": 8.380629999999883,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 27,
+          "elapsed_ms": 11.852032000000008,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 27,
+          "elapsed_ms": 8.877398999999969,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 27,
+          "elapsed_ms": 0.40278200000011566,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 28,
+          "elapsed_ms": 13.211164999999937,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 28,
+          "elapsed_ms": 9.78404999999998,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 28,
+          "elapsed_ms": 11.365359000000126,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 28,
+          "elapsed_ms": 8.938157000000047,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 28,
+          "elapsed_ms": 0.3527239999998528,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "healthy_read_burst",
+          "repeat": 29,
+          "elapsed_ms": 13.263541999999916,
+          "backend_requests": 1,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "cross_cycle_write",
+          "repeat": 29,
+          "elapsed_ms": 8.232406999999967,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "whiteboard_handoff",
+          "repeat": 29,
+          "elapsed_ms": 11.862814999999955,
+          "backend_requests": 3,
+          "success": true,
+          "first_error_flag": null
+        },
+        {
+          "arm": "after",
+          "scenario": "transient_read_failure",
+          "repeat": 29,
+          "elapsed_ms": 8.216535999999905,
+          "backend_requests": 2,
+          "success": true,
+          "first_error_flag": true
+        },
+        {
+          "arm": "after",
+          "scenario": "unauthorized_write",
+          "repeat": 29,
+          "elapsed_ms": 0.41792400000008456,
+          "backend_requests": 0,
+          "success": true,
+          "first_error_flag": null
+        }
+      ]
+    }
+  },
+  "component_summary": {
+    "before": {
+      "cross_cycle_write": {
+        "attempts": 30,
+        "success": 0,
+        "backend_calls": 30,
+        "median_ms": 4.208449999999914
+      },
+      "healthy_read_burst": {
+        "attempts": 30,
+        "success": 30,
+        "backend_calls": 30,
+        "median_ms": 6.884228000000007
+      },
+      "transient_read_failure": {
+        "attempts": 30,
+        "success": 0,
+        "backend_calls": 30,
+        "median_ms": 3.9057704999999032
+      },
+      "unauthorized_write": {
+        "attempts": 30,
+        "success": 0,
+        "backend_calls": 30,
+        "median_ms": 3.7367250000000354
+      },
+      "whiteboard_handoff": {
+        "attempts": 30,
+        "success": 0,
+        "backend_calls": 60,
+        "median_ms": 7.913239000000033
+      }
+    },
+    "after": {
+      "cross_cycle_write": {
+        "attempts": 30,
+        "success": 30,
+        "backend_calls": 60,
+        "median_ms": 8.052812000000017
+      },
+      "healthy_read_burst": {
+        "attempts": 30,
+        "success": 30,
+        "backend_calls": 30,
+        "median_ms": 8.498749499999917
+      },
+      "transient_read_failure": {
+        "attempts": 30,
+        "success": 30,
+        "backend_calls": 60,
+        "median_ms": 8.027787000000046
+      },
+      "unauthorized_write": {
+        "attempts": 30,
+        "success": 30,
+        "backend_calls": 0,
+        "median_ms": 0.3993605000000571
+      },
+      "whiteboard_handoff": {
+        "attempts": 30,
+        "success": 30,
+        "backend_calls": 90,
+        "median_ms": 11.657286999999997
+      }
+    }
+  },
+  "handoff": [
+    {
+      "arm": "before",
+      "repeat": 0,
+      "poll_interval_s": 1,
+      "success": true,
+      "polls": 61,
+      "elapsed_s": 60.14521141798468,
+      "state": {
+        "backend": 3,
+        "writes": 1,
+        "reads": 2,
+        "board": {
+          "market_context": "verified note"
+        }
+      }
+    },
+    {
+      "arm": "after",
+      "repeat": 0,
+      "poll_interval_s": 1,
+      "success": true,
+      "polls": 1,
+      "elapsed_s": 0.005666782992193475,
+      "state": {
+        "backend": 3,
+        "writes": 1,
+        "reads": 2,
+        "board": {
+          "market_context": "verified note"
+        }
+      }
+    },
+    {
+      "arm": "after",
+      "repeat": 1,
+      "poll_interval_s": 1,
+      "success": true,
+      "polls": 1,
+      "elapsed_s": 0.005007529980503023,
+      "state": {
+        "backend": 3,
+        "writes": 1,
+        "reads": 2,
+        "board": {
+          "market_context": "verified note"
+        }
+      }
+    },
+    {
+      "arm": "before",
+      "repeat": 1,
+      "poll_interval_s": 1,
+      "success": true,
+      "polls": 61,
+      "elapsed_s": 60.136354802991264,
+      "state": {
+        "backend": 3,
+        "writes": 1,
+        "reads": 2,
+        "board": {
+          "market_context": "verified note"
+        }
+      }
+    },
+    {
+      "arm": "before",
+      "repeat": 2,
+      "poll_interval_s": 1,
+      "success": true,
+      "polls": 61,
+      "elapsed_s": 60.13598874898162,
+      "state": {
+        "backend": 3,
+        "writes": 1,
+        "reads": 2,
+        "board": {
+          "market_context": "verified note"
+        }
+      }
+    },
+    {
+      "arm": "after",
+      "repeat": 2,
+      "poll_interval_s": 1,
+      "success": true,
+      "polls": 1,
+      "elapsed_s": 0.0049641759833320975,
+      "state": {
+        "backend": 3,
+        "writes": 1,
+        "reads": 2,
+        "board": {
+          "market_context": "verified note"
+        }
+      }
+    }
+  ],
+  "limitations": [
+    "Synthetic backend with 3ms delay; live performance distribution not sampled.",
+    "Component input/work is fixed; failures are not counted as equivalent completed work.",
+    "Handoff uses real default 60s TTL, 1s polling, 3 order-alternated pairs.",
+    "Model replay remains pending automatic-review permission; no full-cycle speed or token claim."
+  ]
+}

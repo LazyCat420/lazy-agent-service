@@ -1,0 +1,10 @@
+Trading tool fix benchmark protocol (frozen before model inference)
+Baseline: lazy-agent-service c35fbd7. Candidate: current fixes; record source hashes.
+Model: current Gold Spark served ID, same endpoint and settings for both arms.
+4 scenarios x 2 reversed-order repetitions = 8 pairs / 16 model attempts.
+Scenarios: healthy required note write/read; stale whiteboard handoff; repeated note across cycles; transient data error recovery.
+Both arms receive identical scenario prompt, tool schemas, task/financial values, limits and fixtures. Only actual tool execution implementation differs. Work occurs in in-memory fixture backend; no production tool actions or telemetry.
+Use actual revision MCP handler/router/cache; capability injection uses candidate binder after model generation, so no signature tokens enter model context. Streaming model token usage is recorded exactly, failures as unknown rather than zero.
+Max 6 model turns, 1024 output tokens/turn, temperature 0, 300s attempt deadline. Stop on final artifact or limit; no hidden retries. Each result requires matching supplied facts and completed required tool work. Healthy comparison control included. Unavailable fixtures must be explicit.
+Real cache TTL retained. Prior reads/writes that create incident conditions are set up identically in both arms and reported separately. Cross-cycle prior write uses the actual first model write arguments in each arm so the same logical action is represented in prior/current cycles; this is an adverse fixture, not a measured incidence claim.
+Report input/output tokens, all-attempt elapsed time, correctness+completion, tool requests/backend executions, raw JSON validity. Compare cost only with completion status visible. Conditional successful subsets are descriptive, not an unbiased overall effect. Shared model load and cache are uncontrolled; alternate pair order. These are trading workflow step replays, not a full live-cycle profitability or end-to-end speed test.

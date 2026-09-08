@@ -1,3 +1,4 @@
+import { classifyToolResult } from "./ToolResult.ts";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { callKey, guardedRun } from "./ToolCallGuard.ts";
@@ -35,6 +36,14 @@ interface CacheEntry {
   expiresAt: number;
 }
 const cache = new Map<string, CacheEntry>();
+// Explicit reusable data reads only. Unknown tools, writes, composite tools,
+// account state and mutable collaboration state always execute afresh.
+export const REUSABLE_READ_TOOLS = new Set([
+  "get_market_data", "get_polygon_price_history", "get_finviz_fundamentals",
+  "get_sec_filings", "get_earnings_data", "get_finnhub_news", "get_options_flow",
+  "get_insider_trades", "get_institutional_holdings", "get_congress_trades",
+  "get_technical_indicators", "get_upcoming_events", "lazy_web_search", "scrape_url",
+]);
 
 /**
  * Execute a python-bridge tool via trading-service's HTTP endpoint
@@ -46,14 +55,19 @@ export const executeToolViaTradingService = async (
   toolArguments: Record<string, unknown>,
   context?: LocalToolContext
 ): Promise<unknown> => {
-  const cacheKey = callKey(toolName, toolArguments);
+  const reusable = REUSABLE_READ_TOOLS.has(toolName);
+  // The Python bridge repairs an absent ticker from caller context. Requests
+  // with identical raw arguments but different fallback tickers are not equal.
+  const fallbackTicker = typeof toolArguments.ticker === "string" && toolArguments.ticker.trim()
+    ? "" : context?.ticker || "";
+  const cacheKey = callKey(toolName, { arguments: toolArguments, fallbackTicker });
 
   const readCache = (): unknown | undefined => {
     const hit = cache.get(cacheKey);
     return hit && hit.expiresAt > Date.now() ? hit.result : undefined;
   };
 
-  const fresh = readCache();
+  const fresh = reusable ? readCache() : undefined;
   if (fresh !== undefined) {
     logger.info(JSON.stringify({ event: "cache_hit", toolName, args: toolArguments }));
     return fresh;
@@ -65,8 +79,10 @@ export const executeToolViaTradingService = async (
     toolName,
     key: cacheKey,
     scope: { agentName: context?.agentName, cycleId: context?.cycleId },
-    cached: readCache,
-    run: () => callTradingService(toolName, toolArguments, context, cacheKey),
+    cached: reusable ? readCache : undefined,
+    coalesce: reusable,
+    repeatGuard: reusable,
+    run: () => callTradingService(toolName, toolArguments, context, reusable ? cacheKey : undefined),
   });
 };
 
@@ -74,7 +90,7 @@ const callTradingService = async (
   toolName: string,
   toolArguments: Record<string, unknown>,
   context: LocalToolContext | undefined,
-  cacheKey: string
+  cacheKey: string | undefined
 ): Promise<unknown> => {
   const url = `${CONFIG.TRADING_SERVICE_URL}/api/v1/agent-tools/execute`;
   const timeoutMs = CONFIG.SLOW_TOOLS.has(toolName)
@@ -110,9 +126,7 @@ const callTradingService = async (
     // Never cache a failure: a cached error would be replayed to every repeat
     // caller for the whole TTL, turning one transient blip into a minute of
     // guaranteed failures.
-    const isError =
-      result && typeof result === "object" && (result as Record<string, unknown>).is_error === true;
-    if (!isError) {
+    if (cacheKey && classifyToolResult(result).success) {
       cache.set(cacheKey, { result, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
     }
     return result;

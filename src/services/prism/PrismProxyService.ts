@@ -1,3 +1,4 @@
+import { prepareToolContext } from "../TradingToolContext.ts";
 import { prepareTradingRequest } from "../learning/TradingLearningBoundary.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
@@ -121,7 +122,7 @@ export class PrismProxyService {
       // as this overwhelms the LLM context window (~130k tokens).
       body.enabledTools = originalEnabledTools;
       try {
-        body = prepareTradingRequest(body);
+        body = prepareToolContext(prepareTradingRequest(body));
       } catch (error) {
         res.status(422).json({ error: String(error) });
         return;
