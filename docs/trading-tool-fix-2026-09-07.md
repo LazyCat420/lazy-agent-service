@@ -46,6 +46,10 @@ Execution is pending explicit payload approval. Automatic approval review twice 
 - Typecheck and production build passed.
 - Streaming tests cover fragmented UTF-8, interleaved calls, failure flags, truncation refusal, usage preservation and the actual shim → dispatch → bridge path in both stream modes.
 - The tool-only benchmark's worker processes close on completion. No test browsers or audio processes are used.
-- NAS deployment and post-deploy checks are recorded below when complete.
+- Deployed runtime commit `3add6e9` using `deploy-kit`: `npm run deploy -- --only=lazy-tool-service --skip-pull`. Transfer, restart and health checks completed successfully on September 7 at 20:03 PDT. Only the affected service deployed.
+- Running NAS image: `sha256:4efee988ce94f8c41a033dd362c4350050ccf20fc18865a5be1254bfe98f70f0`; container status `running/healthy`, HTTP `/health` returned `status=ok`.
+- Live MCP smoke test listed 91 tools and refused a signed call outside its empty whitelist with `isError=true` / `PERMISSION_DENIED`. The nonexistent target could not execute a production operation. The test-owned MCP connection was closed.
+- Boot logs confirmed the coding, trading and HTML Notes MCP registrations reconnected through the supported API. Deployed `TradingToolContext.js` and `LocalToolRouter.js` SHA-256 values matched the local validated build.
+- Deploy-kit also reported DNS reconciliation conflicts; its affected-service deployment result was one passed / zero failed and Caddyfile unchanged. The verified service uses its existing NAS address. No unrelated DNS changes were made as part of these tool fixes.
 
 Remaining limitation: an adapter timeout still does not prove that an underlying write was cancelled. Mutations are no longer globally coalesced; do not retry an ambiguous timed-out write as if no side effect occurred. A durable operation-id contract would be separate work.
