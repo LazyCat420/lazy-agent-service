@@ -58,3 +58,9 @@ it("does not authorize truncated arguments and keeps foreign tool arguments unch
   const foreign = { choices: [{ message: { tool_calls: [{ function: { name: "mcp__other__search", arguments: "{}" } }] } }] };
   expect(bindToolResponse(foreign, signToolContext(context()))).toEqual(foreign);
 });
+it.each(["", "## Cycle:\ncycle-observe-123", "## Cycle: cycle-observe-123 extra", `## Cycle: ${"x".repeat(161)}`])("never truncates or invents scope from malformed cycle headings: %s", (heading) => {
+  const prepared = prepareToolContext({ project: "vllm-trading-bot", agent: "v3_junior_analyst", conversationId: "scope-regression", enabledTools: ["whiteboard_read"], messages: [{ role: "user", content: heading }] });
+  const extracted = extractToolContext({ messages: [{ role: "system", content: prepared.systemPrompt }] });
+  expect(verifyToolContext(extracted.token).cycleId).toBe("");
+  expect(() => authorizeTradingTool("whiteboard_read", { [TOOL_CONTEXT_ARG]: extracted.token })).toThrow("explicit cycle");
+});

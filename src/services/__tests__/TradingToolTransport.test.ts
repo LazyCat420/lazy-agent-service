@@ -17,8 +17,9 @@ function response() {
   });
   return result;
 }
-for (const streaming of [false, true]) it(`binds real shim -> dispatch -> bridge identity (${streaming ? "SSE" : "JSON"})`, async () => {
-  const prepared = prepareToolContext({ project: "vllm-trading-bot", agent: "CUSTOM_V3_JUNIOR_ANALYST", conversationId: "offline-fullpath", enabledTools: ["whiteboard_write"], systemPrompt: "role", messages: [{ role: "user", content: "## Ticker: TEST\n\n## Cycle: cycle-v3-fullpath" }] });
+for (const cycleId of ["cycle-v3-fullpath", "cycle-observe-1788843390", "bench-FIXT-123"])
+for (const streaming of [false, true]) it(`binds real shim -> dispatch -> bridge identity ${cycleId} (${streaming ? "SSE" : "JSON"})`, async () => {
+  const prepared = prepareToolContext({ project: "vllm-trading-bot", agent: "CUSTOM_V3_JUNIOR_ANALYST", conversationId: "offline-fullpath", enabledTools: ["whiteboard_write"], systemPrompt: "role", messages: [{ role: "user", content: `## Ticker: TEST\n\n## Cycle: ${cycleId}` }] });
   const call = { id: "call-a", type: "function", function: { name: "whiteboard_write", arguments: '{"ticker":"TEST","section":"market_context","content":"offline"}' } };
   const modelResponse = { choices: [{ index: 0, message: { role: "assistant", tool_calls: [call] }, finish_reason: "tool_calls" }], usage: { prompt_tokens: 20, completion_tokens: 8 } };
   const wire = streaming ? [
@@ -43,7 +44,7 @@ for (const streaming of [false, true]) it(`binds real shim -> dispatch -> bridge
   expect(JSON.parse(argumentsText)[TOOL_CONTEXT_ARG]).toBeTruthy();
   expect(await dispatchTool("whiteboard_write", JSON.parse(argumentsText), { transport: "mcp" })).toEqual({ ok: true });
   const bridge = JSON.parse(fetchMock.mock.calls[1][1].body);
-  expect(bridge).toMatchObject({ cycle_id: "cycle-v3-fullpath", agent_name: "v3_junior_analyst", ticker: "TEST" });
+  expect(bridge).toMatchObject({ cycle_id: cycleId, agent_name: "v3_junior_analyst", ticker: "TEST" });
   expect(bridge.arguments).not.toHaveProperty(TOOL_CONTEXT_ARG);
 });
 it("rejects bad request identity before contacting a model", async () => {

@@ -50,7 +50,9 @@ export function prepareToolContext(body: Record<string, any>): Record<string, an
   if (!agentName || !body.conversationId) throw new Error("Trading request requires agent and conversation identity");
   const context: TradingToolContext = {
     project: "vllm-trading-bot", agentName, conversationId: String(body.conversationId),
-    cycleId: task.match(/^## Cycle:\s*(cycle-v3-[^\s]+)/m)?.[1] || "",
+    // Cycle IDs are opaque harness identities, including observation and replay runs.
+    // Preserve the complete heading value; never substitute the active production cycle.
+    cycleId: task.match(/^## Cycle:[ \t]*([A-Za-z0-9][A-Za-z0-9_.:-]{0,159})[ \t]*\r?$/m)?.[1] || "",
     ticker: task.match(/^## Ticker:\s*([A-Z][A-Z0-9.-]{0,12})/m)?.[1] || "",
     allowedTools: [...new Set<string>((body.enabledTools || []).filter((t: unknown) => typeof t === "string").map(stripMcpPrefix))],
     expiresAt: Date.now() + 24 * 60 * 60 * 1000,
