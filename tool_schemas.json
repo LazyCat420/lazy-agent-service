@@ -2327,45 +2327,6 @@
     "agents": []
   },
   {
-    "name": "request_peer_analysis",
-    "description": "Request a specific peer agent (e.g. 'quant_analyst', 'fundamental_analyst', 'junior_analyst') to run a query, check a lead, or verify details, and post findings to the whiteboard.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker to research."
-        },
-        "target_agent": {
-          "type": "string",
-          "description": "The exact name of the target agent (junior_analyst, fundamental_analyst, quant_analyst)."
-        },
-        "query": {
-          "type": "string",
-          "description": "The specific question or instructions for the target agent."
-        }
-      },
-      "required": [
-        "ticker",
-        "target_agent",
-        "query"
-      ]
-    },
-    "tier": 1,
-    "source": "agent_coordination",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "owner_app": "trading",
-    "agents": []
-  },
-  {
     "name": "request_research_now",
     "description": "Queue an immediate research-only cycle (collect + analyze, NEVER trades) on up to 5 tickers. Use ONLY when a catalyst already hit and the current data is insufficient. Governor enforces: max 2 queued at once, 4h per-ticker cooldown, dedupe against scheduled research. Be picky \u2014 routine curiosity will be rejected; check list_scheduled_research first.",
     "parameters": {
@@ -3095,7 +3056,7 @@
   },
   {
     "name": "whiteboard_write",
-    "description": "Write or overwrite a section of the team's shared whiteboard. Use this to post your final analysis or consensus for other agents to read. Writing will bump the version number of the section. Content should be valid JSON string.",
+    "description": "Post shared evidence or notes for the current ticker and cycle. This replaces a collaboration section with a new version; use whiteboard_annotate to comment without replacing it. Pipeline analysis and debate artifacts are published automatically and cannot be overwritten here. This posts a note, not an assigned task or a request to rerun an agent.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -3105,7 +3066,7 @@
         },
         "section": {
           "type": "string",
-          "description": "The section name to write to (e.g. 'consensus')."
+          "description": "The collaboration section name (e.g. 'market_context' or 'risk_flags')."
         },
         "content": {
           "type": "string",
