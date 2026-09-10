@@ -1,16 +1,23 @@
-import { attachToolContext } from "./TradingToolContext.ts";
+import { attachToolContext, verifyToolContext } from "./TradingToolContext.ts";
 import { getToolSchemas } from "./ToolSchemaService.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 
 const localTools = new Set(getToolSchemas().map(t => t.name));
 function local(name: string): boolean { return typeof name === "string" && localTools.has(stripMcpPrefix(name)); }
+function bindArguments(name: string, args: string, token: string): string {
+  const context = verifyToolContext(token);
+  if (typeof name !== "string" || !context.allowedTools.includes(stripMcpPrefix(name)) || stripMcpPrefix(name) === "think") {
+    throw new Error(`Model requested an unauthorized trading tool: ${name}`);
+  }
+  return local(name) ? attachToolContext(args, token) : args;
+}
 export function bindToolResponse(response: any, token: string): any {
   return { ...response, choices: (response.choices || []).map((choice: any) => ({
     ...choice,
     ...(choice.message ? { message: { ...choice.message,
       ...(Array.isArray(choice.message.tool_calls) ? { tool_calls: choice.message.tool_calls.map((call: any) =>
-        local(call.function?.name) ? { ...call, function: { ...call.function,
-          arguments: attachToolContext(call.function.arguments, token) } } : call) } : {}),
+        ({ ...call, function: { ...call.function,
+          arguments: bindArguments(call.function?.name, call.function?.arguments, token) } })) } : {}),
     } } : {}),
   })) };
 }
@@ -78,7 +85,7 @@ export class TradingToolStream {
         if (choice.finish_reason !== "tool_calls" && choice.finish_reason !== "stop") throw new Error("Incomplete trading tool arguments");
         if (chunks?.length) frames.push(frame(ci, choice.delta.tool_calls));
         frames.push(frame(ci, [...calls].map(([index, state]) => ({ index,
-          function: { arguments: local(state.name) ? attachToolContext(state.args, this.token) : state.args },
+          function: { arguments: bindArguments(state.name, state.args, this.token) },
         }))));
         this.calls.delete(ci);
         if (choice.delta) delete choice.delta.tool_calls;

@@ -16,10 +16,21 @@ const acknowledgement = JSON.stringify({
 });
 const isThink = (name: unknown) => typeof name === "string" && stripMcpPrefix(name) === "think";
 
-export function applyTradingToolProtocol(body: Record<string, any>): {
-  body: Record<string, any>; removedTools: number; correctedAcknowledgements: number;
+export function applyTradingToolProtocol(body: Record<string, any>, allowedTools?: string[]): {
+  body: Record<string, any>; removedTools: number; correctedAcknowledgements: number; deniedTools: string[];
 } {
-  const tools = Array.isArray(body.tools) ? body.tools.filter((t: any) => !isThink(t.function?.name)) : body.tools;
+  const allowed = allowedTools ? new Set(allowedTools.map(stripMcpPrefix)) : null;
+  const deniedTools: string[] = [];
+  const tools = Array.isArray(body.tools) ? body.tools.filter((t: any) => {
+    const name = t.function?.name;
+    if (isThink(name)) return false;
+    // Built-in tools bypass /execute authorization. Enforce the signed role catalog here too.
+    if (allowed && (typeof name !== "string" || !allowed.has(stripMcpPrefix(name)))) {
+      deniedTools.push(String(name || "unknown"));
+      return false;
+    }
+    return true;
+  }) : body.tools;
   const removedTools = Array.isArray(body.tools) ? body.tools.length - tools.length : 0;
   const thinkIds = new Set<string>();
   let correctedAcknowledgements = 0;
@@ -40,7 +51,7 @@ export function applyTradingToolProtocol(body: Record<string, any>): {
   });
   if (!injected) messages.unshift({ role: "system", content: protocol });
   const result: Record<string, any> = { ...body, messages, ...(Array.isArray(tools) ? { tools } : {}) };
-  if (isThink(body.tool_choice?.function?.name)) result.tool_choice = tools?.length ? "auto" : "none";
+  if (isThink(body.tool_choice?.function?.name) || deniedTools.includes(body.tool_choice?.function?.name)) result.tool_choice = tools?.length ? "auto" : "none";
   if (removedTools && !tools.length && body.tool_choice === "required") result.tool_choice = "none";
-  return { body: result, removedTools, correctedAcknowledgements };
+  return { body: result, removedTools, correctedAcknowledgements, deniedTools };
 }

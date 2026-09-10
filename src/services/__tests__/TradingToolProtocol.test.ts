@@ -39,3 +39,10 @@ describe("trading execution protocol", () => {
     expect(applyTradingToolProtocol({ tools: [tool("get_news")], tool_choice: "none" }).body.tool_choice).toBe("none");
   });
 });
+
+it("enforces the signed role catalog against framework built-ins", () => {
+  const result = applyTradingToolProtocol({tools:[tool("search_web"),tool("execute_python"),tool("whiteboard_read")], tool_choice:{type:"function",function:{name:"search_web"}}}, ["whiteboard_read"]);
+  expect(result.body.tools).toEqual([tool("whiteboard_read")]);
+  expect(result.deniedTools).toEqual(["search_web","execute_python"]);
+  expect(result.body.tool_choice).toBe("auto");
+});

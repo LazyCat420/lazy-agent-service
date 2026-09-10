@@ -1,7 +1,7 @@
 import { applyTradingToolProtocol } from "../TradingToolProtocol.ts";
-import { extractToolContext } from "../TradingToolContext.ts";
+import { extractToolContext, verifyToolContext } from "../TradingToolContext.ts";
 import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
-import { filterTradingPayload, recordPayload } from "../learning/TradingLearningBoundary.ts";
+import { filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
 
@@ -650,12 +650,13 @@ export class VllmShimService {
       try {
         const execution = extractToolContext(req.body);
         toolContextToken = execution.token;
-        const protocol = execution.token ? applyTradingToolProtocol(execution.body) : null;
+        const protocol = execution.token ? applyTradingToolProtocol(execution.body, verifyToolContext(execution.token).allowedTools) : null;
         boundary = filterTradingPayload(protocol?.body || execution.body);
         if (boundary.receipt && protocol) {
           boundary.receipt.tool_protocol_version = 1;
-          boundary.receipt.reasoning_tools_removed = protocol.removedTools;
+          boundary.receipt.reasoning_tools_removed = protocol.removedTools - protocol.deniedTools.length;
           boundary.receipt.reasoning_acknowledgements_corrected = protocol.correctedAcknowledgements;
+          boundary.receipt.unpermitted_tools_removed = protocol.deniedTools;
         }
       } catch (error) {
         res.status(422).json({ error: String(error) });
@@ -666,6 +667,7 @@ export class VllmShimService {
       // Repair degenerate recovery tails + non-leading system turns before
       // the chat template sees them (copy-on-write; identity when clean).
       body = this.rewriteMessages(body as Record<string, unknown>);
+      await recordProviderSnapshot(boundary.receipt, body);
     }
 
     const isEmbedPost = basePath === "/v1/embeddings" && req.method === "POST" && !!body && typeof body === "object";

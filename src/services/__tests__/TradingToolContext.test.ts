@@ -52,11 +52,11 @@ it("streaming preserves fragmented UTF-8, interleaved tools, usage and finish ev
   expect(output).toContain("café");
   expect(frames.flatMap(f => f.choices).filter(c => c.finish_reason)).toHaveLength(1);
 });
-it("does not authorize truncated arguments and keeps foreign tool arguments unchanged", () => {
+it("rejects truncated arguments and unsigned foreign tool authority", () => {
   const stream = new TradingToolStream(signToolContext(context()));
   expect(() => stream.push(Buffer.from('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"whiteboard_write","arguments":"{"}}]},"finish_reason":"length"}]}\n\n'))).toThrow("Incomplete");
   const foreign = { choices: [{ message: { tool_calls: [{ function: { name: "mcp__other__search", arguments: "{}" } }] } }] };
-  expect(bindToolResponse(foreign, signToolContext(context()))).toEqual(foreign);
+  expect(() => bindToolResponse(foreign, signToolContext(context()))).toThrow("unauthorized");
 });
 it.each(["", "## Cycle:\ncycle-observe-123", "## Cycle: cycle-observe-123 extra", `## Cycle: ${"x".repeat(161)}`])("never truncates or invents scope from malformed cycle headings: %s", (heading) => {
   const prepared = prepareToolContext({ project: "vllm-trading-bot", agent: "v3_junior_analyst", conversationId: "scope-regression", enabledTools: ["whiteboard_read"], messages: [{ role: "user", content: heading }] });
