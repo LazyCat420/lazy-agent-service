@@ -35,7 +35,7 @@ describe("trading execution protocol", () => {
   });
   it("resolves forced think and empty required catalogs without enabling other tools", () => {
     expect(applyTradingToolProtocol({ tools: [tool("think"), tool("get_news")], tool_choice: { type: "function", function: { name: "think" } } }).body.tool_choice).toBe("auto");
-    expect(applyTradingToolProtocol({ tools: [tool("think")], tool_choice: "required" }).body.tool_choice).toBe("none");
+    expect(applyTradingToolProtocol({ tools: [tool("think")], tool_choice: "required" }).body.tool_choice).toBeUndefined();
     expect(applyTradingToolProtocol({ tools: [tool("get_news")], tool_choice: "none" }).body.tool_choice).toBe("none");
   });
 });
@@ -45,4 +45,11 @@ it("enforces the signed role catalog against framework built-ins", () => {
   expect(result.body.tools).toEqual([tool("whiteboard_read")]);
   expect(result.deniedTools).toEqual(["search_web","execute_python"]);
   expect(result.body.tool_choice).toBe("auto");
+});
+
+it("omits an emptied signed catalog for tool-less correction requests", () => {
+  const result = applyTradingToolProtocol({tools:[tool("search_web"),tool("execute_python")],tool_choice:"auto"},[]);
+  expect(result.body).not.toHaveProperty("tools");
+  expect(result.body).not.toHaveProperty("tool_choice");
+  expect(result.deniedTools).toEqual(["search_web","execute_python"]);
 });

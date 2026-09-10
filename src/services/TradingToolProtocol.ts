@@ -53,5 +53,11 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
   const result: Record<string, any> = { ...body, messages, ...(Array.isArray(tools) ? { tools } : {}) };
   if (isThink(body.tool_choice?.function?.name) || deniedTools.includes(body.tool_choice?.function?.name)) result.tool_choice = tools?.length ? "auto" : "none";
   if (removedTools && !tools.length && body.tool_choice === "required") result.tool_choice = "none";
+  // OpenAI-compatible providers reject tools:[] before inference. A tool-less
+  // repair must omit the catalog and choice, not advertise an empty catalog.
+  if (Array.isArray(tools) && tools.length === 0) {
+    delete result.tools;
+    delete result.tool_choice;
+  }
   return { body: result, removedTools, correctedAcknowledgements, deniedTools };
 }
