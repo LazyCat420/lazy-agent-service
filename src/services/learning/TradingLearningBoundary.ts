@@ -119,7 +119,8 @@ export async function recordProviderSnapshot(receipt: Record<string, any> | null
     const created_at = new Date();
     const snapshot = { hash, bytes: raw.length, truncated, encoding: truncated ? "utf8-json-prefix" : "json" };
     await db.collection("pipeline_trace_blobs").updateOne({ _id:hash } as any,
-      { $setOnInsert:{ ...snapshot, content:raw.subarray(0,256*1024).toString(), created_at } }, { upsert:true });
+      { $setOnInsert:{ ...snapshot, content:raw.subarray(0,256*1024).toString(), created_at },
+        $max:{ last_referenced_at:created_at } }, { upsert:true });
     await db.collection("pipeline_trace_events").insertOne({
       id:randomUUID(), trace_id:digest(receipt.cycle_id).slice(0,32), span_id:randomUUID().replaceAll("-", "").slice(0,16),
       parent_span_id:receipt.parent_span_id || null, cycle_id:receipt.cycle_id, ticker:receipt.ticker,

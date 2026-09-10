@@ -64,6 +64,7 @@ it("stores the provider payload in trading-owned bounded snapshots with cycle id
     {messages:[{role:"assistant",reasoning_content:"hidden",content:'{"action":"HOLD"}'}],model:"fixture"});
   expect(collection).toHaveBeenCalledWith("pipeline_trace_blobs");
   const blob=updateOne.mock.calls[0][1].$setOnInsert;
+  expect(updateOne.mock.calls[0][1].$max.last_referenced_at).toBeInstanceOf(Date);
   expect(blob.content).not.toContain("hidden");
   expect(JSON.parse(blob.content).messages[0].content).toContain("HOLD");
   expect(insertOne.mock.calls[0][0]).toMatchObject({cycle_id:"cycle-test",agent:"v3_board_of_directors",stage:"provider.payload",parent_span_id:"0123456789abcdef"});
