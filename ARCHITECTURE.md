@@ -53,6 +53,7 @@ It must **never** contain trading cycle management or cognition/evaluation logic
 |-----------|---------------|
 | `boot.ts` | Entry point — starts Express + MCP SSE server |
 | `src/mcp/` | MCP SSE transport — registers tools from schema, proxies calls to Python |
+| `src/platform/` | Shared agent runtime: 4-layer context assembly, lifecycle memory engine, trace engineering, deterministic verifiers, and replay manifests |
 | `src/routes/` | Express REST routes (`/tools`, `/health`, `/schemas`) |
 | `tool_schemas/` | Per-app/per-domain source folders for tool schemas (`<owner_app>/<domain>.json`). Edit these, not the flat file. |
 | `tool_schemas.json` | Build artifact — flat array generated from `tool_schemas/` by `trading-service/scripts/build_tool_schemas.py` (run by deploy.sh; `update_tool_schemas.py` refreshes the sources from prism + native registry). |
