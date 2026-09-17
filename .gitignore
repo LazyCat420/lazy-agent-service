@@ -40,7 +40,9 @@ __pycache__/
 # Local Secrets File
 projects.json
 
+# Git worktrees
+.worktrees/
+
 # Temporary/Backup configs
 *_temp.json
 *_backup.json
-
