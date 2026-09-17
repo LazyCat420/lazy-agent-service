@@ -36,6 +36,7 @@ import crypto from "node:crypto";
 import logger from "../utils/logger.ts";
 import { Span } from "../platform/trace/Span.ts";
 import { TraceExporter } from "../platform/trace/TraceExporter.ts";
+import { TraceContext } from "../platform/trace/TraceContext.ts";
 
 const num = (name: string, fallback: number): number => {
   const raw = Number(process.env[name]);
@@ -254,9 +255,11 @@ export function guardedRun<T>(opts: GuardedRunOptions<T>): Promise<T | Record<st
   const decision = opts.repeatGuard === false ? { verdict: "allow" as const, count: 0 } : recordAttempt(toolName, key, scope);
   if (decision.verdict !== "allow") {
     try {
+      const activeCtx = TraceContext.get();
       const guardSpan = new Span({
-        trace_id: crypto.randomUUID().replaceAll("-", "").slice(0, 32),
-        run_id: "guard_run",
+        trace_id: activeCtx?.trace_id || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+        parent_span_id: activeCtx?.current_span_id || activeCtx?.currentSpan?.span_id || null,
+        run_id: activeCtx?.run_id || "guard_run",
         name: `tool_guard:${toolName}`,
         kind: "tool_guard",
         attributes: {

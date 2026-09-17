@@ -57,7 +57,7 @@ export interface SpanData {
   parent_span_id?: string | null;
   run_id: string;
   name: string;
-  kind: "agent_run" | "model_call" | "tool_guard" | "tool_execution" | "retry" | "subagent" | "verifier" | "checkpoint";
+  kind: "agent_run" | "model_call" | "tool_guard" | "tool_execution" | "retry" | "subagent" | "delegation" | "delegation_join" | "verifier" | "checkpoint";
   status: SpanStatus;
   status_message?: string;
   start_time: string; // ISO 8601
@@ -71,6 +71,7 @@ export interface SpanData {
 export interface AgentRunManifest {
   run_id: string;
   trace_id: string;
+  conversation_id?: string | null;
   parent_run_id?: string | null;
   project: string;
   agent_role: string;
@@ -78,7 +79,7 @@ export interface AgentRunManifest {
   model: string;
   start_time: string;
   end_time?: string;
-  status: "running" | "completed" | "failed" | "cancelled" | "timeout" | "budget_exceeded";
+  status: "running" | "completed" | "failed" | "cancelled" | "setup_error" | "timeout" | "budget_exceeded";
   stop_reason?: string;
   total_tokens?: number;
   total_cost_usd?: number;

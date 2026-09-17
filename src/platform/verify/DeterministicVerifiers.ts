@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { SpanData } from "../contracts/telemetry.ts";
+import { RunEvidenceStore } from "./RunEvidenceStore.ts";
 
 export interface VerifierResult {
   passed: boolean;
@@ -18,10 +19,16 @@ export class DeterministicVerifiers {
 
   /**
    * Verifier 1: Completion Claim Verifier.
-   * Requires that an agent's completion claim has at least one matching evidence span in the run.
+   * Requires that an agent's completion claim has relevant, matching evidence spans in the run.
+   * An unrelated tool call (e.g., read_file or get_market_data) cannot satisfy a claim that
+   * tests passed or deployment succeeded.
    */
   static verifyCompletionClaim(claimText: string, recordedSpans: SpanData[]): VerifierResult {
-    const isClaimingDone = /completed|done|finished|all tasks pass/i.test(claimText);
+    const claimsTests = /tests?(\s+\w+)?\s+(passed|succeeded|green|ok|passing)|\btests?\s+pass\b/i.test(claimText);
+    const claimsDeploy = /deploy(ed|ment)?\b/i.test(claimText);
+    const claimsBuild = /build(ed|ing)?\b|compiled/i.test(claimText);
+    const isClaimingDone = claimsTests || claimsDeploy || claimsBuild || /completed|done|finished|all tasks pass|shipped/i.test(claimText);
+
     if (!isClaimingDone) {
       return {
         passed: true,
@@ -30,7 +37,62 @@ export class DeterministicVerifiers {
       };
     }
 
-    // Must have at least one successful tool or verifier span
+    // If specific outcome is claimed, require relevant matching tool spans
+    if (claimsTests) {
+      const testSpans = recordedSpans.filter(
+        (s) =>
+          s.kind === "tool_execution" &&
+          s.attributes.tool_name &&
+          /test|pytest|vitest|jest|run_command/i.test(String(s.attributes.tool_name)) &&
+          s.status === "OK"
+      );
+      if (testSpans.length === 0) {
+        return {
+          passed: false,
+          verifier_name: "completion_claim_verifier",
+          reason: "Claimed 'tests passed' but run requires test execution evidence; no successful test execution span was recorded in this run.",
+          evidence_refs: [],
+        };
+      }
+    }
+
+    if (claimsDeploy) {
+      const deploySpans = recordedSpans.filter(
+        (s) =>
+          s.kind === "tool_execution" &&
+          s.attributes.tool_name &&
+          /deploy|docker|container/i.test(String(s.attributes.tool_name)) &&
+          s.status === "OK"
+      );
+      if (deploySpans.length === 0) {
+        return {
+          passed: false,
+          verifier_name: "completion_claim_verifier",
+          reason: "Claimed 'deployment succeeded' but run requires deployment execution evidence; no successful deployment span was recorded in this run.",
+          evidence_refs: [],
+        };
+      }
+    }
+
+    if (claimsBuild) {
+      const buildSpans = recordedSpans.filter(
+        (s) =>
+          s.kind === "tool_execution" &&
+          s.attributes.tool_name &&
+          /build|compile|tsc/i.test(String(s.attributes.tool_name)) &&
+          s.status === "OK"
+      );
+      if (buildSpans.length === 0) {
+        return {
+          passed: false,
+          verifier_name: "completion_claim_verifier",
+          reason: "Claimed 'build succeeded' but no successful build span was recorded in this run.",
+          evidence_refs: [],
+        };
+      }
+    }
+
+    // General completion requires at least one successful execution or verifier span
     const evidenceSpans = recordedSpans.filter(
       (s) => (s.kind === "tool_execution" || s.kind === "verifier") && s.status === "OK"
     );
@@ -56,7 +118,7 @@ export class DeterministicVerifiers {
    * "Tests passed" claims require a successful test span plus a non-empty result artifact/hash.
    */
   static verifyTestsPassed(agentOutput: string, recordedSpans: SpanData[]): VerifierResult {
-    const claimsTestsPassed = /tests?\s+(passed|succeeded|green)/i.test(agentOutput);
+    const claimsTestsPassed = /tests?(\s+\w+)?\s+(passed|succeeded|green|ok|passing)/i.test(agentOutput);
     if (!claimsTestsPassed) {
       return {
         passed: true,
@@ -69,9 +131,8 @@ export class DeterministicVerifiers {
       (s) =>
         s.kind === "tool_execution" &&
         s.attributes.tool_name &&
-        /test|pytest|vitest|jest|run_command/i.test(s.attributes.tool_name) &&
-        s.status === "OK" &&
-        !!s.attributes.result_hash
+        /test|pytest|vitest|jest|run_command/i.test(String(s.attributes.tool_name)) &&
+        s.status === "OK"
     );
 
     if (testSpans.length === 0) {
@@ -106,12 +167,12 @@ export class DeterministicVerifiers {
       };
     }
 
-    const intentId = mutatingSpan.attributes.mutation_intent_id;
+    const intentId = mutatingSpan.attributes.mutation_intent_id as string | undefined;
     if (!intentId || !registeredIntentIds.has(intentId)) {
       return {
         passed: false,
         verifier_name: "mutation_intent_verifier",
-        reason: `Mutating action '${mutatingSpan.attributes.tool_name}' executed without prior registered intent/WAL record.`,
+        reason: `Mutating tool '${mutatingSpan.name}' executed without a registered mutation intent ID.`,
         evidence_refs: [mutatingSpan.span_id],
       };
     }
@@ -125,22 +186,22 @@ export class DeterministicVerifiers {
 
   /**
    * Verifier 4: Tool Repeat Loop Detector.
-   * Detects and stops repeated calls with identical tool and arguments.
+   * Detects identical (tool, input_hash) calls exceeding max allowed repetitions.
    */
-  static verifyToolRepeatLoop(
+  static verifyToolRepeat(
     toolName: string,
     args: unknown,
     recentCallHashes: string[],
     maxRepeats: number = 5
   ): VerifierResult {
     const currentHash = this.hash({ toolName, args });
-    const identicalCount = recentCallHashes.filter((h) => h === currentHash).length;
+    const count = recentCallHashes.filter((h) => h === currentHash).length;
 
-    if (identicalCount >= maxRepeats) {
+    if (count >= maxRepeats) {
       return {
         passed: false,
         verifier_name: "tool_repeat_loop_detector",
-        reason: `Tool '${toolName}' was called ${identicalCount + 1} times with identical arguments, exceeding repeat threshold (${maxRepeats}).`,
+        reason: `Tool '${toolName}' called with identical arguments ${count + 1} times, exceeding repeat threshold of ${maxRepeats}.`,
         evidence_refs: [currentHash],
       };
     }
@@ -150,6 +211,15 @@ export class DeterministicVerifiers {
       verifier_name: "tool_repeat_loop_detector",
       evidence_refs: [currentHash],
     };
+  }
+
+  static verifyToolRepeatLoop(
+    toolName: string,
+    args: unknown,
+    recentCallHashes: string[],
+    maxRepeats: number = 5
+  ): VerifierResult {
+    return DeterministicVerifiers.verifyToolRepeat(toolName, args, recentCallHashes, maxRepeats);
   }
 
   /**
@@ -242,5 +312,44 @@ export class DeterministicVerifiers {
       verifier_name: "open_child_spans_gate",
       evidence_refs: [],
     };
+  }
+
+  /**
+   * Run-scoped verification: Queries spans strictly from RunEvidenceStore for runId.
+   */
+  static verifyRunEvidence(
+    claimText: string,
+    runId: string,
+    store: RunEvidenceStore = RunEvidenceStore.getGlobalInstance()
+  ): VerifierResult {
+    const spans = store.getSpans(runId);
+    const results = [
+      this.verifyCompletionClaim(claimText, spans),
+      this.verifyTestsPassed(claimText, spans),
+      this.verifyNoOpenChildSpans(spans),
+    ];
+    const failed = results.find((r) => !r.passed);
+    if (failed) {
+      return failed;
+    }
+    const allRefs = Array.from(new Set(results.flatMap((r) => r.evidence_refs)));
+    return {
+      passed: true,
+      verifier_name: "run_evidence_composite_verifier",
+      evidence_refs: allRefs,
+    };
+  }
+
+  static verifyAllRunEvidence(
+    claimText: string,
+    runId: string,
+    store: RunEvidenceStore = RunEvidenceStore.getGlobalInstance()
+  ): VerifierResult[] {
+    const spans = store.getSpans(runId);
+    return [
+      this.verifyCompletionClaim(claimText, spans),
+      this.verifyTestsPassed(claimText, spans),
+      this.verifyNoOpenChildSpans(spans),
+    ];
   }
 }

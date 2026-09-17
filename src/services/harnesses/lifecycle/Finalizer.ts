@@ -30,8 +30,10 @@ import {
 import { getErrorMessage } from "../../../utils/ErrorHelpers.ts";
 import crypto from "node:crypto";
 import { DeterministicVerifiers } from "../../../platform/verify/DeterministicVerifiers.ts";
+import { RunEvidenceStore } from "../../../platform/verify/RunEvidenceStore.ts";
 import { Span } from "../../../platform/trace/Span.ts";
 import { TraceExporter } from "../../../platform/trace/TraceExporter.ts";
+import { TraceContext } from "../../../platform/trace/TraceContext.ts";
 
 export interface FinalizerContext {
   providerName: string;
@@ -485,14 +487,20 @@ export async function finalizeTextGeneration(
     );
   }
   // ── Verification assertion & Done event ───────────────────────
+  let verResult: { passed: boolean; reason?: string; evidence_refs: string[] } | null = null;
   try {
-    const recordedSpans = TraceExporter.getGlobalInstance().getQueuedSpans();
-    const verResult = DeterministicVerifiers.verifyCompletionClaim(text || "", recordedSpans);
-    const effectiveTraceId = (context as any).rootSpan?.trace_id || traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32);
+    const effectiveRunId = (context as any).runId || TraceContext.runId() || agentConversationId || "run_final";
+    const runSpans = RunEvidenceStore.getGlobalInstance().getSpans(effectiveRunId);
+    const recordedSpans = runSpans.length > 0 ? runSpans : TraceExporter.getGlobalInstance().getQueuedSpans();
+    verResult = DeterministicVerifiers.verifyCompletionClaim(text || "", recordedSpans);
+
+    const effectiveTraceId = TraceContext.traceId() || (context as any).rootSpan?.trace_id || traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32);
+    const effectiveParentSpanId = TraceContext.currentSpanId() || (context as any).rootSpan?.span_id || null;
+
     const verSpan = new Span({
       trace_id: effectiveTraceId,
-      parent_span_id: (context as any).rootSpan?.span_id || null,
-      run_id: (context as any).runId || agentConversationId || "run_final",
+      parent_span_id: effectiveParentSpanId,
+      run_id: effectiveRunId,
       name: "verification:completion_claim",
       kind: "verifier",
       attributes: {
@@ -512,6 +520,11 @@ export async function finalizeTextGeneration(
   // is guaranteed to see the complete, up-to-date conversation.
   if (!signal?.aborted) {
     if (emit) {
+      const activeCtx = TraceContext.get();
+      const resolvedTraceId = activeCtx?.trace_id || (context as any).rootSpan?.trace_id || traceId || null;
+      const resolvedRunId = activeCtx?.run_id || (context as any).runId || null;
+      const resolvedSpanId = activeCtx?.current_span_id || (context as any).rootSpan?.span_id || null;
+
       emit({
         type: SERVER_SENT_EVENT_TYPES.DONE,
         provider: providerName,
@@ -527,10 +540,17 @@ export async function finalizeTextGeneration(
         generationTime:
           generationSec != null ? roundMilliseconds(generationSec) : null,
         totalTime: totalSec != null ? roundMilliseconds(totalSec) : null,
-        ...(traceId && { traceId, trace_id: traceId }),
+        ...(resolvedTraceId && { traceId: resolvedTraceId, trace_id: resolvedTraceId }),
         ...(conversationId && { conversationId }),
-        ...((context as any).runId && { run_id: (context as any).runId }),
-        ...((context as any).rootSpan?.span_id && { span_id: (context as any).rootSpan.span_id }),
+        ...(resolvedRunId && { run_id: resolvedRunId }),
+        ...(resolvedSpanId && { span_id: resolvedSpanId }),
+        ...(verResult && {
+          verification: {
+            passed: verResult.passed,
+            reason: verResult.reason,
+            evidence_count: verResult.evidence_refs.length,
+          },
+        }),
       });
     }
   }

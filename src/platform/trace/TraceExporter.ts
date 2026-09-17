@@ -6,6 +6,18 @@ export interface ExporterConfig {
   batchSize?: number;
   flushIntervalMs?: number;
   serviceSource?: string;
+  authToken?: string;
+}
+
+export interface ExporterMetrics {
+  queue_depth_spans: number;
+  queue_depth_runs: number;
+  overflow_drops: number;
+  export_failures: number;
+  rejected_batches: number;
+  successful_exports: number;
+  last_success_time: string | null;
+  last_failure_time: string | null;
 }
 
 export const DEFAULT_EXPORTER_CONFIG: ExporterConfig = {
@@ -14,10 +26,12 @@ export const DEFAULT_EXPORTER_CONFIG: ExporterConfig = {
   batchSize: 50,
   flushIntervalMs: 5000,
   serviceSource: "lazy-agent-service",
+  authToken: process.env.TELEMETRY_SERVICE_TOKEN,
 };
 
 /**
- * Sanitizes object keys and values against credential / secret patterns.
+ * Sanitizes object keys and values against credential / secret patterns,
+ * while strictly preserving numeric usage metrics (tokens, token counts).
  */
 export function sanitizeTelemetryPayload(obj: unknown): unknown {
   if (Array.isArray(obj)) {
@@ -26,7 +40,16 @@ export function sanitizeTelemetryPayload(obj: unknown): unknown {
   if (obj && typeof obj === "object") {
     const clean: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      if (/password|secret|token|api[_-]?key|credential|private[_-]?key/i.test(key)) {
+      // Preserve numeric token metrics unconditionally
+      const isNumericTokenField =
+        typeof value === "number" &&
+        /token/i.test(key);
+      const isKnownTokenMetric =
+        /^(total_tokens|tokens_input|tokens_output|tokens_cache|prompt_tokens|completion_tokens|inputTokens|outputTokens|totalTokens|tokens)$/i.test(key);
+
+      if (isNumericTokenField || isKnownTokenMetric) {
+        clean[key] = value;
+      } else if (/password|secret|token|bearer|api[_-]?key|credential|private[_-]?key/i.test(key)) {
         clean[key] = "[REDACTED]";
       } else {
         clean[key] = sanitizeTelemetryPayload(value);
@@ -41,7 +64,8 @@ export function sanitizeTelemetryPayload(obj: unknown): unknown {
 }
 
 /**
- * TraceExporter — Fail-safe, non-blocking asynchronous trace exporter with ring-buffered queue.
+ * TraceExporter — Fail-safe, non-blocking asynchronous trace exporter with ring-buffered queue,
+ * measurable overflow drops, export failures, and shutdown flushing.
  */
 export class TraceExporter {
   private static instance: TraceExporter | null = null;
@@ -50,6 +74,14 @@ export class TraceExporter {
   private config: ExporterConfig;
   private timer: NodeJS.Timeout | null = null;
   private isFlushing = false;
+
+  // Producer-side observability metrics
+  private overflowDrops = 0;
+  private exportFailures = 0;
+  private rejectedBatches = 0;
+  private successfulExports = 0;
+  private lastSuccessTime: string | null = null;
+  private lastFailureTime: string | null = null;
 
   constructor(config: Partial<ExporterConfig> = {}) {
     this.config = { ...DEFAULT_EXPORTER_CONFIG, ...config };
@@ -73,8 +105,10 @@ export class TraceExporter {
   enqueueSpan(span: SpanData): void {
     const max = this.config.maxQueueSize || 2000;
     if (this.queue.length >= max) {
-      // Drop oldest 10% to prevent unbounded memory growth
-      this.queue.splice(0, Math.floor(max * 0.1));
+      // Drop oldest 10% to prevent unbounded memory growth and track drops
+      const droppedCount = Math.floor(max * 0.1);
+      this.queue.splice(0, droppedCount);
+      this.overflowDrops += droppedCount;
     }
     this.queue.push(span);
   }
@@ -82,7 +116,9 @@ export class TraceExporter {
   enqueueRun(run: AgentRunManifest): void {
     const max = this.config.maxQueueSize || 2000;
     if (this.runQueue.length >= max) {
-      this.runQueue.splice(0, Math.floor(max * 0.1));
+      const droppedCount = Math.floor(max * 0.1);
+      this.runQueue.splice(0, droppedCount);
+      this.overflowDrops += droppedCount;
     }
     this.runQueue.push(run);
   }
@@ -116,24 +152,55 @@ export class TraceExporter {
         runs: sanitizeTelemetryPayload(runsToExport) as AgentRunManifest[],
       };
 
-      // Native fetch with 3-second hard timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000);
 
-      await fetch(this.config.collectorEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(batch),
-        signal: controller.signal,
-      }).catch(() => {
-        // Collector unreachable or timed out; drop silently to guarantee harness SLA
-      }).finally(() => {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (this.config.authToken) {
+        headers["X-Service-Token"] = this.config.authToken;
+      }
+
+      try {
+        const res = await fetch(this.config.collectorEndpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(batch),
+          signal: controller.signal,
+        });
+
+        if (res.ok) {
+          this.successfulExports++;
+          this.lastSuccessTime = new Date().toISOString();
+        } else {
+          // HTTP rejection counts as failure
+          this.exportFailures++;
+          this.rejectedBatches++;
+          this.lastFailureTime = new Date().toISOString();
+        }
+      } catch {
+        // Network failure or timeout
+        this.exportFailures++;
+        this.lastFailureTime = new Date().toISOString();
+      } finally {
         clearTimeout(timeoutId);
-      });
+      }
     } catch {
-      // Network or serialization error caught; safe fail-open
+      this.exportFailures++;
+      this.lastFailureTime = new Date().toISOString();
     } finally {
       this.isFlushing = false;
+    }
+  }
+
+  /**
+   * Bounded shutdown flush that drains the complete queue in batches within the timeout.
+   */
+  async flushAll(timeoutMs: number = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while ((this.queue.length > 0 || this.runQueue.length > 0) && Date.now() < deadline) {
+      await this.flush();
     }
   }
 
@@ -143,6 +210,28 @@ export class TraceExporter {
 
   getQueuedSpans(): SpanData[] {
     return [...this.queue];
+  }
+
+  getMetrics(): ExporterMetrics {
+    return {
+      queue_depth_spans: this.queue.length,
+      queue_depth_runs: this.runQueue.length,
+      overflow_drops: this.overflowDrops,
+      export_failures: this.exportFailures,
+      rejected_batches: this.rejectedBatches,
+      successful_exports: this.successfulExports,
+      last_success_time: this.lastSuccessTime,
+      last_failure_time: this.lastFailureTime,
+    };
+  }
+
+  clear(): void {
+    this.queue = [];
+    this.runQueue = [];
+    this.overflowDrops = 0;
+    this.exportFailures = 0;
+    this.rejectedBatches = 0;
+    this.successfulExports = 0;
   }
 
   stop(): void {

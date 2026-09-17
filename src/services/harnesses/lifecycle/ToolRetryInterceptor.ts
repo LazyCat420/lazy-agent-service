@@ -6,6 +6,7 @@ import {
 } from "@rodrigo-barraza/utilities-library/taxonomy";
 import { Span } from "../../../platform/trace/Span.ts";
 import { TraceExporter } from "../../../platform/trace/TraceExporter.ts";
+import { TraceContext } from "../../../platform/trace/TraceContext.ts";
 import crypto from "node:crypto";
 
 import type AgenticLoopState from "../../AgenticLoopState.ts";
@@ -107,16 +108,21 @@ export function buildToolRetryGuidance(
   if (failedToolCalls.length === 0) return null;
 
   try {
+    const activeCtx = TraceContext.get();
     for (const failed of failedToolCalls) {
       const span = new Span({
-        trace_id: crypto.randomUUID().replaceAll("-", "").slice(0, 32),
-        run_id: "retry_run",
+        trace_id: activeCtx?.trace_id || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+        parent_span_id: activeCtx?.current_span_id || activeCtx?.currentSpan?.span_id || null,
+        run_id: activeCtx?.run_id || "retry_run",
         name: `workflow_retry:${failed.toolName}`,
         kind: "retry",
         attributes: {
           tool_name: failed.toolName,
           error_message: failed.errorMessage,
           attempt: failed.consecutiveFailureCount,
+          failed_attempt: failed.consecutiveFailureCount,
+          failed_tool_call_id: failed.toolCallId,
+          failure_span_id: activeCtx?.current_span_id || activeCtx?.currentSpan?.span_id || null,
         },
       });
       span.end("OK");

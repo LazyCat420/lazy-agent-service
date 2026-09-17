@@ -7,6 +7,8 @@ import { SseEvent } from "../types/SseTypes.ts";
 import type { ChatRequest } from "../types/schemas.ts";
 import AgentSessionRegistry from "../services/AgentSessionRegistry.ts";
 
+import { TraceContext } from "../platform/trace/TraceContext.ts";
+
 // ─── shared by /chat and /agent routes ──────────────────────
 
 /**
@@ -23,6 +25,7 @@ export function initSseResponse(res: Response) {
 /**
  * Create an SSE emit callback that writes events to the response.
  * Strips heavy base64 data from image events when minioRef is available.
+ * Automatically injects trace_id, run_id, and span_id from active TraceContext.
  */
 export function createSseEmitter(res: Response, connectionSignal: AbortSignal) {
   // Disable Nagle's algorithm for minimal SSE latency.
@@ -32,11 +35,25 @@ export function createSseEmitter(res: Response, connectionSignal: AbortSignal) {
 
   return (event: SseEvent) => {
     if (!connectionSignal.aborted && !res.destroyed && !res.writableEnded) {
-      if (event.type === "image" && event.minioRef && event.data) {
-        const { data: _stripped, ...lightweight } = event;
+      const activeCtx = TraceContext.get();
+      const enrichedEvent: Record<string, unknown> = {
+        ...event,
+        ...(activeCtx?.trace_id && !("trace_id" in event) && !("traceId" in event)
+          ? { trace_id: activeCtx.trace_id, traceId: activeCtx.trace_id }
+          : {}),
+        ...(activeCtx?.run_id && !("run_id" in event)
+          ? { run_id: activeCtx.run_id }
+          : {}),
+        ...(activeCtx?.current_span_id && !("span_id" in event)
+          ? { span_id: activeCtx.current_span_id }
+          : {}),
+      };
+
+      if (event.type === "image" && (event as any).minioRef && (event as any).data) {
+        const { data: _stripped, ...lightweight } = enrichedEvent;
         res.write(`data: ${JSON.stringify(lightweight)}\n\n`);
       } else {
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        res.write(`data: ${JSON.stringify(enrichedEvent)}\n\n`);
       }
       // Force-flush the write buffer. Without compression middleware,
       // res.flush() doesn't exist — use cork()/uncork() to guarantee

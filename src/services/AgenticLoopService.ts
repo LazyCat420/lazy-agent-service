@@ -13,6 +13,7 @@ import ConversationGenerationTracker from "./ConversationGenerationTracker.ts";
 import ToolContext from "./ToolContext.ts";
 import logger from "../utils/logger.ts";
 import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
+import { TraceContext } from "../platform/trace/TraceContext.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
 
@@ -54,10 +55,12 @@ export default class AgenticLoopService {
     const resolvedRole = typeof agent === "string" ? agent : (agent as any)?.name || optRole;
     const resolvedModelName = context.resolvedModel || (modelDefinition && (modelDefinition as any).model) || "default";
 
+    const optParentSpanId = typeof (options as any)?.parentSpanId === "string" ? String((options as any).parentSpanId) : undefined;
     const instrumenter = HarnessInstrumenter.startRun({
       traceId: optTrace || ctxTrace,
-      runId: resolvedAgentConversationId || undefined,
+      conversationId: resolvedAgentConversationId || conversationId || undefined,
       parentRunId: resolvedParentAgentConversationId || null,
+      parentSpanId: optParentSpanId || (context as any).parentSpanId || null,
       project: project || "default",
       agentRole: String(resolvedRole),
       environment: process.env.NODE_ENV || "production",
@@ -187,16 +190,37 @@ export default class AgenticLoopService {
 
     // 4. Instantiate and run
     const harness = new HarnessClass(context, state, resolvedTools);
-    let runStatus: "completed" | "failed" | "cancelled" = "completed";
+    let runStatus: "completed" | "failed" | "cancelled" | "setup_error" = "completed";
     let stopReason: string | undefined;
     try {
-      return await harness.run();
+      return await TraceContext.run(
+        {
+          trace_id: instrumenter.runManifest.trace_id,
+          run_id: instrumenter.runManifest.run_id,
+          currentSpan: instrumenter.rootSpan,
+          current_span_id: instrumenter.rootSpan.span_id,
+          parentSpanId: optParentSpanId || (context as any).parentSpanId || null,
+          conversation_id: resolvedAgentConversationId || conversationId || undefined,
+        },
+        async () => {
+          return await harness.run();
+        },
+      );
     } catch (err: unknown) {
-      runStatus = "failed";
-      stopReason = err instanceof Error ? err.message : String(err);
+      if (context.signal?.aborted) {
+        runStatus = "cancelled";
+        stopReason = "Execution cancelled by client";
+      } else {
+        runStatus = "failed";
+        stopReason = err instanceof Error ? err.message : String(err);
+      }
       throw err;
     } finally {
       try {
+        if (context.signal?.aborted && runStatus !== "cancelled") {
+          runStatus = "cancelled";
+          stopReason = "Execution cancelled by client";
+        }
         instrumenter.complete(runStatus, stopReason);
       } catch (instErr: unknown) {
         logger.debug(`[HarnessInstrumenter] Run completion export failed: ${instErr}`);

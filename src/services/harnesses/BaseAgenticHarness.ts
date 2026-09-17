@@ -39,6 +39,7 @@ import {
 } from "@rodrigo-barraza/utilities-library/taxonomy";
 import { Span } from "../../platform/trace/Span.ts";
 import { TraceExporter } from "../../platform/trace/TraceExporter.ts";
+import { TraceContext } from "../../platform/trace/TraceContext.ts";
 import crypto from "node:crypto";
 
 import ToolContext from "../ToolContext.ts";
@@ -100,6 +101,7 @@ export default class BaseAgenticHarness {
   protected state: AgenticLoopState;
   protected tools: ResolvedTools;
   protected trackerConversationId: string;
+  protected _activeModelSpan: Span | null = null;
 
   constructor(
     context: AgenticContext,
@@ -489,7 +491,7 @@ export default class BaseAgenticHarness {
     messages: ConversationMessage[],
     passOptions: AgenticOptions,
   ): AsyncIterable<unknown> | null {
-    const { provider, resolvedModel, modelDefinition, signal } = this.context;
+    const { provider, providerName, resolvedModel, modelDefinition, signal } = this.context;
 
     const clampedMaxTokens = this.clampOutputTokens(messages, passOptions.maxTokens);
 
@@ -514,6 +516,21 @@ export default class BaseAgenticHarness {
         availableOutputTokens: clampedMaxTokens,
         contextWindow,
       });
+      const activeCtx = TraceContext.get();
+      const exhaustedSpan = new Span({
+        trace_id: activeCtx?.trace_id || (this.context as any).rootSpan?.trace_id || this.context.traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+        parent_span_id: activeCtx?.current_span_id || (this.context as any).rootSpan?.span_id || null,
+        run_id: activeCtx?.run_id || (this.context as any).runId || this.context.agentConversationId || "run_gen",
+        name: `llm.generate:${resolvedModel}`,
+        kind: "model_call",
+        attributes: {
+          model: resolvedModel,
+          provider: providerName,
+          error: "context_exhausted",
+        },
+      });
+      exhaustedSpan.end("ERROR", "context_exhausted");
+      TraceExporter.getGlobalInstance().enqueueSpan(exhaustedSpan.toJSON());
       return null;
     }
 
@@ -527,15 +544,40 @@ export default class BaseAgenticHarness {
         filterDeleted: false,
       },
     );
-    return modelDefinition?.liveAPI && provider.generateTextStreamLive
-      ? provider.generateTextStreamLive(expandedMessages, resolvedModel, {
-          ...clampedPassOptions,
-          signal,
-        })
-      : provider.generateTextStream(expandedMessages, resolvedModel, {
-          ...clampedPassOptions,
-          signal,
-        });
+
+    // Start model span before provider invocation to capture setup errors and initial latency
+    const activeCtx = TraceContext.get();
+    const parentSpan = (this.context as any).rootSpan;
+    const modelSpan = new Span({
+      trace_id: activeCtx?.trace_id || parentSpan?.trace_id || this.context.traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+      parent_span_id: activeCtx?.current_span_id || parentSpan?.span_id || null,
+      run_id: activeCtx?.run_id || (this.context as any).runId || this.context.agentConversationId || "run_gen",
+      name: `llm.generate:${resolvedModel}`,
+      kind: "model_call",
+      attributes: {
+        model: resolvedModel,
+        provider: providerName,
+      },
+    });
+    this._activeModelSpan = modelSpan;
+
+    try {
+      return modelDefinition?.liveAPI && provider.generateTextStreamLive
+        ? provider.generateTextStreamLive(expandedMessages, resolvedModel, {
+            ...clampedPassOptions,
+            signal,
+          })
+        : provider.generateTextStream(expandedMessages, resolvedModel, {
+            ...clampedPassOptions,
+            signal,
+          });
+    } catch (setupErr: unknown) {
+      const errMsg = setupErr instanceof Error ? setupErr.message : String(setupErr);
+      modelSpan.end("ERROR", errMsg);
+      TraceExporter.getGlobalInstance().enqueueSpan(modelSpan.toJSON());
+      this._activeModelSpan = null;
+      throw setupErr;
+    }
   }
 
   // ── Stream consumption ────────────────────────────────────
@@ -554,11 +596,12 @@ export default class BaseAgenticHarness {
     allowedToolNames: Set<string>,
   ): Promise<void> {
     if (stream === null) return;
+    const activeCtx = TraceContext.get();
     const parentSpan = (this.context as any).rootSpan;
-    const modelSpan = new Span({
-      trace_id: (this.context as any).rootSpan?.trace_id || this.context.traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
-      parent_span_id: parentSpan?.span_id || null,
-      run_id: (this.context as any).runId || this.context.agentConversationId || "run_gen",
+    const modelSpan = this._activeModelSpan || new Span({
+      trace_id: activeCtx?.trace_id || parentSpan?.trace_id || this.context.traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+      parent_span_id: activeCtx?.current_span_id || parentSpan?.span_id || null,
+      run_id: activeCtx?.run_id || (this.context as any).runId || this.context.agentConversationId || "run_gen",
       name: `llm.generate:${this.context.resolvedModel}`,
       kind: "model_call",
       attributes: {
@@ -566,6 +609,7 @@ export default class BaseAgenticHarness {
         provider: this.context.providerName,
       },
     });
+    this._activeModelSpan = null;
 
     try {
       for await (const chunk of stream) {
@@ -586,6 +630,7 @@ export default class BaseAgenticHarness {
           tokens_input: pass.usage.inputTokens,
           tokens_output: pass.usage.outputTokens,
           tokens_cache: pass.usage.cacheReadInputTokens,
+          total_tokens: (pass.usage.totalTokens ?? ((pass.usage.inputTokens || 0) + (pass.usage.outputTokens || 0))),
         });
       }
       modelSpan.end("OK");

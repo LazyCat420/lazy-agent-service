@@ -37,6 +37,8 @@ import { evictIdleSecondaryModel } from "./orchestrator/VramEvictionPolicy.ts";
 import type { TopologyRouter } from "./orchestrator/TopologyRouter.ts";
 import { Span } from "../platform/trace/Span.ts";
 import { TraceExporter } from "../platform/trace/TraceExporter.ts";
+import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
+import { TraceContext } from "../platform/trace/TraceContext.ts";
 
 import type {
   SubAgentState,
@@ -1584,17 +1586,17 @@ export default class OrchestratorService {
     const subAgentModelDefinition = getModelByName(subAgent.resolvedModel);
 
     let loopResult: { messages?: ConversationMessage[] } | undefined;
-    const delegateSpan = new Span({
-      trace_id: subAgent.traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
-      run_id: subAgent.parentAgentConversationId || "root_run",
-      name: `agent.delegate:${subAgent.agent || "subagent"}`,
-      kind: "subagent",
-      attributes: {
-        subagent_run_id: subAgent.subAgentConversationId,
-        agent_role: subAgent.agent || "subagent",
-        model: subAgent.resolvedModel,
-      },
-    });
+    const activeCtx = TraceContext.get();
+    const effectiveTraceId = subAgent.traceId || activeCtx?.trace_id || crypto.randomUUID().replaceAll("-", "").slice(0, 32);
+    subAgent.traceId = effectiveTraceId;
+
+    const delegation = HarnessInstrumenter.traceDelegation(
+      subAgent.agent || "subagent",
+      subAgent.resolvedModel,
+      subAgent.subAgentConversationId,
+    );
+    const delegateSpan = delegation.delegateSpan;
+    const subAgentStartTime = performance.now();
 
     try {
       loopResult = await AgenticLoopService.runAgenticLoop({
@@ -1607,6 +1609,7 @@ export default class OrchestratorService {
           autoApprove: true,
           agenticLoopEnabled: true,
           isSubAgent: true,
+          parentSpanId: delegateSpan.span_id,
           enabledTools: subAgentEnabledTools,
           maxIterations: subAgent.maxIterations,
           maxTokens: 8192,
@@ -1627,7 +1630,7 @@ export default class OrchestratorService {
         parentAgentConversationId: subAgent.parentAgentConversationId,
         conversationId: subAgent.subAgentConversationId,
         parentConversationId: subAgent.parentConversationId,
-        traceId: subAgent.traceId,
+        traceId: effectiveTraceId,
         project: subAgent.project,
         username: subAgent.username,
         agent: subAgent.agent,
@@ -1642,11 +1645,12 @@ export default class OrchestratorService {
         _recursionDepth: childRecursionDepth,
         _maxRecursionDepth: maxRecursionDepth,
       });
-      delegateSpan.end("OK");
-      TraceExporter.getGlobalInstance().enqueueSpan(delegateSpan.toJSON());
+      const durationMs = performance.now() - subAgentStartTime;
+      delegation.complete("OK");
+      delegation.emitJoinSpan("OK", durationMs);
     } catch (error: unknown) {
-      delegateSpan.end("ERROR", error instanceof Error ? error.message : String(error));
-      TraceExporter.getGlobalInstance().enqueueSpan(delegateSpan.toJSON());
+      delegation.complete("ERROR", error instanceof Error ? error.message : String(error));
+      delegation.emitJoinSpan("ERROR");
       if (
         (error instanceof Error && error.name === "AbortError") ||
         subAgent.abortController?.signal.aborted

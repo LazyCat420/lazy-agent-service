@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { SpanData, SpanStatus, SpanAttributes, SpanEvent, SpanLink } from "../contracts/telemetry.ts";
+import { RunEvidenceStore } from "../verify/RunEvidenceStore.ts";
 
 export class Span {
   readonly trace_id: string;
@@ -83,7 +84,9 @@ export class Span {
     if (message) {
       this.status_message = message;
     }
-    return this.toJSON();
+    const data = this.toJSON();
+    RunEvidenceStore.getGlobalInstance().record(data);
+    return data;
   }
 
   toJSON(): SpanData {
