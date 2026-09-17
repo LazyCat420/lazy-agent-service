@@ -2,8 +2,28 @@ import ToolOrchestratorService from "../../ToolOrchestratorService.ts";
 import ToolContext from "../../ToolContext.ts";
 import { SERVER_SENT_EVENT_TYPES } from "@rodrigo-barraza/utilities-library/taxonomy";
 import logger from "../../../logger.ts";
+import { HarnessInstrumenter } from "../../../platform/trace/HarnessInstrumenter.ts";
+import type { SideEffectClass } from "../../../platform/contracts/telemetry.ts";
 
 import type AgenticLoopState from "../../AgenticLoopState.ts";
+
+function classifySideEffect(toolName: string): SideEffectClass {
+  const name = toolName.toLowerCase();
+  if (
+    name.includes("write") ||
+    name.includes("replace") ||
+    name.includes("create") ||
+    name.includes("save") ||
+    name.includes("delete") ||
+    name.includes("remove") ||
+    name.includes("drop") ||
+    name.includes("deploy") ||
+    name.includes("kill")
+  ) {
+    return "MUTATING";
+  }
+  return "READ_ONLY";
+}
 
 function truncateResultIfNeeded(result: any, project?: string, toolName?: string): any {
   if (project === "vllm-trading-bot" && result !== undefined && result !== null) {
@@ -68,35 +88,48 @@ export async function executeToolBatch(
         return { name: toolCall.name, id: toolCall.id, result, durationMs: 0 };
       }
 
+      const parentSpan = (context as any).rootSpan;
+      const sideEffect = classifySideEffect(toolCall.name);
+
       if (ToolOrchestratorService.isStreamable(toolCall.name)) {
         const startTime = Date.now();
-        const result = await ToolOrchestratorService.executeToolStreaming(
+        const result = await HarnessInstrumenter.traceToolExecution(
           toolCall.name,
-          toolCall.args as Record<string, unknown>,
-          (
-            event: string,
-            data: string | null,
-            meta?: Record<string, unknown>,
-          ) => {
-            emit({
-              type: SERVER_SENT_EVENT_TYPES.TOOL_OUTPUT,
-              toolCallId: toolCall.id,
-              name: toolCall.name,
-              event,
-              data: data || undefined,
-              meta: meta || undefined,
-            });
-          },
-          {
-            project,
-            username,
-            agent,
-            requestId: context.requestId,
-            agentConversationId: resolvedAgentConversationId,
-            conversationId,
-            iteration: state.iterations,
-            workspaceRoot,
-            _toolState: ToolContext.getStore(resolvedAgentConversationId),
+          toolCall.args,
+          parentSpan,
+          sideEffect,
+          async () => {
+            return await ToolOrchestratorService.executeToolStreaming(
+              toolCall.name,
+              toolCall.args as Record<string, unknown>,
+              (
+                event: string,
+                data: string | null,
+                meta?: Record<string, unknown>,
+              ) => {
+                emit({
+                  type: SERVER_SENT_EVENT_TYPES.TOOL_OUTPUT,
+                  toolCallId: toolCall.id,
+                  name: toolCall.name,
+                  event,
+                  data: data || undefined,
+                  meta: meta || undefined,
+                  ...(context.traceId ? { trace_id: context.traceId } : {}),
+                  ...((context as any).runId ? { run_id: (context as any).runId } : {}),
+                });
+              },
+              {
+                project,
+                username,
+                agent,
+                requestId: context.requestId,
+                agentConversationId: resolvedAgentConversationId,
+                conversationId,
+                iteration: state.iterations,
+                workspaceRoot,
+                _toolState: ToolContext.getStore(resolvedAgentConversationId),
+              },
+            );
           },
         );
         const durationMs = Date.now() - startTime;
@@ -105,45 +138,53 @@ export async function executeToolBatch(
       }
 
       const startTime = Date.now();
-      const result = await ToolOrchestratorService.executeTool(
+      const result = await HarnessInstrumenter.traceToolExecution(
         toolCall.name,
-        toolCall.args as Record<string, unknown>,
-        {
-          messages: context._currentMessages || context.messages,
-          project,
-          username,
-          agent: agent || null,
-          traceId: traceId || null,
-          agentConversationId: resolvedAgentConversationId,
-          conversationId,
-          clientIp: context.clientIp || null,
-          requestId: context.requestId,
-          iteration: state.iterations,
-          _providerName: providerName,
-          _resolvedModel: resolvedModel,
-          _emit: emit,
-          _maxSubAgentIterations: context.options?.maxSubAgentIterations,
-          _minContextLength: context.options?.minContextLength,
-          workspaceRoot,
-          _toolState: ToolContext.getStore(resolvedAgentConversationId),
-          enabledTools: tools.finalTools.map((toolSchema) => toolSchema.name),
-          _topology:
-            typeof context.options?.topology === "string"
-              ? context.options.topology
-              : undefined,
-          _recursionDepth:
-            typeof context._recursionDepth === "number"
-              ? context._recursionDepth
-              : undefined,
-          _maxRecursionDepth:
-            typeof context._maxRecursionDepth === "number"
-              ? context._maxRecursionDepth
-              : typeof context.options?.maxRecursionDepth === "number"
-                ? context.options.maxRecursionDepth
-                : undefined,
-          _thinkingEnabled: context.options?.thinkingEnabled,
-          _reasoningEffort: context.options?.reasoningEffort,
-          _thinkingBudget: context.options?.thinkingBudget,
+        toolCall.args,
+        parentSpan,
+        sideEffect,
+        async () => {
+          return await ToolOrchestratorService.executeTool(
+            toolCall.name,
+            toolCall.args as Record<string, unknown>,
+            {
+              messages: context._currentMessages || context.messages,
+              project,
+              username,
+              agent: agent || null,
+              traceId: traceId || null,
+              agentConversationId: resolvedAgentConversationId,
+              conversationId,
+              clientIp: context.clientIp || null,
+              requestId: context.requestId,
+              iteration: state.iterations,
+              _providerName: providerName,
+              _resolvedModel: resolvedModel,
+              _emit: emit,
+              _maxSubAgentIterations: context.options?.maxSubAgentIterations,
+              _minContextLength: context.options?.minContextLength,
+              workspaceRoot,
+              _toolState: ToolContext.getStore(resolvedAgentConversationId),
+              enabledTools: tools.finalTools.map((toolSchema) => toolSchema.name),
+              _topology:
+                typeof context.options?.topology === "string"
+                  ? context.options.topology
+                  : undefined,
+              _recursionDepth:
+                typeof context._recursionDepth === "number"
+                  ? context._recursionDepth
+                  : undefined,
+              _maxRecursionDepth:
+                typeof context._maxRecursionDepth === "number"
+                  ? context._maxRecursionDepth
+                  : typeof context.options?.maxRecursionDepth === "number"
+                    ? context.options.maxRecursionDepth
+                    : undefined,
+              _thinkingEnabled: context.options?.thinkingEnabled,
+              _reasoningEffort: context.options?.reasoningEffort,
+              _thinkingBudget: context.options?.thinkingBudget,
+            },
+          );
         },
       );
       const durationMs = Date.now() - startTime;

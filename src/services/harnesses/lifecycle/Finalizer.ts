@@ -28,6 +28,10 @@ import {
   LlmOptions,
 } from "../../RequestLogger.ts";
 import { getErrorMessage } from "../../../utils/ErrorHelpers.ts";
+import crypto from "node:crypto";
+import { DeterministicVerifiers } from "../../../platform/verify/DeterministicVerifiers.ts";
+import { Span } from "../../../platform/trace/Span.ts";
+import { TraceExporter } from "../../../platform/trace/TraceExporter.ts";
 
 export interface FinalizerContext {
   providerName: string;
@@ -480,6 +484,29 @@ export async function finalizeTextGeneration(
       getCollectionOpts(project, agent),
     );
   }
+  // ── Verification assertion & Done event ───────────────────────
+  try {
+    const recordedSpans = TraceExporter.getGlobalInstance().getQueuedSpans();
+    const verResult = DeterministicVerifiers.verifyCompletionClaim(text || "", recordedSpans);
+    const effectiveTraceId = (context as any).rootSpan?.trace_id || traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32);
+    const verSpan = new Span({
+      trace_id: effectiveTraceId,
+      parent_span_id: (context as any).rootSpan?.span_id || null,
+      run_id: (context as any).runId || agentConversationId || "run_final",
+      name: "verification:completion_claim",
+      kind: "verifier",
+      attributes: {
+        passed: verResult.passed,
+        reason: verResult.reason,
+        evidence_count: verResult.evidence_refs.length,
+      },
+    });
+    verSpan.end(verResult.passed ? "OK" : "ERROR", verResult.reason);
+    TraceExporter.getGlobalInstance().enqueueSpan(verSpan.toJSON());
+  } catch (verErr) {
+    logger.debug(`[DeterministicVerifiers] Finalizer verification error: ${verErr}`);
+  }
+
   // ── Emit done event ───────────────────────────────────────────
   // Emitted AFTER persistence so the client's post-stream DB fetch
   // is guaranteed to see the complete, up-to-date conversation.
@@ -500,8 +527,10 @@ export async function finalizeTextGeneration(
         generationTime:
           generationSec != null ? roundMilliseconds(generationSec) : null,
         totalTime: totalSec != null ? roundMilliseconds(totalSec) : null,
-        ...(traceId && { traceId }),
+        ...(traceId && { traceId, trace_id: traceId }),
         ...(conversationId && { conversationId }),
+        ...((context as any).runId && { run_id: (context as any).runId }),
+        ...((context as any).rootSpan?.span_id && { span_id: (context as any).rootSpan.span_id }),
       });
     }
   }

@@ -141,6 +141,10 @@ export class TraceExporter {
     return { spans: this.queue.length, runs: this.runQueue.length };
   }
 
+  getQueuedSpans(): SpanData[] {
+    return [...this.queue];
+  }
+
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer);

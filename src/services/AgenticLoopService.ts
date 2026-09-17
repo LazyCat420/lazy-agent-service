@@ -12,6 +12,7 @@ import {
 import ConversationGenerationTracker from "./ConversationGenerationTracker.ts";
 import ToolContext from "./ToolContext.ts";
 import logger from "../utils/logger.ts";
+import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
 
@@ -46,6 +47,25 @@ export default class AgenticLoopService {
 
     const resolvedAgentConversationId = agentConversationId || "";
     const resolvedParentAgentConversationId = parentAgentConversationId || null;
+
+    const optTrace = typeof (options as any)?.traceId === "string" ? String((options as any).traceId) : undefined;
+    const ctxTrace = typeof context.traceId === "string" ? context.traceId : undefined;
+    const optRole = typeof (options as any)?.agentRole === "string" ? String((options as any).agentRole) : "assistant";
+    const resolvedRole = typeof agent === "string" ? agent : (agent as any)?.name || optRole;
+    const resolvedModelName = context.resolvedModel || (modelDefinition && (modelDefinition as any).model) || "default";
+
+    const instrumenter = HarnessInstrumenter.startRun({
+      traceId: optTrace || ctxTrace,
+      runId: resolvedAgentConversationId || undefined,
+      parentRunId: resolvedParentAgentConversationId || null,
+      project: project || "default",
+      agentRole: String(resolvedRole),
+      environment: process.env.NODE_ENV || "production",
+      model: String(resolvedModelName),
+    });
+    context.traceId = instrumenter.runManifest.trace_id;
+    (context as any).runId = instrumenter.runManifest.run_id;
+    (context as any).rootSpan = instrumenter.rootSpan;
 
     // Load any persisted tool state from MongoDB (e.g. after server restart or previous turn)
     await ToolContext.ensureLoaded(resolvedAgentConversationId);
@@ -167,9 +187,20 @@ export default class AgenticLoopService {
 
     // 4. Instantiate and run
     const harness = new HarnessClass(context, state, resolvedTools);
+    let runStatus: "completed" | "failed" | "cancelled" = "completed";
+    let stopReason: string | undefined;
     try {
       return await harness.run();
+    } catch (err: unknown) {
+      runStatus = "failed";
+      stopReason = err instanceof Error ? err.message : String(err);
+      throw err;
     } finally {
+      try {
+        instrumenter.complete(runStatus, stopReason);
+      } catch (instErr: unknown) {
+        logger.debug(`[HarnessInstrumenter] Run completion export failed: ${instErr}`);
+      }
       // Clean up in-memory cache keyed by agentConversationId (keeps MongoDB state for next turn)
       ToolContext.cleanupInMemory(resolvedAgentConversationId);
 

@@ -4,6 +4,9 @@ import {
   SERVER_SENT_EVENT_TYPES,
   STATUS_MESSAGES,
 } from "@rodrigo-barraza/utilities-library/taxonomy";
+import { Span } from "../../../platform/trace/Span.ts";
+import { TraceExporter } from "../../../platform/trace/TraceExporter.ts";
+import crypto from "node:crypto";
 
 import type AgenticLoopState from "../../AgenticLoopState.ts";
 import type {
@@ -102,6 +105,26 @@ export function buildToolRetryGuidance(
   }
 
   if (failedToolCalls.length === 0) return null;
+
+  try {
+    for (const failed of failedToolCalls) {
+      const span = new Span({
+        trace_id: crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+        run_id: "retry_run",
+        name: `workflow_retry:${failed.toolName}`,
+        kind: "retry",
+        attributes: {
+          tool_name: failed.toolName,
+          error_message: failed.errorMessage,
+          attempt: failed.consecutiveFailureCount,
+        },
+      });
+      span.end("OK");
+      TraceExporter.getGlobalInstance().enqueueSpan(span.toJSON());
+    }
+  } catch {
+    // non-blocking
+  }
 
   const activeLocale = locale || PromptLocaleService.getDefaultLocale();
 

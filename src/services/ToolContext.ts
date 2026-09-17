@@ -1,8 +1,11 @@
+import crypto from "node:crypto";
 import logger from "../utils/logger.ts";
 import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { MONGO_DB_NAME } from "../../config.ts";
 import { COLLECTIONS } from "../constants.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
+import { Span } from "../platform/trace/Span.ts";
+import { TraceExporter } from "../platform/trace/TraceExporter.ts";
 
 /**
  * ToolContext — per-conversation key-value state store for stateful tool chains.
@@ -141,6 +144,26 @@ export default class ToolContext {
     store.set(key, value);
     // Async write-through — don't await to keep tool execution fast
     persistToMongo(conversationId, store).catch(() => {});
+
+    try {
+      const valStr = typeof value === "string" ? value : JSON.stringify(value ?? {});
+      const hash = crypto.createHash("sha256").update(valStr).digest("hex").slice(0, 16);
+      const span = new Span({
+        trace_id: crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+        run_id: conversationId,
+        name: `state_mutation:${key}`,
+        kind: "checkpoint",
+        attributes: {
+          key,
+          value_hash: hash,
+          mutation_type: "set",
+        },
+      });
+      span.end("OK");
+      TraceExporter.getGlobalInstance().enqueueSpan(span.toJSON());
+    } catch {
+      // non-blocking
+    }
   }
 
   /** Delete a single key from a conversation's state. */

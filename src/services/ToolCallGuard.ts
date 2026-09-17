@@ -34,6 +34,8 @@
 
 import crypto from "node:crypto";
 import logger from "../utils/logger.ts";
+import { Span } from "../platform/trace/Span.ts";
+import { TraceExporter } from "../platform/trace/TraceExporter.ts";
 
 const num = (name: string, fallback: number): number => {
   const raw = Number(process.env[name]);
@@ -249,8 +251,26 @@ export function guardedRun<T>(opts: GuardedRunOptions<T>): Promise<T | Record<st
   // 2. Ledger — how many identical calls has this scope already made?
   //    Coalesced callers never reach here, which is correct: riding along with
   //    an in-flight call is one call, not a repeat.
-  const decision = opts.repeatGuard === false ? { verdict: "allow", count: 0 } : recordAttempt(toolName, key, scope);
+  const decision = opts.repeatGuard === false ? { verdict: "allow" as const, count: 0 } : recordAttempt(toolName, key, scope);
   if (decision.verdict !== "allow") {
+    try {
+      const guardSpan = new Span({
+        trace_id: crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+        run_id: "guard_run",
+        name: `tool_guard:${toolName}`,
+        kind: "tool_guard",
+        attributes: {
+          tool_name: toolName,
+          guard_decision: decision.verdict,
+          repeat_count: decision.count,
+        },
+      });
+      guardSpan.end(decision.verdict === "refuse" ? "ERROR" : "OK", decision.verdict === "refuse" ? `Repeated ${decision.count} times` : undefined);
+      TraceExporter.getGlobalInstance().enqueueSpan(guardSpan.toJSON());
+    } catch {
+      // non-blocking
+    }
+
     const hit = cached?.();
     if (hit !== undefined) {
       logger.warn(

@@ -37,6 +37,9 @@ import {
   CORE_AGENTIC_TOOLS as CORE_AGENTIC_TOOLS_LIST,
   CORE_ORCHESTRATOR_TOOLS as CORE_ORCHESTRATOR_TOOLS_LIST,
 } from "@rodrigo-barraza/utilities-library/taxonomy";
+import { Span } from "../../platform/trace/Span.ts";
+import { TraceExporter } from "../../platform/trace/TraceExporter.ts";
+import crypto from "node:crypto";
 
 import ToolContext from "../ToolContext.ts";
 
@@ -551,18 +554,46 @@ export default class BaseAgenticHarness {
     allowedToolNames: Set<string>,
   ): Promise<void> {
     if (stream === null) return;
-    for await (const chunk of stream) {
-      const result = await this.processStreamChunk(
-        chunk,
-        pass,
-        allowedToolNames,
-      );
-      if (result.action === "break") {
-        const returnable = stream as AsyncGenerator<unknown>;
-        if (typeof returnable.return === "function")
-          returnable.return(undefined);
-        break;
+    const parentSpan = (this.context as any).rootSpan;
+    const modelSpan = new Span({
+      trace_id: (this.context as any).rootSpan?.trace_id || this.context.traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+      parent_span_id: parentSpan?.span_id || null,
+      run_id: (this.context as any).runId || this.context.agentConversationId || "run_gen",
+      name: `llm.generate:${this.context.resolvedModel}`,
+      kind: "model_call",
+      attributes: {
+        model: this.context.resolvedModel,
+        provider: this.context.providerName,
+      },
+    });
+
+    try {
+      for await (const chunk of stream) {
+        const result = await this.processStreamChunk(
+          chunk,
+          pass,
+          allowedToolNames,
+        );
+        if (result.action === "break") {
+          const returnable = stream as AsyncGenerator<unknown>;
+          if (typeof returnable.return === "function")
+            returnable.return(undefined);
+          break;
+        }
       }
+      if (pass.usage) {
+        modelSpan.setAttributes({
+          tokens_input: pass.usage.inputTokens,
+          tokens_output: pass.usage.outputTokens,
+          tokens_cache: pass.usage.cacheReadInputTokens,
+        });
+      }
+      modelSpan.end("OK");
+      TraceExporter.getGlobalInstance().enqueueSpan(modelSpan.toJSON());
+    } catch (err: unknown) {
+      modelSpan.end("ERROR", err instanceof Error ? err.message : String(err));
+      TraceExporter.getGlobalInstance().enqueueSpan(modelSpan.toJSON());
+      throw err;
     }
   }
 

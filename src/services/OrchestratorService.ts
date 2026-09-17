@@ -35,6 +35,8 @@ import {
 import { SubAgentTelemetryEmitter } from "./orchestrator/SubAgentTelemetryEmitter.ts";
 import { evictIdleSecondaryModel } from "./orchestrator/VramEvictionPolicy.ts";
 import type { TopologyRouter } from "./orchestrator/TopologyRouter.ts";
+import { Span } from "../platform/trace/Span.ts";
+import { TraceExporter } from "../platform/trace/TraceExporter.ts";
 
 import type {
   SubAgentState,
@@ -1582,6 +1584,18 @@ export default class OrchestratorService {
     const subAgentModelDefinition = getModelByName(subAgent.resolvedModel);
 
     let loopResult: { messages?: ConversationMessage[] } | undefined;
+    const delegateSpan = new Span({
+      trace_id: subAgent.traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+      run_id: subAgent.parentAgentConversationId || "root_run",
+      name: `agent.delegate:${subAgent.agent || "subagent"}`,
+      kind: "subagent",
+      attributes: {
+        subagent_run_id: subAgent.subAgentConversationId,
+        agent_role: subAgent.agent || "subagent",
+        model: subAgent.resolvedModel,
+      },
+    });
+
     try {
       loopResult = await AgenticLoopService.runAgenticLoop({
         provider: subAgentProviderInstance as LLMProvider,
@@ -1628,7 +1642,11 @@ export default class OrchestratorService {
         _recursionDepth: childRecursionDepth,
         _maxRecursionDepth: maxRecursionDepth,
       });
+      delegateSpan.end("OK");
+      TraceExporter.getGlobalInstance().enqueueSpan(delegateSpan.toJSON());
     } catch (error: unknown) {
+      delegateSpan.end("ERROR", error instanceof Error ? error.message : String(error));
+      TraceExporter.getGlobalInstance().enqueueSpan(delegateSpan.toJSON());
       if (
         (error instanceof Error && error.name === "AbortError") ||
         subAgent.abortController?.signal.aborted
