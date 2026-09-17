@@ -476,4 +476,43 @@ router.get(
   }),
 );
 
+const TELEMETRY_URL = process.env.TELEMETRY_SERVICE_URL || "http://10.0.0.16:5595";
+
+router.get(
+  "/telemetry/runs",
+  asyncHandler(async (req: Request, res: Response) => {
+    const limit = Math.max(1, Math.min(100, parseInt((req.query.limit as string) || "50", 10)));
+    try {
+      const response = await fetch(`${TELEMETRY_URL}/v1/runs?limit=${limit}`, {
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!response.ok) {
+        return res.json({ runs: [], status: "collector_offline" });
+      }
+      const data = await response.json();
+      res.json(data);
+    } catch (err) {
+      res.json({ runs: [], status: "collector_offline", error: getErrorMessage(err) });
+    }
+  }),
+);
+
+router.get(
+  "/telemetry/incidents",
+  asyncHandler(async (req: Request, res: Response) => {
+    try {
+      const response = await fetch(`${TELEMETRY_URL}/v1/incidents`, {
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!response.ok) {
+        return res.json({ incidents: [], status: "collector_offline" });
+      }
+      const data = await response.json();
+      res.json(data);
+    } catch (err) {
+      res.json({ incidents: [], status: "collector_offline", error: getErrorMessage(err) });
+    }
+  }),
+);
+
 export default router;

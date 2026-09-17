@@ -91,6 +91,8 @@
     <div class="sub">Cross-project tool telemetry · lazy-tool-service</div>
   </div>
   <div class="spacer"></div>
+  <a href="http://10.0.0.16:8801/" target="_blank" style="margin-right:12px;font-size:12px;color:var(--accent);text-decoration:none;">⚡ Spark Console (:8801) ↗</a>
+  <a href="http://10.0.0.16:3030/" target="_blank" style="margin-right:16px;font-size:12px;color:var(--muted);text-decoration:none;">Trading Benchmarks (:3030) ↗</a>
   <label class="sub" for="range">Window</label>
   <select id="range">
     <option value="24">Last 24 hours</option>
@@ -104,6 +106,24 @@
 <main>
   <div id="error"></div>
   <div class="row" id="tiles"></div>
+
+  <h2>⚡ Agent Runtime Telemetry &amp; Incidents <span class="hint">Live agent runs and error clusters from NAS Telemetry Service (:5595)</span></h2>
+  <div class="row" style="grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); margin-bottom: 22px;">
+    <div class="project" style="margin-bottom:0;" open>
+      <div style="padding:10px 16px; font-weight:600; font-size:13px; border-bottom:1px solid var(--border); color:var(--accent);">Active &amp; Recent Agent Runs</div>
+      <div class="tablewrap"><table id="telem-runs-table">
+        <thead><tr><th>Run ID</th><th>Agent</th><th>Status</th><th class="num">ms</th><th class="num">Claims</th><th>Started</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+    <div class="project" style="margin-bottom:0;" open>
+      <div style="padding:10px 16px; font-weight:600; font-size:13px; border-bottom:1px solid var(--border); color:var(--err);">Prioritized Incidents (Clustered)</div>
+      <div class="tablewrap"><table id="telem-inc-table">
+        <thead><tr><th>Fingerprint</th><th>Project</th><th>Message</th><th class="num">Count</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+  </div>
 
   <div id="storms"></div>
 
@@ -271,17 +291,46 @@ function renderStorms(data) {
     </div>`;
 }
 
+function renderTelemetry(runsData, incData) {
+  const runs = runsData?.runs || [];
+  const incs = incData?.incidents || [];
+
+  $('#telem-runs-table tbody').innerHTML = runs.length ? runs.map(r => `
+    <tr>
+      <td><code>${esc(r.run_id)}</code></td>
+      <td>${esc(r.agent_name || '—')}</td>
+      <td><span class="chip ${r.status === 'COMPLETED' ? 'ok' : r.status === 'FAILED' ? 'err' : 'warn'}">${esc(r.status)}</span></td>
+      <td class="num">${fmt(r.duration_ms)}</td>
+      <td class="num">${r.claims_verified ?? '—'}/${r.claims_total ?? '—'}</td>
+      <td style="color:var(--muted)">${ago(r.started_at)}</td>
+    </tr>
+  `).join('') : '<tr><td colspan="6" class="empty">No agent runs recorded yet.</td></tr>';
+
+  $('#telem-inc-table tbody').innerHTML = incs.length ? incs.map(i => `
+    <tr>
+      <td><code>${esc(i.error_fingerprint)}</code></td>
+      <td>${esc(i.project || '—')}</td>
+      <td style="color:var(--muted); max-width:200px; overflow:hidden; text-overflow:ellipsis;" title="${esc(i.sample_message || '')}">${esc(i.sample_message || '—')}</td>
+      <td class="num">${fmt(i.occurrence_count)}</td>
+      <td><span class="chip ${i.status === 'active' ? 'err' : 'ok'}">${esc(i.status)}</span></td>
+    </tr>
+  `).join('') : '<tr><td colspan="5" class="empty">No active incidents detected.</td></tr>';
+}
+
 async function load() {
   const hours = $('#range').value;
   $('#error').innerHTML = '';
   try {
-    const [stats, services, recent, storms] = await Promise.all([
+    const [stats, services, recent, storms, runs, incidents] = await Promise.all([
       getJson(`../platform/stats?hours=${hours}`),
       getJson(`../platform/services?hours=${hours}`),
       getJson('../platform/recent?limit=60'),
       getJson(`../platform/storms?hours=${hours}`),
+      getJson('../platform/telemetry/runs?limit=15').catch(() => ({ runs: [] })),
+      getJson('../platform/telemetry/incidents').catch(() => ({ incidents: [] })),
     ]);
     renderTiles(stats.summary || {});
+    renderTelemetry(runs, incidents);
     renderStorms(storms);
     renderProjects(stats.projects || []);
     renderServices(services.services || []);
