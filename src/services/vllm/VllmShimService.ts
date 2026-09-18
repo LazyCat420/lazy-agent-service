@@ -569,6 +569,29 @@ export class VllmShimService {
     return body;
   }
 
+  private static activeJetsonUrl: string | null = null;
+
+  public static setActiveJetsonUrl(url: string | null): void {
+    this.activeJetsonUrl = url;
+  }
+
+  public static getActiveJetsonUrl(): string {
+    if (process.env.VLLM_SHIM_JETSON_URL) {
+      return process.env.VLLM_SHIM_JETSON_URL;
+    }
+    return this.activeJetsonUrl || "http://10.0.0.30:8080";
+  }
+
+  public static getAlternateJetsonUrl(currentUrl: string): string | null {
+    if (currentUrl.includes(":8080")) {
+      return currentUrl.replace(":8080", ":8000");
+    }
+    if (currentUrl.includes(":8000")) {
+      return currentUrl.replace(":8000", ":8080");
+    }
+    return null;
+  }
+
   /**
    * Resolve /vllm-shim/<name>/<rest> to its upstream. Exported for unit
    * tests; returns null for unknown upstream names.
@@ -580,8 +603,8 @@ export class VllmShimService {
     if (!match) return null;
     const upstreamName = match[1];
     let upstreamUrl = UPSTREAMS[upstreamName];
-    if (upstreamName === "jetson" && process.env.VLLM_SHIM_JETSON_URL) {
-      upstreamUrl = process.env.VLLM_SHIM_JETSON_URL;
+    if (upstreamName === "jetson") {
+      upstreamUrl = this.getActiveJetsonUrl();
     } else if (upstreamName === "gold-spark" && process.env.VLLM_SHIM_GOLD_SPARK_URL) {
       upstreamUrl = process.env.VLLM_SHIM_GOLD_SPARK_URL;
     } else if (upstreamName === "gold-spark-vision" && process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL) {
@@ -627,6 +650,28 @@ export class VllmShimService {
     }
 
     return modified ? (copy as T) : payload;
+  }
+
+  public static enrichModels<T extends Record<string, any>>(payload: T): T {
+    if (!payload || typeof payload !== "object") return payload;
+    const copy: Record<string, any> = { ...payload };
+
+    const enrichModel = (item: any) => {
+      if (item && typeof item === "object") {
+        if (!item.max_model_len && !item.context_length) {
+          return { ...item, max_model_len: 262144, context_length: 262144 };
+        }
+      }
+      return item;
+    };
+
+    if (Array.isArray(copy.data)) {
+      copy.data = copy.data.map(enrichModel);
+    }
+    if (Array.isArray(copy.models)) {
+      copy.models = copy.models.map(enrichModel);
+    }
+    return copy as T;
   }
 
   /** Per-upstream semaphores, created on first use. Exported for tests. */
@@ -723,13 +768,13 @@ export class VllmShimService {
     }
 
     const upstreamAbortController = new AbortController();
-    const fetchOnce = async (): Promise<globalThis.Response> => {
+    const fetchOnce = async (urlToFetch: string = targetUrl): Promise<globalThis.Response> => {
       const headersTimeout = setTimeout(() => {
         logger.error(`[VllmShim] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
         upstreamAbortController.abort();
       }, UPSTREAM_HEADERS_TIMEOUT_MS);
       try {
-        return await fetch(targetUrl, {
+        return await fetch(urlToFetch, {
           method: req.method,
           headers: { "Content-Type": req.headers["content-type"] || "application/json" },
           body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(body) : undefined,
@@ -783,7 +828,37 @@ export class VllmShimService {
     }
 
     try {
-      let response = await fetchOnce();
+      let response: globalThis.Response;
+      try {
+        response = await fetchOnce();
+        if ((response.status === 404 || response.status === 502) && upstreamName === "jetson") {
+          const alternateUrl = VllmShimService.getAlternateJetsonUrl(upstreamUrl);
+          if (alternateUrl) {
+            try {
+              const altResponse = await fetchOnce(`${alternateUrl}${originalPath}`);
+              if (altResponse.ok || altResponse.status < 500) {
+                VllmShimService.setActiveJetsonUrl(alternateUrl);
+                response = altResponse;
+              }
+            } catch {
+              // keep initial response
+            }
+          }
+        }
+      } catch (err: any) {
+        if (upstreamName === "jetson") {
+          const alternateUrl = VllmShimService.getAlternateJetsonUrl(upstreamUrl);
+          if (alternateUrl) {
+            logger.warn(`[VllmShim] Jetson on ${upstreamUrl} failed (${err?.message || err}), falling back to ${alternateUrl}`);
+            response = await fetchOnce(`${alternateUrl}${originalPath}`);
+            VllmShimService.setActiveJetsonUrl(alternateUrl);
+          } else {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
 
       // Token-feedback rescale: the char clamp undershoots on token-dense
       // text (the desk's JSON/ticker prose runs ~2.4 chars per token). When
@@ -856,7 +931,8 @@ export class VllmShimService {
           const text = buf.toString("utf8");
           const parsed = JSON.parse(text);
           const filtered = VllmShimService.filterModels(parsed);
-          return res.end(JSON.stringify(filtered));
+          const enriched = VllmShimService.enrichModels(filtered);
+          return res.end(JSON.stringify(enriched));
         } catch {
           // Fall through to returning raw buffer
         }

@@ -111,6 +111,35 @@ describe("VllmShimService.filterModels", () => {
     const output = VllmShimService.filterModels(input);
     expect(output).toEqual(input);
   });
+
+  it("enriches models with 262144 max_model_len if missing from llama.cpp", () => {
+    const input = {
+      data: [{ id: "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0" }],
+      models: [{ name: "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0" }],
+    };
+    const output = VllmShimService.enrichModels(input);
+    expect(output.data[0].max_model_len).toBe(262144);
+    expect(output.data[0].context_length).toBe(262144);
+    expect(output.models[0].max_model_len).toBe(262144);
+  });
+
+  it("swaps alternate ports between 8080 and 8000 for Jetson", () => {
+    expect(VllmShimService.getAlternateJetsonUrl("http://10.0.0.30:8080"))
+      .toBe("http://10.0.0.30:8000");
+    expect(VllmShimService.getAlternateJetsonUrl("http://10.0.0.30:8000"))
+      .toBe("http://10.0.0.30:8080");
+  });
+
+  it("supports dynamic activeJetsonUrl switching", () => {
+    delete process.env.VLLM_SHIM_JETSON_URL;
+    VllmShimService.setActiveJetsonUrl("http://10.0.0.30:8000");
+    expect(VllmShimService.getActiveJetsonUrl()).toBe("http://10.0.0.30:8000");
+    expect(VllmShimService.resolveUpstream("/vllm-shim/jetson")?.upstreamUrl)
+      .toBe("http://10.0.0.30:8000");
+
+    VllmShimService.setActiveJetsonUrl(null);
+    expect(VllmShimService.getActiveJetsonUrl()).toBe("http://10.0.0.30:8080");
+  });
 });
 
 describe("thinking-flag arrival accounting", () => {
