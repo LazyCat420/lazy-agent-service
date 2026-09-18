@@ -46,9 +46,24 @@ describe("VllmShimService.resolveUpstream", () => {
 
   it("routes jetson and jetson-2 to their ports", () => {
     expect(VllmShimService.resolveUpstream("/vllm-shim/jetson/v1/models")?.upstreamUrl)
-      .toBe("http://10.0.0.30:8000");
+      .toBe("http://10.0.0.30:8080");
     expect(VllmShimService.resolveUpstream("/vllm-shim/jetson-2/v1/models")?.upstreamUrl)
       .toBe("http://10.0.0.30:8001");
+  });
+
+  it("honors VLLM_SHIM_JETSON_URL dynamic override", () => {
+    const prev = process.env.VLLM_SHIM_JETSON_URL;
+    try {
+      process.env.VLLM_SHIM_JETSON_URL = "http://10.0.0.30:9999";
+      expect(VllmShimService.resolveUpstream("/vllm-shim/jetson/v1/models")?.upstreamUrl)
+        .toBe("http://10.0.0.30:9999");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.VLLM_SHIM_JETSON_URL;
+      } else {
+        process.env.VLLM_SHIM_JETSON_URL = prev;
+      }
+    }
   });
 
   it("preserves query strings", () => {
@@ -62,6 +77,39 @@ describe("VllmShimService.resolveUpstream", () => {
 
   it("defaults bare upstream to /", () => {
     expect(VllmShimService.resolveUpstream("/vllm-shim/jetson")?.originalPath).toBe("/");
+  });
+});
+
+describe("VllmShimService.filterModels", () => {
+  it("filters out non-LLM models while preserving actual LLMs", () => {
+    const input = {
+      object: "list",
+      data: [
+        { id: "gliner", object: "model" },
+        { id: "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0", object: "model" },
+        { id: "market_cnn", object: "model" },
+        { id: "timeseries_rnn", object: "model" },
+      ],
+      models: [
+        { name: "gliner" },
+        { name: "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0" },
+      ],
+    };
+    const output = VllmShimService.filterModels(input);
+    expect(output.data.map((m: any) => m.id)).toEqual([
+      "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0",
+    ]);
+    expect(output.models.map((m: any) => m.name)).toEqual([
+      "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0",
+    ]);
+  });
+
+  it("returns original payload if no non-LLM models found", () => {
+    const input = {
+      data: [{ id: "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0" }],
+    };
+    const output = VllmShimService.filterModels(input);
+    expect(output).toEqual(input);
   });
 });
 

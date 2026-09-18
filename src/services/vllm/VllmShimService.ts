@@ -44,7 +44,7 @@ const UPSTREAMS: Record<string, string> = {
   // It is routed here so vision traffic passes through code we own — it is not
   // part of prism and nothing else was governing it.
   "gold-spark-vision": process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL || "http://10.0.0.141:8899",
-  "jetson": process.env.VLLM_SHIM_JETSON_URL || "http://10.0.0.30:8000",
+  "jetson": process.env.VLLM_SHIM_JETSON_URL || "http://10.0.0.30:8080",
   "jetson-2": process.env.VLLM_SHIM_JETSON_2_URL || "http://10.0.0.30:8001",
 };
 
@@ -577,9 +577,56 @@ export class VllmShimService {
     originalUrl: string,
   ): { upstreamUrl: string; originalPath: string; upstreamName: string } | null {
     const match = originalUrl.match(/^\/vllm-shim\/([a-z0-9-]+)(\/.*)?$/);
-    const upstreamUrl = match ? UPSTREAMS[match[1]] : undefined;
+    if (!match) return null;
+    const upstreamName = match[1];
+    let upstreamUrl = UPSTREAMS[upstreamName];
+    if (upstreamName === "jetson" && process.env.VLLM_SHIM_JETSON_URL) {
+      upstreamUrl = process.env.VLLM_SHIM_JETSON_URL;
+    } else if (upstreamName === "gold-spark" && process.env.VLLM_SHIM_GOLD_SPARK_URL) {
+      upstreamUrl = process.env.VLLM_SHIM_GOLD_SPARK_URL;
+    } else if (upstreamName === "gold-spark-vision" && process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL) {
+      upstreamUrl = process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL;
+    } else if (upstreamName === "jetson-2" && process.env.VLLM_SHIM_JETSON_2_URL) {
+      upstreamUrl = process.env.VLLM_SHIM_JETSON_2_URL;
+    }
     if (!upstreamUrl) return null;
-    return { upstreamUrl, originalPath: match![2] || "/", upstreamName: match![1] };
+    return { upstreamUrl, originalPath: match[2] || "/", upstreamName };
+  }
+
+  /**
+   * Models that only expose extraction/ner or timeseries endpoints, never chat completions.
+   * Filtered from /v1/models so Prism never registers them as LLM providers.
+   */
+  public static readonly NON_LLM_MODELS = new Set([
+    "gliner",
+    "market_cnn",
+    "timeseries_rnn",
+  ]);
+
+  public static filterModels<T extends Record<string, any>>(payload: T): T {
+    if (!payload || typeof payload !== "object") return payload;
+    let modified = false;
+    const copy: Record<string, any> = { ...payload };
+
+    if (Array.isArray(copy.data)) {
+      const initialLen = copy.data.length;
+      copy.data = copy.data.filter((item: any) => {
+        const id = item?.id || item?.name;
+        return !(typeof id === "string" && VllmShimService.NON_LLM_MODELS.has(id.toLowerCase()));
+      });
+      if (copy.data.length !== initialLen) modified = true;
+    }
+
+    if (Array.isArray(copy.models)) {
+      const initialLen = copy.models.length;
+      copy.models = copy.models.filter((item: any) => {
+        const name = item?.name || item?.model;
+        return !(typeof name === "string" && VllmShimService.NON_LLM_MODELS.has(name.toLowerCase()));
+      });
+      if (copy.models.length !== initialLen) modified = true;
+    }
+
+    return modified ? (copy as T) : payload;
   }
 
   /** Per-upstream semaphores, created on first use. Exported for tests. */
@@ -801,6 +848,19 @@ export class VllmShimService {
       // Non-stream: if application/json and /v1/chat/completions, normalize any
       // DeepSeek DSML tool calls back into standard OpenAI tool_calls schema.
       const buf = Buffer.from(await response.arrayBuffer());
+      if (
+        upstreamContentType.includes("application/json") &&
+        basePath === "/v1/models"
+      ) {
+        try {
+          const text = buf.toString("utf8");
+          const parsed = JSON.parse(text);
+          const filtered = VllmShimService.filterModels(parsed);
+          return res.end(JSON.stringify(filtered));
+        } catch {
+          // Fall through to returning raw buffer
+        }
+      }
       if (
         upstreamContentType.includes("application/json") &&
         originalPath.includes("/chat/completions")

@@ -14,6 +14,7 @@ services:
       # The /platform dashboard reads tool_usage_stats from the TRADING
       # database, not prism's. MONGO_URI comes from the deployed .env.
       - TRADING_MONGO_DB=${TRADING_MONGO_DB:-trading_bot}
+      - VLLM_SHIM_JETSON_URL=${VLLM_SHIM_JETSON_URL:-http://10.0.0.30:8080}
     volumes:
       - /usr/share/zoneinfo/America/Los_Angeles:/etc/localtime:ro
       - ./data/charts:/app/data/charts
