@@ -317,3 +317,17 @@ describe("VllmShimService model discovery & healing", () => {
     expect((VllmShimService as any).getActiveModel("gold-spark")).toBe("GLM-5.3-Flash-EXL3");
   });
 });
+
+describe("VllmShimService.sanitizeGenerationParams", () => {
+  it("strips max_tokens when <= 0 (e.g. -1) to prevent vLLM 400 rejection", () => {
+    const body = { model: "GLM-5.3-Flash-EXL3", max_tokens: -1, messages: [] };
+    const sanitized = (VllmShimService as any).sanitizeGenerationParams(body);
+    expect("max_tokens" in sanitized).toBe(false);
+  });
+
+  it("preserves positive max_tokens", () => {
+    const body = { model: "GLM-5.3-Flash-EXL3", max_tokens: 4096, messages: [] };
+    const sanitized = (VllmShimService as any).sanitizeGenerationParams(body);
+    expect(sanitized.max_tokens).toBe(4096);
+  });
+});

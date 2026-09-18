@@ -88,6 +88,10 @@ export function createVllmProvider(
           stream: false,
         };
 
+        if (payload.max_tokens !== undefined && Number(payload.max_tokens) < 1) {
+          delete payload.max_tokens;
+        }
+
         // Function calling tools
         const tools = convertToolsToOpenAI(options.tools);
         if (tools) {
@@ -176,6 +180,10 @@ export function createVllmProvider(
           stream_options: { include_usage: true },
         };
 
+        if (payload.max_tokens !== undefined && Number(payload.max_tokens) < 1) {
+          delete payload.max_tokens;
+        }
+
         // Function calling tools
         const tools = convertToolsToOpenAI(options.tools);
         if (tools) {
@@ -260,7 +268,6 @@ export function createVllmProvider(
             messages,
             model,
             temperature: 0.7,
-            max_tokens: -1,
             stream: false,
           },
         );

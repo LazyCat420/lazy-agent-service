@@ -753,6 +753,23 @@ export class VllmShimService {
     }
   }
 
+  /**
+   * vLLM rejects non-positive max_tokens with HTTP 400:
+   * "max_tokens must be at least 1, got -1. (parameter=max_tokens, value=-1)".
+   * When max_tokens is <= 0 or not a positive integer, strip it so vLLM defaults
+   * to generating until context/EOS limit.
+   */
+  public static sanitizeGenerationParams<T extends Record<string, unknown>>(body: T): T {
+    if (!body || typeof body !== "object") return body;
+    if ("max_tokens" in body) {
+      const mt = Number(body.max_tokens);
+      if (Number.isFinite(mt) && mt < 1) {
+        delete body.max_tokens;
+      }
+    }
+    return body;
+  }
+
   public static async handle(req: Request, res: Response) {
     const resolved = this.resolveUpstream(req.originalUrl);
     if (!resolved) {
@@ -799,6 +816,7 @@ export class VllmShimService {
       // Repair degenerate recovery tails + non-leading system turns before
       // the chat template sees them (copy-on-write; identity when clean).
       body = this.rewriteMessages(body as Record<string, unknown>);
+      body = this.sanitizeGenerationParams(body as Record<string, unknown>);
       await recordProviderSnapshot(boundary.receipt, body);
     }
 

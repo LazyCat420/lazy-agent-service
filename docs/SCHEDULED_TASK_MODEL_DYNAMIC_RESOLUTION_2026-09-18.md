@@ -35,9 +35,14 @@ At 07:00 AM PDT (14:00:00 UTC), the daily scheduled task **"Daily Stock Deep Res
 - When proxying `/v1/chat/completions`: if the upstream returns HTTP 404 with body indicating the model does not exist, discovers the live model from `${upstreamUrl}/v1/models`, rewrites `body.model`, caches it, and automatically retries `fetchOnce()`.
 - When `/v1/models` is queried, caches the active generation model.
 
+### D. Non-Positive `max_tokens` Stripping (`VllmShimService.ts` & `src/providers/vllm.ts`)
+- vLLM's OpenAI API validator strictly enforces `max_tokens >= 1` and rejects negative values (such as `max_tokens: -1` common in llama.cpp clients) with HTTP 400.
+- Added `VllmShimService.sanitizeGenerationParams` to strip non-positive `max_tokens` prior to forwarding `/v1/chat/completions` calls.
+- Updated `src/providers/vllm.ts` to delete `max_tokens` when `< 1` in both streaming and non-streaming requests.
+
 ## 3. Verification
-- `VllmShimService.test.ts`: Added tests for `resolveUpstreamActiveModel` and model caching.
+- `VllmShimService.test.ts`: Added tests for `resolveUpstreamActiveModel`, model caching, and `sanitizeGenerationParams`.
 - `VllmModelSyncService.test.ts`: Added tests for `syncScheduledTasks` healing missing models, migrating providers, and preserving valid models.
 - `ScheduledTaskModelSync.test.ts`: Added integration tests verifying `ScheduledTaskService.executeTask` dynamically substitutes live models and updates MongoDB.
-- All 35 test files and 714 unit tests pass with zero regressions.
+- All 35 test files and 716 unit tests pass with zero regressions.
 - `pnpm tsc --noEmit` clean.
