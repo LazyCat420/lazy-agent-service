@@ -654,24 +654,8 @@ export class VllmShimService {
 
   public static enrichModels<T extends Record<string, any>>(payload: T): T {
     if (!payload || typeof payload !== "object") return payload;
-    const copy: Record<string, any> = { ...payload };
-
-    const enrichModel = (item: any) => {
-      if (item && typeof item === "object") {
-        if (!item.max_model_len && !item.context_length) {
-          return { ...item, max_model_len: 262144, context_length: 262144 };
-        }
-      }
-      return item;
-    };
-
-    if (Array.isArray(copy.data)) {
-      copy.data = copy.data.map(enrichModel);
-    }
-    if (Array.isArray(copy.models)) {
-      copy.models = copy.models.map(enrichModel);
-    }
-    return copy as T;
+    // Preserve authentic upstream capacities; never invent synthetic context limits
+    return payload;
   }
 
   /** Per-upstream semaphores, created on first use. Exported for tests. */
@@ -894,7 +878,7 @@ export class VllmShimService {
           if (alternateUrl) {
             try {
               const altResponse = await fetchOnce(`${alternateUrl}${originalPath}`);
-              if (altResponse.ok || altResponse.status < 500) {
+              if (altResponse.ok) {
                 VllmShimService.setActiveJetsonUrl(alternateUrl);
                 response = altResponse;
               }

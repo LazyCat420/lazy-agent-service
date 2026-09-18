@@ -112,15 +112,15 @@ describe("VllmShimService.filterModels", () => {
     expect(output).toEqual(input);
   });
 
-  it("enriches models with 262144 max_model_len if missing from llama.cpp", () => {
+  it("does not invent synthetic 262144 max_model_len if missing from upstream", () => {
     const input = {
       data: [{ id: "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0" }],
       models: [{ name: "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0" }],
     };
     const output = VllmShimService.enrichModels(input);
-    expect(output.data[0].max_model_len).toBe(262144);
-    expect(output.data[0].context_length).toBe(262144);
-    expect(output.models[0].max_model_len).toBe(262144);
+    expect((output.data[0] as any).max_model_len).toBeUndefined();
+    expect((output.data[0] as any).context_length).toBeUndefined();
+    expect((output.models[0] as any).max_model_len).toBeUndefined();
   });
 
   it("swaps alternate ports between 8080 and 8000 for Jetson", () => {
