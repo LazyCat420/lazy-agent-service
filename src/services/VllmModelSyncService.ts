@@ -3,10 +3,13 @@ import SettingsService, { SettingsData } from "./SettingsService.ts";
 import { getInstancesByType } from "../providers/instance-registry.ts";
 import { getProvider } from "../providers/index.ts";
 import { prismAttributionHeaders } from "../utils/PrismAttribution.ts";
+import MongoWrapper from "../wrappers/MongoWrapper.ts";
+import { MONGO_DB_NAME } from "../../config.ts";
+import { COLLECTIONS } from "../constants.ts";
 
 const CHECK_INTERVAL_MS = 30_000; // Check every 30 seconds
 
-function isVllmProvider(provider: string): boolean {
+export function isVllmProvider(provider: string): boolean {
   return provider === "vllm" || provider.startsWith("vllm-");
 }
 
@@ -290,8 +293,118 @@ export const VllmModelSyncService = {
       if (updated) {
         await updateSettings(dataCopy);
       }
+
+      // Also auto-heal scheduled tasks whose configured vLLM models are stale
+      await this.syncScheduledTasks(
+        loadedModelsByInstance,
+        generationCandidates,
+        configuredEmbeddingModel,
+      );
     } catch (error) {
       logger.error(`[VllmModelSyncService] Error during check and sync: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  },
+
+  async syncScheduledTasks(
+    loadedModelsByInstance: Map<string, string[]>,
+    generationCandidates: Array<{ instanceId: string; modelName: string }>,
+    configuredEmbeddingModel: string,
+  ): Promise<number> {
+    try {
+      const db = MongoWrapper.getDb(MONGO_DB_NAME);
+      if (!db) return 0;
+
+      const tasks = await db
+        .collection(COLLECTIONS.SCHEDULED_TASKS)
+        .find({ enabled: true })
+        .toArray();
+
+      let healedCount = 0;
+
+      for (const task of tasks) {
+        if (!isVllmProvider(task.provider)) continue;
+
+        const currentProvider = task.provider;
+        const currentModel = task.model || "";
+        const loadedOnCurrent = loadedModelsByInstance.get(currentProvider) || [];
+
+        const currentIsEmbedding = isEmbeddingModel(
+          currentModel,
+          configuredEmbeddingModel,
+        );
+
+        if (loadedOnCurrent.includes(currentModel) && !currentIsEmbedding) {
+          continue;
+        }
+
+        // Check if currentModel is loaded on another vLLM instance
+        let foundInstanceId: string | null = null;
+        if (!currentIsEmbedding && currentModel) {
+          for (const [instanceId, models] of loadedModelsByInstance.entries()) {
+            if (models.includes(currentModel)) {
+              foundInstanceId = instanceId;
+              break;
+            }
+          }
+        }
+
+        if (foundInstanceId) {
+          logger.info(
+            `[VllmModelSyncService] Healing scheduled task "${task.name}" (${task.id}) provider from "${currentProvider}" to "${foundInstanceId}" to match model "${currentModel}"`,
+          );
+          await db.collection(COLLECTIONS.SCHEDULED_TASKS).updateOne(
+            { id: task.id },
+            {
+              $set: {
+                provider: foundInstanceId,
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          );
+          healedCount++;
+          continue;
+        }
+
+        // Model not loaded on any instance. Prefer candidate on currentProvider, else best global candidate
+        const providerCandidates = loadedOnCurrent.filter(
+          (m) => !isEmbeddingModel(m, configuredEmbeddingModel),
+        );
+
+        let targetProvider = currentProvider;
+        let targetModel = "";
+
+        if (providerCandidates.length > 0) {
+          targetModel = providerCandidates[0];
+        } else if (generationCandidates.length > 0) {
+          targetProvider = generationCandidates[0].instanceId;
+          targetModel = generationCandidates[0].modelName;
+        } else {
+          continue;
+        }
+
+        logger.info(
+          `[VllmModelSyncService] Auto-healing scheduled task "${task.name}" (${task.id}) from "${currentProvider}/${currentModel}" to "${targetProvider}/${targetModel}"`,
+        );
+
+        await db.collection(COLLECTIONS.SCHEDULED_TASKS).updateOne(
+          { id: task.id },
+          {
+            $set: {
+              provider: targetProvider,
+              model: targetModel,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        );
+        healedCount++;
+      }
+
+      return healedCount;
+    } catch (error) {
+      logger.warn(
+        `[VllmModelSyncService] Failed to sync scheduled tasks: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return 0;
     }
   },
 

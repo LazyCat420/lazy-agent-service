@@ -713,6 +713,46 @@ export class VllmShimService {
     this.semaphores.clear();
   }
 
+  /** Cache of known active models by upstream name. */
+  private static readonly activeModelsByUpstream = new Map<string, string>();
+
+  public static getActiveModel(upstream: string): string | undefined {
+    return this.activeModelsByUpstream.get(upstream);
+  }
+
+  public static setActiveModel(upstream: string, model: string): void {
+    this.activeModelsByUpstream.set(upstream, model);
+  }
+
+  public static clearActiveModels(): void {
+    this.activeModelsByUpstream.clear();
+  }
+
+  /**
+   * Resolves the active generation model from an upstream vLLM instance by querying its /v1/models endpoint.
+   * Filters out non-LLM models (e.g. gliner) and embedding-only models.
+   */
+  public static async resolveUpstreamActiveModel(upstreamUrl: string): Promise<string | null> {
+    try {
+      const response = await fetch(`${upstreamUrl}/v1/models`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!response.ok) return null;
+      const data = (await response.json()) as Record<string, any>;
+      const filtered = this.filterModels(data);
+      const candidates: string[] = (((filtered as Record<string, any>).data || (filtered as Record<string, any>).models || []) as Array<Record<string, any>>)
+        .map((m: Record<string, any>) => m?.id || m?.name || "")
+        .filter(Boolean);
+
+      const genModel = candidates.find(
+        (m: string) => !/embed/i.test(m) && !this.NON_LLM_MODELS.has(m.toLowerCase()),
+      );
+      return genModel || null;
+    } catch {
+      return null;
+    }
+  }
+
   public static async handle(req: Request, res: Response) {
     const resolved = this.resolveUpstream(req.originalUrl);
     if (!resolved) {
@@ -845,6 +885,27 @@ export class VllmShimService {
             }
           }
         }
+        if (response.status === 404 && basePath === "/v1/chat/completions") {
+          try {
+            const cloned = response.clone();
+            const errJson = (await cloned.json()) as Record<string, any>;
+            const errMsg = errJson?.error?.message || errJson?.message || "";
+            if (typeof errMsg === "string" && /model.*not exist|does not exist/i.test(errMsg)) {
+              const liveModel = await VllmShimService.resolveUpstreamActiveModel(upstreamUrl);
+              if (liveModel && body && typeof body === "object" && (body as Record<string, any>).model !== liveModel) {
+                const staleModel = (body as Record<string, any>).model;
+                logger.warn(
+                  `[VllmShim] Upstream "${upstreamName}" rejected model "${staleModel}" (404: model does not exist). Auto-healing to live model "${liveModel}" and retrying.`,
+                );
+                (body as Record<string, any>).model = liveModel;
+                VllmShimService.setActiveModel(upstreamName, liveModel);
+                response = await fetchOnce();
+              }
+            }
+          } catch (healErr: any) {
+            logger.warn(`[VllmShim] Failed to auto-heal 404 model on ${upstreamName}: ${healErr?.message || healErr}`);
+          }
+        }
       } catch (err: any) {
         if (upstreamName === "jetson") {
           const alternateUrl = VllmShimService.getAlternateJetsonUrl(upstreamUrl);
@@ -932,6 +993,16 @@ export class VllmShimService {
           const parsed = JSON.parse(text);
           const filtered = VllmShimService.filterModels(parsed);
           const enriched = VllmShimService.enrichModels(filtered);
+
+          const list = (((enriched as Record<string, any>).data || (enriched as Record<string, any>).models || []) as Array<Record<string, any>>);
+          const gen = list.find((m: Record<string, any>) => {
+            const id = m?.id || m?.name;
+            return id && !VllmShimService.NON_LLM_MODELS.has(String(id).toLowerCase()) && !/embed/i.test(String(id));
+          });
+          if (gen) {
+            VllmShimService.setActiveModel(upstreamName, String(gen.id || gen.name));
+          }
+
           return res.end(JSON.stringify(enriched));
         } catch {
           // Fall through to returning raw buffer

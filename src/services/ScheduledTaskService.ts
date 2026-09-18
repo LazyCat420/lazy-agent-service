@@ -13,6 +13,7 @@ import {
   matchRecurrenceRule,
 } from "../utils/RecurrenceMatcher.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
+import { isVllmProvider, isEmbeddingModel } from "./VllmModelSyncService.ts";
 
 export interface ScheduledTask {
   id: string;
@@ -312,16 +313,68 @@ const ScheduledTaskService = {
       _alreadyPersisted: true,
     };
 
-    // 1. Create agent session stub document
+    // 1. Resolve provider and model dynamically for vLLM providers to prevent 404s
+    let effectiveProvider = task.provider;
+    let effectiveModel = task.model;
+
+    if (isVllmProvider(task.provider)) {
+      try {
+        const prov = getProvider(task.provider);
+        if (prov?.listModels) {
+          const result = await Promise.race([
+            prov.listModels(),
+            new Promise<any>((_, rej) =>
+              setTimeout(() => rej(new Error("timeout")), 2500),
+            ),
+          ]);
+          const models: Array<{ key?: string; id?: string }> =
+            result?.models || result?.data || [];
+          const modelKeys = models
+            .map((m) => m.key || m.id || "")
+            .filter(Boolean);
+          const generationModels = modelKeys.filter((m) => !isEmbeddingModel(m, ""));
+
+          if (generationModels.length > 0 && !generationModels.includes(task.model)) {
+            const liveModel = generationModels[0];
+            logger.warn(
+              `[ScheduledTasks] Task "${task.name}" requested model "${task.model}" which is not loaded on ${task.provider}. Dynamically auto-healing to live model "${liveModel}".`,
+            );
+            effectiveModel = liveModel;
+
+            // Persist healed model to MongoDB asynchronously
+            db.collection(COLLECTIONS.SCHEDULED_TASKS)
+              .updateOne(
+                { id: task.id },
+                {
+                  $set: {
+                    model: effectiveModel,
+                    updatedAt: new Date().toISOString(),
+                  },
+                },
+              )
+              .catch((err: unknown) =>
+                logger.warn(
+                  `[ScheduledTasks] Failed to update task ${task.id} with healed model: ${getErrorMessage(err)}`,
+                ),
+              );
+          }
+        }
+      } catch (probeError) {
+        logger.warn(
+          `[ScheduledTasks] Failed to probe models on provider ${task.provider} for task "${task.name}": ${getErrorMessage(probeError)}`,
+        );
+      }
+    }
+
+    // 2. Create agent session stub document
     const settings = {
-      provider: task.provider,
-      model: task.model,
+      provider: effectiveProvider,
+      model: effectiveModel,
       agent: task.agent,
       workspaceRoot: workspacePath,
       toolConfig: task.toolConfig,
     };
 
-    // 1. Create agent session stub document
     // Top-level `agent` is required for per-agent filtering in GET /conversations
     // (the user sidebar queries with ?agent=OMNI etc.). Without it, the
     // conversation only appears in the admin view which doesn't filter by agent.
@@ -336,7 +389,7 @@ const ScheduledTaskService = {
       systemPrompt: "",
       settings,
       modalities: { textIn: true, textOut: false },
-      providers: [task.provider.toLowerCase()],
+      providers: [effectiveProvider.toLowerCase()],
       totalCost: 0,
       isGenerating: true,
       createdAt: nowISO,
@@ -347,21 +400,21 @@ const ScheduledTaskService = {
       logger.debug(`[ScheduledTasks][${task.name}][Event] type=${event.type}`);
     };
 
-    // 2. Resolve provider and model definitions
-    const provider = getProvider(task.provider);
-    const modelDefinition = getModelByName(task.model);
+    // 3. Resolve provider and model definitions
+    const provider = getProvider(effectiveProvider);
+    const modelDefinition = getModelByName(effectiveModel);
 
     if (!provider) {
-      throw new Error(`Provider not found: ${task.provider}`);
+      throw new Error(`Provider not found: ${effectiveProvider}`);
     }
 
-    // 3. Trigger AgenticLoopService
+    // 4. Trigger AgenticLoopService
     try {
       await AgenticLoopService.runAgenticLoop({
         provider:
           provider as unknown as import("./harnesses/types.ts").LLMProvider,
-        providerName: task.provider,
-        resolvedModel: task.model,
+        providerName: effectiveProvider,
+        resolvedModel: effectiveModel,
         modelDefinition,
         messages: [userTriggerMessage as ConversationMessage],
         originalMessages: [userTriggerMessage as ConversationMessage],

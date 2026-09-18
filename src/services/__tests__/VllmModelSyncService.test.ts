@@ -175,3 +175,154 @@ describe("VllmModelSyncService.isEmbeddingModel — generation-role exclusion gu
     expect(isEmbeddingModel(undefined as unknown as string, "")).toBe(false);
   });
 });
+
+describe("VllmModelSyncService.syncScheduledTasks — auto-healing of scheduled task models", () => {
+  it("heals a scheduled task when its configured model is absent on the vLLM instance", async () => {
+    const { default: MongoWrapper } = await import("../../wrappers/MongoWrapper.ts");
+    const mockTasks = [
+      {
+        id: "03c1061c-3cec-4b55-b45f-65ffe200059c",
+        name: "Daily Stock Deep Research",
+        provider: "vllm-2",
+        model: "deepseek-v4-flash-0731",
+        enabled: true,
+      },
+    ];
+
+    let updatedDoc: any = null;
+    const mockDb = {
+      collection: () => ({
+        find: () => ({
+          toArray: async () => mockTasks,
+        }),
+        updateOne: async (query: any, update: any) => {
+          updatedDoc = { query, update };
+          return { modifiedCount: 1 };
+        },
+      }),
+    };
+
+    const originalGetDb = MongoWrapper.getDb;
+    MongoWrapper.getDb = (() => mockDb as any);
+
+    try {
+      const loadedModels = new Map<string, string[]>([
+        ["vllm-2", ["GLM-5.3-Flash-EXL3"]],
+        ["vllm", ["cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit"]],
+      ]);
+      const generationCandidates = [
+        { instanceId: "vllm-2", modelName: "GLM-5.3-Flash-EXL3" },
+        { instanceId: "vllm", modelName: "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit" },
+      ];
+
+      const healed = await VllmModelSyncService.syncScheduledTasks(
+        loadedModels,
+        generationCandidates,
+        "embeddinggemma",
+      );
+
+      expect(healed).toBe(1);
+      expect(updatedDoc).not.toBeNull();
+      expect(updatedDoc.query).toEqual({ id: "03c1061c-3cec-4b55-b45f-65ffe200059c" });
+      expect(updatedDoc.update.$set.model).toBe("GLM-5.3-Flash-EXL3");
+      expect(updatedDoc.update.$set.provider).toBe("vllm-2");
+    } finally {
+      MongoWrapper.getDb = originalGetDb;
+    }
+  });
+
+  it("heals provider to match model when model is loaded on a different vLLM instance", async () => {
+    const { default: MongoWrapper } = await import("../../wrappers/MongoWrapper.ts");
+    const mockTasks = [
+      {
+        id: "task-qwen",
+        name: "Qwen Analysis",
+        provider: "vllm-2",
+        model: "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit",
+        enabled: true,
+      },
+    ];
+
+    let updatedDoc: any = null;
+    const mockDb = {
+      collection: () => ({
+        find: () => ({ toArray: async () => mockTasks }),
+        updateOne: async (query: any, update: any) => {
+          updatedDoc = { query, update };
+          return { modifiedCount: 1 };
+        },
+      }),
+    };
+
+    const originalGetDb = MongoWrapper.getDb;
+    MongoWrapper.getDb = (() => mockDb as any);
+
+    try {
+      const loadedModels = new Map<string, string[]>([
+        ["vllm-2", ["GLM-5.3-Flash-EXL3"]],
+        ["vllm", ["cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit"]],
+      ]);
+      const generationCandidates = [
+        { instanceId: "vllm-2", modelName: "GLM-5.3-Flash-EXL3" },
+      ];
+
+      const healed = await VllmModelSyncService.syncScheduledTasks(
+        loadedModels,
+        generationCandidates,
+        "embeddinggemma",
+      );
+
+      expect(healed).toBe(1);
+      expect(updatedDoc.update.$set.provider).toBe("vllm");
+    } finally {
+      MongoWrapper.getDb = originalGetDb;
+    }
+  });
+
+  it("does not mutate tasks whose configured model is already loaded and valid", async () => {
+    const { default: MongoWrapper } = await import("../../wrappers/MongoWrapper.ts");
+    const mockTasks = [
+      {
+        id: "task-valid",
+        name: "GLM Task",
+        provider: "vllm-2",
+        model: "GLM-5.3-Flash-EXL3",
+        enabled: true,
+      },
+    ];
+
+    let updateCount = 0;
+    const mockDb = {
+      collection: () => ({
+        find: () => ({ toArray: async () => mockTasks }),
+        updateOne: async () => {
+          updateCount++;
+          return { modifiedCount: 1 };
+        },
+      }),
+    };
+
+    const originalGetDb = MongoWrapper.getDb;
+    MongoWrapper.getDb = (() => mockDb as any);
+
+    try {
+      const loadedModels = new Map<string, string[]>([
+        ["vllm-2", ["GLM-5.3-Flash-EXL3"]],
+      ]);
+      const generationCandidates = [
+        { instanceId: "vllm-2", modelName: "GLM-5.3-Flash-EXL3" },
+      ];
+
+      const healed = await VllmModelSyncService.syncScheduledTasks(
+        loadedModels,
+        generationCandidates,
+        "embeddinggemma",
+      );
+
+      expect(healed).toBe(0);
+      expect(updateCount).toBe(0);
+    } finally {
+      MongoWrapper.getDb = originalGetDb;
+    }
+  });
+});

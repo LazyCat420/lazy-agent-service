@@ -288,3 +288,32 @@ describe("VllmShimService.rescaleFactor", () => {
     expect(VllmShimService.rescaleFactor(2048, 4096)).toBeCloseTo(0.45, 5);
   });
 });
+
+describe("VllmShimService model discovery & healing", () => {
+  it("resolves the live generation model from upstream /v1/models ignoring embeddings and non-LLMs", async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { id: "gliner" },
+              { id: "text-embedding-embeddinggemma-300m" },
+              { id: "GLM-5.3-Flash-EXL3" },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+      const model = await (VllmShimService as any).resolveUpstreamActiveModel("http://10.0.0.141:8000");
+      expect(model).toBe("GLM-5.3-Flash-EXL3");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("caches and retrieves active models per upstream", () => {
+    (VllmShimService as any).setActiveModel("gold-spark", "GLM-5.3-Flash-EXL3");
+    expect((VllmShimService as any).getActiveModel("gold-spark")).toBe("GLM-5.3-Flash-EXL3");
+  });
+});
