@@ -1,0 +1,84 @@
+{
+  "contract_version": "1.0.0",
+  "fixture_id": "denied-tool-call-run",
+  "description": "Agent attempted to call a tool outside the profile whitelist, policy gate denied execution",
+  "request": {
+    "profile_id": "trading-analyst-v1",
+    "profile_version": "1.0.0",
+    "input": "Execute a raw shell command to delete cache.",
+    "stream": false
+  },
+  "events": [
+    {
+      "id": "evt-deny-001",
+      "run_id": "run-deny-456",
+      "type": "run.admitted",
+      "timestamp": "2026-09-19T10:15:00.000Z",
+      "data": { "run_id": "run-deny-456", "profile_id": "trading-analyst-v1", "version": "1.0.0", "status": "admitted" }
+    },
+    {
+      "id": "evt-deny-002",
+      "run_id": "run-deny-456",
+      "type": "run.started",
+      "timestamp": "2026-09-19T10:15:00.020Z",
+      "data": { "status": "running" }
+    },
+    {
+      "id": "evt-deny-003",
+      "run_id": "run-deny-456",
+      "type": "tool.failed",
+      "timestamp": "2026-09-19T10:15:00.300Z",
+      "data": {
+        "tool_name": "system_bash",
+        "error": {
+          "code": "TOOL_PERMISSION_DENIED",
+          "message": "Tool 'system_bash' is disallowed by profile whitelist",
+          "retryable": false,
+          "category": "POLICY"
+        }
+      }
+    },
+    {
+      "id": "evt-deny-004",
+      "run_id": "run-deny-456",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T10:15:00.350Z",
+      "data": {
+        "error": {
+          "code": "TOOL_PERMISSION_DENIED",
+          "message": "Tool 'system_bash' is disallowed by profile whitelist",
+          "retryable": false,
+          "category": "POLICY"
+        }
+      }
+    }
+  ],
+  "result": {
+    "run_id": "run-deny-456",
+    "status": "failed",
+    "profile_id": "trading-analyst-v1",
+    "messages": [],
+    "usage": {
+      "prompt_tokens": 150,
+      "completion_tokens": 15,
+      "total_tokens": 165,
+      "tool_calls_count": 0,
+      "retry_count": 0,
+      "duration_ms": 350
+    },
+    "error": {
+      "code": "TOOL_PERMISSION_DENIED",
+      "message": "Tool 'system_bash' is disallowed by profile whitelist",
+      "retryable": false,
+      "category": "POLICY",
+      "details": {
+        "attempted_tool": "system_bash",
+        "allowed_tools": [
+          "mcp__lazy-tool-service__fetch_financial_statement",
+          "mcp__lazy-tool-service__get_price_history",
+          "mcp__lazy-tool-service__calculate_liquidity_ratios"
+        ]
+      }
+    }
+  }
+}

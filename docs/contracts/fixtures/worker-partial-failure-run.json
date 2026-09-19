@@ -1,0 +1,78 @@
+{
+  "contract_version": "1.0.0",
+  "fixture_id": "worker-partial-failure-run",
+  "description": "Worker plugin raised an error during parallel subagent execution",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "profile_version": "1.0.0",
+    "input": "Dispatch peer sector analysis workers for technology industry.",
+    "stream": true
+  },
+  "events": [
+    {
+      "id": "evt-w-001",
+      "run_id": "run-worker-fail-1",
+      "type": "run.admitted",
+      "timestamp": "2026-09-19T10:40:00.000Z",
+      "data": { "run_id": "run-worker-fail-1", "profile_id": "html-notes-researcher-v1", "version": "1.0.0", "status": "admitted" }
+    },
+    {
+      "id": "evt-w-002",
+      "run_id": "run-worker-fail-1",
+      "type": "run.started",
+      "timestamp": "2026-09-19T10:40:00.030Z",
+      "data": { "status": "running" }
+    },
+    {
+      "id": "evt-w-003",
+      "run_id": "run-worker-fail-1",
+      "type": "worker.dispatched",
+      "timestamp": "2026-09-19T10:40:00.200Z",
+      "data": {
+        "worker_id": "worker-peer-sector-01",
+        "plugin_name": "peer-sector-worker",
+        "task": "Analyze cloud infrastructure peers"
+      }
+    },
+    {
+      "id": "evt-w-004",
+      "run_id": "run-worker-fail-1",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T10:40:01.000Z",
+      "data": {
+        "error": {
+          "code": "TOOL_EXECUTION_FAILED",
+          "message": "Worker plugin 'peer-sector-worker' failed with unhandled exception",
+          "retryable": false,
+          "category": "TOOL",
+          "details": {
+            "worker_id": "worker-peer-sector-01"
+          }
+        }
+      }
+    }
+  ],
+  "result": {
+    "run_id": "run-worker-fail-1",
+    "status": "failed",
+    "profile_id": "html-notes-researcher-v1",
+    "messages": [],
+    "usage": {
+      "prompt_tokens": 300,
+      "completion_tokens": 20,
+      "total_tokens": 320,
+      "tool_calls_count": 0,
+      "retry_count": 1,
+      "duration_ms": 1000
+    },
+    "error": {
+      "code": "TOOL_EXECUTION_FAILED",
+      "message": "Worker plugin 'peer-sector-worker' failed with unhandled exception",
+      "retryable": false,
+      "category": "TOOL",
+      "details": {
+        "worker_id": "worker-peer-sector-01"
+      }
+    }
+  }
+}

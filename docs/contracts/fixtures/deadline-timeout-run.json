@@ -1,0 +1,64 @@
+{
+  "contract_version": "1.0.0",
+  "fixture_id": "deadline-timeout-run",
+  "description": "Run exceeded wall-clock budget ceiling (x-deadline-ms) before reaching terminal state",
+  "request": {
+    "profile_id": "trading-analyst-v1",
+    "profile_version": "1.0.0",
+    "input": "Perform deep order book analysis across full exchange feed.",
+    "budget": {
+      "max_duration_ms": 5000
+    },
+    "stream": false
+  },
+  "events": [
+    {
+      "id": "evt-to-001",
+      "run_id": "run-timeout-777",
+      "type": "run.admitted",
+      "timestamp": "2026-09-19T10:35:00.000Z",
+      "data": { "run_id": "run-timeout-777", "profile_id": "trading-analyst-v1", "version": "1.0.0", "status": "admitted" }
+    },
+    {
+      "id": "evt-to-002",
+      "run_id": "run-timeout-777",
+      "type": "run.started",
+      "timestamp": "2026-09-19T10:35:00.020Z",
+      "data": { "status": "running" }
+    },
+    {
+      "id": "evt-to-003",
+      "run_id": "run-timeout-777",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T10:35:05.020Z",
+      "data": {
+        "error": {
+          "code": "DEADLINE_EXCEEDED",
+          "message": "Run wall-clock duration exceeded deadline of 5000ms",
+          "retryable": false,
+          "category": "RESOURCE"
+        }
+      }
+    }
+  ],
+  "result": {
+    "run_id": "run-timeout-777",
+    "status": "timed_out",
+    "profile_id": "trading-analyst-v1",
+    "messages": [],
+    "usage": {
+      "prompt_tokens": 600,
+      "completion_tokens": 150,
+      "total_tokens": 750,
+      "tool_calls_count": 2,
+      "retry_count": 0,
+      "duration_ms": 5000
+    },
+    "error": {
+      "code": "DEADLINE_EXCEEDED",
+      "message": "Run wall-clock duration exceeded deadline of 5000ms",
+      "retryable": false,
+      "category": "RESOURCE"
+    }
+  }
+}

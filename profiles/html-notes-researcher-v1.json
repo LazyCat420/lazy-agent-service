@@ -1,0 +1,40 @@
+{
+  "profile_id": "html-notes-researcher-v1",
+  "version": "1.0.0",
+  "role": "canvas-research-coordinator",
+  "description": "Coordinates multi-source topic research, source verification, and widget synthesis.",
+  "system_prompt": "You are a research synthesis agent. Decompose complex user topics into targeted inquiries, verify source provenance, and generate structured canvas note representations.",
+  "model_constraints": {
+    "default_model": "llama-3-8b",
+    "allowed_models": ["llama-3-8b", "qwen-coder-32b"],
+    "allowed_providers": ["vllm-shim", "ollama"],
+    "temperature_range": [0.1, 0.7]
+  },
+  "tool_policy": {
+    "mode": "STRICT_WHITELIST",
+    "whitelist": [
+      "mcp__lazy-tool-service__news_search",
+      "mcp__lazy-tool-service__web_scrape",
+      "mcp__lazy-tool-service__canvas_add_widget"
+    ],
+    "require_signed_capability": false
+  },
+  "budget_limits": {
+    "max_tokens": 12288,
+    "max_tool_calls": 15,
+    "max_retries": 3,
+    "max_duration_ms": 120000,
+    "max_concurrent_workers": 4
+  },
+  "plugins": {
+    "context_contributors": ["canvas-active-widget-contributor"],
+    "verifiers": ["provenance-source-verifier"],
+    "worker_plugins": ["news-worker", "peer-sector-worker", "price-worker"]
+  },
+  "retention_class": "AUDITED_SESSION",
+  "observability_policy": {
+    "telemetry_level": "FULL_SPANS",
+    "redact_keys": ["user_credentials", "session_token"],
+    "sample_rate": 1.0
+  }
+}
