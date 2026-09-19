@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "fixture_id": "cancellation-run",
   "description": "Run terminated mid-execution by client cancellation request",
   "request": {
@@ -14,14 +14,21 @@
       "run_id": "run-cancel-888",
       "type": "run.admitted",
       "timestamp": "2026-09-19T10:30:00.000Z",
-      "data": { "run_id": "run-cancel-888", "profile_id": "trading-analyst-v1", "version": "1.0.0", "status": "admitted" }
+      "data": {
+        "run_id": "run-cancel-888",
+        "profile_id": "trading-analyst-v1",
+        "version": "1.0.0",
+        "status": "admitted"
+      }
     },
     {
       "id": "evt-cancel-002",
       "run_id": "run-cancel-888",
       "type": "run.started",
       "timestamp": "2026-09-19T10:30:00.030Z",
-      "data": { "status": "running" }
+      "data": {
+        "status": "running"
+      }
     },
     {
       "id": "evt-cancel-003",

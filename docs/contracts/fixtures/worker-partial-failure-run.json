@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "fixture_id": "worker-partial-failure-run",
   "description": "Worker plugin raised an error during parallel subagent execution",
   "request": {
@@ -14,14 +14,21 @@
       "run_id": "run-worker-fail-1",
       "type": "run.admitted",
       "timestamp": "2026-09-19T10:40:00.000Z",
-      "data": { "run_id": "run-worker-fail-1", "profile_id": "html-notes-researcher-v1", "version": "1.0.0", "status": "admitted" }
+      "data": {
+        "run_id": "run-worker-fail-1",
+        "profile_id": "html-notes-researcher-v1",
+        "version": "1.0.0",
+        "status": "admitted"
+      }
     },
     {
       "id": "evt-w-002",
       "run_id": "run-worker-fail-1",
       "type": "run.started",
       "timestamp": "2026-09-19T10:40:00.030Z",
-      "data": { "status": "running" }
+      "data": {
+        "status": "running"
+      }
     },
     {
       "id": "evt-w-003",

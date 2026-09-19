@@ -105,6 +105,22 @@ export class RunExecutionEngine {
       }
     }
 
+    // 1.5 Contract Version Validation
+    const requestedContractVersion = request.contract_version || request.contractVersion;
+    if (requestedContractVersion) {
+      const match = /^(\d+)\./.exec(requestedContractVersion);
+      if (!match || match[1] !== "1") {
+        const versionErr: StructuredError = {
+          code: "CONTRACT_VERSION_MISMATCH",
+          message: `Incompatible contract version '${requestedContractVersion}'. Supported major versions: 1.x.x`,
+          retryable: false,
+          category: "CLIENT",
+        };
+        emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: versionErr } });
+        return { run_id: runId, id: runId, status: "failed", messages: [], error: versionErr };
+      }
+    }
+
     // 2. Profile Lookup & Overrides Validation
     const profileId = request.profile_id || request.profileId;
     if (!profileId) {

@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "fixture_id": "streaming-chat-run",
   "description": "Streaming execution emitting message delta chunks followed by completed run",
   "request": {
@@ -14,35 +14,51 @@
       "run_id": "run-stream-12345",
       "type": "run.admitted",
       "timestamp": "2026-09-19T10:05:00.000Z",
-      "data": { "run_id": "run-stream-12345", "profile_id": "html-notes-researcher-v1", "version": "1.0.0", "status": "admitted" }
+      "data": {
+        "run_id": "run-stream-12345",
+        "profile_id": "html-notes-researcher-v1",
+        "version": "1.0.0",
+        "status": "admitted"
+      }
     },
     {
       "id": "evt-stream-002",
       "run_id": "run-stream-12345",
       "type": "run.started",
       "timestamp": "2026-09-19T10:05:00.040Z",
-      "data": { "status": "running" }
+      "data": {
+        "status": "running"
+      }
     },
     {
       "id": "evt-stream-003",
       "run_id": "run-stream-12345",
       "type": "message.delta",
       "timestamp": "2026-09-19T10:05:00.200Z",
-      "data": { "role": "assistant", "delta": "Shared " }
+      "data": {
+        "role": "assistant",
+        "delta": "Shared "
+      }
     },
     {
       "id": "evt-stream-004",
       "run_id": "run-stream-12345",
       "type": "message.delta",
       "timestamp": "2026-09-19T10:05:00.350Z",
-      "data": { "role": "assistant", "delta": "runtime architectures " }
+      "data": {
+        "role": "assistant",
+        "delta": "runtime architectures "
+      }
     },
     {
       "id": "evt-stream-005",
       "run_id": "run-stream-12345",
       "type": "message.delta",
       "timestamp": "2026-09-19T10:05:00.500Z",
-      "data": { "role": "assistant", "delta": "decouple execution from application harnesses." }
+      "data": {
+        "role": "assistant",
+        "delta": "decouple execution from application harnesses."
+      }
     },
     {
       "id": "evt-stream-006",
@@ -59,7 +75,9 @@
       "run_id": "run-stream-12345",
       "type": "run.completed",
       "timestamp": "2026-09-19T10:05:00.550Z",
-      "data": { "status": "completed" }
+      "data": {
+        "status": "completed"
+      }
     }
   ],
   "result": {

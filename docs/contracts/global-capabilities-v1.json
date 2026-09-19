@@ -1,0 +1,206 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GlobalCapabilitiesContractV1",
+  "version": "1.1.0",
+  "description": "Authoritative registry of app-neutral global capabilities provided by lazy-agent-service.",
+  "capabilities": [
+    {
+      "id": "global.web.search",
+      "name": "global.web.search",
+      "owner": "lazy-agent-service",
+      "version": "1.1.0",
+      "effect": "read",
+      "timeout_ms": 15000,
+      "requires_audit": false,
+      "description": "App-neutral web retrieval capability returning relevant search results with citations and source metadata.",
+      "parameters": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string", "description": "The search query string." },
+          "max_results": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5 }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["results", "query"],
+        "properties": {
+          "query": { "type": "string" },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["title", "url", "snippet"],
+              "properties": {
+                "title": { "type": "string" },
+                "url": { "type": "string" },
+                "snippet": { "type": "string" },
+                "source": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "global.web.read_page",
+      "name": "global.web.read_page",
+      "owner": "lazy-agent-service",
+      "version": "1.1.0",
+      "effect": "read",
+      "timeout_ms": 20000,
+      "requires_audit": false,
+      "description": "App-neutral page extraction capability converting public webpage HTML into clean, bounded markdown text.",
+      "parameters": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "format": "uri", "description": "The public HTTP/HTTPS URL to retrieve." },
+          "max_chars": { "type": "integer", "minimum": 500, "maximum": 50000, "default": 8000 }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["url", "content"],
+        "properties": {
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "content": { "type": "string" },
+          "character_count": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.data.transform",
+      "name": "global.data.transform",
+      "owner": "lazy-agent-service",
+      "version": "1.1.0",
+      "effect": "read",
+      "timeout_ms": 5000,
+      "requires_audit": false,
+      "description": "Pure side-effect-free in-memory JSON data structure remapping, field picking, and numeric aggregations.",
+      "parameters": {
+        "type": "object",
+        "required": ["input", "operations"],
+        "properties": {
+          "input": { "description": "Source JSON object or array to transform." },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["op"],
+              "properties": {
+                "op": { "type": "string", "enum": ["pick", "omit", "rename", "aggregate"] },
+                "fields": { "type": "array", "items": { "type": "string" } },
+                "mapping": { "type": "object" },
+                "aggregate_key": { "type": "string" },
+                "aggregate_type": { "type": "string", "enum": ["sum", "avg", "min", "max", "count"] }
+              }
+            }
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["output", "operations_applied"],
+        "properties": {
+          "output": {},
+          "operations_applied": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.data.sort",
+      "name": "global.data.sort",
+      "owner": "lazy-agent-service",
+      "version": "1.1.0",
+      "effect": "read",
+      "timeout_ms": 5000,
+      "requires_audit": false,
+      "description": "Pure side-effect-free in-memory sorting of object arrays by key and direction.",
+      "parameters": {
+        "type": "object",
+        "required": ["items", "key"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "key": { "type": "string", "description": "Field key on objects to sort by." },
+          "direction": { "type": "string", "enum": ["asc", "desc"], "default": "asc" }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["items", "count"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "count": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.data.filter",
+      "name": "global.data.filter",
+      "owner": "lazy-agent-service",
+      "version": "1.1.0",
+      "effect": "read",
+      "timeout_ms": 5000,
+      "requires_audit": false,
+      "description": "Pure side-effect-free in-memory filtering of object arrays against comparison criteria.",
+      "parameters": {
+        "type": "object",
+        "required": ["items", "predicate"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "predicate": {
+            "type": "object",
+            "required": ["field", "op", "value"],
+            "properties": {
+              "field": { "type": "string" },
+              "op": { "type": "string", "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "in"] },
+              "value": {}
+            }
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["items", "count"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "count": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.data.extract",
+      "name": "global.data.extract",
+      "owner": "lazy-agent-service",
+      "version": "1.1.0",
+      "effect": "read",
+      "timeout_ms": 5000,
+      "requires_audit": false,
+      "description": "Pure side-effect-free regex or keyword structured entity extraction from text.",
+      "parameters": {
+        "type": "object",
+        "required": ["text", "patterns"],
+        "properties": {
+          "text": { "type": "string" },
+          "patterns": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Map of entity name to regular expression pattern."
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["entities"],
+        "properties": {
+          "entities": {
+            "type": "object",
+            "additionalProperties": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -83,6 +83,7 @@ import webhookRouter from "./routes/WebhookRoutes.ts";
 import platformRouter from "./routes/PlatformRoutes.ts";
 import executeRouter from "./routes/ExecuteRoutes.ts";
 import runRouter from "./routes/RunRoutes.ts";
+import contractRouter from "./routes/ContractRoutes.ts";
 
 
 
@@ -221,6 +222,7 @@ app.use("/webhooks", webhookRouter);
 app.use("/execute", executeRouter);
 app.use("/platform", platformRouter);
 app.use("/v1/runs", runRouter);
+app.use("/v1/contracts", contractRouter);
 
 // Platform dashboard — cross-project tool telemetry. Lives here (not in
 // trading-client) because this service owns the tool registry; trading-client

@@ -1,6 +1,7 @@
 # lazy-agent-service Architecture
 
-> Last updated: 2026-07-27
+> **Notice (2026-09-19):** For canonical contract ownership, tool taxonomy, and runtime boundary rules, refer to [CONTRACT_OWNERSHIP.md](./CONTRACT_OWNERSHIP.md). Historical monolithic tool schema sections below are preserved for legacy attribution context but superseded by Contract v1.1.0.
+> Last updated: 2026-09-19 (Contract v1.1.0)
 
 ## Names — read this first
 

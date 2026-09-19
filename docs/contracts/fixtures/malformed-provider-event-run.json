@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "fixture_id": "malformed-provider-event-run",
   "description": "Provider emitted invalid tokens or truncated non-JSON chunk in tool calling mode",
   "request": {
@@ -14,14 +14,21 @@
       "run_id": "run-mal-99",
       "type": "run.admitted",
       "timestamp": "2026-09-19T10:25:00.000Z",
-      "data": { "run_id": "run-mal-99", "profile_id": "html-notes-researcher-v1", "version": "1.0.0", "status": "admitted" }
+      "data": {
+        "run_id": "run-mal-99",
+        "profile_id": "html-notes-researcher-v1",
+        "version": "1.0.0",
+        "status": "admitted"
+      }
     },
     {
       "id": "evt-mal-002",
       "run_id": "run-mal-99",
       "type": "run.started",
       "timestamp": "2026-09-19T10:25:00.030Z",
-      "data": { "status": "running" }
+      "data": {
+        "status": "running"
+      }
     },
     {
       "id": "evt-mal-003",

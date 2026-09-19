@@ -8,15 +8,19 @@ import { RunEvidenceStore } from "../../src/platform/verify/RunEvidenceStore.ts"
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 
 describe("Authoritative Run API Contract & State Machine Tests", () => {
+  const testDir = path.dirname(fileURLToPath(import.meta.url));
+  const profilesDir = path.resolve(testDir, "..", "..", "profiles");
+
   beforeEach(async () => {
     RunExecutionEngine.reset();
     ProfileRegistry.clear();
     RunEvidenceStore.getGlobalInstance().clearAll();
     vi.restoreAllMocks();
     // Load profiles from the workspace profiles/ directory
-    await ProfileRegistry.loadProfilesFromDisk(path.resolve(process.cwd(), "profiles"));
+    await ProfileRegistry.loadProfilesFromDisk(profilesDir);
   });
 
   it("isolates execution requests across concurrent runs", async () => {
@@ -351,5 +355,42 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
     expect(result.error?.code).toBe("PROFILE_NOT_FOUND");
     expect(result.error?.message).toContain("Profile unknown-role-xyz not found");
     expect(emittedEvents).toContain("run.failed");
+  });
+
+  it("rejects unsupported contract major versions with CONTRACT_VERSION_MISMATCH", async () => {
+    const emittedEvents: string[] = [];
+    const result = await RunExecutionEngine.startRun(
+      "run-incompatible-version",
+      {
+        contract_version: "2.0.0",
+        profile_id: "trading-analyst-v1",
+        input: "Test version check",
+      },
+      (evt) => emittedEvents.push(evt.type),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error?.code).toBe("CONTRACT_VERSION_MISMATCH");
+    expect(result.error?.message).toContain("Incompatible contract version '2.0.0'");
+    expect(emittedEvents).toContain("run.failed");
+  });
+
+  it("accepts valid v1.1.0 contract_version in CreateRunRequest", async () => {
+    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockResolvedValue({
+      messages: [{ role: "assistant", content: "Contract v1.1.0 accepted" }],
+    } as any);
+
+    const result = await RunExecutionEngine.startRun(
+      "run-valid-v110",
+      {
+        contract_version: "1.1.0",
+        profile_id: "trading-analyst-v1",
+        input: "Test valid v1.1.0",
+      },
+      () => {},
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.messages[0].content).toBe("Contract v1.1.0 accepted");
   });
 });

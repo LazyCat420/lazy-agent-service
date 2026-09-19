@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "fixture_id": "successful-no-tool-run",
   "description": "Successful one-turn assistant response with no tool invocations",
   "request": {
@@ -80,10 +80,39 @@
       "task_delivery": "exact",
       "created_at": "2026-09-19T10:00:00.020Z",
       "layers": {
-        "prefix": { "allocated_chars": 2000, "used_chars": 480, "truncated": false, "item_count": 1, "hash": "sha256-1111111111111111111111111111111111111111111111111111111111111111" },
-        "project_scope": { "allocated_chars": 4000, "used_chars": 250, "truncated": false, "item_count": 3, "tool_ids": ["fetch_financial_statement"], "hash": "sha256-2222222222222222222222222222222222222222222222222222222222222222" },
-        "retrieved_evidence": { "allocated_chars": 4000, "used_chars": 0, "truncated": false, "item_count": 0, "memory_ids": [], "artifact_refs": [], "hash": "sha256-3333333333333333333333333333333333333333333333333333333333333333" },
-        "dynamic_tail": { "allocated_chars": 2000, "used_chars": 120, "truncated": false, "item_count": 1, "hash": "sha256-4444444444444444444444444444444444444444444444444444444444444444" }
+        "prefix": {
+          "allocated_chars": 2000,
+          "used_chars": 480,
+          "truncated": false,
+          "item_count": 1,
+          "hash": "sha256-1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "project_scope": {
+          "allocated_chars": 4000,
+          "used_chars": 250,
+          "truncated": false,
+          "item_count": 3,
+          "tool_ids": [
+            "fetch_financial_statement"
+          ],
+          "hash": "sha256-2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "retrieved_evidence": {
+          "allocated_chars": 4000,
+          "used_chars": 0,
+          "truncated": false,
+          "item_count": 0,
+          "memory_ids": [],
+          "artifact_refs": [],
+          "hash": "sha256-3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "dynamic_tail": {
+          "allocated_chars": 2000,
+          "used_chars": 120,
+          "truncated": false,
+          "item_count": 1,
+          "hash": "sha256-4444444444444444444444444444444444444444444444444444444444444444"
+        }
       },
       "total_chars": 850,
       "excluded_items": []

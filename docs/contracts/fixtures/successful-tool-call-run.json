@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "fixture_id": "successful-tool-call-run",
   "description": "Run executing a whitelisted tool with verified evidence records",
   "request": {
@@ -14,14 +14,21 @@
       "run_id": "run-tool-987",
       "type": "run.admitted",
       "timestamp": "2026-09-19T10:10:00.000Z",
-      "data": { "run_id": "run-tool-987", "profile_id": "trading-analyst-v1", "version": "1.0.0", "status": "admitted" }
+      "data": {
+        "run_id": "run-tool-987",
+        "profile_id": "trading-analyst-v1",
+        "version": "1.0.0",
+        "status": "admitted"
+      }
     },
     {
       "id": "evt-tool-002",
       "run_id": "run-tool-987",
       "type": "run.started",
       "timestamp": "2026-09-19T10:10:00.030Z",
-      "data": { "status": "running" }
+      "data": {
+        "status": "running"
+      }
     },
     {
       "id": "evt-tool-003",
@@ -31,7 +38,9 @@
       "data": {
         "call_id": "call-001",
         "tool_name": "mcp__lazy-tool-service__calculate_liquidity_ratios",
-        "arguments": { "ticker": "NVDA" }
+        "arguments": {
+          "ticker": "NVDA"
+        }
       }
     },
     {
@@ -51,7 +60,9 @@
       "run_id": "run-tool-987",
       "type": "run.completed",
       "timestamp": "2026-09-19T10:10:01.800Z",
-      "data": { "status": "completed" }
+      "data": {
+        "status": "completed"
+      }
     }
   ],
   "result": {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import logger from "../utils/logger.ts";
 import type { RuntimeOverrides } from "../types/run.ts";
+import { CapabilityRegistry } from "./CapabilityRegistry.ts";
 
 export interface ModelConstraints {
   default_model: string;
@@ -129,6 +130,14 @@ export class ProfileRegistry {
     ) {
       throw new Error(
         "budget_limits requires numeric max_tokens, max_tool_calls, and max_duration_ms",
+      );
+    }
+
+    // Validate capabilities: a profile cannot grant a nonexistent global capability
+    const capValidation = CapabilityRegistry.validateProfileCapabilities(tool_policy.whitelist);
+    if (!capValidation.valid) {
+      throw new Error(
+        `Profile manifest '${data.profile_id}' grants nonexistent or unauthorized capability: ${capValidation.unauthorized.join(", ")}`,
       );
     }
 

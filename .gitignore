@@ -46,3 +46,5 @@ projects.json
 # Temporary/Backup configs
 *_temp.json
 *_backup.json
+data/run_store_durable.json
+

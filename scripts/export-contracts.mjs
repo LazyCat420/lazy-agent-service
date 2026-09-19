@@ -13,6 +13,7 @@ fs.mkdirSync(targetSchemas, { recursive: true });
 // Copy schema files
 const filesToExport = [
   "run-contract-v1.json",
+  "global-capabilities-v1.json",
   "agent-profile-spec-v1.json",
   "agent-runtime-contract-v1.md",
   "agent-profile-spec-v1.md",
@@ -39,7 +40,24 @@ if (fs.existsSync(fixturesSrc)) {
   }
 }
 
-// Also generate tool-contract-v1.json if tool_schemas.json exists
+// Generate self-contained contracts-bundle-v1.1.0.json
+const bundlePath = path.join(targetContracts, "contracts-bundle-v1.1.0.json");
+const runContractPath = path.join(contractsDir, "run-contract-v1.json");
+const globalCapsPath = path.join(contractsDir, "global-capabilities-v1.json");
+const profileSpecPath = path.join(contractsDir, "agent-profile-spec-v1.json");
+
+const bundle = {
+  contract_version: "1.1.0",
+  generated_at: new Date().toISOString(),
+  run_contract: fs.existsSync(runContractPath) ? JSON.parse(fs.readFileSync(runContractPath, "utf-8")) : null,
+  global_capabilities: fs.existsSync(globalCapsPath) ? JSON.parse(fs.readFileSync(globalCapsPath, "utf-8")) : null,
+  agent_profile_spec: fs.existsSync(profileSpecPath) ? JSON.parse(fs.readFileSync(profileSpecPath, "utf-8")) : null,
+};
+
+fs.writeFileSync(bundlePath, JSON.stringify(bundle, null, 2), "utf-8");
+fs.copyFileSync(bundlePath, path.join(targetSchemas, "contracts-bundle-v1.1.0.json"));
+
+// Also generate tool-contract-v1.json if tool_schemas.json exists (for backward compatibility)
 const toolSchemas = path.resolve(rootDir, "tool_schemas.json");
 if (fs.existsSync(toolSchemas)) {
   fs.copyFileSync(toolSchemas, path.join(targetSchemas, "tool-contract-v1.json"));

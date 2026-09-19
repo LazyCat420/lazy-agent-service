@@ -10,6 +10,26 @@ export type RunState =
   | "cancelled"
   | "timed_out";
 
+export type ToolEffect = "read" | "write" | "destructive";
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  effect: ToolEffect;
+  timeout_ms?: number;
+}
+
+export interface ToolResult {
+  tool_call_id: string;
+  name: string;
+  result: unknown;
+  is_error: boolean;
+  error?: StructuredError;
+}
+
+export type ContractVersion = "1.0.0" | "1.1.0";
+
 export interface RunBudget {
   max_tokens?: number;
   max_tool_calls?: number;
@@ -32,6 +52,8 @@ export interface RuntimeOverrides {
 }
 
 export interface CreateRunRequest {
+  contract_version?: string;
+  contractVersion?: string;
   profile_id?: string;
   profileId?: string;
   profile_version?: string;
@@ -103,10 +125,12 @@ export interface EvidenceRecord {
   source: string;
   provenance_hash?: string;
   redacted?: boolean;
+  data?: unknown;
   [key: string]: unknown;
 }
 
 export interface RunResult {
+  contract_version?: string;
   run_id: string;
   id?: string; // Legacy alias
   status: RunState | "queued" | "in_progress";
@@ -119,6 +143,7 @@ export interface RunResult {
 }
 
 export interface RunRecord {
+  contract_version?: string;
   run_id: string;
   status: RunState;
   profile_id: string;

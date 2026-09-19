@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "fixture_id": "denied-tool-call-run",
   "description": "Agent attempted to call a tool outside the profile whitelist, policy gate denied execution",
   "request": {
@@ -14,14 +14,21 @@
       "run_id": "run-deny-456",
       "type": "run.admitted",
       "timestamp": "2026-09-19T10:15:00.000Z",
-      "data": { "run_id": "run-deny-456", "profile_id": "trading-analyst-v1", "version": "1.0.0", "status": "admitted" }
+      "data": {
+        "run_id": "run-deny-456",
+        "profile_id": "trading-analyst-v1",
+        "version": "1.0.0",
+        "status": "admitted"
+      }
     },
     {
       "id": "evt-deny-002",
       "run_id": "run-deny-456",
       "type": "run.started",
       "timestamp": "2026-09-19T10:15:00.020Z",
-      "data": { "status": "running" }
+      "data": {
+        "status": "running"
+      }
     },
     {
       "id": "evt-deny-003",

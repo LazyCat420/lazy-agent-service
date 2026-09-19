@@ -1,6 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "AgentRuntimeContractV1",
+  "version": "1.1.0",
+  "description": "Canonical Agent Runtime Execution Contract v1.1.0",
   "definitions": {
     "RunBudget": {
       "type": "object",
@@ -11,10 +13,68 @@
         "max_duration_ms": { "type": "integer", "minimum": 1000, "maximum": 600000 }
       }
     },
+    "ToolEffect": {
+      "type": "string",
+      "enum": ["read", "write", "destructive"],
+      "description": "Side-effect classification for authorization and confirmation safety."
+    },
+    "ToolCall": {
+      "type": "object",
+      "required": ["id", "name", "arguments", "effect"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "arguments": { "type": "object" },
+        "effect": { "$ref": "#/definitions/ToolEffect" },
+        "timeout_ms": { "type": "integer", "minimum": 100 }
+      }
+    },
+    "ToolResult": {
+      "type": "object",
+      "required": ["tool_call_id", "name", "result", "is_error"],
+      "properties": {
+        "tool_call_id": { "type": "string" },
+        "name": { "type": "string" },
+        "result": {},
+        "is_error": { "type": "boolean" },
+        "error": { "$ref": "#/definitions/StructuredError" }
+      }
+    },
+    "EvidenceRecord": {
+      "type": "object",
+      "required": ["evidence_id", "source"],
+      "properties": {
+        "evidence_id": { "type": "string" },
+        "source": { "type": "string" },
+        "provenance_hash": { "type": "string" },
+        "redacted": { "type": "boolean", "default": false },
+        "data": {}
+      }
+    },
+    "ContextReceipt": {
+      "type": "object",
+      "required": ["receipt_id", "timestamp", "layers"],
+      "properties": {
+        "receipt_id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "layers": {
+          "type": "object",
+          "properties": {
+            "prefix": { "type": "object", "properties": { "hash": { "type": "string" } } },
+            "role_rules": { "type": "object", "properties": { "hash": { "type": "string" } } },
+            "project_scope": { "type": "object", "properties": { "hash": { "type": "string" } } },
+            "dynamic_state": { "type": "object", "properties": { "hash": { "type": "string" } } }
+          }
+        },
+        "total_chars": { "type": "integer" },
+        "total_tokens": { "type": "integer" }
+      }
+    },
     "CreateRunRequest": {
       "type": "object",
       "required": ["profile_id", "input"],
       "properties": {
+        "contract_version": { "type": "string", "default": "1.1.0" },
         "profile_id": { "type": "string" },
         "profile_version": { "type": "string" },
         "input": {
@@ -37,7 +97,8 @@
         "budget": { "$ref": "#/definitions/RunBudget" },
         "tools": { "type": "array", "items": { "type": "object" } },
         "stream": { "type": "boolean", "default": false },
-        "idempotency_key": { "type": "string" }
+        "idempotency_key": { "type": "string" },
+        "deadline_ms": { "type": "integer", "minimum": 1000 }
       }
     },
     "RunEvent": {
@@ -82,6 +143,7 @@
       "type": "object",
       "required": ["run_id", "status", "messages"],
       "properties": {
+        "contract_version": { "type": "string" },
         "run_id": { "type": "string" },
         "status": { "type": "string", "enum": ["admitted", "running", "completed", "failed", "cancelled", "timed_out"] },
         "messages": { "type": "array", "items": { "type": "object" } },
@@ -96,8 +158,8 @@
             "duration_ms": { "type": "integer" }
           }
         },
-        "context_receipt": { "type": "object" },
-        "evidence_records": { "type": "array", "items": { "type": "object" } },
+        "context_receipt": { "$ref": "#/definitions/ContextReceipt" },
+        "evidence_records": { "type": "array", "items": { "$ref": "#/definitions/EvidenceRecord" } },
         "error": { "$ref": "#/definitions/StructuredError" }
       }
     }
