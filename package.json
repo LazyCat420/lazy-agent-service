@@ -10,7 +10,7 @@
     "build": "tsc && mkdir -p dist/src && cp -r src/locales dist/src/locales && node scripts/export-contracts.mjs",
     "export:contracts": "node scripts/export-contracts.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --exclude \"**/.worktrees/**\"",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "format": "prettier --write \"src/**/*.ts\"",
