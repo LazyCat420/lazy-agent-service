@@ -60,5 +60,99 @@
     "max_duration_ms": 120000,
     "max_concurrent_workers": 4
   },
-  "retention_class": "AUDITED_SESSION"
+  "retention_class": "AUDITED_SESSION",
+  "local_tool_policy": {
+    "html_notes.canvas.read": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.canvas.upsert_widget": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.canvas.remove_widget": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.canvas.mutate": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.notes.create": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.notes.update": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.notes.get": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.notes.search": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.notes.link": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.apps.list": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.apps.open": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.apps.execute_action": {
+      "effect": "destructive",
+      "requires_confirmation": true
+    },
+    "html_notes.apps.curate": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.watches.create": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.watches.list": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.watches.cancel": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.widgets.list_catalog": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.weather.get": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.sports.scores": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.finance.stock_history": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.finance.stock_news": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.news.get_news": {
+      "effect": "read",
+      "requires_confirmation": false
+    },
+    "html_notes.media.youtube_search": {
+      "effect": "read",
+      "requires_confirmation": false
+    }
+  }
 }

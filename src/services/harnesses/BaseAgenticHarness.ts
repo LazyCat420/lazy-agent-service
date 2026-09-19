@@ -493,6 +493,14 @@ export default class BaseAgenticHarness {
   ): AsyncIterable<unknown> | null {
     const { provider, providerName, resolvedModel, modelDefinition, signal } = this.context;
 
+    if (this.context.runtimeToolExecutor) {
+      const limit = this.context.options.maxTokens ?? 0;
+      const consumed = this.state.overallUsage.inputTokens + this.state.overallUsage.outputTokens;
+      const remaining = limit - consumed;
+      if (remaining <= 0) throw Object.assign(new Error("Canonical token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+      passOptions = { ...passOptions, maxTokens: Math.min(passOptions.maxTokens ?? remaining, remaining) };
+    }
+
     const clampedMaxTokens = this.clampOutputTokens(messages, passOptions.maxTokens);
 
     // ── Pre-flight context exhaustion guard ──────────────────

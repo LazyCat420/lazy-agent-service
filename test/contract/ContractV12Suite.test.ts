@@ -1,6 +1,8 @@
 import { executeToolBatch } from "../../src/services/harnesses/lifecycle/ToolExecutor.ts";
 import ToolOrchestratorService from "../../src/services/ToolOrchestratorService.ts";
 import crypto from "node:crypto";
+import { LocalToolContinuation } from "../../src/services/LocalToolContinuation.ts";
+import * as NewsSearch from "../../src/services/NewsSearchService.ts";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
@@ -28,6 +30,10 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
     RunEvidenceStore.getGlobalInstance().clearAll();
     vi.restoreAllMocks();
     await ProfileRegistry.loadProfilesFromDisk(profilesDir);
+    for (const id of ProfileRegistry.getRegisteredProfileIds()) {
+      const profile = await ProfileRegistry.loadProfile(id);
+      ProfileRegistry.registerProfile({ ...profile!, plugins: {} });
+    }
   });
 
   it("test_profile_rejects_unknown_capability", () => {
@@ -263,14 +269,19 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
       context.emit({ type: "chunk", content: "Preparing your note" });
       const results = await executeToolBatch([{ id: "integration-call", name: "html_notes.notes.create", args: { title: "Integration", rendered_html: "<p>Verified</p>" } }],
         context, context.runtimeTools!, { run: vi.fn() } as any, {} as any);
-      expect((results[0].result as any).status).toBe("admitted_local");
-      return { messages: [] };
+      expect(results[0].result).toEqual({ saved: true });
+      return { messages: [{ role: "assistant", content: "Note saved" }] };
     });
     const schema = (name: string) => ({ name, description: "Test schema", parameters: { type: "object", properties: {} } });
     const result = await RunExecutionEngine.startRun("run-wired", {
       profile_id: "html-notes-canvas-v1", input: "Create a note",
       runtime_overrides: { context: { session_id: "session-wired" }, local_tool_schemas: [schema("html_notes.notes.create"), schema("forbidden.tool")] },
-    }, event => events.push(event));
+    }, event => {
+      events.push(event);
+      if (event.type === "tool.invoked") void LocalToolContinuation.submit("run-wired", event.data.tool_call_id, {
+        authorization_receipt: event.data.authorization_receipt, result: { saved: true }, is_error: false,
+      });
+    });
     expect(result.status).toBe("completed");
     const invoked = events.find(e => e.type === "tool.invoked");
     expect(invoked.data.authorization_receipt.session_id).toBe("session-wired");
@@ -398,6 +409,7 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
   });
 
   it("test_global_capability_emits_evidence_when_configured", async () => {
+    vi.spyOn(NewsSearch, "newsSearch").mockResolvedValue({ items: [], source: "fixture" } as any);
     const processed = await RunExecutionEngine.processToolCall(
       "run-evidence-test-01",
       {

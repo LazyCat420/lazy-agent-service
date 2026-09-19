@@ -61,6 +61,8 @@ export interface RuntimeOverrides {
 }
 
 export interface CreateRunRequest {
+  /** Set by the HTTP boundary, never accepted from the body. */
+  identity?: { project: string; username: string };
   contract_version?: string;
   contractVersion?: string;
   profile_id?: string;
@@ -119,17 +121,17 @@ export interface StructuredError {
 }
 
 export interface RunUsage {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
   tool_calls_count: number;
   retry_count: number;
   duration_ms: number;
 
   // Backwards compatibility aliases
-  promptTokens?: number;
-  completionTokens?: number;
-  totalTokens?: number;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  totalTokens?: number | null;
   toolCalls?: number;
 }
 
@@ -157,6 +159,8 @@ export interface RunResult {
 }
 
 export interface RunRecord {
+  identity?: { project: string; username: string };
+  pending_tools?: Record<string, { event: any; result_digest?: string; observation?: unknown }>;
   contract_version?: string;
   run_id: string;
   status: RunState;

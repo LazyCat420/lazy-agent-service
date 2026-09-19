@@ -21,27 +21,54 @@
       "description": "App-neutral web retrieval capability returning relevant search results with citations and source metadata.",
       "parameters": {
         "type": "object",
-        "required": ["query"],
+        "required": [
+          "query"
+        ],
         "properties": {
-          "query": { "type": "string", "description": "The search query string." },
-          "max_results": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5 }
+          "query": {
+            "type": "string",
+            "description": "The search query string."
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 5
+          }
         }
       },
       "returns": {
         "type": "object",
-        "required": ["query", "results"],
+        "required": [
+          "query",
+          "results"
+        ],
         "properties": {
-          "query": { "type": "string" },
+          "query": {
+            "type": "string"
+          },
           "results": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["title", "url", "snippet"],
+              "required": [
+                "title",
+                "url",
+                "snippet"
+              ],
               "properties": {
-                "title": { "type": "string" },
-                "url": { "type": "string" },
-                "snippet": { "type": "string" },
-                "source": { "type": "string" }
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "snippet": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -65,20 +92,42 @@
       "description": "App-neutral page extraction capability converting public webpage HTML into clean, bounded markdown text.",
       "parameters": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "url": { "type": "string", "format": "uri", "description": "The public HTTP/HTTPS URL to retrieve." },
-          "max_chars": { "type": "integer", "minimum": 500, "maximum": 50000, "default": 8000 }
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "The public HTTP/HTTPS URL to retrieve."
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 50000,
+            "default": 8000
+          }
         }
       },
       "returns": {
         "type": "object",
-        "required": ["url", "content"],
+        "required": [
+          "url",
+          "content"
+        ],
         "properties": {
-          "url": { "type": "string" },
-          "title": { "type": "string" },
-          "content": { "type": "string" },
-          "character_count": { "type": "integer" }
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "character_count": {
+            "type": "integer"
+          }
         }
       }
     },
@@ -99,20 +148,37 @@
       "description": "Extract title, description, canonical URL, favicon, and image metadata from a webpage.",
       "parameters": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "url": { "type": "string", "format": "uri" }
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
         }
       },
       "returns": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "url": { "type": "string" },
-          "title": { "type": "string" },
-          "description": { "type": "string" },
-          "canonical_url": { "type": "string" },
-          "image": { "type": "string" }
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "canonical_url": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          }
         }
       }
     },
@@ -133,20 +199,53 @@
       "description": "Pure side-effect-free in-memory JSON data structure remapping, field picking, and numeric aggregations.",
       "parameters": {
         "type": "object",
-        "required": ["input", "operations"],
+        "required": [
+          "input",
+          "operations"
+        ],
         "properties": {
-          "input": { "description": "Source JSON object or array to transform." },
+          "input": {
+            "description": "Source JSON object or array to transform."
+          },
           "operations": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["op"],
+              "required": [
+                "op"
+              ],
               "properties": {
-                "op": { "type": "string", "enum": ["pick", "omit", "rename", "aggregate"] },
-                "fields": { "type": "array", "items": { "type": "string" } },
-                "mapping": { "type": "object" },
-                "aggregate_key": { "type": "string" },
-                "aggregate_type": { "type": "string", "enum": ["sum", "avg", "min", "max", "count"] }
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "pick",
+                    "omit",
+                    "rename",
+                    "aggregate"
+                  ]
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "mapping": {
+                  "type": "object"
+                },
+                "aggregate_key": {
+                  "type": "string"
+                },
+                "aggregate_type": {
+                  "type": "string",
+                  "enum": [
+                    "sum",
+                    "avg",
+                    "min",
+                    "max",
+                    "count"
+                  ]
+                }
               }
             }
           }
@@ -154,10 +253,15 @@
       },
       "returns": {
         "type": "object",
-        "required": ["output", "operations_applied"],
+        "required": [
+          "output",
+          "operations_applied"
+        ],
         "properties": {
           "output": {},
-          "operations_applied": { "type": "integer" }
+          "operations_applied": {
+            "type": "integer"
+          }
         }
       }
     },
@@ -178,19 +282,47 @@
       "description": "Pure side-effect-free in-memory sorting of object arrays by key and direction.",
       "parameters": {
         "type": "object",
-        "required": ["items", "key"],
+        "required": [
+          "items",
+          "key"
+        ],
         "properties": {
-          "items": { "type": "array", "items": { "type": "object" } },
-          "key": { "type": "string", "description": "Field key on objects to sort by." },
-          "direction": { "type": "string", "enum": ["asc", "desc"], "default": "asc" }
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "key": {
+            "type": "string",
+            "description": "Field key on objects to sort by."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc"
+          }
         }
       },
       "returns": {
         "type": "object",
-        "required": ["items", "count"],
+        "required": [
+          "items",
+          "count"
+        ],
         "properties": {
-          "items": { "type": "array", "items": { "type": "object" } },
-          "count": { "type": "integer" }
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
         }
       }
     },
@@ -211,15 +343,41 @@
       "description": "Pure side-effect-free in-memory filtering of object arrays against comparison criteria.",
       "parameters": {
         "type": "object",
-        "required": ["items", "predicate"],
+        "required": [
+          "items",
+          "predicate"
+        ],
         "properties": {
-          "items": { "type": "array", "items": { "type": "object" } },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
           "predicate": {
             "type": "object",
-            "required": ["field", "op", "value"],
+            "required": [
+              "field",
+              "op",
+              "value"
+            ],
             "properties": {
-              "field": { "type": "string" },
-              "op": { "type": "string", "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "in"] },
+              "field": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "neq",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte",
+                  "contains",
+                  "in"
+                ]
+              },
               "value": {}
             }
           }
@@ -227,10 +385,20 @@
       },
       "returns": {
         "type": "object",
-        "required": ["items", "count"],
+        "required": [
+          "items",
+          "count"
+        ],
         "properties": {
-          "items": { "type": "array", "items": { "type": "object" } },
-          "count": { "type": "integer" }
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
         }
       }
     },
@@ -251,18 +419,35 @@
       "description": "Pure side-effect-free in-memory grouping and aggregation of object arrays by key.",
       "parameters": {
         "type": "object",
-        "required": ["items", "group_by"],
+        "required": [
+          "items",
+          "group_by"
+        ],
         "properties": {
-          "items": { "type": "array", "items": { "type": "object" } },
-          "group_by": { "type": "string" }
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "group_by": {
+            "type": "string"
+          }
         }
       },
       "returns": {
         "type": "object",
-        "required": ["groups", "group_count"],
+        "required": [
+          "groups",
+          "group_count"
+        ],
         "properties": {
-          "groups": { "type": "object" },
-          "group_count": { "type": "integer" }
+          "groups": {
+            "type": "object"
+          },
+          "group_count": {
+            "type": "integer"
+          }
         }
       }
     },
@@ -283,21 +468,32 @@
       "description": "Pure side-effect-free regex or keyword structured entity extraction from text.",
       "parameters": {
         "type": "object",
-        "required": ["text", "patterns"],
+        "required": [
+          "text",
+          "patterns"
+        ],
         "properties": {
-          "text": { "type": "string" },
+          "text": {
+            "type": "string"
+          },
           "patterns": {
             "type": "object",
-            "additionalProperties": { "type": "string" },
+            "additionalProperties": {
+              "type": "string"
+            },
             "description": "Map of entity name to regular expression pattern."
           }
         }
       },
       "returns": {
         "type": "object",
-        "required": ["entities"],
+        "required": [
+          "entities"
+        ],
         "properties": {
-          "entities": { "type": "object" }
+          "entities": {
+            "type": "object"
+          }
         }
       }
     },
@@ -318,18 +514,33 @@
       "description": "Pure deterministic classification, tagging, and rule-based categorization.",
       "parameters": {
         "type": "object",
-        "required": ["item", "rules"],
+        "required": [
+          "item",
+          "rules"
+        ],
         "properties": {
-          "item": { "type": "object" },
+          "item": {
+            "type": "object"
+          },
           "rules": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["field", "match", "category"],
+              "required": [
+                "field",
+                "match",
+                "category"
+              ],
               "properties": {
-                "field": { "type": "string" },
-                "match": { "type": "string" },
-                "category": { "type": "string" }
+                "field": {
+                  "type": "string"
+                },
+                "match": {
+                  "type": "string"
+                },
+                "category": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -337,9 +548,16 @@
       },
       "returns": {
         "type": "object",
-        "required": ["categories"],
+        "required": [
+          "categories"
+        ],
         "properties": {
-          "categories": { "type": "array", "items": { "type": "string" } }
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -360,51 +578,39 @@
       "description": "App-neutral text segmentation and chunking with configurable overlap.",
       "parameters": {
         "type": "object",
-        "required": ["text"],
+        "required": [
+          "text"
+        ],
         "properties": {
-          "text": { "type": "string" },
-          "chunk_size": { "type": "integer", "default": 1000 },
-          "overlap": { "type": "integer", "default": 100 }
+          "text": {
+            "type": "string"
+          },
+          "chunk_size": {
+            "type": "integer",
+            "default": 1000
+          },
+          "overlap": {
+            "type": "integer",
+            "default": 100
+          }
         }
       },
       "returns": {
         "type": "object",
-        "required": ["chunks", "count"],
+        "required": [
+          "chunks",
+          "count"
+        ],
         "properties": {
-          "chunks": { "type": "array", "items": { "type": "string" } },
-          "count": { "type": "integer" }
-        }
-      }
-    },
-    {
-      "id": "global.document.summarize",
-      "version": "1.2.0",
-      "owner": "lazy-agent-service",
-      "execution": "shared",
-      "effect": "read",
-      "input_schema_ref": "schemas/global.document.summarize.input.json",
-      "output_schema_ref": "schemas/global.document.summarize.output.json",
-      "requires_confirmation": false,
-      "requires_user_scope": false,
-      "supports_evidence": true,
-      "timeout_ms": 30000,
-      "retryable": true,
-      "rate_limit_class": "llm_inference",
-      "description": "Document summarization adhering to bounded input and verifiable evidence policy.",
-      "parameters": {
-        "type": "object",
-        "required": ["text"],
-        "properties": {
-          "text": { "type": "string" },
-          "max_length": { "type": "integer", "default": 500 }
-        }
-      },
-      "returns": {
-        "type": "object",
-        "required": ["summary"],
-        "properties": {
-          "summary": { "type": "string" },
-          "length": { "type": "integer" }
+          "chunks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
         }
       }
     },
@@ -426,16 +632,29 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "timezone": { "type": "string", "default": "UTC" }
+          "timezone": {
+            "type": "string",
+            "default": "UTC"
+          }
         }
       },
       "returns": {
         "type": "object",
-        "required": ["iso", "timestamp", "timezone"],
+        "required": [
+          "iso",
+          "timestamp",
+          "timezone"
+        ],
         "properties": {
-          "iso": { "type": "string" },
-          "timestamp": { "type": "integer" },
-          "timezone": { "type": "string" }
+          "iso": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "integer"
+          },
+          "timezone": {
+            "type": "string"
+          }
         }
       }
     },
@@ -456,77 +675,24 @@
       "description": "Deterministic calculation and unit conversion.",
       "parameters": {
         "type": "object",
-        "required": ["expression"],
+        "required": [
+          "expression"
+        ],
         "properties": {
-          "expression": { "type": "string" }
+          "expression": {
+            "type": "string"
+          }
         }
       },
       "returns": {
         "type": "object",
-        "required": ["result"],
+        "required": [
+          "result"
+        ],
         "properties": {
-          "result": { "type": "number" }
-        }
-      }
-    },
-    {
-      "id": "global.media.transcribe",
-      "version": "1.2.0",
-      "owner": "lazy-agent-service",
-      "execution": "shared",
-      "effect": "read",
-      "input_schema_ref": "schemas/global.media.transcribe.input.json",
-      "output_schema_ref": "schemas/global.media.transcribe.output.json",
-      "requires_confirmation": false,
-      "requires_user_scope": false,
-      "supports_evidence": true,
-      "timeout_ms": 60000,
-      "retryable": true,
-      "rate_limit_class": "media_processing",
-      "description": "Speech-to-text audio transcription capability.",
-      "parameters": {
-        "type": "object",
-        "required": ["audio_url"],
-        "properties": {
-          "audio_url": { "type": "string" }
-        }
-      },
-      "returns": {
-        "type": "object",
-        "required": ["transcript"],
-        "properties": {
-          "transcript": { "type": "string" }
-        }
-      }
-    },
-    {
-      "id": "global.media.describe_image",
-      "version": "1.2.0",
-      "owner": "lazy-agent-service",
-      "execution": "shared",
-      "effect": "read",
-      "input_schema_ref": "schemas/global.media.describe_image.input.json",
-      "output_schema_ref": "schemas/global.media.describe_image.output.json",
-      "requires_confirmation": false,
-      "requires_user_scope": false,
-      "supports_evidence": true,
-      "timeout_ms": 30000,
-      "retryable": true,
-      "rate_limit_class": "vision_inference",
-      "description": "Visual feature extraction and natural language image description.",
-      "parameters": {
-        "type": "object",
-        "required": ["image_url"],
-        "properties": {
-          "image_url": { "type": "string" },
-          "prompt": { "type": "string" }
-        }
-      },
-      "returns": {
-        "type": "object",
-        "required": ["description"],
-        "properties": {
-          "description": { "type": "string" }
+          "result": {
+            "type": "number"
+          }
         }
       }
     }

@@ -19,6 +19,9 @@ export class GlobalCapabilityExecutor {
     capabilityId: string,
     args: Record<string, unknown>,
   ): Promise<ExecutionResult> {
+    if (["global.document.summarize", "global.media.transcribe", "global.media.describe_image"].includes(capabilityId)) {
+      return { success: false, error: { code: "CAPABILITY_UNAVAILABLE", message: "No tested executor is installed for this capability" } };
+    }
     try {
       switch (capabilityId) {
         case "global.data.sort":
@@ -35,8 +38,6 @@ export class GlobalCapabilityExecutor {
           return this.executeClassify(args);
         case "global.document.chunk":
           return this.executeChunk(args);
-        case "global.document.summarize":
-          return this.executeSummarize(args);
         case "global.time.now":
           return this.executeTimeNow(args);
         case "global.math.calculate":
@@ -47,10 +48,6 @@ export class GlobalCapabilityExecutor {
           return await this.executeReadPage(args);
         case "global.web.fetch_metadata":
           return await this.executeFetchMetadata(args);
-        case "global.media.transcribe":
-          return this.executeTranscribe(args);
-        case "global.media.describe_image":
-          return this.executeDescribeImage(args);
         default:
           return {
             success: false,
@@ -437,15 +434,6 @@ export class GlobalCapabilityExecutor {
     };
   }
 
-  private static executeSummarize(args: Record<string, unknown>): ExecutionResult {
-    const text = String(args.text || "");
-    const maxLength = Math.max(50, Number(args.max_length || 500));
-    const summary = text.length <= maxLength ? text : text.slice(0, maxLength) + "...";
-    return {
-      success: true,
-      result: { summary, length: summary.length },
-    };
-  }
 
   private static executeTimeNow(args: Record<string, unknown>): ExecutionResult {
     const timezone = String(args.timezone || "UTC");
@@ -504,36 +492,11 @@ export class GlobalCapabilityExecutor {
           image: ogImgMatch ? ogImgMatch[1].trim() : undefined,
         },
       };
-    } catch {
-      // Fallback metadata
-      return {
-        success: true,
-        result: {
-          url,
-          title: "Fetched Page Metadata",
-          canonical_url: url,
-        },
-      };
+    } catch (err: any) {
+      return { success: false, error: { code: "METADATA_FETCH_FAILED", message: err.message || "Metadata retrieval failed" } };
     }
   }
 
-  private static executeTranscribe(args: Record<string, unknown>): ExecutionResult {
-    const audioUrl = String(args.audio_url || "");
-    return {
-      success: true,
-      result: {
-        transcript: `[Audio transcript for ${audioUrl}]`,
-      },
-    };
-  }
 
-  private static executeDescribeImage(args: Record<string, unknown>): ExecutionResult {
-    const imageUrl = String(args.image_url || "");
-    return {
-      success: true,
-      result: {
-        description: `[Visual description for ${imageUrl}]`,
-      },
-    };
-  }
+
 }

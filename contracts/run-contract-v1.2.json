@@ -7,143 +7,349 @@
     "RunBudget": {
       "type": "object",
       "properties": {
-        "max_tokens": { "type": "integer", "minimum": 1, "maximum": 32768 },
-        "max_tool_calls": { "type": "integer", "minimum": 0, "maximum": 50 },
-        "max_retries": { "type": "integer", "minimum": 0, "maximum": 10 },
-        "max_duration_ms": { "type": "integer", "minimum": 1000, "maximum": 600000 }
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32768
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "max_duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600000
+        }
       }
     },
     "ToolEffect": {
       "type": "string",
-      "enum": ["read", "write", "destructive"],
+      "enum": [
+        "read",
+        "write",
+        "destructive"
+      ],
       "description": "Side-effect classification for authorization and confirmation safety."
     },
     "ToolExecution": {
       "type": "string",
-      "enum": ["shared", "local"],
+      "enum": [
+        "shared",
+        "local"
+      ],
       "description": "Execution location boundary: 'shared' runs inside lazy-agent-service; 'local' is admitted by runtime but executed by caller application."
     },
     "RequiredScope": {
       "type": "object",
-      "required": ["app_id"],
+      "required": [
+        "app_id"
+      ],
       "properties": {
-        "app_id": { "type": "string", "description": "Target application boundary identifier (e.g. 'html-notes', 'trading-service')." },
-        "session_id": { "type": "string", "description": "Application session identifier preventing cross-session tool invocation." },
-        "user_id": { "type": "string" },
-        "resource_id": { "type": "string" }
+        "app_id": {
+          "type": "string",
+          "description": "Target application boundary identifier (e.g. 'html-notes', 'trading-service')."
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Application session identifier preventing cross-session tool invocation."
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "resource_id": {
+          "type": "string"
+        }
       },
       "additionalProperties": true
     },
     "AuthorizationReceipt": {
       "type": "object",
-      "required": ["receipt_id", "issued_at", "tool_name", "execution"],
+      "required": [
+        "receipt_id",
+        "issued_at",
+        "tool_name",
+        "execution"
+      ],
       "properties": {
-        "receipt_id": { "type": "string" },
-        "issued_at": { "type": "string", "format": "date-time" },
-        "tool_name": { "type": "string" },
-        "execution": { "$ref": "#/definitions/ToolExecution" },
-        "effect": { "$ref": "#/definitions/ToolEffect" },
-        "signature": { "type": "string" }
+        "receipt_id": {
+          "type": "string"
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "execution": {
+          "$ref": "#/definitions/ToolExecution"
+        },
+        "effect": {
+          "$ref": "#/definitions/ToolEffect"
+        },
+        "signature": {
+          "type": "string"
+        }
       },
       "additionalProperties": true
     },
     "ToolCall": {
       "type": "object",
-      "required": ["id", "name", "arguments", "effect"],
+      "required": [
+        "id",
+        "name",
+        "arguments",
+        "effect"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "arguments": { "type": "object" },
-        "effect": { "$ref": "#/definitions/ToolEffect" },
-        "execution": { "$ref": "#/definitions/ToolExecution", "default": "shared" },
-        "timeout_ms": { "type": "integer", "minimum": 100 },
-        "authorization_receipt": { "$ref": "#/definitions/AuthorizationReceipt" },
-        "required_scope": { "$ref": "#/definitions/RequiredScope" }
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "effect": {
+          "$ref": "#/definitions/ToolEffect"
+        },
+        "execution": {
+          "$ref": "#/definitions/ToolExecution",
+          "default": "shared"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100
+        },
+        "authorization_receipt": {
+          "$ref": "#/definitions/AuthorizationReceipt"
+        },
+        "required_scope": {
+          "$ref": "#/definitions/RequiredScope"
+        }
       }
     },
     "ToolResult": {
       "type": "object",
-      "required": ["tool_call_id", "name", "result", "is_error"],
+      "required": [
+        "tool_call_id",
+        "name",
+        "result",
+        "is_error"
+      ],
       "properties": {
-        "tool_call_id": { "type": "string" },
-        "name": { "type": "string" },
+        "tool_call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
         "result": {},
-        "is_error": { "type": "boolean" },
-        "error": { "$ref": "#/definitions/StructuredError" }
+        "is_error": {
+          "type": "boolean"
+        },
+        "error": {
+          "$ref": "#/definitions/StructuredError"
+        }
       }
     },
     "EvidenceRecord": {
       "type": "object",
-      "required": ["evidence_id", "source"],
+      "required": [
+        "evidence_id",
+        "source"
+      ],
       "properties": {
-        "evidence_id": { "type": "string" },
-        "source": { "type": "string" },
-        "provenance_hash": { "type": "string" },
-        "redacted": { "type": "boolean", "default": false },
+        "evidence_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "provenance_hash": {
+          "type": "string"
+        },
+        "redacted": {
+          "type": "boolean",
+          "default": false
+        },
         "data": {}
       }
     },
     "ContextReceipt": {
       "type": "object",
-      "required": ["receipt_id", "timestamp", "layers"],
+      "required": [
+        "receipt_id",
+        "timestamp",
+        "layers"
+      ],
       "properties": {
-        "receipt_id": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "contract_version": { "type": "string" },
-        "profile_version": { "type": "string" },
+        "receipt_id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "contract_version": {
+          "type": "string"
+        },
+        "profile_version": {
+          "type": "string"
+        },
         "layers": {
           "type": "object",
           "properties": {
-            "prefix": { "type": "object", "properties": { "hash": { "type": "string" } } },
-            "role_rules": { "type": "object", "properties": { "hash": { "type": "string" } } },
-            "project_scope": { "type": "object", "properties": { "hash": { "type": "string" } } },
-            "dynamic_state": { "type": "object", "properties": { "hash": { "type": "string" } } }
+            "prefix": {
+              "type": "object",
+              "properties": {
+                "hash": {
+                  "type": "string"
+                }
+              }
+            },
+            "role_rules": {
+              "type": "object",
+              "properties": {
+                "hash": {
+                  "type": "string"
+                }
+              }
+            },
+            "project_scope": {
+              "type": "object",
+              "properties": {
+                "hash": {
+                  "type": "string"
+                }
+              }
+            },
+            "dynamic_state": {
+              "type": "object",
+              "properties": {
+                "hash": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
-        "total_chars": { "type": "integer" },
-        "total_tokens": { "type": "integer" }
+        "total_chars": {
+          "type": "integer"
+        },
+        "total_tokens": {
+          "type": "integer"
+        }
       }
     },
     "CreateRunRequest": {
       "type": "object",
-      "required": ["profile_id", "input"],
+      "required": [
+        "profile_id",
+        "input"
+      ],
       "properties": {
-        "contract_version": { "type": "string", "default": "1.2.0" },
-        "profile_id": { "type": "string" },
-        "profile_version": { "type": "string" },
-        "app_id": { "type": "string", "description": "Calling application identifier for session and scope isolation." },
-        "session_id": { "type": "string", "description": "Calling session identifier for local tool scoping." },
+        "contract_version": {
+          "type": "string",
+          "default": "1.2.0"
+        },
+        "profile_id": {
+          "type": "string"
+        },
+        "profile_version": {
+          "type": "string"
+        },
+        "app_id": {
+          "type": "string",
+          "description": "Calling application identifier for session and scope isolation."
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Calling session identifier for local tool scoping."
+        },
         "input": {
           "oneOf": [
-            { "type": "string" },
+            {
+              "type": "string"
+            },
             {
               "type": "array",
               "items": {
                 "type": "object",
-                "required": ["role", "content"],
+                "required": [
+                  "role",
+                  "content"
+                ],
                 "properties": {
-                  "role": { "type": "string", "enum": ["system", "user", "assistant", "tool"] },
-                  "content": { "type": "string" }
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "system",
+                      "user",
+                      "assistant",
+                      "tool"
+                    ]
+                  },
+                  "content": {
+                    "type": "string"
+                  }
                 }
               }
             }
           ]
         },
-        "model": { "type": "string" },
-        "budget": { "$ref": "#/definitions/RunBudget" },
-        "tools": { "type": "array", "items": { "type": "object" } },
-        "stream": { "type": "boolean", "default": false },
-        "idempotency_key": { "type": "string" },
-        "deadline_ms": { "type": "integer", "minimum": 1000 },
-        "runtime_overrides": { "type": "object" }
+        "model": {
+          "type": "string"
+        },
+        "budget": {
+          "$ref": "#/definitions/RunBudget"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "stream": {
+          "type": "boolean",
+          "default": false
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "deadline_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "runtime_overrides": {
+          "type": "object"
+        }
       }
     },
     "RunEvent": {
       "type": "object",
-      "required": ["id", "run_id", "type", "timestamp", "data"],
+      "required": [
+        "id",
+        "run_id",
+        "type",
+        "timestamp",
+        "data"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "run_id": { "type": "string" },
+        "id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
         "type": {
           "type": "string",
           "enum": [
@@ -161,46 +367,169 @@
             "run.cancelled"
           ]
         },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "data": { "type": "object" }
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object"
+        }
       }
     },
     "StructuredError": {
       "type": "object",
-      "required": ["code", "message", "retryable"],
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
       "properties": {
-        "code": { "type": "string" },
-        "message": { "type": "string" },
-        "retryable": { "type": "boolean" },
-        "category": { "type": "string", "enum": ["CLIENT", "RUNTIME", "PROVIDER", "TOOL", "POLICY", "RESOURCE"] },
-        "details": { "type": "object" }
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "CLIENT",
+            "RUNTIME",
+            "PROVIDER",
+            "TOOL",
+            "POLICY",
+            "RESOURCE"
+          ]
+        },
+        "details": {
+          "type": "object"
+        }
       }
     },
     "RunResult": {
       "type": "object",
-      "required": ["run_id", "status", "messages"],
+      "required": [
+        "run_id",
+        "status",
+        "messages"
+      ],
       "properties": {
-        "contract_version": { "type": "string" },
-        "run_id": { "type": "string" },
-        "status": { "type": "string", "enum": ["admitted", "running", "waiting_for_tool", "waiting_for_worker", "completed", "failed", "cancelled", "timed_out"] },
-        "profile_id": { "type": "string" },
-        "profile_version": { "type": "string" },
-        "messages": { "type": "array", "items": { "type": "object" } },
+        "contract_version": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "admitted",
+            "running",
+            "waiting_for_tool",
+            "waiting_for_worker",
+            "completed",
+            "failed",
+            "cancelled",
+            "timed_out"
+          ]
+        },
+        "profile_id": {
+          "type": "string"
+        },
+        "profile_version": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
         "usage": {
           "type": "object",
           "properties": {
-            "prompt_tokens": { "type": "integer" },
-            "completion_tokens": { "type": "integer" },
-            "total_tokens": { "type": "integer" },
-            "tool_calls_count": { "type": "integer" },
-            "retry_count": { "type": "integer" },
-            "duration_ms": { "type": "integer" }
+            "prompt_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "completion_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "total_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tool_calls_count": {
+              "type": "integer"
+            },
+            "retry_count": {
+              "type": "integer"
+            },
+            "duration_ms": {
+              "type": "integer"
+            }
           }
         },
-        "context_receipt": { "$ref": "#/definitions/ContextReceipt" },
-        "evidence_records": { "type": "array", "items": { "$ref": "#/definitions/EvidenceRecord" } },
-        "error": { "$ref": "#/definitions/StructuredError" }
+        "context_receipt": {
+          "$ref": "#/definitions/ContextReceipt"
+        },
+        "evidence_records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceRecord"
+          }
+        },
+        "error": {
+          "$ref": "#/definitions/StructuredError"
+        }
       }
+    },
+    "ToolResultSubmission": {
+      "type": "object",
+      "required": [
+        "authorization_receipt",
+        "result",
+        "is_error"
+      ],
+      "properties": {
+        "authorization_receipt": {
+          "$ref": "#/definitions/AuthorizationReceipt"
+        },
+        "result": {},
+        "is_error": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "commands": {
+    "create": {
+      "method": "POST",
+      "path": "/v1/runs"
+    },
+    "get": {
+      "method": "GET",
+      "path": "/v1/runs/{run_id}"
+    },
+    "cancel": {
+      "method": "POST",
+      "path": "/v1/runs/{run_id}/cancel"
+    },
+    "submit_tool_result": {
+      "method": "POST",
+      "path": "/v1/runs/{run_id}/tools/{tool_call_id}/result",
+      "request": "#/definitions/ToolResultSubmission"
     }
   }
 }

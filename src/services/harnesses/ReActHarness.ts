@@ -588,7 +588,10 @@ export default class ReActHarness extends BaseAgenticHarness {
               context,
               state,
             );
-            if (!shouldContinueLoop) return { messages: currentMessages };
+            if (!shouldContinueLoop) {
+              if (context.runtimeToolExecutor) throw Object.assign(new Error("Detached work cannot complete a canonical run"), { code: "INCOMPLETE_RUN" });
+              return { messages: currentMessages };
+            }
           }
 
           // ── Append to context for next pass ───────────────────
@@ -816,6 +819,10 @@ export default class ReActHarness extends BaseAgenticHarness {
         );
         this.logIteration(pass, currentMessages);
         break;
+      }
+
+      if (context.runtimeToolExecutor && !hasCleanTextBreak) {
+        throw Object.assign(new Error("Canonical run ended without a final model turn"), { code: "INCOMPLETE_RUN" });
       }
 
       // ── Exhaustion Recovery Pass ─────────────────────────────

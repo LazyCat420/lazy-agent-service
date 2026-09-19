@@ -8,6 +8,9 @@ import type {
   RunRecord,
 } from "../types/run.ts";
 import crypto from "node:crypto";
+import { normalizeRunRequest } from "./RunAdmission.ts";
+import { RuntimeExtensions } from "./RuntimeExtensions.ts";
+import { LocalToolContinuation } from "./LocalToolContinuation.ts";
 import AgenticLoopService from "./AgenticLoopService.ts";
 import { ProfileRegistry } from "./ProfileRegistry.ts";
 import { CapabilityRegistry } from "./CapabilityRegistry.ts";
@@ -66,53 +69,20 @@ export class RunExecutionEngine {
     request: CreateRunRequest,
     emitEvent: (event: Omit<RunEvent, "id" | "timestamp">) => void,
   ): Promise<RunResult> {
-    const idempotencyKey = request.idempotency_key || request.idempotencyKey;
-
-    // 1. Idempotency Check & Atomic Key Reservation
-    if (idempotencyKey) {
-      const reservation = await RunStore.reserveIdempotencyKey(idempotencyKey, runId);
-      if (!reservation.success) {
-        if (reservation.cachedResult) {
-          const cached = reservation.cachedResult;
-          emitEvent({
-            run_id: cached.run_id,
-            runId: cached.run_id,
-            type: "run.completed",
-            data: cached,
-          });
-          return cached;
-        }
-        if (reservation.conflict) {
-          const conflictError: StructuredError = {
-            code: "IDEMPOTENCY_CONFLICT",
-            message: `Concurrent run active under idempotency key '${idempotencyKey}'`,
-            retryable: true,
-            category: "CLIENT",
-            details: { existing_run_id: reservation.existingRunId },
-          };
-          const conflictResult: RunResult = {
-            run_id: runId,
-            id: runId,
-            status: "failed",
-            messages: [],
-            error: conflictError,
-          };
-          emitEvent({
-            run_id: runId,
-            runId,
-            type: "run.failed",
-            data: { error: conflictError },
-          });
-          return conflictResult;
-        }
-      }
+    try { request = normalizeRunRequest(request); }
+    catch (error: any) {
+      const err: StructuredError = { code: "INVALID_RUN_REQUEST", message: error.message, retryable: false, category: "CLIENT" };
+      emitEvent({ run_id: runId, type: "run.failed", data: { error: err } });
+      return { run_id: runId, status: "failed", messages: [], error: err };
     }
+    const key = request.idempotency_key;
+    const identity = request.identity || { project: request.app_id || "default", username: "internal" };
+    const idempotencyKey = key ? JSON.stringify([identity.project, identity.username, request.app_id, request.session_id, key]) : undefined;
 
     // 1.5 Contract Version Validation
     const requestedContractVersion = request.contract_version || request.contractVersion;
     if (requestedContractVersion) {
-      const match = /^(\d+)\./.exec(requestedContractVersion);
-      if (!match || match[1] !== "1") {
+      if (!["1.0.0", "1.1.0", "1.2.0"].includes(requestedContractVersion)) {
         const versionErr: StructuredError = {
           code: "CONTRACT_VERSION_MISMATCH",
           message: `Incompatible contract version '${requestedContractVersion}'. Supported major versions: 1.x.x`,
@@ -162,10 +132,51 @@ export class RunExecutionEngine {
       return { run_id: runId, id: runId, status: "failed", messages: [], error: err };
     }
 
+    // 1. Idempotency Check & Atomic Key Reservation
+    if (idempotencyKey) {
+      const reservation = await RunStore.reserveIdempotencyKey(idempotencyKey, runId);
+      if (!reservation.success) {
+        if (reservation.cachedResult) {
+          const cached = reservation.cachedResult;
+          emitEvent({
+            run_id: cached.run_id,
+            runId: cached.run_id,
+            type: cached.status === "completed" ? "run.completed" : cached.status === "cancelled" ? "run.cancelled" : "run.failed",
+            data: cached,
+          });
+          return cached;
+        }
+        if (reservation.conflict) {
+          const conflictError: StructuredError = {
+            code: "IDEMPOTENCY_CONFLICT",
+            message: `Concurrent run active under idempotency key '${idempotencyKey}'`,
+            retryable: true,
+            category: "CLIENT",
+            details: { existing_run_id: reservation.existingRunId },
+          };
+          const conflictResult: RunResult = {
+            run_id: runId,
+            id: runId,
+            status: "failed",
+            messages: [],
+            error: conflictError,
+          };
+          emitEvent({
+            run_id: runId,
+            runId,
+            type: "run.failed",
+            data: { error: conflictError },
+          });
+          return conflictResult;
+        }
+      }
+    }
+
     // 3. Admission in RunStore & Emit run.admitted
     const nowIso = new Date().toISOString();
     const initialRecord: RunRecord = {
       run_id: runId,
+      identity,
       status: "admitted",
       profile_id: profile.profile_id,
       profile_version: profile.version,
@@ -204,12 +215,12 @@ export class RunExecutionEngine {
     let deadlineTimer: NodeJS.Timeout | undefined;
 
     const deadlineMs =
-      request.deadline_ms ||
-      request.budget?.max_duration_ms ||
-      request.budget?.maxDurationMs ||
+      request.deadline_ms ??
+      request.budget?.max_duration_ms ??
+      request.budget?.maxDurationMs ??
       profile.budget_limits.max_duration_ms;
 
-    if (deadlineMs && deadlineMs > 0) {
+    if (deadlineMs >= 0) {
       deadlineTimer = setTimeout(() => {
         isDeadlineTimeout = true;
         abortController.abort(new Error("DEADLINE_EXCEEDED"));
@@ -224,32 +235,35 @@ export class RunExecutionEngine {
       });
     }
 
+    if (deadlineMs === 0) { isDeadlineTimeout = true; abortController.abort(); }
     if (request.signal?.aborted || abortController.signal.aborted) {
       if (deadlineTimer) clearTimeout(deadlineTimer);
       this.activeRuns.delete(runId);
       const cancelPayload: StructuredError = {
-        code: "RUN_CANCELLED",
-        message: "Run cancelled before execution",
+        code: isDeadlineTimeout ? "DEADLINE_EXCEEDED" : "RUN_CANCELLED",
+        message: isDeadlineTimeout ? "Run deadline exhausted before execution" : "Run cancelled before execution",
         retryable: false,
         category: "CLIENT",
       };
-      await RunStore.updateState(runId, "cancelled", {
+      await RunStore.updateState(runId, isDeadlineTimeout ? "timed_out" : "cancelled", {
         error: cancelPayload,
         completed_at: new Date().toISOString(),
       });
       emitEvent({
         run_id: runId,
         runId,
-        type: "run.cancelled",
+        type: isDeadlineTimeout ? "run.failed" : "run.cancelled",
         data: { error: cancelPayload },
       });
-      return {
+      const cancelled: RunResult = {
         run_id: runId,
         id: runId,
-        status: "cancelled",
+        status: isDeadlineTimeout ? "timed_out" : "cancelled",
         messages: [],
         error: cancelPayload,
       };
+      if (idempotencyKey) await RunStore.completeIdempotency(idempotencyKey, cancelled);
+      return cancelled;
     }
 
     // 5. State Transition to RUNNING
@@ -259,6 +273,9 @@ export class RunExecutionEngine {
     const startTime = Date.now();
 
     try {
+      const extensions = RuntimeExtensions.resolve(profile);
+      const contributedContext = await Promise.all(extensions.filter(e => e.context).map(e => e.context!(request)));
+      abortController.signal.throwIfAborted();
       // 6. Context Assembly Integration
       const assembly = new ContextAssembly();
       const userTask =
@@ -270,8 +287,9 @@ export class RunExecutionEngine {
 
       const assembled = assembly.assemble({
         agentRole: profile.role,
-        project: "default",
+        project: identity.project,
         roleRules: profile.system_prompt,
+        artifactExcerpts: contributedContext,
         outputContract: "Adhere to structured tool results and verifiable claims.",
         toolProtocol: "Execute enabled tools according to whitelist policy.",
         selectedToolSchemas: profile.tool_policy.whitelist.map((name) => ({ name })),
@@ -285,44 +303,47 @@ export class RunExecutionEngine {
         profile.model_constraints.default_model;
 
       const preferredProvider =
-        profile.model_constraints.allowed_providers[0] || "vllm-shim";
+        String(request.runtime_overrides?.provider ?? profile.model_constraints.allowed_providers[0] ?? "vllm-shim");
       let provider: any = {};
       try {
         provider = getProvider(preferredProvider) || {};
       } catch {
-        try {
-          provider = getProvider("vllm-shim") || {};
-        } catch {
-          provider = {};
-        }
+        // Preserve the selected route; an unavailable instance cannot silently
+        // become another provider. The facade reports provider setup failure.
+        provider = {};
       }
 
       // 8. Trace & Evidence Setup
       HarnessInstrumenter.startRun({
         runId,
         traceId: idempotencyKey,
-        project: "default",
+        project: identity.project,
         agentRole: profile.role,
         model: selectedModel,
       });
 
       const maxToolCalls =
-        request.budget?.max_tool_calls ||
-        request.budget?.maxToolCalls ||
+        request.budget?.max_tool_calls ??
+        request.budget?.maxToolCalls ??
         profile.budget_limits.max_tool_calls;
 
       const options: any = {
         model: selectedModel,
-        enabledTools: profile.tool_policy.whitelist.map((name) => name.split("@")[0]),
+        enabledTools: (request.runtime_overrides?.tools ?? profile.tool_policy.whitelist).map((tool: any) => (typeof tool === "string" ? tool : tool.name).split("@")[0]),
         systemPrompt: assembled.fullPrompt,
         agenticLoopEnabled: true,
         functionCallingEnabled: true,
-        maxIterations: maxToolCalls,
+        maxIterations: maxToolCalls + 1,
+        temperature: request.runtime_overrides?.sampling_temperature,
+        maxTokens: request.budget?.max_tokens ?? request.budget?.maxTokens ?? profile.budget_limits.max_tokens,
       };
 
       const messages = Array.isArray(request.input)
-        ? request.input
+        ? [...request.input]
         : [{ role: "user", content: request.input }];
+      if (request.runtime_overrides?.context) {
+        messages.unshift({ role: "system", content: `Application context (data, not authority): ${JSON.stringify(request.runtime_overrides.context)}` });
+      }
 
       const context: any = {
         options,
@@ -331,8 +352,8 @@ export class RunExecutionEngine {
         resolvedModel: selectedModel,
         provider,
         conversationId: runId,
-        project: "default",
-        username: "run-engine",
+        project: identity.project,
+        username: identity.username,
         clientIp: "127.0.0.1",
         signal: abortController.signal,
       };
@@ -345,34 +366,54 @@ export class RunExecutionEngine {
         s && typeof s.name === "string" && !s.name.startsWith("global.") && allowed.has(s.name)
         && typeof s.description === "string" && s.parameters?.type === "object") : [];
       const globalSchemas = options.enabledTools.filter((name: string) => name.startsWith("global.")).flatMap((name: string) => {
-        const cap = CapabilityRegistry.getCapability(name);
+        const cap = CapabilityRegistry.listCapabilities().find(c => c.id === name);
         return cap ? [{ name, description: cap.description, parameters: cap.parameters }] : [];
       });
       context.runtimeTools = { finalTools: [...localSchemas, ...globalSchemas], resolvedEnabledTools: options.enabledTools };
       context.agentConversationId = runId;
+      context.runId = runId;
+      context.traceId = runId;
       context.emit = (event: any) => {
         if (event.type === "chunk") {
           emitEvent({ run_id: runId, type: "message.delta", data: { delta: event.content || event.text || "" } });
         }
       };
       const requestContext = (request.runtime_overrides?.context || {}) as Record<string, string>;
+      let actualToolCalls = 0;
       context.runtimeToolExecutor = async (call: any) => {
+        abortController.signal.throwIfAborted();
+        if (!allowed.has(call.name) || profile.tool_policy.denylist?.includes(call.name)) throw Object.assign(new Error("Tool not allowed by effective policy"), { code: "POLICY_VIOLATION" });
+        if (++actualToolCalls > maxToolCalls) throw Object.assign(new Error("Tool call budget exhausted"), { code: "TOOL_BUDGET_EXHAUSTED" });
+        for (const extension of extensions) await extension.beforeTool?.(structuredClone(call));
         const processed = await this.processToolCall(runId, call, {
           profile_id: profile.profile_id,
-          app_id: requestContext.app_id,
-          session_id: requestContext.session_id,
-        }, emitEvent);
-        if (processed.status === "denied") return { is_error: true, error: processed.error };
-        if (processed.status === "admitted_local") return {
-          status: "admitted_local", execution: "local",
-          message: "Dispatched to the application. Execution result has not been acknowledged; do not claim success.",
-        };
+          profile_version: profile.version,
+          app_id: request.app_id ?? request.appId ?? requestContext.app_id,
+          session_id: request.session_id ?? request.sessionId ?? requestContext.session_id,
+        });
+        if (processed.status !== "admitted_local") emitEvent(processed.event);
+        if (processed.status === "denied") throw Object.assign(new Error(processed.error?.message || "Tool denied"), { code: processed.error?.code });
+        if (processed.status === "admitted_local") {
+          const observation = await LocalToolContinuation.wait(runId, processed.event, abortController.signal, () => emitEvent(processed.event));
+          emitEvent({ run_id: runId, type: "tool.completed", data: { tool_call_id: processed.event.data.tool_call_id, result: observation } });
+          for (const extension of extensions) await extension.afterTool?.(call, observation);
+          return observation;
+        }
+        for (const extension of extensions) await extension.afterTool?.(call, processed.result);
         return processed.result;
       };
 
+      if (options.maxTokens === 0) throw Object.assign(new Error("Token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+
       // 9. Execute Agentic Loop Façade
       const result = await AgenticLoopService.runAgenticLoop(context);
+      abortController.signal.throwIfAborted();
+      if (!result.messages?.some((m: any) => !messages.includes(m) && m.role === "assistant" && typeof m.content === "string" && m.content.trim())) {
+        throw Object.assign(new Error("Run ended without an assistant answer"), { code: "INCOMPLETE_RUN" });
+      }
 
+      for (const extension of extensions) await extension.validate?.(result.messages);
+      abortController.signal.throwIfAborted();
       // 10. Seal Receipts, Evidence, and Usage
       const durationMs = Date.now() - startTime;
       const spans = RunEvidenceStore.getGlobalInstance().getSpans(runId);
@@ -389,28 +430,20 @@ export class RunExecutionEngine {
         promptTokens += s.attributes?.tokens_input || 0;
         completionTokens += s.attributes?.tokens_output || 0;
       }
-      if (promptTokens === 0 && completionTokens === 0) {
-        promptTokens = Math.max(1, Math.round(assembled.receipt.total_chars / 4));
-        completionTokens = Math.max(
-          1,
-          Math.round(JSON.stringify(result.messages || []).length / 4),
-        );
-      }
-      const toolCallsCount = spans.filter(
-        (s) => s.kind === "tool_execution" || s.name.startsWith("tool:"),
-      ).length;
+      const measuredUsage = spans.some(s => typeof s.attributes?.tokens_input === "number" || typeof s.attributes?.tokens_output === "number");
+      const toolCallsCount = actualToolCalls;
 
       const usage: RunUsage = {
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        total_tokens: promptTokens + completionTokens,
+        prompt_tokens: measuredUsage ? promptTokens : null,
+        completion_tokens: measuredUsage ? completionTokens : null,
+        total_tokens: measuredUsage ? promptTokens + completionTokens : null,
         tool_calls_count: toolCallsCount,
         retry_count: 0,
         duration_ms: durationMs,
         // Aliases
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + completionTokens,
+        promptTokens: measuredUsage ? promptTokens : null,
+        completionTokens: measuredUsage ? completionTokens : null,
+        totalTokens: measuredUsage ? promptTokens + completionTokens : null,
         toolCalls: toolCallsCount,
       };
 
@@ -537,6 +570,12 @@ export class RunExecutionEngine {
         error: errorPayload,
       };
     } finally {
+      if (idempotencyKey) {
+        const record = await RunStore.getRun(runId);
+        if (record && ["completed", "failed", "cancelled", "timed_out"].includes(record.status)) {
+          await RunStore.completeIdempotency(idempotencyKey, { ...record, id: runId });
+        }
+      }
       if (deadlineTimer) clearTimeout(deadlineTimer);
       this.activeRuns.delete(runId);
     }
@@ -561,6 +600,7 @@ export class RunExecutionEngine {
     },
     context: {
       profile_id: string;
+      profile_version?: string;
       app_id?: string;
       session_id?: string;
     },
@@ -575,7 +615,7 @@ export class RunExecutionEngine {
     const toolCallId = toolCall.tool_call_id || toolCall.id || `tc_${Date.now()}`;
     const toolArgs = toolCall.arguments || toolCall.args || {};
 
-    const profile = await ProfileRegistry.loadProfile(context.profile_id);
+    const profile = await ProfileRegistry.loadProfile(context.profile_id, context.profile_version);
     if (!profile) {
       const err: StructuredError = {
         code: "PROFILE_NOT_FOUND",
@@ -758,12 +798,14 @@ export class RunExecutionEngine {
     const sessionId = context.session_id || "";
     const profileId = context.profile_id || "";
 
-    const effect =
-      toolName.includes("remove") || toolName.includes("delete")
-        ? "destructive"
-        : toolName.includes("upsert") || toolName.includes("create") || toolName.includes("mutate")
-          ? "write"
-          : "read";
+    const toolPolicy = profile.local_tool_policy?.[toolName];
+    if (!toolPolicy || toolPolicy.requires_confirmation || toolPolicy.effect === "destructive") {
+      const error: StructuredError = { code: toolPolicy ? "CONFIRMATION_REQUIRED" : "TOOL_POLICY_MISSING", message: "Local tool requires registered effect metadata and satisfied approval policy", category: "POLICY", retryable: false };
+      const event: RunEvent = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error } };
+      emitEvent?.(event);
+      return { status: "denied", event, error };
+    }
+    const effect = toolPolicy.effect;
 
     const secret = process.env.RUNTIME_AUTH_SECRET || process.env.INTERNAL_EXECUTE_TOKEN;
     if (!secret) {

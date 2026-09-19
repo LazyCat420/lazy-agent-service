@@ -5,7 +5,11 @@ import { ProfileRegistry } from "../services/ProfileRegistry.ts";
 import fs from "node:fs";
 import path from "node:path";
 
+import { z } from "zod";
+import { RunRequestSchema } from "../services/RunAdmission.ts";
+
 const router = express.Router();
+router.get("/request-schema", (_req, res) => res.json(z.toJSONSchema(RunRequestSchema)));
 
 const CONTRACT_VERSION = "1.2.0";
 

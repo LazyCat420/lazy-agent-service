@@ -51,6 +51,7 @@ export interface AgentProfile {
   allowed_local_tools?: string[];
   budget_limits: BudgetLimits;
   plugins?: ProfilePlugins;
+  local_tool_policy?: Record<string, { effect: "read" | "write" | "destructive"; requires_confirmation?: boolean }>;
   retention_class: "EPHEMERAL" | "AUDITED_SESSION" | "PERMANENT_RECORD";
   observability_policy?: ObservabilityPolicy;
 
@@ -252,6 +253,7 @@ export class ProfileRegistry {
       if (this.profiles.has(key)) {
         return this.profiles.get(key)!;
       }
+      return null;
     }
 
     // Exact id lookup
@@ -287,6 +289,11 @@ export class ProfileRegistry {
   static validateOverrides(profile: AgentProfile, overrides?: RuntimeOverrides): void {
     if (!overrides) return;
 
+    const temperature = overrides.sampling_temperature;
+    const range = profile.model_constraints.temperature_range;
+    if (temperature !== undefined && range && (temperature < range[0] || temperature > range[1])) throw new Error("Temperature outside profile limits");
+    if (overrides.provider && !profile.model_constraints.allowed_providers.includes(String(overrides.provider))) throw new Error("Requested provider is outside profile policy");
+
     if (overrides.model && !profile.model_constraints.allowed_models.includes(overrides.model)) {
       throw new Error(
         `Requested model '${overrides.model}' is not permitted by profile '${profile.profile_id}'. Allowed models: ${profile.model_constraints.allowed_models.join(", ")}`,
@@ -295,6 +302,11 @@ export class ProfileRegistry {
 
     if (overrides.budget) {
       const b = overrides.budget;
+      for (const value of Object.values(b)) {
+        if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("Budgets must be nonnegative integers");
+      }
+      const retries = b.max_retries ?? b.maxRetries;
+      if (retries !== undefined && retries > (profile.budget_limits.max_retries ?? 0)) throw new Error("Retry budget exceeds profile limit");
       const maxTokens = b.max_tokens ?? b.maxTokens;
       if (maxTokens !== undefined && maxTokens > profile.budget_limits.max_tokens) {
         throw new Error(

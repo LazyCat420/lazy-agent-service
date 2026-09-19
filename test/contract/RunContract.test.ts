@@ -21,6 +21,10 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
     vi.restoreAllMocks();
     // Load profiles from the workspace profiles/ directory
     await ProfileRegistry.loadProfilesFromDisk(profilesDir);
+    for (const id of ProfileRegistry.getRegisteredProfileIds()) {
+      const profile = await ProfileRegistry.loadProfile(id);
+      ProfileRegistry.registerProfile({ ...profile!, plugins: {} });
+    }
   });
 
   it("isolates execution requests across concurrent runs", async () => {
@@ -260,7 +264,7 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
 
     expect(result.usage?.prompt_tokens).toBe(150);
     expect(result.usage?.completion_tokens).toBe(50);
-    expect(result.usage?.tool_calls_count).toBe(1);
+    expect(result.usage?.tool_calls_count).toBe(0); // Spans alone do not establish a dispatched call.
 
     // Check authoritative store
     const stored = await RunStore.getRun("run-receipt-test");

@@ -57,6 +57,7 @@ export default class AgenticLoopService {
 
     const optParentSpanId = typeof (options as any)?.parentSpanId === "string" ? String((options as any).parentSpanId) : undefined;
     const instrumenter = HarnessInstrumenter.startRun({
+      runId: (context as any).runId,
       traceId: optTrace || ctxTrace,
       conversationId: resolvedAgentConversationId || conversationId || undefined,
       parentRunId: resolvedParentAgentConversationId || null,

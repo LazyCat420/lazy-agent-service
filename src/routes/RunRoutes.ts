@@ -6,7 +6,22 @@ import { RunStore } from "../services/RunStore.ts";
 import { RunStateMachine } from "../services/RunStateMachine.ts";
 import { randomUUID } from "node:crypto";
 
+import { LocalToolContinuation } from "../services/LocalToolContinuation.ts";
+
+import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
+
 const router = express.Router();
+router.use(runtimeAuth);
+router.post("/:runId/tools/:callId/result", asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const run = await RunStore.getRun(String(req.params.runId));
+    if (!run || (run.identity && (run.identity.project !== req.project || run.identity.username !== req.username))) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
+    const result = await LocalToolContinuation.submit(String(req.params.runId), String(req.params.callId), req.body);
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    res.status(err.status || 400).json({ error: { code: "TOOL_RESULT_REJECTED", message: err.message } });
+  }
+}));
 
 /**
  * POST /v1/runs
@@ -15,7 +30,10 @@ const router = express.Router();
 router.post(
   "/",
   asyncHandler(async (req: Request, res: Response) => {
-    const payload = req.body as CreateRunRequest;
+    const payload = { ...req.body, identity: { project: req.project || "default", username: req.username || "anonymous" } } as CreateRunRequest;
+    const requestedApp = payload.app_id || payload.appId;
+    if (requestedApp && requestedApp !== payload.identity!.project) return res.status(403).json({ error: { code: "SCOPE_VIOLATION" } });
+    payload.app_id = requestedApp || payload.identity!.project;
     const profileId = payload.profile_id || payload.profileId;
 
     if (!profileId) {
@@ -56,6 +74,9 @@ router.post(
         res.write(`event: ${fullEvent.type}\ndata: ${JSON.stringify(fullEvent)}\n\n`);
       };
 
+      const controller = new AbortController();
+      payload.signal = controller.signal;
+      res.on("close", () => { if (!res.writableEnded) controller.abort(); });
       RunExecutionEngine.startRun(runId, payload, sendEvent)
         .then(() => {
           res.end();
@@ -91,7 +112,7 @@ router.get(
     const { runId } = req.params;
     const run = await RunStore.getRun(runId as string);
 
-    if (!run) {
+    if (!run || (run.identity && (run.identity.project !== (req.project || "default") || run.identity.username !== (req.username || "anonymous")))) {
       return res.status(404).json({
         error: {
           code: "RUN_NOT_FOUND",
@@ -137,6 +158,8 @@ router.post(
   "/:runId/cancel",
   asyncHandler(async (req: Request, res: Response) => {
     const { runId } = req.params;
+    const run = await RunStore.getRun(runId as string);
+    if (!run || (run.identity && (run.identity.project !== (req.project || "default") || run.identity.username !== (req.username || "anonymous")))) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
     const cancelled = await RunExecutionEngine.cancelRun(runId as string);
     res.json({ ok: true, cancelled, run_id: runId as string, status: "cancelled" });
   }),

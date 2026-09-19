@@ -504,7 +504,7 @@ export class CapabilityRegistry {
 
   static listCapabilities(): CapabilityDefinition[] {
     this.init();
-    return Array.from(this.capabilities.values());
+    return Array.from(this.capabilities.values()).filter(c => !["global.document.summarize", "global.media.transcribe", "global.media.describe_image"].includes(c.id));
   }
 
   /**

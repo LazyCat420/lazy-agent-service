@@ -19,9 +19,18 @@
   ],
   "model_constraints": {
     "default_model": "llama-3-8b",
-    "allowed_models": ["llama-3-8b", "qwen-coder-32b"],
-    "allowed_providers": ["vllm-shim", "ollama"],
-    "temperature_range": [0.1, 0.7]
+    "allowed_models": [
+      "llama-3-8b",
+      "qwen-coder-32b"
+    ],
+    "allowed_providers": [
+      "vllm-shim",
+      "ollama"
+    ],
+    "temperature_range": [
+      0.1,
+      0.7
+    ]
   },
   "tool_policy": {
     "mode": "STRICT_WHITELIST",
@@ -48,14 +57,35 @@
     "max_concurrent_workers": 4
   },
   "plugins": {
-    "context_contributors": ["canvas-active-widget-contributor"],
-    "verifiers": ["provenance-source-verifier"],
-    "worker_plugins": ["news-worker", "peer-sector-worker", "price-worker"]
+    "context_contributors": [
+      "canvas-active-widget-contributor"
+    ],
+    "verifiers": [
+      "provenance-source-verifier"
+    ],
+    "worker_plugins": [
+      "news-worker",
+      "peer-sector-worker",
+      "price-worker"
+    ]
   },
   "retention_class": "AUDITED_SESSION",
   "observability_policy": {
     "telemetry_level": "FULL_SPANS",
-    "redact_keys": ["user_credentials", "session_token"],
+    "redact_keys": [
+      "user_credentials",
+      "session_token"
+    ],
     "sample_rate": 1.0
+  },
+  "local_tool_policy": {
+    "html_notes.canvas.upsert_widget": {
+      "effect": "write",
+      "requires_confirmation": false
+    },
+    "html_notes.notes.create": {
+      "effect": "write",
+      "requires_confirmation": false
+    }
   }
 }

@@ -1,7 +1,7 @@
 import type { RunState } from "../types/run.ts";
 
 export const VALID_TRANSITIONS: Record<RunState, RunState[]> = {
-  admitted: ["running", "cancelled", "failed"],
+  admitted: ["running", "cancelled", "failed", "timed_out"],
   running: [
     "waiting_for_tool",
     "waiting_for_worker",

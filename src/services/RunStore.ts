@@ -39,6 +39,11 @@ export class RunStore {
         const data = JSON.parse(content);
         if (Array.isArray(data.runs)) {
           for (const r of data.runs) {
+            if (!RunStateMachine.isTerminal(r.status)) {
+              r.status = "failed";
+              r.completed_at = new Date().toISOString();
+              r.error = { code: "RUN_INTERRUPTED", message: "Runtime restarted before completion; pending effects are not replayed", retryable: false, category: "RUNTIME" };
+            }
             this.runs.set(r.run_id, r);
           }
         }
@@ -46,6 +51,11 @@ export class RunStore {
           const now = Date.now();
           for (const item of data.idempotency) {
             if (item.expiresAt > now) {
+              const run = this.runs.get(item.runId);
+              if (run && RunStateMachine.isTerminal(run.status)) {
+                item.status = "completed";
+                item.result = { ...run, id: run.run_id };
+              }
               this.idempotency.set(item.key, item);
             }
           }
@@ -74,13 +84,15 @@ export class RunStore {
         runs: Array.from(this.runs.values()),
         idempotency: validIdempotency,
       };
+      const temporary = `${this.persistenceFile}.tmp`;
       fs.writeFileSync(
-        this.persistenceFile,
+        temporary,
         JSON.stringify(payload, null, 2),
         "utf-8",
       );
+      fs.renameSync(temporary, this.persistenceFile);
     } catch (err: any) {
-      logger.warn(`[RunStore] Failed to flush to disk: ${err.message}`);
+      throw new Error(`Run persistence failed: ${err.message}`);
     }
   }
 
@@ -100,6 +112,18 @@ export class RunStore {
     await this.init();
     const run = this.runs.get(runId);
     return run ? { ...run } : null;
+  }
+
+  static async mutateRun(runId: string, mutate: (run: RunRecord) => Partial<RunRecord>): Promise<RunRecord> {
+    await this.init();
+    const current = this.runs.get(runId);
+    if (!current) throw new Error("Run not found");
+    const updates = mutate(current);
+    if (updates.status && updates.status !== current.status) RunStateMachine.assertValidTransition(runId, current.status, updates.status);
+    const updated = { ...current, ...updates };
+    this.runs.set(runId, updated);
+    await this.flushToDisk();
+    return { ...updated };
   }
 
   /**

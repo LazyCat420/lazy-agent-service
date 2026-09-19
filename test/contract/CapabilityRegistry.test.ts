@@ -10,7 +10,7 @@ describe("CapabilityRegistry & GlobalCapabilityExecutor Contract Tests", () => {
 
   it("registers canonical global capabilities on initialization", () => {
     const capabilities = CapabilityRegistry.listCapabilities();
-    expect(capabilities.length).toBeGreaterThanOrEqual(15);
+    expect(capabilities.length).toBeGreaterThanOrEqual(12);
 
     const ids = capabilities.map((c) => c.id);
     expect(ids).toContain("global.web.search");
