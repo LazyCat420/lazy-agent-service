@@ -1,0 +1,49 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "cancellation",
+  "description": "Run execution is aborted midway via cancellation signal.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "contract_version": "1.2.0",
+    "input": "Long running synthesis."
+  },
+  "events": [
+    {
+      "id": "evt-can-001",
+      "run_id": "run-can-01",
+      "type": "run.started",
+      "timestamp": "2026-09-19T11:05:00.000Z",
+      "data": {
+        "status": "running"
+      }
+    },
+    {
+      "id": "evt-can-002",
+      "run_id": "run-can-01",
+      "type": "run.cancelled",
+      "timestamp": "2026-09-19T11:05:00.500Z",
+      "data": {
+        "status": "cancelled",
+        "error": {
+          "code": "RUN_CANCELLED",
+          "category": "CLIENT",
+          "message": "Run cancelled by user",
+          "retryable": false
+        }
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-can-01",
+    "status": "cancelled",
+    "profile_id": "html-notes-researcher-v1",
+    "messages": [],
+    "error": {
+      "code": "RUN_CANCELLED",
+      "category": "CLIENT",
+      "message": "Run cancelled by user",
+      "retryable": false
+    }
+  }
+}

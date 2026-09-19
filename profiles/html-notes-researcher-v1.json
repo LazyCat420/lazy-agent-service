@@ -1,10 +1,22 @@
 {
   "profile_id": "html-notes-researcher-v1",
-  "version": "1.1.0",
-  "contract_version": "1.1.0",
+  "version": "1.2.0",
+  "contract_version": "1.2.0",
   "role": "canvas-research-coordinator",
   "description": "Coordinates multi-source topic research, source verification, and widget synthesis.",
   "system_prompt": "You are a research synthesis agent. Decompose complex user topics into targeted inquiries, verify source provenance, and generate structured canvas note representations.",
+  "allowed_global_capabilities": [
+    "global.web.search@1.2",
+    "global.web.read_page@1.2",
+    "global.data.transform@1.2",
+    "global.data.sort@1.2",
+    "global.data.filter@1.2",
+    "global.data.extract@1.2"
+  ],
+  "allowed_local_tools": [
+    "html_notes.canvas.upsert_widget@1.0",
+    "html_notes.notes.create@1.0"
+  ],
   "model_constraints": {
     "default_model": "llama-3-8b",
     "allowed_models": ["llama-3-8b", "qwen-coder-32b"],
@@ -21,6 +33,7 @@
       "global.data.filter",
       "global.data.extract",
       "html_notes.canvas.upsert_widget",
+      "html_notes.notes.create",
       "mcp__lazy-tool-service__news_search",
       "mcp__lazy-tool-service__web_scrape",
       "mcp__lazy-tool-service__canvas_add_widget"

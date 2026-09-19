@@ -7,8 +7,11 @@ import type {
   EvidenceRecord,
   RunRecord,
 } from "../types/run.ts";
+import crypto from "node:crypto";
 import AgenticLoopService from "./AgenticLoopService.ts";
 import { ProfileRegistry } from "./ProfileRegistry.ts";
+import { CapabilityRegistry } from "./CapabilityRegistry.ts";
+import { GlobalCapabilityExecutor } from "./GlobalCapabilityExecutor.ts";
 import { RunStore } from "./RunStore.ts";
 import logger from "../utils/logger.ts";
 import { getProvider } from "../providers/index.ts";
@@ -380,16 +383,20 @@ export class RunExecutionEngine {
 
       const contextReceipt = {
         ...assembled.receipt,
+        contract_version: requestedContractVersion || "1.2.0",
+        profile_version: profile.version,
         receipt_id: assembled.receipt.receipt_id.startsWith("sha256-")
           ? assembled.receipt.receipt_id
           : `sha256-${assembled.receipt.receipt_id}`,
       };
 
       const finalResult: RunResult = {
+        contract_version: requestedContractVersion || "1.2.0",
         run_id: runId,
         id: runId,
         status: "completed",
         profile_id: profile.profile_id,
+        profile_version: profile.version,
         messages: result.messages || [],
         usage,
         context_receipt: contextReceipt,
@@ -500,5 +507,253 @@ export class RunExecutionEngine {
       if (deadlineTimer) clearTimeout(deadlineTimer);
       this.activeRuns.delete(runId);
     }
+  }
+
+  /**
+   * Process a tool call according to the Dev 1 contract:
+   * - Policy denial if tool is not whitelisted by the profile.
+   * - Global capability (execution: "shared"): authorized and executed in runtime, emitting tool.completed.
+   * - Local application tool (execution: "local"): admitted with required_scope (app_id, session_id) and authorization_receipt,
+   *   emitting tool.invoked without executing local code in runtime container.
+   */
+  static async processToolCall(
+    runId: string,
+    toolCall: {
+      tool_call_id?: string;
+      id?: string;
+      tool_name?: string;
+      name?: string;
+      arguments?: Record<string, unknown>;
+      args?: Record<string, unknown>;
+    },
+    context: {
+      profile_id: string;
+      app_id?: string;
+      session_id?: string;
+    },
+    emitEvent?: (event: RunEvent) => void,
+  ): Promise<{
+    status: "admitted_local" | "executed_shared" | "denied";
+    event: RunEvent;
+    result?: unknown;
+    error?: StructuredError;
+  }> {
+    const toolName = toolCall.tool_name || toolCall.name || "";
+    const toolCallId = toolCall.tool_call_id || toolCall.id || `tc_${Date.now()}`;
+    const toolArgs = toolCall.arguments || toolCall.args || {};
+
+    const profile = await ProfileRegistry.loadProfile(context.profile_id);
+    if (!profile) {
+      const err: StructuredError = {
+        code: "PROFILE_NOT_FOUND",
+        message: `Profile '${context.profile_id}' not found`,
+        category: "CLIENT",
+        retryable: false,
+      };
+      const evt: RunEvent = {
+        id: `evt_err_${Date.now()}`,
+        run_id: runId,
+        type: "tool.failed",
+        timestamp: new Date().toISOString(),
+        data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+      };
+      if (emitEvent) emitEvent(evt);
+      return { status: "denied", event: evt, error: err };
+    }
+
+    // 1. Verify Profile Whitelist / Permissions
+    const permittedTools = [
+      ...(profile.tool_policy.whitelist || []),
+      ...(profile.allowed_global_capabilities || []).map((c) => c.split("@")[0]),
+      ...(profile.allowed_local_tools || []).map((c) => c.split("@")[0]),
+    ];
+
+    const isPermitted = permittedTools.some(
+      (p) => p === toolName || p.split("@")[0] === toolName,
+    );
+
+    if (!isPermitted) {
+      const err: StructuredError = {
+        code: "POLICY_VIOLATION",
+        message: `Tool '${toolName}' is not allowed by profile '${context.profile_id}' policy`,
+        category: "POLICY",
+        retryable: false,
+      };
+      const evt: RunEvent = {
+        id: `evt_denied_${Date.now()}`,
+        run_id: runId,
+        type: "tool.failed",
+        timestamp: new Date().toISOString(),
+        data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+      };
+      if (emitEvent) emitEvent(evt);
+      return { status: "denied", event: evt, error: err };
+    }
+
+    // 2. Global Capability Execution
+    if (toolName.startsWith("global.")) {
+      const cap = CapabilityRegistry.getCapability(toolName);
+      if (!cap) {
+        const err: StructuredError = {
+          code: "UNKNOWN_CAPABILITY",
+          message: `Unknown global capability '${toolName}'`,
+          category: "POLICY",
+          retryable: false,
+        };
+        const evt: RunEvent = {
+          id: `evt_unk_${Date.now()}`,
+          run_id: runId,
+          type: "tool.failed",
+          timestamp: new Date().toISOString(),
+          data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+        };
+        if (emitEvent) emitEvent(evt);
+        return { status: "denied", event: evt, error: err };
+      }
+
+      const execResult = await GlobalCapabilityExecutor.execute(toolName, toolArgs);
+      if (!execResult.success) {
+        const err: StructuredError = {
+          code: execResult.error?.code || "TOOL_EXECUTION_FAILED",
+          message: execResult.error?.message || "Execution failed",
+          category: "TOOL",
+          retryable: false,
+        };
+        const evt: RunEvent = {
+          id: `evt_fail_${Date.now()}`,
+          run_id: runId,
+          type: "tool.failed",
+          timestamp: new Date().toISOString(),
+          data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+        };
+        if (emitEvent) emitEvent(evt);
+        return { status: "denied", event: evt, error: err };
+      }
+
+      let evidenceRecords: EvidenceRecord[] = [];
+      if (cap.supports_evidence) {
+        const evidenceId = `ev_${runId}_${Date.now()}`;
+        evidenceRecords = [
+          {
+            evidence_id: evidenceId,
+            source: toolName,
+            provenance_hash: `sha256-${crypto.createHash("sha256").update(JSON.stringify(execResult.result)).digest("hex")}`,
+          },
+        ];
+        RunEvidenceStore.getGlobalInstance().record({
+          trace_id: runId,
+          span_id: evidenceId,
+          run_id: runId,
+          name: `capability:${toolName}`,
+          kind: "tool_execution",
+          status: "OK",
+          start_time: new Date().toISOString(),
+          attributes: { tool_name: toolName },
+          events: [],
+          links: [],
+        });
+      }
+
+      const completedEvent: RunEvent = {
+        id: `evt_comp_${Date.now()}`,
+        run_id: runId,
+        type: "tool.completed",
+        timestamp: new Date().toISOString(),
+        data: {
+          tool_call_id: toolCallId,
+          tool_name: toolName,
+          execution: "shared",
+          result: execResult.result,
+          evidence_records: evidenceRecords,
+        },
+      };
+      if (emitEvent) emitEvent(completedEvent);
+      return { status: "executed_shared", event: completedEvent, result: execResult.result };
+    }
+
+    // 3. Local Application Tool Admission
+    if (!context.session_id) {
+      const err: StructuredError = {
+        code: "SCOPE_VIOLATION",
+        message: `Local tool '${toolName}' requires valid session_id`,
+        category: "POLICY",
+        retryable: false,
+      };
+      const evt: RunEvent = {
+        id: `evt_nosess_${Date.now()}`,
+        run_id: runId,
+        type: "tool.failed",
+        timestamp: new Date().toISOString(),
+        data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+      };
+      if (emitEvent) emitEvent(evt);
+      return { status: "denied", event: evt, error: err };
+    }
+
+    const appPrefix = toolName.split(".")[0];
+    if (context.app_id) {
+      const normalizedCallerApp = context.app_id.replace(/-/g, "_");
+      if (normalizedCallerApp !== appPrefix) {
+        const err: StructuredError = {
+          code: "SCOPE_VIOLATION",
+          message: `Local tool '${toolName}' namespace does not match caller app_id '${context.app_id}'`,
+          category: "POLICY",
+          retryable: false,
+        };
+        const evt: RunEvent = {
+          id: `evt_badapp_${Date.now()}`,
+          run_id: runId,
+          type: "tool.failed",
+          timestamp: new Date().toISOString(),
+          data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+        };
+        if (emitEvent) emitEvent(evt);
+        return { status: "denied", event: evt, error: err };
+      }
+    }
+
+    const receiptId = `auth_rec_${runId}_${Date.now()}`;
+    const effect =
+      toolName.includes("remove") || toolName.includes("delete")
+        ? "destructive"
+        : toolName.includes("upsert") || toolName.includes("create") || toolName.includes("mutate")
+          ? "write"
+          : "read";
+
+    const signature = `sha256-${crypto
+      .createHash("sha256")
+      .update(`${runId}:${toolCallId}:${toolName}:${context.session_id}`)
+      .digest("hex")}`;
+
+    const authorizationReceipt = {
+      receipt_id: receiptId,
+      issued_at: new Date().toISOString(),
+      tool_name: toolName,
+      execution: "local" as const,
+      effect,
+      signature,
+    };
+
+    const localInvokedEvent: RunEvent = {
+      id: `evt_loc_${Date.now()}`,
+      run_id: runId,
+      type: "tool.invoked",
+      timestamp: new Date().toISOString(),
+      data: {
+        tool_call_id: toolCallId,
+        tool_name: toolName,
+        execution: "local",
+        effect,
+        arguments: toolArgs,
+        authorization_receipt: authorizationReceipt,
+        required_scope: {
+          app_id: context.app_id || appPrefix.replace(/_/g, "-"),
+          session_id: context.session_id,
+        },
+      },
+    };
+
+    if (emitEvent) emitEvent(localInvokedEvent);
+    return { status: "admitted_local", event: localInvokedEvent };
   }
 }

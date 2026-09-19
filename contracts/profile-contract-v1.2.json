@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AgentProfileV1_2",
+  "version": "1.2.0",
+  "type": "object",
+  "required": [
+    "profile_id",
+    "version",
+    "contract_version",
+    "role",
+    "system_prompt",
+    "model_constraints",
+    "budget_limits",
+    "retention_class"
+  ],
+  "properties": {
+    "profile_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "contract_version": {
+      "type": "string",
+      "enum": ["1.0.0", "1.1.0", "1.2.0"],
+      "default": "1.2.0"
+    },
+    "role": {
+      "type": "string",
+      "description": "Functional agent role (e.g., 'financial-analyst', 'canvas-researcher')"
+    },
+    "description": {
+      "type": "string"
+    },
+    "system_prompt": {
+      "type": "string",
+      "description": "Canonical Layer 0 system instructions and persona."
+    },
+    "allowed_global_capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^global\\.[a-z0-9_.]+(\\@\\d+(\\.\\d+)?)?$"
+      },
+      "description": "Explicit whitelist of registered global capabilities with optional semver constraint."
+    },
+    "allowed_local_tools": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]+\\.[a-z0-9_.]+(\\@\\d+(\\.\\d+)?)?$"
+      },
+      "description": "Explicit whitelist of application-owned local tools."
+    },
+    "tool_policy": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["STRICT_WHITELIST", "DENYLIST"] },
+        "whitelist": { "type": "array", "items": { "type": "string" } },
+        "denylist": { "type": "array", "items": { "type": "string" } },
+        "require_signed_capability": { "type": "boolean" }
+      },
+      "description": "Transitional / legacy tool policy definition."
+    },
+    "model_constraints": {
+      "type": "object",
+      "required": ["default_model", "allowed_models", "allowed_providers"],
+      "properties": {
+        "default_model": { "type": "string" },
+        "allowed_models": { "type": "array", "items": { "type": "string" } },
+        "allowed_providers": { "type": "array", "items": { "type": "string" } },
+        "temperature_range": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "budget_limits": {
+      "type": "object",
+      "required": ["max_tokens", "max_tool_calls", "max_duration_ms"],
+      "properties": {
+        "max_tokens": { "type": "integer", "maximum": 32768 },
+        "max_tool_calls": { "type": "integer", "maximum": 50 },
+        "max_retries": { "type": "integer", "maximum": 5 },
+        "max_duration_ms": { "type": "integer", "maximum": 300000 },
+        "max_concurrent_workers": { "type": "integer", "maximum": 10 }
+      }
+    },
+    "plugins": {
+      "type": "object",
+      "properties": {
+        "context_contributors": { "type": "array", "items": { "type": "string" } },
+        "verifiers": { "type": "array", "items": { "type": "string" } },
+        "worker_plugins": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "retention_class": {
+      "type": "string",
+      "enum": ["EPHEMERAL", "AUDITED_SESSION", "PERMANENT_RECORD"]
+    },
+    "observability_policy": {
+      "type": "object",
+      "properties": {
+        "telemetry_level": { "type": "string", "enum": ["OFF", "METRICS_ONLY", "FULL_SPANS"] },
+        "redact_keys": { "type": "array", "items": { "type": "string" } },
+        "sample_rate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

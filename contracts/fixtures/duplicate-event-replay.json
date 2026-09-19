@@ -1,0 +1,43 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "duplicate-event-replay",
+  "description": "Client reconnects and replays cached terminal run event idempotently.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "contract_version": "1.2.0",
+    "idempotency_key": "idem-replay-key-01",
+    "input": "Durable idempotent query."
+  },
+  "events": [
+    {
+      "id": "evt-rep-001",
+      "run_id": "run-rep-01",
+      "type": "run.completed",
+      "timestamp": "2026-09-19T11:11:00.000Z",
+      "data": {
+        "status": "completed",
+        "cached": true
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-rep-01",
+    "status": "completed",
+    "profile_id": "html-notes-researcher-v1",
+    "messages": [
+      {
+        "role": "assistant",
+        "content": "Durable result returned from cache."
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 40,
+      "completion_tokens": 15,
+      "total_tokens": 55,
+      "tool_calls_count": 0,
+      "retry_count": 0,
+      "duration_ms": 50
+    }
+  }
+}

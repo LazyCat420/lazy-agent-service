@@ -41,11 +41,14 @@ export interface ObservabilityPolicy {
 export interface AgentProfile {
   profile_id: string;
   version: string;
+  contract_version?: string;
   role: string;
   description?: string;
   system_prompt: string;
   model_constraints: ModelConstraints;
   tool_policy: ToolPolicy;
+  allowed_global_capabilities?: string[];
+  allowed_local_tools?: string[];
   budget_limits: BudgetLimits;
   plugins?: ProfilePlugins;
   retention_class: "EPHEMERAL" | "AUDITED_SESSION" | "PERMANENT_RECORD";
@@ -76,7 +79,6 @@ export class ProfileRegistry {
       "role",
       "system_prompt",
       "model_constraints",
-      "tool_policy",
       "budget_limits",
       "retention_class",
     ];
@@ -97,6 +99,31 @@ export class ProfileRegistry {
       throw new Error(
         `Invalid version '${data.version}': must follow semantic versioning X.Y.Z`,
       );
+    }
+
+    // 1. Validate contract_version if provided
+    if (data.contract_version) {
+      const match = /^(\d+)\./.exec(data.contract_version);
+      if (!match || match[1] !== "1") {
+        throw new Error(
+          `Profile manifest '${data.profile_id}' specifies incompatible contract major version '${data.contract_version}'. Supported major: 1`,
+        );
+      }
+    }
+
+    // 2. Synthesize or validate tool_policy
+    if (!data.tool_policy) {
+      if (data.allowed_global_capabilities || data.allowed_local_tools) {
+        data.tool_policy = {
+          mode: "STRICT_WHITELIST",
+          whitelist: [
+            ...(data.allowed_global_capabilities || []),
+            ...(data.allowed_local_tools || []),
+          ],
+        };
+      } else {
+        throw new Error("Profile manifest missing required field: tool_policy");
+      }
     }
 
     const { model_constraints, tool_policy, budget_limits } = data;
@@ -123,6 +150,24 @@ export class ProfileRegistry {
       throw new Error("tool_policy.whitelist must be an array");
     }
 
+    // 3. Validate allowed_local_tools if declared
+    if (data.allowed_local_tools) {
+      if (!Array.isArray(data.allowed_local_tools)) {
+        throw new Error("allowed_local_tools must be an array");
+      }
+      for (const localTool of data.allowed_local_tools) {
+        if (typeof localTool !== "string") {
+          throw new Error("Each entry in allowed_local_tools must be a string");
+        }
+        if (localTool.startsWith("global.")) {
+          throw new Error(`Local tool '${localTool}' cannot declare global namespace`);
+        }
+        if (!/^[a-z0-9_-]+\.[a-z0-9_.]+(@\d+(\.\d+)?)?$/.test(localTool)) {
+          throw new Error(`Invalid local tool declaration '${localTool}': must match pattern <app>.<domain>.<action>`);
+        }
+      }
+    }
+
     if (
       typeof budget_limits.max_tokens !== "number" ||
       typeof budget_limits.max_tool_calls !== "number" ||
@@ -133,8 +178,13 @@ export class ProfileRegistry {
       );
     }
 
-    // Validate capabilities: a profile cannot grant a nonexistent global capability
-    const capValidation = CapabilityRegistry.validateProfileCapabilities(tool_policy.whitelist);
+    // Validate capabilities: a profile cannot grant a nonexistent global capability or unsupported version
+    const toolsToValidate = Array.from(new Set([
+      ...tool_policy.whitelist,
+      ...(data.allowed_global_capabilities || []),
+    ]));
+
+    const capValidation = CapabilityRegistry.validateProfileCapabilities(toolsToValidate);
     if (!capValidation.valid) {
       throw new Error(
         `Profile manifest '${data.profile_id}' grants nonexistent or unauthorized capability: ${capValidation.unauthorized.join(", ")}`,

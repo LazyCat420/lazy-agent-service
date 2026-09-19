@@ -1,0 +1,51 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "timeout",
+  "description": "Run execution exceeds configured deadline budget and transitions to timed_out.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "contract_version": "1.2.0",
+    "budget": {
+      "max_duration_ms": 1000
+    },
+    "input": "Process massive dataset."
+  },
+  "events": [
+    {
+      "id": "evt-to-001",
+      "run_id": "run-to-01",
+      "type": "run.started",
+      "timestamp": "2026-09-19T11:06:00.000Z",
+      "data": {
+        "status": "running"
+      }
+    },
+    {
+      "id": "evt-to-002",
+      "run_id": "run-to-01",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T11:06:01.050Z",
+      "data": {
+        "error": {
+          "code": "DEADLINE_EXCEEDED",
+          "category": "RESOURCE",
+          "message": "Run exceeded max_duration_ms limit of 1000ms",
+          "retryable": false
+        }
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-to-01",
+    "status": "timed_out",
+    "profile_id": "html-notes-researcher-v1",
+    "messages": [],
+    "error": {
+      "code": "DEADLINE_EXCEEDED",
+      "category": "RESOURCE",
+      "message": "Run exceeded max_duration_ms limit of 1000ms",
+      "retryable": false
+    }
+  }
+}

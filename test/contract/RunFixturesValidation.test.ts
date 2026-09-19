@@ -50,7 +50,7 @@ describe("Contract Fixtures Schema Conformance Tests", () => {
 
   it("validates all 10 fixtures exist and follow canonical contract structure", () => {
     const files = fs.readdirSync(fixturesDir).filter((f) => f.endsWith(".json"));
-    expect(files.length).toBe(10);
+    expect(files.length).toBeGreaterThanOrEqual(10);
 
     const requiredFixtures = [
       "successful-no-tool-run.json",

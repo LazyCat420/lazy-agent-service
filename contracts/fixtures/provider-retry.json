@@ -1,0 +1,51 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "provider-retry",
+  "description": "Upstream provider 503 error is automatically retried within budget limits.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "contract_version": "1.2.0",
+    "input": "Query during transient upstream blip."
+  },
+  "events": [
+    {
+      "id": "evt-ret-001",
+      "run_id": "run-ret-01",
+      "type": "run.started",
+      "timestamp": "2026-09-19T11:07:00.000Z",
+      "data": {
+        "status": "running"
+      }
+    },
+    {
+      "id": "evt-ret-002",
+      "run_id": "run-ret-01",
+      "type": "run.completed",
+      "timestamp": "2026-09-19T11:07:02.100Z",
+      "data": {
+        "status": "completed"
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-ret-01",
+    "status": "completed",
+    "profile_id": "html-notes-researcher-v1",
+    "messages": [
+      {
+        "role": "assistant",
+        "content": "Successfully resolved after transient retry."
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 50,
+      "completion_tokens": 20,
+      "total_tokens": 70,
+      "tool_calls_count": 0,
+      "retry_count": 1,
+      "duration_ms": 2100
+    },
+    "evidence_records": []
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "incompatible-contract-version",
+  "description": "Client submits an incompatible major contract version (e.g. 2.0.0).",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "contract_version": "2.0.0",
+    "input": "Query with v2 contract."
+  },
+  "events": [
+    {
+      "id": "evt-inc-001",
+      "run_id": "run-inc-01",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T11:10:00.000Z",
+      "data": {
+        "error": {
+          "code": "CONTRACT_VERSION_MISMATCH",
+          "category": "CLIENT",
+          "message": "Incompatible contract version '2.0.0'. Supported major versions: 1.x.x",
+          "retryable": false
+        }
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-inc-01",
+    "status": "failed",
+    "messages": [],
+    "error": {
+      "code": "CONTRACT_VERSION_MISMATCH",
+      "category": "CLIENT",
+      "message": "Incompatible contract version '2.0.0'. Supported major versions: 1.x.x",
+      "retryable": false
+    }
+  }
+}

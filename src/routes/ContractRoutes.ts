@@ -6,7 +6,7 @@ import path from "node:path";
 
 const router = express.Router();
 
-const CONTRACT_VERSION = "1.1.0";
+const CONTRACT_VERSION = "1.2.0";
 
 /**
  * GET /v1/contracts/spec
@@ -22,7 +22,7 @@ router.get(
       status: "CANONICAL",
       owner: "lazy-agent-service",
       supported_major_versions: [1],
-      supported_minor_versions: ["1.0.0", "1.1.0"],
+      supported_minor_versions: ["1.0.0", "1.1.0", "1.2.0"],
       capabilities_count: CapabilityRegistry.listCapabilities().length,
       timestamp: new Date().toISOString(),
     });
@@ -54,18 +54,42 @@ router.get(
   asyncHandler(async (_req: Request, res: Response) => {
     res.setHeader("x-contract-version", CONTRACT_VERSION);
 
-    const contractsDir = path.resolve(process.cwd(), "docs", "contracts");
+    const rootDir = process.cwd();
+    let contractsDir = path.resolve(rootDir, "contracts");
+    if (!fs.existsSync(contractsDir)) {
+      contractsDir = path.resolve(rootDir, "docs", "contracts");
+    }
+
     let runContractSchema: any = null;
     let profileSpecSchema: any = null;
+    let toolContractSchema: any = null;
+    let errorCodesSchema: any = null;
 
     try {
-      const runContractPath = path.join(contractsDir, "run-contract-v1.json");
+      const runContractPath = path.join(contractsDir, "run-contract-v1.2.json");
       if (fs.existsSync(runContractPath)) {
         runContractSchema = JSON.parse(fs.readFileSync(runContractPath, "utf-8"));
+      } else {
+        const legacyRun = path.join(contractsDir, "run-contract-v1.json");
+        if (fs.existsSync(legacyRun)) runContractSchema = JSON.parse(fs.readFileSync(legacyRun, "utf-8"));
       }
-      const profileSpecPath = path.join(contractsDir, "agent-profile-spec-v1.json");
+
+      const profileSpecPath = path.join(contractsDir, "profile-contract-v1.2.json");
       if (fs.existsSync(profileSpecPath)) {
         profileSpecSchema = JSON.parse(fs.readFileSync(profileSpecPath, "utf-8"));
+      } else {
+        const legacyProfile = path.join(contractsDir, "agent-profile-spec-v1.json");
+        if (fs.existsSync(legacyProfile)) profileSpecSchema = JSON.parse(fs.readFileSync(legacyProfile, "utf-8"));
+      }
+
+      const toolContractPath = path.join(contractsDir, "tool-contract-v1.2.json");
+      if (fs.existsSync(toolContractPath)) {
+        toolContractSchema = JSON.parse(fs.readFileSync(toolContractPath, "utf-8"));
+      }
+
+      const errorCodesPath = path.join(contractsDir, "error-codes-v1.2.json");
+      if (fs.existsSync(errorCodesPath)) {
+        errorCodesSchema = JSON.parse(fs.readFileSync(errorCodesPath, "utf-8"));
       }
     } catch {
       // Fallback if reading fails
@@ -76,6 +100,8 @@ router.get(
       generated_at: new Date().toISOString(),
       run_contract: runContractSchema,
       profile_spec: profileSpecSchema,
+      tool_contract: toolContractSchema,
+      error_codes: errorCodesSchema,
       global_capabilities: CapabilityRegistry.listCapabilities(),
     });
   }),

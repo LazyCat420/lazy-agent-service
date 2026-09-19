@@ -1,0 +1,534 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GlobalCapabilityRegistryContractV1_2",
+  "version": "1.2.0",
+  "description": "Authoritative registry of app-neutral global capabilities provided by lazy-agent-service v1.2.",
+  "capabilities": [
+    {
+      "id": "global.web.search",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.web.search.input.json",
+      "output_schema_ref": "schemas/global.web.search.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": true,
+      "timeout_ms": 60000,
+      "retryable": true,
+      "rate_limit_class": "standard_search",
+      "description": "App-neutral web retrieval capability returning relevant search results with citations and source metadata.",
+      "parameters": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string", "description": "The search query string." },
+          "max_results": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5 }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["query", "results"],
+        "properties": {
+          "query": { "type": "string" },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["title", "url", "snippet"],
+              "properties": {
+                "title": { "type": "string" },
+                "url": { "type": "string" },
+                "snippet": { "type": "string" },
+                "source": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "global.web.read_page",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.web.read_page.input.json",
+      "output_schema_ref": "schemas/global.web.read_page.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": true,
+      "timeout_ms": 30000,
+      "retryable": true,
+      "rate_limit_class": "web_scrape",
+      "description": "App-neutral page extraction capability converting public webpage HTML into clean, bounded markdown text.",
+      "parameters": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "format": "uri", "description": "The public HTTP/HTTPS URL to retrieve." },
+          "max_chars": { "type": "integer", "minimum": 500, "maximum": 50000, "default": 8000 }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["url", "content"],
+        "properties": {
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "content": { "type": "string" },
+          "character_count": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.web.fetch_metadata",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.web.fetch_metadata.input.json",
+      "output_schema_ref": "schemas/global.web.fetch_metadata.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": true,
+      "timeout_ms": 15000,
+      "retryable": true,
+      "rate_limit_class": "web_scrape",
+      "description": "Extract title, description, canonical URL, favicon, and image metadata from a webpage.",
+      "parameters": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "format": "uri" }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "canonical_url": { "type": "string" },
+          "image": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "global.data.transform",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.data.transform.input.json",
+      "output_schema_ref": "schemas/global.data.transform.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": false,
+      "timeout_ms": 5000,
+      "retryable": false,
+      "rate_limit_class": "cpu_in_memory",
+      "description": "Pure side-effect-free in-memory JSON data structure remapping, field picking, and numeric aggregations.",
+      "parameters": {
+        "type": "object",
+        "required": ["input", "operations"],
+        "properties": {
+          "input": { "description": "Source JSON object or array to transform." },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["op"],
+              "properties": {
+                "op": { "type": "string", "enum": ["pick", "omit", "rename", "aggregate"] },
+                "fields": { "type": "array", "items": { "type": "string" } },
+                "mapping": { "type": "object" },
+                "aggregate_key": { "type": "string" },
+                "aggregate_type": { "type": "string", "enum": ["sum", "avg", "min", "max", "count"] }
+              }
+            }
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["output", "operations_applied"],
+        "properties": {
+          "output": {},
+          "operations_applied": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.data.sort",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.data.sort.input.json",
+      "output_schema_ref": "schemas/global.data.sort.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": false,
+      "timeout_ms": 5000,
+      "retryable": false,
+      "rate_limit_class": "cpu_in_memory",
+      "description": "Pure side-effect-free in-memory sorting of object arrays by key and direction.",
+      "parameters": {
+        "type": "object",
+        "required": ["items", "key"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "key": { "type": "string", "description": "Field key on objects to sort by." },
+          "direction": { "type": "string", "enum": ["asc", "desc"], "default": "asc" }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["items", "count"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "count": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.data.filter",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.data.filter.input.json",
+      "output_schema_ref": "schemas/global.data.filter.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": false,
+      "timeout_ms": 5000,
+      "retryable": false,
+      "rate_limit_class": "cpu_in_memory",
+      "description": "Pure side-effect-free in-memory filtering of object arrays against comparison criteria.",
+      "parameters": {
+        "type": "object",
+        "required": ["items", "predicate"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "predicate": {
+            "type": "object",
+            "required": ["field", "op", "value"],
+            "properties": {
+              "field": { "type": "string" },
+              "op": { "type": "string", "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "in"] },
+              "value": {}
+            }
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["items", "count"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "count": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.data.group",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.data.group.input.json",
+      "output_schema_ref": "schemas/global.data.group.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": false,
+      "timeout_ms": 5000,
+      "retryable": false,
+      "rate_limit_class": "cpu_in_memory",
+      "description": "Pure side-effect-free in-memory grouping and aggregation of object arrays by key.",
+      "parameters": {
+        "type": "object",
+        "required": ["items", "group_by"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "group_by": { "type": "string" }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["groups", "group_count"],
+        "properties": {
+          "groups": { "type": "object" },
+          "group_count": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.data.extract",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.data.extract.input.json",
+      "output_schema_ref": "schemas/global.data.extract.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": false,
+      "timeout_ms": 5000,
+      "retryable": false,
+      "rate_limit_class": "cpu_in_memory",
+      "description": "Pure side-effect-free regex or keyword structured entity extraction from text.",
+      "parameters": {
+        "type": "object",
+        "required": ["text", "patterns"],
+        "properties": {
+          "text": { "type": "string" },
+          "patterns": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Map of entity name to regular expression pattern."
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["entities"],
+        "properties": {
+          "entities": { "type": "object" }
+        }
+      }
+    },
+    {
+      "id": "global.data.classify",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.data.classify.input.json",
+      "output_schema_ref": "schemas/global.data.classify.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": false,
+      "timeout_ms": 5000,
+      "retryable": false,
+      "rate_limit_class": "cpu_in_memory",
+      "description": "Pure deterministic classification, tagging, and rule-based categorization.",
+      "parameters": {
+        "type": "object",
+        "required": ["item", "rules"],
+        "properties": {
+          "item": { "type": "object" },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["field", "match", "category"],
+              "properties": {
+                "field": { "type": "string" },
+                "match": { "type": "string" },
+                "category": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["categories"],
+        "properties": {
+          "categories": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "global.document.chunk",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.document.chunk.input.json",
+      "output_schema_ref": "schemas/global.document.chunk.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": false,
+      "timeout_ms": 10000,
+      "retryable": false,
+      "rate_limit_class": "cpu_in_memory",
+      "description": "App-neutral text segmentation and chunking with configurable overlap.",
+      "parameters": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string" },
+          "chunk_size": { "type": "integer", "default": 1000 },
+          "overlap": { "type": "integer", "default": 100 }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["chunks", "count"],
+        "properties": {
+          "chunks": { "type": "array", "items": { "type": "string" } },
+          "count": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.document.summarize",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.document.summarize.input.json",
+      "output_schema_ref": "schemas/global.document.summarize.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": true,
+      "timeout_ms": 30000,
+      "retryable": true,
+      "rate_limit_class": "llm_inference",
+      "description": "Document summarization adhering to bounded input and verifiable evidence policy.",
+      "parameters": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string" },
+          "max_length": { "type": "integer", "default": 500 }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["summary"],
+        "properties": {
+          "summary": { "type": "string" },
+          "length": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "global.time.now",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.time.now.input.json",
+      "output_schema_ref": "schemas/global.time.now.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": false,
+      "timeout_ms": 2000,
+      "retryable": false,
+      "rate_limit_class": "cpu_in_memory",
+      "description": "Canonical UTC and localized timestamp retrieval and timezone conversion.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "timezone": { "type": "string", "default": "UTC" }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["iso", "timestamp", "timezone"],
+        "properties": {
+          "iso": { "type": "string" },
+          "timestamp": { "type": "integer" },
+          "timezone": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "global.math.calculate",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.math.calculate.input.json",
+      "output_schema_ref": "schemas/global.math.calculate.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": false,
+      "timeout_ms": 2000,
+      "retryable": false,
+      "rate_limit_class": "cpu_in_memory",
+      "description": "Deterministic calculation and unit conversion.",
+      "parameters": {
+        "type": "object",
+        "required": ["expression"],
+        "properties": {
+          "expression": { "type": "string" }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["result"],
+        "properties": {
+          "result": { "type": "number" }
+        }
+      }
+    },
+    {
+      "id": "global.media.transcribe",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.media.transcribe.input.json",
+      "output_schema_ref": "schemas/global.media.transcribe.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": true,
+      "timeout_ms": 60000,
+      "retryable": true,
+      "rate_limit_class": "media_processing",
+      "description": "Speech-to-text audio transcription capability.",
+      "parameters": {
+        "type": "object",
+        "required": ["audio_url"],
+        "properties": {
+          "audio_url": { "type": "string" }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["transcript"],
+        "properties": {
+          "transcript": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "global.media.describe_image",
+      "version": "1.2.0",
+      "owner": "lazy-agent-service",
+      "execution": "shared",
+      "effect": "read",
+      "input_schema_ref": "schemas/global.media.describe_image.input.json",
+      "output_schema_ref": "schemas/global.media.describe_image.output.json",
+      "requires_confirmation": false,
+      "requires_user_scope": false,
+      "supports_evidence": true,
+      "timeout_ms": 30000,
+      "retryable": true,
+      "rate_limit_class": "vision_inference",
+      "description": "Visual feature extraction and natural language image description.",
+      "parameters": {
+        "type": "object",
+        "required": ["image_url"],
+        "properties": {
+          "image_url": { "type": "string" },
+          "prompt": { "type": "string" }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["description"],
+        "properties": {
+          "description": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

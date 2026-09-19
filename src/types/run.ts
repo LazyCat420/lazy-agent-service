@@ -12,12 +12,21 @@ export type RunState =
 
 export type ToolEffect = "read" | "write" | "destructive";
 
+export type ToolExecution = "shared" | "local";
+
 export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
   effect: ToolEffect;
+  execution?: ToolExecution;
   timeout_ms?: number;
+  authorization_receipt?: Record<string, unknown>;
+  required_scope?: {
+    app_id: string;
+    session_id?: string;
+    [key: string]: unknown;
+  };
 }
 
 export interface ToolResult {
@@ -28,7 +37,7 @@ export interface ToolResult {
   error?: StructuredError;
 }
 
-export type ContractVersion = "1.0.0" | "1.1.0";
+export type ContractVersion = "1.0.0" | "1.1.0" | "1.2.0";
 
 export interface RunBudget {
   max_tokens?: number;
@@ -57,6 +66,10 @@ export interface CreateRunRequest {
   profile_id?: string;
   profileId?: string;
   profile_version?: string;
+  app_id?: string;
+  appId?: string;
+  session_id?: string;
+  sessionId?: string;
   input: string | Array<{ role: string; content: string }>;
   model?: string;
   budget?: RunBudget;
@@ -135,6 +148,7 @@ export interface RunResult {
   id?: string; // Legacy alias
   status: RunState | "queued" | "in_progress";
   profile_id?: string;
+  profile_version?: string;
   messages: any[];
   usage?: RunUsage;
   context_receipt?: ContextReceipt;

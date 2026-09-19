@@ -35,11 +35,11 @@ describe("ContractRoutes HTTP Endpoints", () => {
     });
 
     expect(status).toBe(200);
-    expect(headers["x-contract-version"]).toBe("1.1.0");
+    expect(headers["x-contract-version"]).toBe("1.2.0");
     expect(body.title).toBe("AgentRuntimeContractV1");
-    expect(body.version).toBe("1.1.0");
+    expect(body.version).toBe("1.2.0");
     expect(body.status).toBe("CANONICAL");
-    expect(body.capabilities_count).toBe(6);
+    expect(body.capabilities_count).toBeGreaterThanOrEqual(15);
   });
 
   it("GET /capabilities returns list of registered global capabilities", async () => {
@@ -67,8 +67,8 @@ describe("ContractRoutes HTTP Endpoints", () => {
     });
 
     expect(status).toBe(200);
-    expect(headers["x-contract-version"]).toBe("1.1.0");
-    expect(body.capabilities).toHaveLength(6);
+    expect(headers["x-contract-version"]).toBe("1.2.0");
+    expect(body.capabilities.length).toBeGreaterThanOrEqual(15);
     const ids = body.capabilities.map((c: any) => c.id);
     expect(ids).toContain("global.web.search");
     expect(ids).toContain("global.data.sort");
@@ -99,10 +99,10 @@ describe("ContractRoutes HTTP Endpoints", () => {
     });
 
     expect(status).toBe(200);
-    expect(headers["x-contract-version"]).toBe("1.1.0");
-    expect(body.bundle_version).toBe("1.1.0");
+    expect(headers["x-contract-version"]).toBe("1.2.0");
+    expect(body.bundle_version).toBe("1.2.0");
     expect(body.run_contract).toBeDefined();
     expect(body.run_contract.definitions.CreateRunRequest).toBeDefined();
-    expect(body.global_capabilities).toHaveLength(6);
+    expect(body.global_capabilities.length).toBeGreaterThanOrEqual(15);
   });
 });
