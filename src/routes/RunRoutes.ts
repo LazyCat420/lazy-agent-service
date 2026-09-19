@@ -40,50 +40,19 @@ router.post(
         data: { status: 'queued', profileId: payload.profileId }
       });
 
-      // Mock processing delay
-      setTimeout(() => {
-        sendEvent({
-          runId,
-          type: 'run.started',
-          data: { status: 'in_progress' }
+      // Start actual execution engine in background for streaming
+      import("../services/RunExecutionEngine.ts").then(({ RunExecutionEngine }) => {
+        RunExecutionEngine.startRun(runId, payload, sendEvent).then((result) => {
+          res.end();
+        }).catch(() => {
+          res.end();
         });
-
-        setTimeout(() => {
-          sendEvent({
-            runId,
-            type: 'message.delta',
-            data: { text: "Mock response text" }
-          });
-          
-          setTimeout(() => {
-            sendEvent({
-              runId,
-              type: 'run.completed',
-              data: {
-                status: 'completed',
-                messages: [{ role: 'assistant', content: "Mock response text" }],
-                usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30, toolCalls: 0 }
-              }
-            });
-            res.end();
-          }, 500);
-        }, 500);
-      }, 500);
+      });
 
     } else {
-      // Synchronous mock response
-      const result: RunResult = {
-        id: runId,
-        status: 'completed',
-        messages: [{ role: 'assistant', content: "Mock synchronous response" }],
-        usage: {
-          promptTokens: 15,
-          completionTokens: 25,
-          totalTokens: 40,
-          toolCalls: 0
-        }
-      };
-
+      const { RunExecutionEngine } = await import("../services/RunExecutionEngine.ts");
+      // For sync, we collect events (or just wait for the end).
+      const result = await RunExecutionEngine.startRun(runId, payload, () => {});
       res.status(201).json(result);
     }
   })
