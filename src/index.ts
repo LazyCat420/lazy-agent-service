@@ -84,6 +84,7 @@ import platformRouter from "./routes/PlatformRoutes.ts";
 import executeRouter from "./routes/ExecuteRoutes.ts";
 import runRouter from "./routes/RunRoutes.ts";
 import contractRouter from "./routes/ContractRoutes.ts";
+import { ProfileRegistry } from "./services/ProfileRegistry.ts";
 
 
 
@@ -638,6 +639,12 @@ setupWebSocket(wss);
     }
     for (const endpoint of ENDPOINTS.websocket) {
       logger.info(`  WS    →  ws://localhost:${PORT}${endpoint}`);
+    }
+
+    try {
+      await ProfileRegistry.loadProfilesFromDisk();
+    } catch (err: any) {
+      logger.warn(`Failed eager profile loading at startup: ${err.message}`);
     }
 
     // Announce ourselves to Prism once we are actually accepting connections —

@@ -335,6 +335,23 @@ export class ProfileRegistry {
   }
 
   static getRegisteredProfileIds(): string[] {
-    return Array.from(this.profiles.keys());
+    if (!this.initialized && this.profiles.size === 0) {
+      try {
+        const dir = path.resolve(process.cwd(), "profiles");
+        if (fs.existsSync(dir)) {
+          const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+          for (const file of files) {
+            const raw = fs.readFileSync(path.join(dir, file), "utf-8");
+            const parsed = JSON.parse(raw);
+            const profile = this.validateProfileSchema(parsed);
+            this.registerProfile(profile);
+          }
+        }
+        this.initialized = true;
+      } catch (err: any) {
+        logger.error(`[ProfileRegistry] Failed loading profiles: ${err.message}`);
+      }
+    }
+    return Array.from(new Set(Array.from(this.profiles.values()).map((p) => p.profile_id)));
   }
 }

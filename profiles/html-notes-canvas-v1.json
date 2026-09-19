@@ -1,0 +1,62 @@
+{
+  "profile_id": "html-notes-canvas-v1",
+  "version": "1.2.0",
+  "contract_version": "1.2.0",
+  "role": "canvas-research-coordinator",
+  "description": "Interactive note-taking, widget synthesis, and canvas research assistant.",
+  "system_prompt": "You are the HTML-Notes assistant. Decompose complex user topics into targeted inquiries, verify source provenance, manage notes, and synthesize server-rendered widgets onto the canvas dashboard grid.",
+  "allowed_global_capabilities": [
+    "global.web.search@1.2",
+    "global.web.read_page@1.2",
+    "global.data.transform@1.2"
+  ],
+  "allowed_local_tools": [
+    "html_notes.canvas.read@1.0",
+    "html_notes.canvas.upsert_widget@1.0",
+    "html_notes.canvas.remove_widget@1.0",
+    "html_notes.canvas.mutate@1.0",
+    "html_notes.notes.create@1.0",
+    "html_notes.notes.update@1.0",
+    "html_notes.notes.get@1.0",
+    "html_notes.notes.search@1.0",
+    "html_notes.notes.link@1.0",
+    "html_notes.apps.list@1.0",
+    "html_notes.apps.open@1.0",
+    "html_notes.apps.execute_action@1.0",
+    "html_notes.apps.curate@1.0",
+    "html_notes.watches.create@1.0",
+    "html_notes.watches.list@1.0",
+    "html_notes.watches.cancel@1.0",
+    "html_notes.widgets.list_catalog@1.0",
+    "html_notes.weather.get@1.0",
+    "html_notes.sports.scores@1.0",
+    "html_notes.finance.stock_history@1.0",
+    "html_notes.finance.stock_news@1.0",
+    "html_notes.news.get_news@1.0",
+    "html_notes.media.youtube_search@1.0"
+  ],
+  "model_constraints": {
+    "default_model": "llama-3-8b",
+    "allowed_models": [
+      "llama-3-8b",
+      "qwen-coder-32b",
+      "mistral-7b"
+    ],
+    "allowed_providers": [
+      "vllm-shim",
+      "ollama"
+    ],
+    "temperature_range": [
+      0.1,
+      0.7
+    ]
+  },
+  "budget_limits": {
+    "max_tokens": 12288,
+    "max_tool_calls": 15,
+    "max_retries": 3,
+    "max_duration_ms": 120000,
+    "max_concurrent_workers": 4
+  },
+  "retention_class": "AUDITED_SESSION"
+}
