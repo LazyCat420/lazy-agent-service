@@ -82,6 +82,7 @@ import promptsRouter from "./routes/PromptsRoutes.ts";
 import webhookRouter from "./routes/WebhookRoutes.ts";
 import platformRouter from "./routes/PlatformRoutes.ts";
 import executeRouter from "./routes/ExecuteRoutes.ts";
+import runRouter from "./routes/RunRoutes.ts";
 
 
 
@@ -153,6 +154,7 @@ const ENDPOINTS = {
     "/scheduled-tasks",
     "/prompts",
     "/webhooks",
+    "/v1/runs",
   ],
   websocket: ["/ws/chat", "/ws/text-to-audio"],
   admin: ["/admin", "/admin/lm-studio"],
@@ -218,6 +220,7 @@ app.use("/prompts", promptsRouter);
 app.use("/webhooks", webhookRouter);
 app.use("/execute", executeRouter);
 app.use("/platform", platformRouter);
+app.use("/v1/runs", runRouter);
 
 // Platform dashboard — cross-project tool telemetry. Lives here (not in
 // trading-client) because this service owns the tool registry; trading-client
