@@ -313,7 +313,7 @@ export class RunExecutionEngine {
 
       const options: any = {
         model: selectedModel,
-        enabledTools: [...profile.tool_policy.whitelist],
+        enabledTools: profile.tool_policy.whitelist.map((name) => name.split("@")[0]),
         systemPrompt: assembled.fullPrompt,
         agenticLoopEnabled: true,
         functionCallingEnabled: true,
@@ -335,6 +335,39 @@ export class RunExecutionEngine {
         username: "run-engine",
         clientIp: "127.0.0.1",
         signal: abortController.signal,
+      };
+
+      // The canonical run path must never dispatch app-owned tools through the
+      // legacy HTTP tool catalog. Route every call through profile admission.
+      const allowed = new Set(options.enabledTools);
+      const suppliedSchemas = request.runtime_overrides?.local_tool_schemas;
+      const localSchemas = Array.isArray(suppliedSchemas) ? suppliedSchemas.filter((s: any) =>
+        s && typeof s.name === "string" && !s.name.startsWith("global.") && allowed.has(s.name)
+        && typeof s.description === "string" && s.parameters?.type === "object") : [];
+      const globalSchemas = options.enabledTools.filter((name: string) => name.startsWith("global.")).flatMap((name: string) => {
+        const cap = CapabilityRegistry.getCapability(name);
+        return cap ? [{ name, description: cap.description, parameters: cap.parameters }] : [];
+      });
+      context.runtimeTools = { finalTools: [...localSchemas, ...globalSchemas], resolvedEnabledTools: options.enabledTools };
+      context.agentConversationId = runId;
+      context.emit = (event: any) => {
+        if (event.type === "chunk") {
+          emitEvent({ run_id: runId, type: "message.delta", data: { delta: event.content || event.text || "" } });
+        }
+      };
+      const requestContext = (request.runtime_overrides?.context || {}) as Record<string, string>;
+      context.runtimeToolExecutor = async (call: any) => {
+        const processed = await this.processToolCall(runId, call, {
+          profile_id: profile.profile_id,
+          app_id: requestContext.app_id,
+          session_id: requestContext.session_id,
+        }, emitEvent);
+        if (processed.status === "denied") return { is_error: true, error: processed.error };
+        if (processed.status === "admitted_local") return {
+          status: "admitted_local", execution: "local",
+          message: "Dispatched to the application. Execution result has not been acknowledged; do not claim success.",
+        };
+        return processed.result;
       };
 
       // 9. Execute Agentic Loop Façade
@@ -611,6 +644,12 @@ export class RunExecutionEngine {
         return { status: "denied", event: evt, error: err };
       }
 
+      if (cap.requires_confirmation) {
+        const error: StructuredError = { code: "CONFIRMATION_REQUIRED", message: "This capability requires an explicit confirmation flow", category: "POLICY", retryable: false };
+        const event: RunEvent = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: new Date().toISOString(), data: { tool_call_id: toolCallId, tool_name: toolName, error } };
+        emitEvent?.(event);
+        return { status: "denied", event, error };
+      }
       const execResult = await GlobalCapabilityExecutor.execute(toolName, toolArgs);
       if (!execResult.success) {
         const err: StructuredError = {
@@ -712,7 +751,7 @@ export class RunExecutionEngine {
       }
     }
 
-    const receiptId = `auth_rec_${runId}_${Date.now()}`;
+    const receiptId = `auth_rec_${runId}_${crypto.randomUUID()}`;
     const issuedAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + 300000).toISOString(); // 5 min TTL
     const appId = context.app_id || appPrefix.replace(/_/g, "-");
@@ -726,19 +765,28 @@ export class RunExecutionEngine {
           ? "write"
           : "read";
 
-    const secret =
-      process.env.INTERNAL_EXECUTE_TOKEN ||
-      process.env.RUNTIME_AUTH_SECRET ||
-      "lazycat-runtime-auth-token";
-
-    const sigPayload = `${runId}:${toolCallId}:${toolName}:${appId}:${sessionId}:${profileId}:${receiptId}:${expiresAt}`;
-    const signature = `sha256-${crypto
-      .createHmac("sha256", secret)
-      .update(sigPayload)
-      .digest("hex")}`;
+    const secret = process.env.RUNTIME_AUTH_SECRET || process.env.INTERNAL_EXECUTE_TOKEN;
+    if (!secret) {
+      const error: StructuredError = {
+        code: "AUTH_SIGNING_UNAVAILABLE", message: "Runtime receipt signing is not configured",
+        category: "POLICY", retryable: false,
+      };
+      const event: RunEvent = {
+        id: `evt_denied_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed",
+        timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error },
+      };
+      emitEvent?.(event);
+      return { status: "denied", event, error };
+    }
+    const argumentsJson = JSON.stringify(toolArgs);
+    const argumentsHash = crypto.createHash("sha256").update(argumentsJson).digest("hex");
+    const sigPayload = `${runId}:${toolCallId}:${toolName}:${argumentsHash}:${appId}:${sessionId}:${profileId}:${receiptId}:${expiresAt}`;
+    const signature = `hmac-sha256-${crypto.createHmac("sha256", secret).update(sigPayload).digest("hex")}`;
 
     const authorizationReceipt = {
       receipt_id: receiptId,
+      arguments_json: argumentsJson,
+      arguments_hash: argumentsHash,
       nonce: receiptId,
       run_id: runId,
       tool_call_id: toolCallId,

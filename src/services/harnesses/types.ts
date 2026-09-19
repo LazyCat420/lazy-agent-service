@@ -214,6 +214,9 @@ export interface AgenticContext {
   resolvedModel: string;
   signal?: AbortSignal | null;
   emit: EmitFunction;
+  /** Canonical runtime adapter, installed only by RunExecutionEngine. */
+  runtimeTools?: ResolvedTools;
+  runtimeToolExecutor?: (call: ToolCall) => Promise<unknown>;
   requestId?: string;
   requestStart?: number;
   clientIp?: string | null;

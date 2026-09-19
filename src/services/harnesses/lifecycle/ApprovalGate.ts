@@ -25,6 +25,10 @@ export async function checkAndWaitForApproval(
   approvalEngine: AutoApprovalEngine,
 ): Promise<{ isApproved: boolean; shouldApproveAll: boolean }> {
   const { conversationId, emit, options } = context;
+  // Canonical runs use profile admission in runtimeToolExecutor; local destructive
+  // actions still require confirmation in the application executor. There is no
+  // legacy approval-response endpoint on /v1/runs.
+  if (context.runtimeToolExecutor) return { isApproved: true, shouldApproveAll: false };
 
   const { needsApproval } = approvalEngine.checkBatch(toolCalls);
 

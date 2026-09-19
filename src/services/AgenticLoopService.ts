@@ -74,7 +74,7 @@ export default class AgenticLoopService {
     await ToolContext.ensureLoaded(resolvedAgentConversationId);
 
     // 1. Resolve tools (passing agentConversationId so dynamicEnabledTools is merged)
-    const resolvedTools = await AgenticToolResolver.resolve({
+    const resolvedTools = context.runtimeTools || await AgenticToolResolver.resolve({
       options,
       agent: agent || undefined,
       project,

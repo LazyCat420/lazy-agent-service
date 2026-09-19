@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { executeToolBatch } from "../../src/services/harnesses/lifecycle/ToolExecutor.ts";
+import ToolOrchestratorService from "../../src/services/ToolOrchestratorService.ts";
+import crypto from "node:crypto";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -15,7 +18,10 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
   const profilesDir = path.resolve(testDir, "..", "..", "profiles");
   const contractsDir = path.resolve(testDir, "..", "..", "contracts");
 
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(async () => {
+    vi.stubEnv("RUNTIME_AUTH_SECRET", crypto.randomBytes(32).toString("hex"));
     CapabilityRegistry.reset();
     ProfileRegistry.clear();
     RunExecutionEngine.reset();
@@ -196,7 +202,34 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
     expect(evtData.required_scope.session_id).toBe("session_scope_999");
     expect(evtData.authorization_receipt).toBeDefined();
     expect(evtData.authorization_receipt.execution).toBe("local");
-    expect(evtData.authorization_receipt.signature).toMatch(/^sha256-[a-f0-9]{64}$/);
+    expect(evtData.authorization_receipt.signature).toMatch(/^hmac-sha256-[a-f0-9]{64}$/);
+  });
+
+  it("fails closed when receipt signing is unconfigured", async () => {
+    vi.stubEnv("RUNTIME_AUTH_SECRET", "");
+    vi.stubEnv("INTERNAL_EXECUTE_TOKEN", "");
+    const result = await RunExecutionEngine.processToolCall("run-no-key", {
+      id: "call-no-key", name: "html_notes.canvas.upsert_widget", arguments: {},
+    }, { profile_id: "html-notes-canvas-v1", app_id: "html-notes", session_id: "session-no-key" });
+    expect(result.status).toBe("denied");
+    expect(result.error?.code).toBe("AUTH_SIGNING_UNAVAILABLE");
+    expect(result.event.data.authorization_receipt).toBeUndefined();
+  });
+
+  it("signs arguments and produces unique receipts for calls in the same millisecond", async () => {
+    const args = { title: "Café", config: { zoom: 1.5, enabled: true } };
+    const call = { id: "call-signed", name: "html_notes.canvas.upsert_widget", arguments: args };
+    const context = { profile_id: "html-notes-canvas-v1", app_id: "html-notes", session_id: "session-signed" };
+    const first = await RunExecutionEngine.processToolCall("run-signed", call, context);
+    const second = await RunExecutionEngine.processToolCall("run-signed", call, context);
+    const receipt = first.event.data.authorization_receipt;
+    expect(first.status).toBe("admitted_local");
+    expect(receipt.nonce).not.toBe(second.event.data.authorization_receipt.nonce);
+    expect(JSON.parse(receipt.arguments_json)).toEqual(args);
+    expect(receipt.arguments_hash).toBe(crypto.createHash("sha256").update(receipt.arguments_json).digest("hex"));
+    const payload = [receipt.run_id, receipt.tool_call_id, receipt.tool_name, receipt.arguments_hash,
+      receipt.app_id, receipt.session_id, receipt.profile_id, receipt.nonce, receipt.expires_at].join(":");
+    expect(receipt.signature).toBe("hmac-sha256-" + crypto.createHmac("sha256", process.env.RUNTIME_AUTH_SECRET!).update(payload).digest("hex"));
   });
 
   it("test_tool_denial_contains_machine_readable_reason", async () => {
@@ -219,6 +252,33 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
     expect(processed.error?.code).toBe("POLICY_VIOLATION");
     expect(processed.error?.category).toBe("POLICY");
     expect(processed.error?.message).toContain("is not allowed by profile");
+  });
+
+  it("startRun emits signed local calls through the harness executor and forwards text", async () => {
+    const events: any[] = [];
+    const legacy = vi.spyOn(ToolOrchestratorService, "executeTool");
+    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (context) => {
+      expect(context.runtimeTools?.finalTools.map(t => t.name)).toContain("html_notes.notes.create");
+      expect(context.runtimeTools?.finalTools.map(t => t.name)).not.toContain("forbidden.tool");
+      context.emit({ type: "chunk", content: "Preparing your note" });
+      const results = await executeToolBatch([{ id: "integration-call", name: "html_notes.notes.create", args: { title: "Integration", rendered_html: "<p>Verified</p>" } }],
+        context, context.runtimeTools!, { run: vi.fn() } as any, {} as any);
+      expect((results[0].result as any).status).toBe("admitted_local");
+      return { messages: [] };
+    });
+    const schema = (name: string) => ({ name, description: "Test schema", parameters: { type: "object", properties: {} } });
+    const result = await RunExecutionEngine.startRun("run-wired", {
+      profile_id: "html-notes-canvas-v1", input: "Create a note",
+      runtime_overrides: { context: { session_id: "session-wired" }, local_tool_schemas: [schema("html_notes.notes.create"), schema("forbidden.tool")] },
+    }, event => events.push(event));
+    expect(result.status).toBe("completed");
+    const invoked = events.find(e => e.type === "tool.invoked");
+    expect(invoked.data.authorization_receipt.session_id).toBe("session-wired");
+    expect(invoked.data.authorization_receipt.tool_call_id).toBe("integration-call");
+    expect(invoked.data.authorization_receipt.signature).toMatch(/^hmac-sha256-[a-f0-9]{64}$/);
+    expect(events.some(e => e.type === "message.delta" && e.data.delta === "Preparing your note")).toBe(true);
+    expect(events.filter(e => e.type === "run.completed")).toHaveLength(1);
+    expect(legacy).not.toHaveBeenCalled();
   });
 
   it("test_cancellation_transitions_once", async () => {

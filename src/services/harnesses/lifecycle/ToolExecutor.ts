@@ -88,6 +88,13 @@ export async function executeToolBatch(
         return { name: toolCall.name, id: toolCall.id, result, durationMs: 0 };
       }
 
+      if (context.runtimeToolExecutor) {
+        const started = Date.now();
+        const result = await context.runtimeToolExecutor(toolCall);
+        await hooks.run("afterToolCall", toolCall, result, context);
+        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+      }
+
       const parentSpan = (context as any).rootSpan;
       const sideEffect = classifySideEffect(toolCall.name);
 

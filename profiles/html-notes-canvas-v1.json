@@ -36,13 +36,15 @@
     "html_notes.media.youtube_search@1.0"
   ],
   "model_constraints": {
-    "default_model": "llama-3-8b",
+    "default_model": "GLM-5.3-Flash-EXL3",
     "allowed_models": [
+      "GLM-5.3-Flash-EXL3",
       "llama-3-8b",
       "qwen-coder-32b",
       "mistral-7b"
     ],
     "allowed_providers": [
+      "vllm-2",
       "vllm-shim",
       "ollama"
     ],
