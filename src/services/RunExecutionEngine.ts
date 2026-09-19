@@ -713,6 +713,12 @@ export class RunExecutionEngine {
     }
 
     const receiptId = `auth_rec_${runId}_${Date.now()}`;
+    const issuedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 300000).toISOString(); // 5 min TTL
+    const appId = context.app_id || appPrefix.replace(/_/g, "-");
+    const sessionId = context.session_id || "";
+    const profileId = context.profile_id || "";
+
     const effect =
       toolName.includes("remove") || toolName.includes("delete")
         ? "destructive"
@@ -720,17 +726,31 @@ export class RunExecutionEngine {
           ? "write"
           : "read";
 
+    const secret =
+      process.env.INTERNAL_EXECUTE_TOKEN ||
+      process.env.RUNTIME_AUTH_SECRET ||
+      "lazycat-runtime-auth-token";
+
+    const sigPayload = `${runId}:${toolCallId}:${toolName}:${appId}:${sessionId}:${profileId}:${receiptId}:${expiresAt}`;
     const signature = `sha256-${crypto
-      .createHash("sha256")
-      .update(`${runId}:${toolCallId}:${toolName}:${context.session_id}`)
+      .createHmac("sha256", secret)
+      .update(sigPayload)
       .digest("hex")}`;
 
     const authorizationReceipt = {
       receipt_id: receiptId,
-      issued_at: new Date().toISOString(),
+      nonce: receiptId,
+      run_id: runId,
+      tool_call_id: toolCallId,
       tool_name: toolName,
+      canonical_tool_id: toolName,
+      app_id: appId,
+      session_id: sessionId,
+      profile_id: profileId,
       execution: "local" as const,
       effect,
+      issued_at: issuedAt,
+      expires_at: expiresAt,
       signature,
     };
 
@@ -738,7 +758,7 @@ export class RunExecutionEngine {
       id: `evt_loc_${Date.now()}`,
       run_id: runId,
       type: "tool.invoked",
-      timestamp: new Date().toISOString(),
+      timestamp: issuedAt,
       data: {
         tool_call_id: toolCallId,
         tool_name: toolName,
@@ -747,8 +767,8 @@ export class RunExecutionEngine {
         arguments: toolArgs,
         authorization_receipt: authorizationReceipt,
         required_scope: {
-          app_id: context.app_id || appPrefix.replace(/_/g, "-"),
-          session_id: context.session_id,
+          app_id: appId,
+          session_id: sessionId,
         },
       },
     };

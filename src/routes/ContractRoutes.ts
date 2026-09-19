@@ -1,6 +1,7 @@
 import express, { Request, Response } from "express";
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import { CapabilityRegistry } from "../services/CapabilityRegistry.ts";
+import { ProfileRegistry } from "../services/ProfileRegistry.ts";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -24,6 +25,7 @@ router.get(
       supported_major_versions: [1],
       supported_minor_versions: ["1.0.0", "1.1.0", "1.2.0"],
       capabilities_count: CapabilityRegistry.listCapabilities().length,
+      registered_profiles: ProfileRegistry.getRegisteredProfileIds(),
       timestamp: new Date().toISOString(),
     });
   }),
