@@ -46,10 +46,19 @@
         },
         "authorization_receipt": {
           "receipt_id": "auth_rec_123",
-          "issued_at": "2026-09-19T11:02:00.400Z",
+          "nonce": "auth_rec_123",
+          "run_id": "run_123",
+          "tool_call_id": "tc_123",
           "tool_name": "html_notes.canvas.upsert_widget",
+          "canonical_tool_id": "html_notes.canvas.upsert_widget",
+          "arguments_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "app_id": "html-notes",
+          "session_id": "session_123",
+          "profile_id": "html-notes-researcher-v1",
           "execution": "local",
           "effect": "write",
+          "issued_at": "2026-09-19T11:02:00.400Z",
+          "expires_at": "2026-09-19T11:07:00.400Z",
           "signature": "sha256-mock-auth-signature"
         },
         "required_scope": {

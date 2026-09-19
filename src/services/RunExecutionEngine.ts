@@ -729,9 +729,21 @@ export class RunExecutionEngine {
     const secret =
       process.env.INTERNAL_EXECUTE_TOKEN ||
       process.env.RUNTIME_AUTH_SECRET ||
-      "lazycat-runtime-auth-token";
+      "dev_local_runtime_auth_token";
 
-    const sigPayload = `${runId}:${toolCallId}:${toolName}:${appId}:${sessionId}:${profileId}:${receiptId}:${expiresAt}`;
+    // Canonical arguments hash binding
+    const sortedArgs: Record<string, unknown> = {};
+    if (toolArgs && typeof toolArgs === "object") {
+      for (const k of Object.keys(toolArgs).sort()) {
+        sortedArgs[k] = toolArgs[k];
+      }
+    }
+    const argsHash = crypto
+      .createHash("sha256")
+      .update(JSON.stringify(sortedArgs))
+      .digest("hex");
+
+    const sigPayload = `${runId}:${toolCallId}:${toolName}:${argsHash}:${appId}:${sessionId}:${profileId}:${receiptId}:${expiresAt}`;
     const signature = `sha256-${crypto
       .createHmac("sha256", secret)
       .update(sigPayload)
@@ -744,6 +756,7 @@ export class RunExecutionEngine {
       tool_call_id: toolCallId,
       tool_name: toolName,
       canonical_tool_id: toolName,
+      arguments_hash: argsHash,
       app_id: appId,
       session_id: sessionId,
       profile_id: profileId,

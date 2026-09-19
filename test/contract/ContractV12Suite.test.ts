@@ -196,6 +196,13 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
     expect(evtData.required_scope.session_id).toBe("session_scope_999");
     expect(evtData.authorization_receipt).toBeDefined();
     expect(evtData.authorization_receipt.execution).toBe("local");
+    expect(evtData.authorization_receipt.run_id).toBe("run-local-scope-01");
+    expect(evtData.authorization_receipt.tool_call_id).toBe("tc-local-301");
+    expect(evtData.authorization_receipt.app_id).toBe("html-notes");
+    expect(evtData.authorization_receipt.session_id).toBe("session_scope_999");
+    expect(evtData.authorization_receipt.profile_id).toBe("html-notes-researcher-v1");
+    expect(evtData.authorization_receipt.arguments_hash).toBeDefined();
+    expect(evtData.authorization_receipt.expires_at).toBeDefined();
     expect(evtData.authorization_receipt.signature).toMatch(/^sha256-[a-f0-9]{64}$/);
   });
 

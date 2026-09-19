@@ -36,13 +36,22 @@
     },
     "AuthorizationReceipt": {
       "type": "object",
-      "required": ["receipt_id", "issued_at", "tool_name", "execution"],
+      "required": ["receipt_id", "issued_at", "tool_name", "execution", "run_id", "tool_call_id", "app_id", "session_id", "profile_id"],
       "properties": {
         "receipt_id": { "type": "string" },
-        "issued_at": { "type": "string", "format": "date-time" },
+        "nonce": { "type": "string" },
+        "run_id": { "type": "string" },
+        "tool_call_id": { "type": "string" },
         "tool_name": { "type": "string" },
+        "canonical_tool_id": { "type": "string" },
+        "arguments_hash": { "type": "string" },
+        "app_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "profile_id": { "type": "string" },
         "execution": { "$ref": "#/definitions/ToolExecution" },
         "effect": { "$ref": "#/definitions/ToolEffect" },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
         "signature": { "type": "string" }
       },
       "additionalProperties": true
