@@ -21,8 +21,20 @@ const MOCK_PROFILES: Record<string, AgentProfile> = {
 };
 
 export class ProfileRegistry {
+  private static dynamicProfiles: Map<string, AgentProfile> = new Map();
+
   static async loadProfile(profileId: string): Promise<AgentProfile | null> {
-    // Mock implementation for the contract
+    if (this.dynamicProfiles.has(profileId)) {
+      return this.dynamicProfiles.get(profileId)!;
+    }
     return MOCK_PROFILES[profileId] || null;
+  }
+
+  static registerProfile(profile: AgentProfile): void {
+    this.dynamicProfiles.set(profile.id, profile);
+  }
+
+  static clear(): void {
+    this.dynamicProfiles.clear();
   }
 }

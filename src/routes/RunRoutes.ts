@@ -18,6 +18,11 @@ router.post(
       return res.status(400).json({ error: "Missing profileId" });
     }
 
+    const idempotencyHeader = req.headers["x-idempotency-key"] as string | undefined;
+    if (idempotencyHeader) {
+      payload.idempotencyKey = idempotencyHeader;
+    }
+
     const runId = randomUUID();
 
     if (payload.stream) {
@@ -91,7 +96,9 @@ router.post(
   "/:runId/cancel",
   asyncHandler(async (req: Request, res: Response) => {
     const { runId } = req.params;
-    res.json({ ok: true, cancelled: true, runId: runId as string });
+    const { RunExecutionEngine } = await import("../services/RunExecutionEngine.ts");
+    const cancelled = RunExecutionEngine.cancelRun(runId as string);
+    res.json({ ok: true, cancelled, runId: runId as string });
   })
 );
 

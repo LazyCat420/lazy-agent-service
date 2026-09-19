@@ -12,6 +12,8 @@ export interface CreateRunRequest {
   budget?: RunBudget;
   tools?: any[];
   stream?: boolean;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
 }
 
 export type RunEventType =

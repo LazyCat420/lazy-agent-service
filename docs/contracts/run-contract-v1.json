@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AgentRuntimeContractV1",
+  "definitions": {
+    "RunBudget": {
+      "type": "object",
+      "properties": {
+        "max_tokens": { "type": "integer", "minimum": 1, "maximum": 32768 },
+        "max_tool_calls": { "type": "integer", "minimum": 0, "maximum": 50 },
+        "max_retries": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "max_duration_ms": { "type": "integer", "minimum": 1000, "maximum": 600000 }
+      }
+    },
+    "CreateRunRequest": {
+      "type": "object",
+      "required": ["profile_id", "input"],
+      "properties": {
+        "profile_id": { "type": "string" },
+        "profile_version": { "type": "string" },
+        "input": {
+          "oneOf": [
+            { "type": "string" },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["role", "content"],
+                "properties": {
+                  "role": { "type": "string", "enum": ["system", "user", "assistant", "tool"] },
+                  "content": { "type": "string" }
+                }
+              }
+            }
+          ]
+        },
+        "model": { "type": "string" },
+        "budget": { "$ref": "#/definitions/RunBudget" },
+        "tools": { "type": "array", "items": { "type": "object" } },
+        "stream": { "type": "boolean", "default": false },
+        "idempotency_key": { "type": "string" }
+      }
+    },
+    "RunEvent": {
+      "type": "object",
+      "required": ["id", "run_id", "type", "timestamp", "data"],
+      "properties": {
+        "id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": [
+            "run.admitted",
+            "run.started",
+            "message.delta",
+            "message.completed",
+            "tool.invoked",
+            "tool.completed",
+            "tool.failed",
+            "worker.dispatched",
+            "worker.completed",
+            "run.completed",
+            "run.failed",
+            "run.cancelled"
+          ]
+        },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "data": { "type": "object" }
+      }
+    },
+    "StructuredError": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "category": { "type": "string", "enum": ["CLIENT", "RUNTIME", "PROVIDER", "TOOL", "POLICY", "RESOURCE"] },
+        "details": { "type": "object" }
+      }
+    },
+    "RunResult": {
+      "type": "object",
+      "required": ["run_id", "status", "messages"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["admitted", "running", "completed", "failed", "cancelled", "timed_out"] },
+        "messages": { "type": "array", "items": { "type": "object" } },
+        "usage": {
+          "type": "object",
+          "properties": {
+            "prompt_tokens": { "type": "integer" },
+            "completion_tokens": { "type": "integer" },
+            "total_tokens": { "type": "integer" },
+            "tool_calls_count": { "type": "integer" },
+            "retry_count": { "type": "integer" },
+            "duration_ms": { "type": "integer" }
+          }
+        },
+        "context_receipt": { "type": "object" },
+        "evidence_records": { "type": "array", "items": { "type": "object" } },
+        "error": { "$ref": "#/definitions/StructuredError" }
+      }
+    }
+  }
+}
