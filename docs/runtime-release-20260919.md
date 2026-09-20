@@ -65,6 +65,11 @@ worker evidence references are included in the final receipt. The full runtime
 suite passed 807/807 with loopback enabled, and the build passed. Named Notes
 research workers and its context/verifier plugins remain application-owned
 registrations; that profile continues to fail readiness until they exist.
+Deploy-kit completed one passed / zero failed for `lazy-tool-service`. The NAS
+container is `running healthy` with `git.sha=f959e93`, and `/health` returned
+HTTP 200. A post-deployment Wallgarden completion canary rediscovered
+`vllm::nemotron35` and returned five parsed recommendations, confirming the
+ordinary no-worker completion path remained available after the runtime change.
 
 ## Shared implementation
 
