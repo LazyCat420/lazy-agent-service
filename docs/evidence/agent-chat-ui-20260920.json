@@ -1,0 +1,22 @@
+{
+  "firstWorkflow": {
+    "applicationOutcome": "completed",
+    "captureOutcome": "failed"
+  },
+  "secondWorkflow": {
+    "applicationOutcome": "failed",
+    "captureOutcome": "captured-before-assertion"
+  },
+  "savedOutcome": "failed",
+  "savedBotChars": 266,
+  "postRunChatRequestCount": 0,
+  "renderedBotChars": 295,
+  "renderedSourceLinkCount": 0,
+  "truthfulTerminalRender": true,
+  "runtimeError": "The model provider encountered an error on iteration 3: Canonical token budget cannot cover the next prompt",
+  "canonicalEventsParsedBeforeAssertion": true,
+  "canonicalEventDetailsRetained": false,
+  "transientToolStatusObservedBeforeAssertion": true,
+  "approvalPopupSeenBeforeAssertion": false,
+  "screenshot": "/tmp/agent-chat-ui-smoke.png"
+}

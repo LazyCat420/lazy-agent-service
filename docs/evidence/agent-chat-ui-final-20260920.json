@@ -1,0 +1,519 @@
+{
+  "ok": false,
+  "priorWorkflows": [
+    {
+      "validation": 1,
+      "applicationOutcome": "completed",
+      "captureOutcome": "failed"
+    },
+    {
+      "validation": 2,
+      "applicationOutcome": "failed",
+      "runtimeError": "Canonical token budget cannot cover the next prompt"
+    }
+  ],
+  "deployedRevision": "262e1ca2",
+  "validationPromptSuffix": "Read-only UI validation 3",
+  "canonicalFrames": [
+    {
+      "type": "run.admitted"
+    },
+    {
+      "type": "run.started"
+    },
+    {
+      "type": "tool.completed"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "message.delta"
+    },
+    {
+      "type": "run.completed"
+    }
+  ],
+  "requestCount": 1,
+  "inPageCapturedRequestCount": 1,
+  "envelopeCount": 308,
+  "canonicalEventCount": 155,
+  "canonicalEventTypes": [
+    "run.admitted",
+    "run.started",
+    "tool.completed",
+    "message.delta",
+    "run.completed"
+  ],
+  "deltaCount": 151,
+  "canonicalTextChars": 2106,
+  "canonicalTextSha256": "c87a89b795a8e059551329eecbbee9912314a09284c03daeaca58306603f98a1",
+  "toolProgressEventCount": 1,
+  "renderedStatusCount": 1,
+  "approvalPopupSeen": false,
+  "canonicalTerminalCount": 1,
+  "canonicalTerminal": "run.completed",
+  "runtimeErrorCode": null,
+  "runtimeErrorMessage": null,
+  "outerTerminalCount": 1,
+  "outerTerminal": "done",
+  "renderedAssistantCharsBeforeStatus": 2060,
+  "orderedWordCoverage": 0.085,
+  "error": "Rendered response lost or reordered canonical text (ordered coverage 0.085)",
+  "applicationWorkflowPassed": true,
+  "harnessAssertionPassed": false,
+  "persistedOutcome": "completed",
+  "persistedResponseChars": 2106,
+  "persistedResponseSha256": "c87a89b795a8e059551329eecbbee9912314a09284c03daeaca58306603f98a1",
+  "persistedResponseMatchesCanonicalDeltas": true,
+  "persistedResponseIsExactRepeatedHalves": false,
+  "assertionDiagnosis": "The Markdown-aware rendered-word heuristic was a false negative. Canonical deltas and the persisted completed response have identical length and SHA-256; rendered text length is 97.8% of Markdown source length, inconsistent with duplicated rendering.",
+  "screenshot": "/tmp/agent-chat-ui-final.png"
+}

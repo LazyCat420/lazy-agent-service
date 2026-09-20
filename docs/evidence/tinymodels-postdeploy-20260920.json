@@ -1,0 +1,93 @@
+{
+  "auth_source": "vault",
+  "capabilities": {
+    "entity_extraction": {
+      "max_batch_size": 50,
+      "models": [
+        "gliner",
+        "urchade/gliner_small-v2.1"
+      ],
+      "route": "/v1/features/entities"
+    },
+    "schema_version": "1"
+  },
+  "cnn": {
+    "elapsed_ms": 24.9,
+    "model_id": "market_cnn",
+    "model_version": "cnn-regime-v1",
+    "server_latency_ms": 2.68
+  },
+  "generated_at": "2026-09-20T17:36:36.069453+00:00",
+  "gliner_batch": {
+    "document_count": 5,
+    "elapsed_ms": 2667.3,
+    "entity_count": 0,
+    "model_id": "gliner",
+    "model_version": "gliner-trading-v1",
+    "server_latency_ms": 2644.72
+  },
+  "gliner_calls": [
+    {
+      "call": 1,
+      "elapsed_ms": 694.1,
+      "entity_count": 0,
+      "model_id": "gliner",
+      "model_version": "gliner-trading-v1",
+      "server_latency_ms": 663.05
+    },
+    {
+      "call": 2,
+      "elapsed_ms": 588.4,
+      "entity_count": 0,
+      "model_id": "gliner",
+      "model_version": "gliner-trading-v1",
+      "server_latency_ms": 565.45
+    }
+  ],
+  "gliner_residency_classification": "warm_resident",
+  "health": {
+    "after_models_loaded": [
+      "gliner",
+      "cnn",
+      "rnn",
+      "gliguard"
+    ],
+    "after_status": "ok",
+    "before_models_loaded": [
+      "gliner",
+      "cnn",
+      "rnn",
+      "gliguard"
+    ],
+    "before_status": "ok"
+  },
+  "inputs": {
+    "bar_count": 30,
+    "batch_news_count": 5,
+    "news_characters_each": 500,
+    "single_news_count": 1,
+    "synthetic": true,
+    "trade_action": false
+  },
+  "rnn": {
+    "elapsed_ms": 44.6,
+    "model_id": "timeseries_rnn",
+    "model_version": "rnn-forecast-v1",
+    "server_latency_ms": 23.18
+  },
+  "system1": {
+    "after_residency": {
+      "model_id": "cnn_infer",
+      "revision": "cpu-training-v1",
+      "state": "idle",
+      "worker_alive": false
+    },
+    "before_residency": {
+      "model_id": "cnn_infer",
+      "revision": "cpu-training-v1",
+      "state": "idle",
+      "worker_alive": false
+    }
+  },
+  "target": "http://10.0.0.30:8002"
+}

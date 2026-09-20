@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "testKind": "mocked UI regression; no live model call",
+  "expectedPackageVersion": "0.2.1",
+  "interceptedRequestCount": 1,
+  "observedStreamRequestCount": 1,
+  "realChatPostsAllowed": 0,
+  "realChatPostsReachedServer": 0,
+  "visibleCanonicalTextOccurrences": 1,
+  "historicalTextInjected": false,
+  "approvalPopupSeen": false,
+  "truthfulTerminalRender": true,
+  "mockedCanonicalEventTypes": [
+    "run.admitted",
+    "run.started",
+    "message.delta",
+    "message.delta (duplicate id)",
+    "run.completed"
+  ],
+  "mockedLegacyFrames": [
+    "token (duplicate)",
+    "done"
+  ],
+  "screenshot": "/tmp/agent-chat-ui-mocked-021.png"
+}
