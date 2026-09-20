@@ -1,0 +1,91 @@
+{
+  "profile_id": "trading-junior-analyst-v1",
+  "version": "1.0.0",
+  "contract_version": "1.2.0",
+  "role": "junior-financial-analyst",
+  "description": "Trading service Junior Analyst with the existing read and research tool boundary.",
+  "system_prompt": "You are the Junior Analyst. Use verified observations, preserve the supplied cycle and account context, write the required SharedDesk finding, and emit the application JSON contract. Never invent data or claim a tool completed without its observation.",
+  "allowed_local_tools": [
+    "trading.market.get_finnhub_news@1.0",
+    "trading.research.lazy_web_search@1.0",
+    "trading.research.scrape_url@1.0",
+    "trading.market.get_market_data@1.0",
+    "trading.market.get_institutional_holdings@1.0",
+    "trading.market.get_reddit_trending_stocks@1.0",
+    "trading.research.run_tool_chain@1.0",
+    "trading.desk.whiteboard_write@1.0",
+    "trading.desk.whiteboard_read@1.0",
+    "trading.research.get_upcoming_events@1.0",
+    "trading.research.list_scheduled_research@1.0",
+    "trading.research.schedule_research@1.0",
+    "trading.market.screener_query@1.0"
+  ],
+  "model_constraints": {
+    "default_model": "GLM-5.3-Flash-EXL3",
+    "allowed_models": [
+      "GLM-5.3-Flash-EXL3",
+      "nemotron35"
+    ],
+    "allowed_providers": [
+      "vllm-2",
+      "vllm-shim"
+    ],
+    "temperature_range": [
+      0.0,
+      0.4
+    ]
+  },
+  "local_tool_policy": {
+    "trading.market.get_finnhub_news": {
+      "effect": "read"
+    },
+    "trading.research.lazy_web_search": {
+      "effect": "read"
+    },
+    "trading.research.scrape_url": {
+      "effect": "read"
+    },
+    "trading.market.get_market_data": {
+      "effect": "read"
+    },
+    "trading.market.get_institutional_holdings": {
+      "effect": "read"
+    },
+    "trading.market.get_reddit_trending_stocks": {
+      "effect": "read"
+    },
+    "trading.research.run_tool_chain": {
+      "effect": "read"
+    },
+    "trading.desk.whiteboard_write": {
+      "effect": "write"
+    },
+    "trading.desk.whiteboard_read": {
+      "effect": "read"
+    },
+    "trading.research.get_upcoming_events": {
+      "effect": "read"
+    },
+    "trading.research.list_scheduled_research": {
+      "effect": "read"
+    },
+    "trading.research.schedule_research": {
+      "effect": "write"
+    },
+    "trading.market.screener_query": {
+      "effect": "read"
+    }
+  },
+  "budget_limits": {
+    "max_tokens": 4096,
+    "max_tool_calls": 7,
+    "max_retries": 0,
+    "max_duration_ms": 120000,
+    "max_concurrent_workers": 1
+  },
+  "retention_class": "PERMANENT_RECORD",
+  "observability_policy": {
+    "telemetry_level": "FULL_SPANS",
+    "sample_rate": 1.0
+  }
+}
