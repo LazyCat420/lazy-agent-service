@@ -41,7 +41,7 @@ export const ApprovalSchema = z.object({
 }).strict();
 
 export const RunEventSchema = z.object({
-  id: z.string().min(1), run_id: z.string().min(1), type: RunEventTypeSchema,
+  id: z.string().min(1), run_id: z.string().min(1), runId: z.string().optional(), type: RunEventTypeSchema,
   timestamp: z.string().datetime(), data: z.record(z.string(), z.unknown()),
 }).strict();
 
