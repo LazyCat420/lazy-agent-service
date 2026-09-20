@@ -24,6 +24,19 @@ The targeted deploy completed two passed / zero failed. Deploy-kit reported an
 unrelated edge-DNS reconciliation warning while confirming that both services
 deployed successfully.
 
+## Follow-up batch: durable Notes mutation boundary
+
+HTML Notes commit `ded3aa4` replaces process-local-only mutation replay
+protection with a persistent SQLite execution journal. Completed duplicate
+receipts return the original observation without redispatch. A journal entry
+left pending by interruption fails as `EXECUTION_OUTCOME_UNKNOWN`; compatibility
+code does not repeat the possibly executed effect. The expanded runtime,
+authorization, and executor selection passed 106 cases, including restart-cache
+loss and pending-crash tests. Deploy-kit completed one passed / zero failed;
+the NAS image label is `git.sha=ded3aa4`, the container is healthy, and the Notes
+HTTP application returned 200. The isolated persistence tests—not a production
+user mutation replay—provide the mutation evidence.
+
 ## Shared implementation
 
 - The executable runtime wire schema generates Python models and a packaged version/digest. Canonical Python consumers verify that identity before starting work. TypeScript transport validates framing, run binding, replay duplicates, and terminal outcomes.
