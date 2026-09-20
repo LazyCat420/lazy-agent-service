@@ -24,6 +24,8 @@ export class CanonicalProviderBudget {
           const reservation = inputReserve + outputReserve;
           budget.chargedTokens += reservation;
           budget.calls++;
+          let emittedBytes = 0;
+          let streamCompleted = false;
           let measuredInput: number | undefined, measuredOutput: number | undefined;
           try {
             for await (const chunk of method.call(target, messages, model, { ...options, maxTokens: outputReserve, signal: budget.signal })) {
@@ -35,14 +37,20 @@ export class CanonicalProviderBudget {
                 if (Number.isFinite(input) && input >= 0) measuredInput = input;
                 if (Number.isFinite(output) && output >= 0) measuredOutput = output;
               }
+              if (chunk?.type !== "usage") emittedBytes += Buffer.byteLength(typeof chunk === "string" ? chunk : JSON.stringify(chunk), "utf8");
               yield chunk;
             }
+            streamCompleted = true;
           } finally {
             if (measuredInput !== undefined) budget.inputTokens += measuredInput;
             if (measuredOutput !== undefined) budget.outputTokens += measuredOutput;
             if (measuredInput !== undefined && measuredOutput !== undefined) {
               budget.measuredCalls++;
               budget.chargedTokens += measuredInput + measuredOutput - reservation;
+            } else if (streamCompleted) {
+              // Conservative observed bytes release unused output reservation.
+              // The public usage total remains unknown, with coverage explicit.
+              budget.chargedTokens += inputReserve + Math.min(outputReserve, emittedBytes) - reservation;
             }
           }
           if (budget.chargedTokens > budget.limit) throw Object.assign(new Error("Provider reported usage beyond run budget"), { code: "TOKEN_BUDGET_EXHAUSTED" });
