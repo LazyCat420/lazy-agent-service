@@ -28,7 +28,7 @@
     ],
     "allowed_providers": [
       "vllm-2",
-      "vllm-shim"
+      "vllm"
     ],
     "temperature_range": [
       0.0,
