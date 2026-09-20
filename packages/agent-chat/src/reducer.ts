@@ -13,6 +13,7 @@ import {
  * Guarantees immutability and monotonic sequence ordering.
  */
 export function reduceChatEvent(state: ChatState, event: RunEvent): ChatState {
+  if (state.pendingRun && event.run_id !== state.pendingRun.runId) return state;
   const seen = state.seenEventIds[event.run_id] || [];
   if (seen.includes(event.id) || state.sealedRuns[event.run_id]) return state;
   if (event.seq !== undefined && event.seq <= (state.runSequences[event.run_id] || 0)) return state;
@@ -200,6 +201,20 @@ function applyEvent(state: ChatState, event: RunEvent): ChatState {
       const durationMs = existing?.startedAt
         ? Math.max(0, new Date(event.timestamp).getTime() - new Date(existing.startedAt).getTime())
         : undefined;
+      const nestedResult = event.data.result && typeof event.data.result === 'object'
+        ? event.data.result
+        : undefined;
+      const resultFailed = event.data.is_error === true
+        || nestedResult?.is_error === true
+        || !!event.data.error
+        || !!nestedResult?.error;
+      const resultError = typeof event.data.error === 'string'
+        ? event.data.error
+        : event.data.error?.message
+          || (typeof nestedResult?.error === 'string'
+            ? nestedResult.error
+            : nestedResult?.error?.message)
+          || (resultFailed ? 'Tool execution failed' : undefined);
 
       const nextToolActivities = {
         ...state.toolActivities,
@@ -208,8 +223,9 @@ function applyEvent(state: ChatState, event: RunEvent): ChatState {
           toolId,
           toolName: existing?.toolName || event.data.tool_name || 'tool',
           args: existing?.args || {},
-          status: 'completed' as const,
+          status: resultFailed ? 'failed' as const : 'completed' as const,
           output: event.data.result ?? event.data.output,
+          error: resultError,
           completedAt: event.timestamp,
           durationMs,
         },
@@ -331,18 +347,44 @@ function applyEvent(state: ChatState, event: RunEvent): ChatState {
         usage: event.data.usage,
       };
 
-      const nextTranscript = state.transcript.map((m) => {
+      const finalAssistant = Array.isArray(event.data.messages)
+        ? [...event.data.messages].reverse().find(
+            (m: any) => m?.role === 'assistant' && typeof m.content === 'string'
+          )
+        : undefined;
+      const finalContent = finalAssistant?.content;
+      const terminalStatus = (
+        event.data.status !== undefined && event.data.status !== 'completed'
+        || event.data.outcome === 'incomplete'
+        || finalAssistant?.outcome === 'incomplete'
+      ) ? 'incomplete' : 'completed';
+      let foundAssistant = false;
+      let nextTranscript = state.transcript.map((m) => {
         if (m.runId === event.run_id && m.role === 'assistant') {
+          foundAssistant = true;
           return {
             ...m,
-            status: (event.data.status && event.data.status !== 'completed' || event.data.outcome === 'incomplete' || event.data.messages?.some((m: any) => m.outcome === 'incomplete') ? 'incomplete' : 'completed') as ChatMessage['status'],
-            content: event.data.messages?.filter((m: any) => m.role === 'assistant').map((m: any) => m.content || '').join('') || m.content,
+            status: terminalStatus as ChatMessage['status'],
+            content: m.content || finalContent || '',
             receipt,
             evidence: receipt.evidence_records,
           };
         }
         return m;
       });
+      if (!foundAssistant && finalContent) {
+        nextTranscript = [...nextTranscript, {
+          id: `msg_asst_${event.run_id}`,
+          runId: event.run_id,
+          role: 'assistant',
+          content: finalContent,
+          timestamp: event.timestamp,
+          status: terminalStatus as ChatMessage['status'],
+          toolCallIds: [],
+          workerIds: [],
+          receipt,
+        }];
+      }
 
       return {
         ...state,

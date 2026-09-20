@@ -67,6 +67,85 @@ describe('canonical delivery and lifecycle', () => {
       expect(init.headers.get('Last-Event-ID')).toBe('previous');
       return new Response(`data: ${JSON.stringify(original)}\n\n`);
     };
-    expect(await replayEvents('/runs/run-one/events', 'previous', {}, fetcher as typeof fetch)).toEqual([original]);
+    expect(await replayEvents('/runs/run-one/events', 'run-one', 'previous', {}, fetcher as typeof fetch)).toEqual([original]);
+  });
+
+  it('rejects replay frames bound to another run', async () => {
+    const foreign = event('next', 'message.delta', { delta: 'wrong run' }, 'run-two');
+    const fetcher = async () => new Response(`data: ${JSON.stringify(foreign)}\n\n`);
+    await expect(replayEvents(
+      '/runs/run-one/events', 'run-one', undefined, {}, fetcher as typeof fetch
+    )).rejects.toThrow('another run');
+  });
+
+  it('ignores another run while an active run owns global UI state', () => {
+    let state = reduceChatEvent(INITIAL_CHAT_STATE, event('1', 'run.started'));
+    state = reduceChatEvent(state, event('2', 'approval.required', { id: 'approval-one' }));
+    state = { ...state, cancellationRequested: true };
+
+    const unchanged = reduceChatEvent(
+      state,
+      event('foreign-terminal', 'run.completed', { status: 'completed' }, 'run-two')
+    );
+    expect(unchanged).toBe(state);
+    expect(unchanged.pendingRun?.runId).toBe('run-one');
+    expect(unchanged.connectionStatus).toBe('streaming');
+    expect(unchanged.approvals).toHaveProperty('approval-one');
+    expect(unchanged.cancellationRequested).toBe(true);
+  });
+
+  it('keeps streamed text and falls back only to the final current assistant message', () => {
+    let streamed = reduceChatEvent(INITIAL_CHAT_STATE, event('1', 'run.started'));
+    streamed = reduceChatEvent(streamed, event('2', 'message.delta', { delta: 'streamed answer' }));
+    streamed = reduceChatEvent(streamed, event('3', 'run.completed', {
+      status: 'completed',
+      messages: [
+        { role: 'assistant', content: 'historical answer', outcome: 'incomplete' },
+        { role: 'user', content: 'current question' },
+        { role: 'assistant', content: 'terminal answer' },
+      ],
+    }));
+    expect(streamed.transcript[0].content).toBe('streamed answer');
+    expect(streamed.transcript[0].status).toBe('completed');
+
+    const withoutPlaceholder = reduceChatEvent(
+      INITIAL_CHAT_STATE,
+      event('terminal-only', 'run.completed', {
+        status: 'completed',
+        messages: [
+          { role: 'assistant', content: 'historical answer', outcome: 'incomplete' },
+          { role: 'assistant', content: 'final answer' },
+        ],
+      })
+    );
+    expect(withoutPlaceholder.transcript).toHaveLength(1);
+    expect(withoutPlaceholder.transcript[0].content).toBe('final answer');
+    expect(withoutPlaceholder.transcript[0].status).toBe('completed');
+  });
+
+  it('renders error-valued tool results as failed', () => {
+    let state = reduceChatEvent(INITIAL_CHAT_STATE, event('1', 'run.started'));
+    state = reduceChatEvent(state, event('2', 'tool.invoked', {
+      tool_call_id: 'tool-one', tool_name: 'lookup',
+    }));
+    state = reduceChatEvent(state, event('3', 'tool.result', {
+      tool_call_id: 'tool-one',
+      result: { is_error: true, error: { message: 'lookup failed' } },
+    }));
+    expect(state.toolActivities['tool-one'].status).toBe('failed');
+    expect(state.toolActivities['tool-one'].error).toBe('lookup failed');
+  });
+
+  it('keeps current incomplete evidence despite a completed run status', () => {
+    let state = reduceChatEvent(INITIAL_CHAT_STATE, event('1', 'run.started'));
+    state = reduceChatEvent(state, event('2', 'run.completed', {
+      status: 'completed',
+      messages: [
+        { role: 'assistant', content: 'historical complete answer' },
+        { role: 'assistant', content: 'partial current answer', outcome: 'incomplete' },
+      ],
+    }));
+    expect(state.transcript[0].content).toBe('partial current answer');
+    expect(state.transcript[0].status).toBe('incomplete');
   });
 });

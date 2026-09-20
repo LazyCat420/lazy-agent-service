@@ -50,13 +50,19 @@ export async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator
 
 /** Replay delivery only. The caller supplies its authorized application proxy. */
 export async function replayEvents(
-  url: string, cursor: string | undefined, init: RequestInit = {}, fetcher: typeof fetch = fetch,
+  url: string, runId: string, cursor: string | undefined,
+  init: RequestInit = {}, fetcher: typeof fetch = fetch,
 ): Promise<RunEvent[]> {
+  if (!runId) throw new Error('Replay requires an expected run ID');
   const headers = new Headers(init.headers);
   if (cursor) headers.set('Last-Event-ID', cursor);
   const response = await fetcher(url, { ...init, method: 'GET', headers });
   if (!response.ok || !response.body) throw new Error(`Replay failed: HTTP ${response.status}`);
   const events: RunEvent[] = [];
-  for await (const event of readSSE(response.body)) events.push(parseRunEvent(event));
+  for await (const value of readSSE(response.body)) {
+    const event = parseRunEvent(value);
+    if (event.run_id !== runId) throw new Error('Replay event belongs to another run');
+    events.push(event);
+  }
   return events;
 }

@@ -1,6 +1,6 @@
 {
   "name": "@lazycat/agent-chat",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Framework-neutral chat session state machine, canonical event reducer, and presentation models for globalized agents.",
   "type": "module",
   "main": "dist/index.js",
