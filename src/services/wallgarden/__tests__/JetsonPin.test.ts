@@ -159,4 +159,28 @@ describe("Jetson pin", () => {
       provider: "vllm-2",
     })).rejects.toThrow(/Stale Wallgarden model selection/);
   });
+
+  it.each([
+    ["empty", "", /empty text/],
+    ["malformed", "not json", /not valid JSON/],
+    ["empty channel list", '{"channels":[]}', /contained no channels/],
+  ])("rejects a %s recommendation completion", async (_case, text, expected) => {
+    const { recommendChannels } = await loadService();
+    vi.stubGlobal("fetch", async (url: any) => {
+      const u = String(url);
+      if (u.endsWith("/v1/models")) {
+        const base = u.replace(/\/v1\/models$/, "");
+        return { ok: true, json: async () => ({ data: [{ id: onlineBoxes[base] }] }) } as any;
+      }
+      if (u.includes("/chat")) {
+        return {
+          ok: true,
+          json: async () => ({ text, provider: "vllm", model: JETSON_MODEL }),
+        } as any;
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+
+    await expect(recommendChannels({ channels: ["Old Channel"] })).rejects.toThrow(expected);
+  });
 });

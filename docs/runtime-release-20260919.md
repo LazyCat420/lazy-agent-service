@@ -37,6 +37,22 @@ the NAS image label is `git.sha=ded3aa4`, the container is healthy, and the Note
 HTTP application returned 200. The isolated persistence tests—not a production
 user mutation replay—provide the mutation evidence.
 
+## Follow-up batch: Wallgarden completion-only acceptance
+
+Wallgarden's complete 18-suite browser chain passed. It covers topic-signal
+thresholds and re-arming, impression deduplication, bounded adaptive budgets,
+idle queue behavior, mining idempotency, topic-scoped classification caches,
+and queued late classification outside the render path. The shared backend's
+focused suite passed 48 tests after adding explicit empty, malformed, and
+no-channel recommendation-completion failures alongside Jetson routing and
+stale-hint checks. The TypeScript build passed.
+
+At 19:07 PDT, the deployed Wallgarden `/api/wallgarden/models` endpoint returned
+the live discovered identity `vllm::nemotron35`. A read-only completion request
+to `/api/wallgarden/recommend-channels` used that exact identity and returned
+HTTP 200 with five parsed recommendations. This validates the deployed
+completion-only path; it did not invoke a tool loop or change application data.
+
 ## Shared implementation
 
 - The executable runtime wire schema generates Python models and a packaged version/digest. Canonical Python consumers verify that identity before starting work. TypeScript transport validates framing, run binding, replay duplicates, and terminal outcomes.

@@ -68,7 +68,7 @@ payloads.
 | Obsidian actual active-vault UI workflow | external gate | Recheck whether D or C is active and perform user-visible activation/reload acceptance. The prior disposable credential was intentionally deleted. |
 | Music full context/history/tool memory, canonical names, receipts, ownership, validation, queue/idempotency, sequencing | passed in focused implementation tests | 53-test adapter/queue/memory/truncation baseline and deployed read-only library run `run-73778bee-9b8a-4bb2-8485-0a6055ba5cd4`. |
 | Music actual frontend payload, follow-up job visibility, malformed/truncated suppression, duplicate delivery, stall outcome, and persisted UI handoff | implementation, narrowed | Runtime/UI tests now prove a stable request ID, one current turn, preserved tool-result memory, `tool_start` before the correlated result, duplicate call suppression, malformed-argument suppression, explicit stalls, and studio-bus handoffs. The unsafe uncorrelated `/api/chat` fallback was removed. Run one controlled persisted mutation workflow before enabling `MUSIC_RUNTIME_ENABLED`. |
-| Wallgarden recommendation resolver, thresholds, mining idempotency, cache, stale model hint, and nonblocking scheduling preserve completion-only behavior | implementation | Backend resolver is deployed and completion-only behavior retained. Map each listed domain guard to executable tests and one live read-only workflow; do not force it into an agent loop. |
+| Wallgarden recommendation resolver, thresholds, mining idempotency, cache, stale model hint, and nonblocking scheduling preserve completion-only behavior | passed | The 18-suite browser test chain proves signal thresholds/re-arming, impression deduplication, bounded evidence budgets, idle queue behavior, mining replay suppression, topic-scoped classifier caching, and late nonblocking classification. The shared backend's 48 focused tests prove Jetson-only discovery/routing, stale-hint rejection, and empty/malformed/no-channel completion rejection. At 19:07 PDT, deployed `/api/wallgarden/models` discovered `vllm::nemotron35`; a completion-only `/recommend-channels` call using that identity returned HTTP 200 with five parsed recommendations. No tool loop or mutation was involved. |
 
 ## TinyModels decision provider and experiment lifecycle
 
@@ -96,7 +96,7 @@ payloads.
 ## Immediate critical path
 
 1. Bind declared worker plugins to bounded task requests and lifecycle evidence.
-2. Finish Music UI/job parity and Obsidian scoped-session UX independently.
+2. Finish Music's controlled persisted workflow and Obsidian scoped-session UX independently.
 3. Complete trading discovery parity and obtain genuine historical cases.
 4. Obtain the real TinyModels source and Jetson access; only then finish live shadow and experiment lifecycle work.
 5. Start the seven-day trading canary after its pre-canary gates pass.
