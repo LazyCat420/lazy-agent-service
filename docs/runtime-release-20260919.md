@@ -2,6 +2,28 @@
 
 This is implementation and acceptance evidence, not a claim that all migration gates have passed. Prism was not edited or deployed.
 
+## Follow-up batch: workflow contracts and Music UI handoff
+
+Runtime commit `4974827` requires an explicit workflow type on every shipped
+profile and adds executed lifecycle evidence for context, before-tool,
+post-result, and final-validation hooks. The full runtime suite passed 802/802
+and the TypeScript build passed. It was deployed to the NAS as image label
+`git.sha=4974827`; `lazy-agent-service` reported healthy and
+`http://10.0.0.16:5591/health` returned HTTP 200.
+
+Music commit `67a33c5` adds stable UI request identity, preserves current-turn
+and tool-result memory, emits `tool_start` before each runtime result so the UI
+can render the persisted job, and removes the uncorrelated legacy fallback that
+could repeat an ambiguous mutation. The focused API suite passed 53/53, the web
+suite passed 130/130, and the production web build passed. It was deployed as
+image label `git.sha=67a33c5`; the container was healthy and
+`http://10.0.0.16:8002/` returned HTTP 200. `MUSIC_RUNTIME_ENABLED=false`
+remains intentional until a controlled persisted mutation workflow is recorded.
+
+The targeted deploy completed two passed / zero failed. Deploy-kit reported an
+unrelated edge-DNS reconciliation warning while confirming that both services
+deployed successfully.
+
 ## Shared implementation
 
 - The executable runtime wire schema generates Python models and a packaged version/digest. Canonical Python consumers verify that identity before starting work. TypeScript transport validates framing, run binding, replay duplicates, and terminal outcomes.

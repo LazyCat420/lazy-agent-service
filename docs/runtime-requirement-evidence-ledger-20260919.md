@@ -67,7 +67,7 @@ payloads.
 | Obsidian scoped session provisioning and refresh/login UX, expiry, disconnect/Stop, approval, steering races, conflict, root, and dry-run behavior | implementation | Build server-side scoped-session provisioning/refresh and plugin UX, then exercise the installed plugin in the user's active vault with disposable artifacts. Preserve `data.json`, settings, credentials, and user notes. |
 | Obsidian actual active-vault UI workflow | external gate | Recheck whether D or C is active and perform user-visible activation/reload acceptance. The prior disposable credential was intentionally deleted. |
 | Music full context/history/tool memory, canonical names, receipts, ownership, validation, queue/idempotency, sequencing | passed in focused implementation tests | 53-test adapter/queue/memory/truncation baseline and deployed read-only library run `run-73778bee-9b8a-4bb2-8485-0a6055ba5cd4`. |
-| Music actual frontend payload, follow-up job visibility, malformed/truncated suppression, duplicate delivery, stall outcome, and persisted UI handoff | implementation | Add UI-to-backend contract tests using isolated queue/render stores, then run one controlled persisted workflow. Keep `MUSIC_RUNTIME_ENABLED` off until passed. |
+| Music actual frontend payload, follow-up job visibility, malformed/truncated suppression, duplicate delivery, stall outcome, and persisted UI handoff | implementation, narrowed | Runtime/UI tests now prove a stable request ID, one current turn, preserved tool-result memory, `tool_start` before the correlated result, duplicate call suppression, malformed-argument suppression, explicit stalls, and studio-bus handoffs. The unsafe uncorrelated `/api/chat` fallback was removed. Run one controlled persisted mutation workflow before enabling `MUSIC_RUNTIME_ENABLED`. |
 | Wallgarden recommendation resolver, thresholds, mining idempotency, cache, stale model hint, and nonblocking scheduling preserve completion-only behavior | implementation | Backend resolver is deployed and completion-only behavior retained. Map each listed domain guard to executable tests and one live read-only workflow; do not force it into an agent loop. |
 
 ## TinyModels decision provider and experiment lifecycle
@@ -89,7 +89,7 @@ payloads.
 
 | Requirement | Status | Evidence or remaining task |
 | --- | --- | --- |
-| Inventory duplicate loops, SSE parsers, provider maps, wrappers, callers, owners, deletion/rollback gates | implementation | Create an inventory across each consumer after the remaining application tests identify the live callers. Delete only after the corresponding migration gate passes. |
+| Inventory duplicate loops, SSE parsers, provider maps, wrappers, callers, owners, deletion/rollback gates | passed | `runtime-duplication-inventory-20260919.md` names each path, caller/owner, deletion condition, and rollback/mutation limit. Deletion remains gated per row. |
 | Installed contract/profile/SDK identity is verified, not inferred from Git | passed for the September 19 release | Release evidence records NAS container revisions, installed client hash, health, and actual domain workflows. Repeat after every affected deployment. |
 | Completed changes land on primary branches, pass secret scan, push, and targeted deploy | ongoing release rule | Each completed batch must follow the workspace integration/deploy instructions. No Prism edit, commit, or deployment is permitted. |
 
