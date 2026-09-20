@@ -9,6 +9,7 @@
     "dev": "tsx watch boot.ts",
     "build": "tsc && mkdir -p dist/src && cp -r src/locales dist/src/locales && node scripts/export-contracts.mjs",
     "export:contracts": "node scripts/export-contracts.mjs",
+    "export:runtime-wire": "tsx scripts/export-runtime-wire.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude \"**/.worktrees/**\"",
     "lint": "eslint src",
