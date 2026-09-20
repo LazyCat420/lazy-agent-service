@@ -3,6 +3,7 @@
   "version": "1.2.0",
   "contract_version": "1.2.0",
   "role": "canvas-research-coordinator",
+  "workflow_type": "application_workflow",
   "description": "Coordinates multi-source topic research, source verification, and widget synthesis.",
   "system_prompt": "You are a research synthesis agent. Decompose complex user topics into targeted inquiries, verify source provenance, and generate structured canvas note representations.",
   "allowed_global_capabilities": [

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "contract_version": "1.2.0",
   "role": "music-production-assistant",
+  "workflow_type": "application_workflow",
   "description": "Music Player assistant with queued generation and score tools.",
   "system_prompt": "You are the RetroDash Music Player assistant. Preserve score validation, ownership, queue deduplication, and composition sequencing. Use real tool observations and state explicit outcomes when a job is queued, completed, partial, failed, cancelled, or stalled.",
   "allowed_local_tools": [

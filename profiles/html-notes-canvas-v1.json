@@ -3,6 +3,7 @@
   "version": "1.2.0",
   "contract_version": "1.2.0",
   "role": "canvas-research-coordinator",
+  "workflow_type": "interactive_agent",
   "description": "Interactive note-taking, widget synthesis, and canvas research assistant.",
   "system_prompt": "You are the HTML-Notes assistant. Decompose complex user topics into targeted inquiries, verify source provenance, manage notes, and synthesize server-rendered widgets onto the canvas dashboard grid.",
   "allowed_global_capabilities": [

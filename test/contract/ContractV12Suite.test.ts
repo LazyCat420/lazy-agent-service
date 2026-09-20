@@ -42,6 +42,7 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
       version: "1.0.0",
       contract_version: "1.2.0",
       role: "test-role",
+      workflow_type: "structured_completion" as const,
       system_prompt: "Test persona",
       allowed_global_capabilities: ["global.nonexistent_exploit_tool@1.2"],
       model_constraints: {
@@ -68,6 +69,7 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
       version: "1.0.0",
       contract_version: "2.0.0",
       role: "test-role",
+      workflow_type: "structured_completion" as const,
       system_prompt: "Test persona",
       allowed_global_capabilities: ["global.web.search@1.2"],
       model_constraints: {
@@ -94,6 +96,7 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
       version: "1.2.0",
       contract_version: "1.2.0",
       role: "researcher",
+      workflow_type: "interactive_agent" as const,
       system_prompt: "Synthesize research",
       allowed_global_capabilities: ["global.web.search@1.2", "global.data.transform@1.2"],
       allowed_local_tools: ["html_notes.canvas.upsert_widget@1.0"],
@@ -113,8 +116,20 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
     const validated = ProfileRegistry.validateProfileSchema(validProfile);
     expect(validated.profile_id).toBe("test-v12-agent");
     expect(validated.contract_version).toBe("1.2.0");
+    expect(validated.workflow_type).toBe("interactive_agent");
     expect(validated.tool_policy.whitelist).toContain("global.web.search@1.2");
     expect(validated.tool_policy.whitelist).toContain("html_notes.canvas.upsert_widget@1.0");
+  });
+
+  it("test_profile_requires_an_explicit_supported_workflow_type", () => {
+    const profile = {
+      profile_id: "test-workflow-agent", version: "1.0.0", role: "test-role",
+      system_prompt: "Test persona", tool_policy: { mode: "STRICT_WHITELIST", whitelist: [] },
+      model_constraints: { default_model: "llama-3-8b", allowed_models: ["llama-3-8b"], allowed_providers: ["vllm-shim"] },
+      budget_limits: { max_tokens: 100, max_tool_calls: 0, max_duration_ms: 1000 }, retention_class: "EPHEMERAL",
+    };
+    expect(() => ProfileRegistry.validateProfileSchema(profile)).toThrow(/workflow_type/);
+    expect(() => ProfileRegistry.validateProfileSchema({ ...profile, workflow_type: "another_loop" })).toThrow(/workflow_type/);
   });
 
   it("test_global_capability_requires_registry_metadata", () => {

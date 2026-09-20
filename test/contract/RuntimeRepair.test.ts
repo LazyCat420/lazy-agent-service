@@ -4,6 +4,7 @@ import { RunExecutionEngine as Engine } from "../../src/services/RunExecutionEng
 import { LocalToolContinuation } from "../../src/services/LocalToolContinuation.ts";
 import { ProfileRegistry } from "../../src/services/ProfileRegistry.ts";
 import { RunStore } from "../../src/services/RunStore.ts";
+import { RuntimeExtensions } from "../../src/services/RuntimeExtensions.ts";
 import AgenticLoopService from "../../src/services/AgenticLoopService.ts";
 
 const profile = "html-notes-canvas-v1";
@@ -111,4 +112,53 @@ it("does not promote the user task or history into the shared system prompt", as
     return { messages: [{ role: "assistant", content: "Done" }] };
   });
   expect((await Engine.startRun("single-task", { profile_id: profile, input: content }, () => {})).status).toBe("completed");
+});
+
+it("executes required context, before-tool, result, and final-validator hooks in lifecycle order", async () => {
+  const extensionName = `lifecycle-fixture-${crypto.randomUUID()}`;
+  const profileId = `hook-fixture-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  RuntimeExtensions.register(extensionName, {
+    context: async () => { calls.push("context"); return "trusted application context"; },
+    beforeTool: async () => { calls.push("before-tool"); },
+    afterTool: async (_call, observation) => {
+      expect(observation).toEqual({ title: "fixture note" });
+      calls.push("after-tool");
+    },
+    validate: async messages => {
+      expect(messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "assistant", content: "Verified" })]));
+      calls.push("validate");
+    },
+  });
+  const base = await ProfileRegistry.loadProfile(profile);
+  ProfileRegistry.registerProfile({
+    ...base!, profile_id: profileId, plugins: {
+      context_contributors: [extensionName],
+      verifiers: [extensionName],
+    },
+  });
+
+  let admission: any;
+  let notify!: () => void;
+  const pending = new Promise<void>(resolve => { notify = resolve; });
+  vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+    expect(context.options.systemPrompt).toContain("trusted application context");
+    const observation = await context.runtimeToolExecutor!({ id: "hook-call", name: schema.name, args: {} });
+    expect(observation).toEqual({ title: "fixture note" });
+    return { messages: [{ role: "assistant", content: "Verified" }] };
+  });
+  const run = Engine.startRun("hook-lifecycle", {
+    profile_id: profileId, input: "Read", app_id: "html-notes", session_id: "hook-session",
+    runtime_overrides: { local_tool_schemas: [schema] },
+  }, event => {
+    if (event.type === "tool.invoked") { admission = event.data; notify(); }
+  });
+  await pending;
+  await LocalToolContinuation.submit("hook-lifecycle", "hook-call", {
+    authorization_receipt: admission.authorization_receipt,
+    result: { title: "fixture note" },
+    is_error: false,
+  });
+  expect((await run).status).toBe("completed");
+  expect(calls).toEqual(["context", "before-tool", "after-tool", "validate"]);
 });

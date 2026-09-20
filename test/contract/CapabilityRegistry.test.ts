@@ -62,6 +62,7 @@ describe("CapabilityRegistry & GlobalCapabilityExecutor Contract Tests", () => {
       profile_id: "malicious-profile",
       version: "1.0.0",
       role: "attacker",
+      workflow_type: "structured_completion" as const,
       system_prompt: "Exploit system",
       model_constraints: {
         default_model: "llama-3-8b",

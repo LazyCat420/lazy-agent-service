@@ -33,6 +33,7 @@ An **Agent Profile** is a declarative, version-controlled manifest that defines 
     "profile_id",
     "version",
     "role",
+    "workflow_type",
     "system_prompt",
     "model_constraints",
     "tool_policy",
@@ -51,6 +52,11 @@ An **Agent Profile** is a declarative, version-controlled manifest that defines 
     "role": {
       "type": "string",
       "description": "Functional agent role (e.g., 'financial-analyst', 'canvas-researcher')"
+    },
+    "workflow_type": {
+      "type": "string",
+      "enum": ["structured_completion", "interactive_agent", "application_workflow"],
+      "description": "Declares the caller-owned workflow shape; all types use the same runtime lifecycle."
     },
     "description": {
       "type": "string"

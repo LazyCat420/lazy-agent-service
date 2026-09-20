@@ -7,6 +7,7 @@
     "profile_id",
     "version",
     "role",
+    "workflow_type",
     "system_prompt",
     "model_constraints",
     "tool_policy",
@@ -29,6 +30,10 @@
     "role": {
       "type": "string",
       "description": "Functional agent role (e.g., 'financial-analyst', 'canvas-researcher')"
+    },
+    "workflow_type": {
+      "type": "string",
+      "enum": ["structured_completion", "interactive_agent", "application_workflow"]
     },
     "description": {
       "type": "string"

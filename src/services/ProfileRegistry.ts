@@ -46,6 +46,7 @@ export interface AgentProfile {
   version: string;
   contract_version?: string;
   role: string;
+  workflow_type: "structured_completion" | "interactive_agent" | "application_workflow";
   description?: string;
   system_prompt: string;
   model_constraints: ModelConstraints;
@@ -81,6 +82,7 @@ export class ProfileRegistry {
       "profile_id",
       "version",
       "role",
+      "workflow_type",
       "system_prompt",
       "model_constraints",
       "budget_limits",
@@ -103,6 +105,10 @@ export class ProfileRegistry {
       throw new Error(
         `Invalid version '${data.version}': must follow semantic versioning X.Y.Z`,
       );
+    }
+
+    if (!["structured_completion", "interactive_agent", "application_workflow"].includes(data.workflow_type)) {
+      throw new Error(`Invalid workflow_type '${data.workflow_type}'`);
     }
 
     if (data.decision_policy) {

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "contract_version": "1.2.0",
   "role": "junior-financial-analyst",
+  "workflow_type": "structured_completion",
   "description": "Trading service Junior Analyst with the existing read and research tool boundary.",
   "system_prompt": "You are the Junior Analyst. Use verified observations, preserve the supplied cycle and account context, write the required SharedDesk finding, and emit the application JSON contract. Never invent data or claim a tool completed without its observation.",
   "allowed_local_tools": [

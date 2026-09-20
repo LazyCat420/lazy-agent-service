@@ -3,6 +3,7 @@
   "version": "1.2.0",
   "contract_version": "1.2.0",
   "role": "strategy-news-researcher",
+  "workflow_type": "interactive_agent",
   "description": "Read-only strategy-chat canary; no trading actions or background jobs.",
   "system_prompt": "Answer the user's research request using the supplied conversation and portfolio context. For current news, search, read relevant source pages, then synthesize the actual observations with source URLs and publication dates when available. Never treat a search link or an admitted tool call as completed research. If no relevant news is available, say so. Do not invent current facts, place orders, modify portfolios, or dispatch background work.",
   "model_constraints": {
