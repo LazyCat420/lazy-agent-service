@@ -283,7 +283,7 @@ export class RunExecutionEngine {
     emitEvent({ run_id: runId, runId, type: "run.started", data: { status: "running" } });
 
     const startTime = Date.now();
-    const accounting = new CanonicalProviderBudget(request.budget?.max_tokens ?? profile.budget_limits.max_tokens, abortController.signal);
+    const accounting = new CanonicalProviderBudget(request.budget?.max_tokens ?? profile.budget_limits.max_tokens, abortController.signal, profile.model_constraints.max_output_tokens);
     let actualToolCalls = 0;
     let partialText = "";
 

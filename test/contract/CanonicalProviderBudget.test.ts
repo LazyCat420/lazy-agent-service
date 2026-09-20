@@ -28,3 +28,16 @@ it("retains partial measured coverage and cancels every wrapped call", async () 
   controller.abort();
   await expect(consume(provider.generateTextStream([], "fixture", {}))).rejects.toThrow();
 });
+it("keeps per-call output caps separate from the total run budget on every generation", async () => {
+  const budget = new CanonicalProviderBudget(65536, new AbortController().signal, 8192);
+  const caps: number[] = [];
+  const generate = async function* (_messages: unknown[], _model: string, options: any) {
+    caps.push(options.maxTokens);
+    yield { type: "usage", usage: { inputTokens: 100, outputTokens: 20 } };
+  };
+  const provider = budget.wrap({ generateTextStream: generate, generateTextStreamLive: generate });
+  await consume(provider.generateTextStream([], "fixture", { maxTokens: 65536 }));
+  await consume(provider.generateTextStreamLive([], "fixture", { maxTokens: 65536 }));
+  expect(caps).toEqual([8192, 8192]);
+  expect(budget.chargedTokens).toBe(240);
+});

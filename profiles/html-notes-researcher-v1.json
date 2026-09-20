@@ -18,6 +18,7 @@
     "html_notes.notes.create@1.0"
   ],
   "model_constraints": {
+    "max_output_tokens": 12288,
     "default_model": "llama-3-8b",
     "allowed_models": [
       "llama-3-8b",

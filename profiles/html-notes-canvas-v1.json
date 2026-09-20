@@ -36,6 +36,7 @@
     "html_notes.media.youtube_search@1.0"
   ],
   "model_constraints": {
+    "max_output_tokens": 12288,
     "default_model": "GLM-5.3-Flash-EXL3",
     "allowed_models": [
       "GLM-5.3-Flash-EXL3",

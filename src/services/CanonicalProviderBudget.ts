@@ -5,7 +5,7 @@ export class CanonicalProviderBudget {
   inputTokens = 0;
   outputTokens = 0;
   chargedTokens = 0;
-  constructor(readonly limit: number, readonly signal: AbortSignal) {}
+  constructor(readonly limit: number, readonly signal: AbortSignal, readonly outputLimit: number = Infinity) {}
 
   wrap(provider: any): any {
     const budget = this;
@@ -19,7 +19,7 @@ export class CanonicalProviderBudget {
           const inputReserve = Buffer.byteLength(JSON.stringify({ messages, tools: options.tools || [] }), "utf8") + 256;
           const available = budget.limit - budget.chargedTokens - inputReserve;
           if (available <= 0) throw Object.assign(new Error("Canonical token budget cannot cover the next prompt"), { code: "TOKEN_BUDGET_EXHAUSTED" });
-          const outputReserve = Math.min(options.maxTokens ?? available, available);
+          const outputReserve = Math.min(options.maxTokens ?? available, available, budget.outputLimit);
           if (outputReserve <= 0) throw Object.assign(new Error("Canonical output budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
           const reservation = inputReserve + outputReserve;
           budget.chargedTokens += reservation;
