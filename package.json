@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node dist/boot.js",
     "dev": "tsx watch boot.ts",
-    "build": "tsc && mkdir -p dist/src && cp -r src/locales dist/src/locales && node scripts/export-contracts.mjs",
+    "build": "npm run build:runtime && npm run build:agent-chat",
     "export:contracts": "node scripts/export-contracts.mjs",
     "export:runtime-wire": "tsx scripts/export-runtime-wire.ts",
     "typecheck": "tsc --noEmit",
@@ -17,7 +17,11 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "deploy": "bash deploy.sh",
-    "deploy:dry": "bash deploy.sh --dry-run"
+    "deploy:dry": "bash deploy.sh --dry-run",
+    "build:runtime": "tsc && mkdir -p dist/src && cp -r src/locales dist/src/locales && node scripts/export-contracts.mjs",
+    "build:agent-chat": "npm run export:runtime-wire && node scripts/export-chat-contract.mjs && npm run build --workspace=@lazycat/agent-chat",
+    "test:agent-chat": "vitest run packages/agent-chat/test",
+    "pack:agent-chat": "npm run build:agent-chat && npm pack --workspace=@lazycat/agent-chat --pack-destination=vendor"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.103.0",
@@ -50,5 +54,8 @@
     "typescript": "^6.0.0-dev.20260416",
     "typescript-eslint": "8.33.0",
     "vitest": "^4.1.10"
-  }
+  },
+  "workspaces": [
+    "packages/*"
+  ]
 }

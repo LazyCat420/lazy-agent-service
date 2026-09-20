@@ -1,0 +1,6 @@
+{
+  "package_version": "0.2.0",
+  "contract_version": "runtime-wire.v1.0.0",
+  "contract_digest": "sha256-de254c9c95a74bb1a3e13f21b33527cbd993a45a7cca40bdac36eedd9a79f84a",
+  "minimum_runtime_version": "0.1.0"
+}

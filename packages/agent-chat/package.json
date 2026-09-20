@@ -1,0 +1,35 @@
+{
+  "name": "@lazycat/agent-chat",
+  "version": "0.2.0",
+  "description": "Framework-neutral chat session state machine, canonical event reducer, and presentation models for globalized agents.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "agent",
+    "chat",
+    "runtime",
+    "reducer",
+    "lazycat"
+  ],
+  "author": "LazyCat420",
+  "license": "MIT",
+  "devDependencies": {},
+  "files": [
+    "dist",
+    "CHANGELOG.md",
+    "contract.json"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contract.json": "./contract.json"
+  }
+}

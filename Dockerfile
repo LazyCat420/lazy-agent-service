@@ -15,6 +15,7 @@ COPY .npmrc ./
 # otherwise 404 here and break every deploy. Must be copied BEFORE the install
 # so the file: dependency resolves. See vendor/README.md to refresh it.
 COPY vendor ./vendor
+COPY packages/agent-chat/package.json ./packages/agent-chat/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY . .
