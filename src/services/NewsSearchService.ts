@@ -85,7 +85,7 @@ interface Provider {
   /** Free-tier requests per day. Used to spread load, not enforced by the API. */
   dailyLimit: number;
   key: () => string | undefined;
-  fetch: (topic: string, limit: number, key: string, country: string) => Promise<NewsItem[]>;
+  fetch: (topic: string, limit: number, key: string, country: string, signal?: AbortSignal) => Promise<NewsItem[]>;
   /**
    * Headlines with NO topic. Optional: a provider without one is skipped for
    * general asks rather than being handed a fake query.
@@ -98,7 +98,7 @@ interface Provider {
    * match. Searching for the words "top stories" is not the same request as
    * asking for the top stories.
    */
-  top?: (limit: number, key: string, country: string) => Promise<NewsItem[]>;
+  top?: (limit: number, key: string, country: string, signal?: AbortSignal) => Promise<NewsItem[]>;
 }
 
 /** Per-provider call counts, reset when the UTC day rolls over. */
@@ -143,10 +143,14 @@ async function getJson(
   url: string,
   params: Record<string, string>,
   timeoutMs = 8000,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const qs = new URLSearchParams(params).toString();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
   try {
     const res = await fetch(`${url}?${qs}`, {
       signal: controller.signal,
@@ -156,6 +160,7 @@ async function getJson(
     return (await res.json()) as Record<string, unknown>;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
   }
 }
 
@@ -210,11 +215,11 @@ const PROVIDERS: Provider[] = [
     name: "gnews",
     dailyLimit: 100,
     key: () => CONFIG.GNEWS_API_KEY,
-    fetch: async (topic, limit, key, country) => {
+    fetch: async (topic, limit, key, country, signal) => {
       const j = await getJson("https://gnews.io/api/v4/search", {
         q: topic, lang: "en", max: String(limit), apikey: key,
         ...(country ? { country } : {}),
-      });
+      }, 8000, signal);
       return mapItems(j.articles, (a) => ({
         title: str(a.title),
         url: str(a.url),
@@ -224,11 +229,11 @@ const PROVIDERS: Provider[] = [
         date: str(a.publishedAt),
       }));
     },
-    top: async (limit, key, country) => {
+    top: async (limit, key, country, signal) => {
       const j = await getJson("https://gnews.io/api/v4/top-headlines", {
         lang: "en", max: String(limit), apikey: key,
         ...(country ? { country } : {}),
-      });
+      }, 8000, signal);
       return mapItems(j.articles, (a) => ({
         title: str(a.title),
         url: str(a.url),
@@ -243,11 +248,11 @@ const PROVIDERS: Provider[] = [
     name: "worldnewsapi",
     dailyLimit: 300,
     key: () => CONFIG.WORLDNEWSAPI_KEY,
-    fetch: async (topic, limit, key, country) => {
+    fetch: async (topic, limit, key, country, signal) => {
       const j = await getJson("https://api.worldnewsapi.com/search-news", {
         text: topic, language: "en", number: String(limit), "api-key": key,
         ...(country ? { "source-country": country } : {}),
-      });
+      }, 8000, signal);
       return mapItems(j.news, (a) => ({
         title: str(a.title),
         url: str(a.url),
@@ -262,11 +267,11 @@ const PROVIDERS: Provider[] = [
     name: "currentsapi",
     dailyLimit: 600,
     key: () => CONFIG.CURRENTS_API_KEY,
-    fetch: async (topic, limit, key, country) => {
+    fetch: async (topic, limit, key, country, signal) => {
       const j = await getJson("https://api.currentsapi.services/v1/search", {
         keywords: topic, language: "en", page_size: String(limit), apiKey: key,
         ...(country ? { country: country.toUpperCase() } : {}),
-      });
+      }, 8000, signal);
       return mapItems(j.news, (a) => ({
         title: str(a.title),
         url: str(a.url),
@@ -277,11 +282,11 @@ const PROVIDERS: Provider[] = [
         date: str(a.published),
       }));
     },
-    top: async (limit, key, country) => {
+    top: async (limit, key, country, signal) => {
       const j = await getJson("https://api.currentsapi.services/v1/latest-news", {
         language: "en", page_size: String(limit), apiKey: key,
         ...(country ? { country: country.toUpperCase() } : {}),
-      });
+      }, 8000, signal);
       return mapItems(j.news, (a) => ({
         title: str(a.title),
         url: str(a.url),
@@ -296,11 +301,11 @@ const PROVIDERS: Provider[] = [
     name: "thenewsapi",
     dailyLimit: 150,
     key: () => CONFIG.THENEWSAPI_KEY,
-    fetch: async (topic, limit, key, country) => {
+    fetch: async (topic, limit, key, country, signal) => {
       const j = await getJson("https://api.thenewsapi.com/v1/news/all", {
         search: topic, language: "en", limit: String(Math.min(limit, 3)), api_token: key,
         ...(country ? { locale: country } : {}),
-      });
+      }, 8000, signal);
       return mapItems(j.data, (a) => ({
         title: str(a.title),
         url: str(a.url),
@@ -310,11 +315,11 @@ const PROVIDERS: Provider[] = [
         date: str(a.published_at),
       }));
     },
-    top: async (limit, key, country) => {
+    top: async (limit, key, country, signal) => {
       const j = await getJson("https://api.thenewsapi.com/v1/news/top", {
         language: "en", limit: String(Math.min(limit, 3)), api_token: key,
         ...(country ? { locale: country } : {}),
-      });
+      }, 8000, signal);
       return mapItems(j.data, (a) => ({
         title: str(a.title),
         url: str(a.url),
@@ -332,11 +337,11 @@ const PROVIDERS: Provider[] = [
     // Last of the keyed providers deliberately: /everything sorted by recency
     // returns topically-unrelated stories (a stabbing report for a "James Webb
     // telescope" query), so it is a availability backstop, not a first choice.
-    fetch: async (topic, limit, key) => {
+    fetch: async (topic, limit, key, _country, signal) => {
       const j = await getJson("https://newsapi.org/v2/everything", {
         q: topic, language: "en", pageSize: String(limit),
         sortBy: "relevancy", apiKey: key,
-      });
+      }, 8000, signal);
       return mapItems(j.articles, (a) => ({
         title: str(a.title),
         url: str(a.url),
@@ -346,12 +351,12 @@ const PROVIDERS: Provider[] = [
         date: str(a.publishedAt),
       }));
     },
-    top: async (limit, key, country) => {
+    top: async (limit, key, country, signal) => {
       // /top-headlines DOES take a country, unlike /everything above.
       const j = await getJson("https://newsapi.org/v2/top-headlines", {
         language: "en", pageSize: String(limit), apiKey: key,
         ...(country ? { country } : {}),
-      });
+      }, 8000, signal);
       return mapItems(j.articles, (a) => ({
         title: str(a.title),
         url: str(a.url),
@@ -391,6 +396,7 @@ export async function newsSearch(
   country = DEFAULT_COUNTRY,
   category = "",
   debug: NewsSearchDebug = {},
+  signal?: AbortSignal,
 ): Promise<NewsSearchResult> {
   const query = (topic || "").trim();
   const region = (country || "").trim().toLowerCase();
@@ -411,12 +417,18 @@ export async function newsSearch(
   // they are the better instrument, and remain the fallback here.
   if (wantTop && debug.source !== "keyed") {
     try {
-      const ed = await topHeadlines({ country: region, category: section, limit });
+      const ed = await topHeadlines({
+        country: region,
+        category: section,
+        limit,
+        fetcher: (url) => fetchWithSignal(url, signal),
+      });
       if (ed.items.length) {
         return { items: ed.items, source: ed.stale ? "editorial:stale" : "editorial" };
       }
       logger.warn("[NewsSearch] editorial feeds returned nothing; falling back to keyed providers");
     } catch (err) {
+      if (signal?.aborted) throw err;
       logger.warn(`[NewsSearch] editorial path threw, falling back to keyed: ${String(err)}`);
     }
   }
@@ -438,8 +450,8 @@ export async function newsSearch(
     try {
       noteUse(p.name, started);
       const items = wantTop
-        ? await p.top!(limit, p.key()!, region)
-        : await p.fetch(query, limit, p.key()!, region);
+        ? await p.top!(limit, p.key()!, region, signal)
+        : await p.fetch(query, limit, p.key()!, region, signal);
       if (items.length) {
         logger.info(
           `[NewsSearch] ${p.name} -> ${items.length} items in ${Date.now() - started}ms ` +
@@ -454,6 +466,7 @@ export async function newsSearch(
         `[NewsSearch] ${p.name} returned 0 items for ${wantTop ? "top headlines" : `"${query}"`}`,
       );
     } catch (err) {
+      if (signal?.aborted) throw err;
       // Quota exhaustion and outages look the same from here, and both mean
       // "stop asking for a while".
       cooldown.set(p.name, Date.now() + COOLDOWN_MS);
@@ -468,6 +481,22 @@ export async function newsSearch(
     `[NewsSearch] every provider missed for ${wantTop ? "top headlines" : `"${query}"`}`,
   );
   return { items: [], source: "" };
+}
+
+async function fetchWithSignal(url: string, signal?: AbortSignal): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const res = await fetch(url, { signal: controller.signal, redirect: "follow" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
 }
 
 /** Exposed for the health surface: which providers could serve a request now. */

@@ -18,6 +18,7 @@ export class GlobalCapabilityExecutor {
   static async execute(
     capabilityId: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<ExecutionResult> {
     if (["global.document.summarize", "global.media.transcribe", "global.media.describe_image"].includes(capabilityId)) {
       return { success: false, error: { code: "CAPABILITY_UNAVAILABLE", message: "No tested executor is installed for this capability" } };
@@ -43,11 +44,11 @@ export class GlobalCapabilityExecutor {
         case "global.math.calculate":
           return this.executeCalculate(args);
         case "global.web.search":
-          return await this.executeWebSearch(args);
+          return await this.executeWebSearch(args, signal);
         case "global.web.read_page":
-          return await this.executeReadPage(args);
+          return await this.executeReadPage(args, signal);
         case "global.web.fetch_metadata":
-          return await this.executeFetchMetadata(args);
+          return await this.executeFetchMetadata(args, signal);
         default:
           return {
             success: false,
@@ -58,6 +59,9 @@ export class GlobalCapabilityExecutor {
           };
       }
     } catch (err: any) {
+      if (signal?.aborted || err?.name === "AbortError") {
+        return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Capability execution was cancelled" } };
+      }
       return {
         success: false,
         error: {
@@ -280,7 +284,7 @@ export class GlobalCapabilityExecutor {
     };
   }
 
-  private static async executeWebSearch(args: Record<string, unknown>): Promise<ExecutionResult> {
+  private static async executeWebSearch(args: Record<string, unknown>, signal?: AbortSignal): Promise<ExecutionResult> {
     const query = String(args.query || "");
     if (!query.trim()) {
       return {
@@ -291,7 +295,7 @@ export class GlobalCapabilityExecutor {
     const maxResults = Math.min(20, Math.max(1, Number(args.max_results || 5)));
 
     try {
-      const searchRes = await newsSearch(query, maxResults);
+      const searchRes = await newsSearch(query, maxResults, undefined, undefined, {}, signal);
       const items = (searchRes?.items || []).slice(0, maxResults);
       return {
         success: true,
@@ -306,6 +310,9 @@ export class GlobalCapabilityExecutor {
         },
       };
     } catch (err: any) {
+      if (signal?.aborted || err?.name === "AbortError") {
+        return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Web search was cancelled" } };
+      }
       return {
         success: false,
         error: {
@@ -316,7 +323,7 @@ export class GlobalCapabilityExecutor {
     }
   }
 
-  private static async executeReadPage(args: Record<string, unknown>): Promise<ExecutionResult> {
+  private static async executeReadPage(args: Record<string, unknown>, signal?: AbortSignal): Promise<ExecutionResult> {
     const url = String(args.url || "");
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
       return {
@@ -330,8 +337,16 @@ export class GlobalCapabilityExecutor {
       // Bounded HTTP fetch
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15000);
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timer);
+      const abort = () => controller.abort(signal?.reason);
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+      let res: Response;
+      try {
+        res = await fetch(url, { signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+      }
 
       if (!res.ok) {
         return {
@@ -363,6 +378,9 @@ export class GlobalCapabilityExecutor {
         },
       };
     } catch (err: any) {
+      if (signal?.aborted || err?.name === "AbortError") {
+        return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Page read was cancelled" } };
+      }
       return {
         success: false,
         error: {
@@ -468,7 +486,7 @@ export class GlobalCapabilityExecutor {
     }
   }
 
-  private static async executeFetchMetadata(args: Record<string, unknown>): Promise<ExecutionResult> {
+  private static async executeFetchMetadata(args: Record<string, unknown>, signal?: AbortSignal): Promise<ExecutionResult> {
     const url = String(args.url || "");
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
       return { success: false, error: { code: "INVALID_ARGUMENTS", message: "url must be a valid HTTP/HTTPS address" } };
@@ -476,8 +494,16 @@ export class GlobalCapabilityExecutor {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timer);
+      const abort = () => controller.abort(signal?.reason);
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+      let res: Response;
+      try {
+        res = await fetch(url, { signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+      }
       const html = await res.text();
       const titleMatch = /<title[^>]*>([^<]+)<\/title>/i.exec(html);
       const descMatch = /<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html);
@@ -493,6 +519,9 @@ export class GlobalCapabilityExecutor {
         },
       };
     } catch (err: any) {
+      if (signal?.aborted || err?.name === "AbortError") {
+        return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Metadata fetch was cancelled" } };
+      }
       return { success: false, error: { code: "METADATA_FETCH_FAILED", message: err.message || "Metadata retrieval failed" } };
     }
   }
