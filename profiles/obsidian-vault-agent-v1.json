@@ -17,7 +17,11 @@
     "temperature_range": [
       0,
       1
-    ]
+    ],
+    "provider_by_model": {
+      "GLM-5.3-Flash-EXL3": "vllm-2",
+      "nemotron35": "vllm"
+    }
   },
   "allowed_local_tools": [
     "obsidian.read_note",

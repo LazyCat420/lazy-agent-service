@@ -318,7 +318,7 @@ export class RunExecutionEngine {
         profile.model_constraints.default_model;
 
       const preferredProvider =
-        String(request.runtime_overrides?.provider ?? profile.model_constraints.allowed_providers[0] ?? "vllm-shim");
+        String(request.runtime_overrides?.provider ?? profile.model_constraints.provider_by_model?.[selectedModel] ?? profile.model_constraints.allowed_providers[0] ?? "vllm-shim");
       let provider: any = {};
       try {
         provider = getProvider(preferredProvider) || {};
@@ -345,7 +345,8 @@ export class RunExecutionEngine {
       const options: any = {
         model: selectedModel,
         enabledTools: (request.runtime_overrides?.tools ?? profile.tool_policy.whitelist).map((tool: any) => (typeof tool === "string" ? tool : tool.name).split("@")[0]),
-        systemPrompt: assembled.fullPrompt,
+        // User/history data stays in messages, never duplicated into system authority.
+        systemPrompt: [assembled.layerTexts.prefix, assembled.layerTexts.projectScope, assembled.layerTexts.retrievedEvidence].filter(Boolean).join("\n\n"),
         agenticLoopEnabled: true,
         functionCallingEnabled: true,
         maxIterations: maxToolCalls + 1,
@@ -414,6 +415,7 @@ export class RunExecutionEngine {
           ? await RunApprovals.wait(runId, call, request.app_id || "", request.session_id || "", abortController.signal, emitEvent) : undefined;
         const processed = await this.processToolCall(runId, call, {
           approval_id: approvalId,
+          signal: abortController.signal,
           profile_id: profile.profile_id,
           profile_version: profile.version,
           app_id: request.app_id ?? request.appId ?? requestContext.app_id,
@@ -466,6 +468,8 @@ export class RunExecutionEngine {
 
       const contextReceipt = {
         ...assembled.receipt,
+        input_delivery: "messages",
+        input_hash: `sha256-${crypto.createHash("sha256").update(JSON.stringify(request.input)).digest("hex")}`,
         contract_version: requestedContractVersion || "1.2.0",
         profile_version: profile.version,
         receipt_id: assembled.receipt.receipt_id.startsWith("sha256-")
@@ -620,6 +624,7 @@ export class RunExecutionEngine {
       profile_id: string;
       profile_version?: string;
       approval_id?: string;
+      signal?: AbortSignal;
       app_id?: string;
       session_id?: string;
     },
@@ -709,7 +714,7 @@ export class RunExecutionEngine {
         emitEvent?.(event);
         return { status: "denied", event, error };
       }
-      const execResult = await GlobalCapabilityExecutor.execute(toolName, toolArgs);
+      const execResult = await GlobalCapabilityExecutor.execute(toolName, toolArgs, context.signal);
       if (!execResult.success) {
         const err: StructuredError = {
           code: execResult.error?.code || "TOOL_EXECUTION_FAILED",

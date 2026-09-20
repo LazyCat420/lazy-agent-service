@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import logger from "../utils/logger.ts";
 import type { RunRecord, RunResult, RunState } from "../types/run.ts";
@@ -43,6 +44,7 @@ export class RunStore {
               r.status = "failed";
               r.completed_at = new Date().toISOString();
               r.error = { code: "RUN_INTERRUPTED", message: "Runtime restarted before completion; pending effects are not replayed", retryable: false, category: "RUNTIME" };
+              r.events = [...(r.events || []), { id: `evt-${crypto.randomUUID()}`, run_id: r.run_id, type: "run.failed", timestamp: r.completed_at, data: { status: "failed", error: r.error } }];
             }
             this.runs.set(r.run_id, r);
           }
@@ -60,6 +62,7 @@ export class RunStore {
             }
           }
         }
+        await this.flushToDisk();
         logger.debug(
           `[RunStore] Loaded ${this.runs.size} runs and ${this.idempotency.size} idempotency records from disk`,
         );

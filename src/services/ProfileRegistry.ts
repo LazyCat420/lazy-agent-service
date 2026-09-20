@@ -5,6 +5,7 @@ import type { RuntimeOverrides } from "../types/run.ts";
 import { CapabilityRegistry } from "./CapabilityRegistry.ts";
 
 export interface ModelConstraints {
+  provider_by_model?: Record<string, string>;
   default_model: string;
   allowed_models: string[];
   allowed_providers: string[];
@@ -106,6 +107,12 @@ export class ProfileRegistry {
     if (data.decision_policy) {
       const policy = data.decision_policy;
       if (!Array.isArray(policy.capabilities) || policy.capabilities.some((c: unknown) => c !== "semantic.choice.v1") || !Array.isArray(policy.data_classifications) || policy.data_classifications.some((c: unknown) => c !== "public") || !Number.isInteger(policy.max_latency_ms) || policy.max_latency_ms < 1 || policy.max_latency_ms > 2000) throw new Error("Invalid shadow decision policy");
+    }
+
+    if (data.model_constraints.provider_by_model) {
+      for (const [model, provider] of Object.entries(data.model_constraints.provider_by_model)) {
+        if (!data.model_constraints.allowed_models.includes(model) || !data.model_constraints.allowed_providers.includes(provider)) throw new Error("Model route outside profile policy");
+      }
     }
 
     // 1. Validate contract_version if provided

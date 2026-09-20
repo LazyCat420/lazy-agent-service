@@ -93,10 +93,22 @@ it("a restart seals interrupted work without replaying pending effects", async (
   expect(recovered?.status).toBe("failed");
   expect(recovered?.error?.code).toBe("RUN_INTERRUPTED");
   expect(recovered?.pending_tools?.call).toBeDefined();
+  expect(recovered?.events?.at(-1)?.type).toBe("run.failed");
+  expect(recovered?.events?.at(-1)?.data.error.code).toBe("RUN_INTERRUPTED");
 });
 
 it("accepts an unversioned effective tool only at the registered version", async () => {
   const active = await ProfileRegistry.loadProfile(profile);
   expect(() => ProfileRegistry.validateOverrides(active!, { tools: [schema.name] })).not.toThrow();
   expect(() => ProfileRegistry.validateOverrides(active!, { tools: [`${schema.name}@99.0`] })).toThrow();
+});
+
+it("does not promote the user task or history into the shared system prompt", async () => {
+  const content = `user-task-${crypto.randomUUID()}`;
+  vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+    expect(context.options.systemPrompt).not.toContain(content);
+    expect(context.messages.filter(message => message.role === "user" && message.content === content)).toHaveLength(1);
+    return { messages: [{ role: "assistant", content: "Done" }] };
+  });
+  expect((await Engine.startRun("single-task", { profile_id: profile, input: content }, () => {})).status).toBe("completed");
 });
