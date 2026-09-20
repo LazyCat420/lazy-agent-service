@@ -290,6 +290,61 @@ export class RunExecutionEngine {
     try {
       const extensions = RuntimeExtensions.resolve(profile);
       const contributedContext = await Promise.all(extensions.filter(e => e.context).map(e => e.context!(request)));
+      const workers = RuntimeExtensions.workers(profile);
+      const workerEvidence: EvidenceRecord[] = [];
+      if (workers.length) {
+        const concurrency = Math.max(1, Math.min(workers.length, profile.budget_limits.max_concurrent_workers ?? 1));
+        const perWorkerTokens = Math.max(1, Math.floor(accounting.limit / (workers.length + 1)));
+        let nextWorker = 0;
+        const executeWorker = async () => {
+          while (nextWorker < workers.length) {
+            const worker = workers[nextWorker++];
+            const taskId = `worker-${worker.id}-${crypto.randomUUID()}`;
+            const remainingMs = Math.max(1, deadlineMs - (Date.now() - startTime));
+            emitEvent({ run_id: runId, type: "worker.dispatched", data: { worker_id: worker.id, task_id: taskId } });
+            const result = await worker.execute({
+              workerId: worker.id,
+              taskId,
+              parameters: { input: structuredClone(request.input) },
+              allocatedBudget: { maxTokens: perWorkerTokens, maxDurationMs: remainingMs },
+            }, {
+              parentRunId: runId,
+              traceId: runId,
+              parentSpanId: runId,
+              signal: abortController.signal,
+              emitEvent: (type, data) => emitEvent({ run_id: runId, type: type as any, data }),
+            });
+            abortController.signal.throwIfAborted();
+            if (!result || result.taskId !== taskId || !["success", "error", "cancelled"].includes(result.status)) {
+              throw Object.assign(new Error(`Worker '${worker.id}' returned an invalid task result`), { code: "WORKER_RESULT_INVALID" });
+            }
+            const usageValues = result.usage && [result.usage.promptTokens, result.usage.completionTokens, result.usage.totalTokens, result.usage.durationMs];
+            if (!usageValues || !usageValues.every(value => Number.isInteger(value) && value >= 0)) {
+              throw Object.assign(new Error(`Worker '${worker.id}' returned invalid usage`), { code: "WORKER_RESULT_INVALID" });
+            }
+            if (result.usage.totalTokens !== result.usage.promptTokens + result.usage.completionTokens || result.usage.totalTokens > perWorkerTokens) {
+              throw Object.assign(new Error(`Worker '${worker.id}' exceeded its allocated token budget`), { code: "WORKER_BUDGET_EXHAUSTED" });
+            }
+            if (!Array.isArray(result.evidenceRefs) || result.evidenceRefs.length > 32 || result.evidenceRefs.some(ref => typeof ref !== "string" || ref.length > 2048)) {
+              throw Object.assign(new Error(`Worker '${worker.id}' returned invalid evidence references`), { code: "WORKER_RESULT_INVALID" });
+            }
+            const workerContext = JSON.stringify({ worker_id: worker.id, task_id: taskId, status: result.status, output: result.output, evidence_refs: result.evidenceRefs, error: result.error });
+            if (Buffer.byteLength(workerContext, "utf8") > 32 * 1024) {
+              throw Object.assign(new Error(`Worker '${worker.id}' output exceeded the context limit`), { code: "WORKER_RESULT_INVALID" });
+            }
+            accounting.chargeExternalUsage(result.usage.promptTokens, result.usage.completionTokens);
+            workerEvidence.push(...result.evidenceRefs.map((ref, index) => ({
+              evidence_id: `worker-${worker.id}-${index}-${crypto.createHash("sha256").update(ref).digest("hex").slice(0, 16)}`,
+              source: `worker:${worker.id}`,
+              provenance_hash: `sha256-${crypto.createHash("sha256").update(ref).digest("hex")}`,
+              redacted: false,
+            })));
+            contributedContext.push(workerContext);
+            emitEvent({ run_id: runId, type: "worker.completed", data: { worker_id: worker.id, task_id: taskId, status: result.status, usage: result.usage, evidence_refs: result.evidenceRefs, error: result.error } });
+          }
+        };
+        await Promise.all(Array.from({ length: concurrency }, () => executeWorker()));
+      }
       abortController.signal.throwIfAborted();
       // 6. Context Assembly Integration
       const assembly = new ContextAssembly();
@@ -457,12 +512,12 @@ export class RunExecutionEngine {
       // 10. Seal Receipts, Evidence, and Usage
       const durationMs = Date.now() - startTime;
       const spans = RunEvidenceStore.getGlobalInstance().getSpans(runId);
-      const evidenceRecords: EvidenceRecord[] = spans.map((s, idx) => ({
+      const evidenceRecords: EvidenceRecord[] = [...workerEvidence, ...spans.map((s, idx) => ({
         evidence_id: s.span_id || `ev-${runId}-${idx}`,
         source: s.name || (s.attributes?.tool_name as string) || "runtime-span",
         provenance_hash: (s.attributes?.input_hash as string) || undefined,
         redacted: false,
-      }));
+      }))];
 
       const usage: RunUsage = accounting.usage(actualToolCalls, durationMs);
 

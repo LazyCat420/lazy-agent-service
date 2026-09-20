@@ -53,6 +53,19 @@ to `/api/wallgarden/recommend-channels` used that exact identity and returned
 HTTP 200 with five parsed recommendations. This validates the deployed
 completion-only path; it did not invoke a tool loop or change application data.
 
+## Follow-up batch: bounded worker lifecycle
+
+The runtime now executes trusted `worker_plugins` as bounded parent-run tasks
+before coordinator synthesis. Workers inherit the parent abort signal, deadline,
+run/trace identity, and profile concurrency cap. Their measured usage is charged
+to the same canonical token budget; oversized output, invalid evidence
+references, malformed usage, and budget overruns fail closed. Structured worker
+results enter retrieved evidence, dispatch/completion events are durable, and
+worker evidence references are included in the final receipt. The full runtime
+suite passed 807/807 with loopback enabled, and the build passed. Named Notes
+research workers and its context/verifier plugins remain application-owned
+registrations; that profile continues to fail readiness until they exist.
+
 ## Shared implementation
 
 - The executable runtime wire schema generates Python models and a packaged version/digest. Canonical Python consumers verify that identity before starting work. TypeScript transport validates framing, run binding, replay duplicates, and terminal outcomes.

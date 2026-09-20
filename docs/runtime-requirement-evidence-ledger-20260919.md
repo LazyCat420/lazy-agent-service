@@ -36,7 +36,7 @@ payloads.
 | Approval allow/deny/expiry and scope are durable and fail closed | passed | `RunApprovals`, run routes, signed authorization receipts, and runtime contract tests. Application UI acceptance remains separate below. |
 | LF/CRLF/chunked SSE, reconnect, explicit terminal states, and cancellation | passed | Cross-language wire fixtures, `RuntimeTransport.test.ts`, SDK stream tests, and cancellation propagation baseline recorded in release evidence. |
 | Usage includes all attempts and distinguishes unknown/partial measurement | passed | `CanonicalProviderBudget` and budget regression tests; the live strategy canary recorded measured usage across three calls. |
-| Context contributors, before-tool guards, result processors, and final validators actually execute | passed for non-worker hooks | `RunExecutionEngine` calls `context`, `beforeTool`, `afterTool`, and `validate`; `RuntimeRepair.test.ts` proves their lifecycle order around a correlated local result. `RuntimeExtensions.resolve` fails absent required context/verifier registrations. `worker_plugins` still have no task-dispatch binding and deliberately make a profile unready; implement the bounded worker lifecycle before enabling such a profile. |
+| Context contributors, before-tool guards, result processors, final validators, and workers actually execute | passed at runtime SPI | `RunExecutionEngine` calls `context`, `beforeTool`, `afterTool`, and `validate`, then runs registered workers with bounded concurrency inside the parent signal, deadline, trace, and canonical token accounting. Worker output/evidence is size-bounded and supplied to synthesis; invalid or over-budget results fail closed. `RuntimeRepair.test.ts` proves lifecycle order, worker dispatch/completion, evidence receipt inclusion, and budget rejection. Profiles still fail readiness until every application-specific named extension is registered. |
 | Workflow types are explicit (`structured_completion`, `interactive_agent`, `application_workflow`) | passed | `AgentProfile`, the profile JSON schemas, and every shipped manifest require an enumerated `workflow_type`; contract tests reject absent or unknown values. The type describes the caller-owned workflow without selecting a second execution loop. |
 | Required guards fail readiness closed | passed | `RuntimeRepair.test.ts` proves `trading-analyst-v1` cannot generate when its required extensions are absent. |
 | No placeholder executor can produce successful evidence | passed | Unimplemented media capabilities were removed from the published runtime capability set; global web execution has real observations and cancellation. |
@@ -95,7 +95,7 @@ payloads.
 
 ## Immediate critical path
 
-1. Bind declared worker plugins to bounded task requests and lifecycle evidence.
+1. Register and accept the application-specific HTML Notes researcher workers and its named context/verifier extensions before enabling that profile.
 2. Finish Music's controlled persisted workflow and Obsidian scoped-session UX independently.
 3. Complete trading discovery parity and obtain genuine historical cases.
 4. Obtain the real TinyModels source and Jetson access; only then finish live shadow and experiment lifecycle work.

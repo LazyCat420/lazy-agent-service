@@ -162,3 +162,72 @@ it("executes required context, before-tool, result, and final-validator hooks in
   expect((await run).status).toBe("completed");
   expect(calls).toEqual(["context", "before-tool", "after-tool", "validate"]);
 });
+
+it("executes declared workers inside the parent budget and contributes their evidence to synthesis", async () => {
+  const workerName = `worker-fixture-${crypto.randomUUID()}`;
+  const profileId = `worker-profile-${crypto.randomUUID()}`;
+  let inheritedSignal: AbortSignal | undefined;
+  RuntimeExtensions.register(workerName, {
+    worker: {
+      id: workerName,
+      capabilities: ["research.fixture"],
+      execute: async (task, context) => {
+        inheritedSignal = context.signal;
+        expect(task.workerId).toBe(workerName);
+        expect(task.parameters.input).toBe("Research this");
+        expect(task.allocatedBudget.maxTokens).toBeGreaterThan(0);
+        return {
+          taskId: task.taskId,
+          status: "success",
+          output: { finding: "bounded evidence" },
+          usage: { promptTokens: 3, completionTokens: 2, totalTokens: 5, durationMs: 1 },
+          evidenceRefs: ["fixture://worker/source"],
+        };
+      },
+    },
+  });
+  const base = await ProfileRegistry.loadProfile(profile);
+  ProfileRegistry.registerProfile({
+    ...base!,
+    profile_id: profileId,
+    plugins: { worker_plugins: [workerName] },
+  });
+  vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+    expect(context.options.systemPrompt).toContain("bounded evidence");
+    return { messages: [{ role: "assistant", content: "Synthesized" }] };
+  });
+  const events: any[] = [];
+  const result = await Engine.startRun("worker-lifecycle", { profile_id: profileId, input: "Research this" }, event => events.push(event));
+  expect(result.status).toBe("completed");
+  expect(inheritedSignal).toBeInstanceOf(AbortSignal);
+  expect(events.map(event => event.type)).toContain("worker.dispatched");
+  expect(events.map(event => event.type)).toContain("worker.completed");
+  expect(result.usage?.total_tokens).toBe(5);
+  expect(result.evidence_records).toEqual(expect.arrayContaining([
+    expect.objectContaining({ source: `worker:${workerName}` }),
+  ]));
+});
+
+it("fails closed when a worker exceeds its allocated token budget", async () => {
+  const workerName = `worker-over-budget-${crypto.randomUUID()}`;
+  const profileId = `worker-budget-profile-${crypto.randomUUID()}`;
+  RuntimeExtensions.register(workerName, {
+    worker: {
+      id: workerName,
+      capabilities: [],
+      execute: async task => ({
+        taskId: task.taskId,
+        status: "success",
+        output: {},
+        usage: { promptTokens: task.allocatedBudget.maxTokens, completionTokens: 1, totalTokens: task.allocatedBudget.maxTokens + 1, durationMs: 1 },
+        evidenceRefs: [],
+      }),
+    },
+  });
+  const base = await ProfileRegistry.loadProfile(profile);
+  ProfileRegistry.registerProfile({ ...base!, profile_id: profileId, plugins: { worker_plugins: [workerName] } });
+  const loop = vi.spyOn(AgenticLoopService, "runAgenticLoop");
+  const result = await Engine.startRun("worker-over-budget", { profile_id: profileId, input: "Research" }, () => {});
+  expect(result.error?.code).toBe("WORKER_BUDGET_EXHAUSTED");
+  expect(loop).not.toHaveBeenCalled();
+});

@@ -7,6 +7,21 @@ export class CanonicalProviderBudget {
   chargedTokens = 0;
   constructor(readonly limit: number, readonly signal: AbortSignal, readonly outputLimit: number = Infinity) {}
 
+  chargeExternalUsage(promptTokens: number, completionTokens: number): void {
+    if (![promptTokens, completionTokens].every(value => Number.isInteger(value) && value >= 0)) {
+      throw Object.assign(new Error("Worker reported invalid token usage"), { code: "WORKER_USAGE_INVALID" });
+    }
+    const total = promptTokens + completionTokens;
+    this.chargedTokens += total;
+    this.inputTokens += promptTokens;
+    this.outputTokens += completionTokens;
+    this.calls += 1;
+    this.measuredCalls += 1;
+    if (this.chargedTokens > this.limit) {
+      throw Object.assign(new Error("Worker usage exceeded the canonical run budget"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+    }
+  }
+
   wrap(provider: any): any {
     const budget = this;
     return new Proxy(provider, {
