@@ -54,7 +54,7 @@
     ]
   },
   "budget_limits": {
-    "max_tokens": 12288,
+    "max_tokens": 65536,
     "max_tool_calls": 15,
     "max_retries": 3,
     "max_duration_ms": 120000,

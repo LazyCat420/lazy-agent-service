@@ -27,7 +27,7 @@
     "temperature_range": [0.1, 0.7]
   },
   "budget_limits": {
-    "max_tokens": 16384,
+    "max_tokens": 65536,
     "max_tool_calls": 8,
     "max_retries": 1,
     "max_duration_ms": 300000,
