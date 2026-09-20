@@ -26,3 +26,21 @@ describe("Transport and capability failure contracts", () => {
     }
   });
 });
+
+const transportFrame = (id: string, type: string, runId = "run") => `data: ${JSON.stringify({ id, run_id: runId, type, timestamp: new Date().toISOString(), data: {} })}\r\n\r\n`;
+it("cancels a known run when the consumer breaks, but never after terminal", async () => {
+  for (const terminal of [false, true]) {
+    const fetcher = vi.fn(async (url: string) => url.endsWith("/cancel") ? Response.json({}) : new Response(transportFrame("a", terminal ? "run.completed" : "run.started")));
+    vi.stubGlobal("fetch", fetcher);
+    for await (const _ of new RuntimeClient("http://runtime.example").streamRun({ profile_id: "test", input: "news" })) break;
+    expect(fetcher.mock.calls.filter(([url]) => url.endsWith("/cancel"))).toHaveLength(terminal ? 0 : 1);
+  }
+});
+it("replay validates run binding and deduplicates persisted event frames", async () => {
+  const client = new RuntimeClient("http://runtime.example");
+  vi.stubGlobal("fetch", async () => new Response(transportFrame("a", "run.started") + transportFrame("a", "run.started")));
+  const events = []; for await (const event of client.replayEvents("run")) events.push(event);
+  expect(events).toHaveLength(1);
+  vi.stubGlobal("fetch", async () => new Response(transportFrame("b", "run.completed", "other-run")));
+  await expect((async () => { for await (const _ of client.replayEvents("run")) {} })()).rejects.toThrow("another run");
+});

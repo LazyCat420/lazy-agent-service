@@ -27,22 +27,12 @@ export class RuntimeClient {
   decide(runId: string, request: import("../decision-fabric/contracts.ts").TypedDecisionRequest): Promise<import("../decision-fabric/contracts.ts").DecisionReceipt> {
     return this.command(`/${encodeURIComponent(runId)}/decisions`, "POST", request);
   }
-  async *replayEvents(runId: string, after?: string): AsyncGenerator<RunEvent> {
-    const response = await fetch(`${this.baseUrl}/${encodeURIComponent(runId)}/events${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: this.headers });
-    if (!response.ok) throw new Error(`Runtime replay failed (HTTP ${response.status})`);
-    for (const block of (await response.text()).split(/\r?\n\r?\n/)) {
-      const data = block.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).replace(/^ /, "")).join("\n");
-      if (data) yield JSON.parse(data) as RunEvent;
-    }
-  }
-  async *streamRun(request: CreateRunRequest): AsyncGenerator<RunEvent> {
-    const { signal, identity: _identity, ...wire } = request;
-    const response = await fetch(this.baseUrl, { method: "POST", signal, headers: { ...this.headers, "Content-Type": "application/json", Accept: "text/event-stream" }, body: JSON.stringify({ ...wire, stream: true }) });
-    if (!response.ok || !response.body) throw new Error(`Runtime stream failed (HTTP ${response.status})`);
+  private async *readEvents(response: Response, expectedRunId?: string): AsyncGenerator<RunEvent> {
+    if (!response.body) throw new Error("Runtime stream has no body");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     const seen = new Set<string>();
-    let buffer = "";
+    let buffer = "", runId = expectedRunId;
     try {
       for (;;) {
         const { done, value } = await reader.read();
@@ -55,14 +45,43 @@ export class RuntimeClient {
           if (!payload) continue;
           if (payload === "[DONE]") throw new Error("Runtime stream ended without a terminal outcome");
           const event = JSON.parse(payload) as RunEvent;
-          if (!event || typeof event.id !== "string" || typeof event.run_id !== "string" || typeof event.type !== "string" || typeof event.timestamp !== "string" || !event.data || typeof event.data !== "object") throw new Error("Invalid runtime event");
+          if (!event || !event.id || typeof event.id !== "string" || !event.run_id || typeof event.run_id !== "string" || typeof event.type !== "string" || typeof event.timestamp !== "string" || !Number.isFinite(Date.parse(event.timestamp)) || !event.data || typeof event.data !== "object" || Array.isArray(event.data)) throw new Error("Invalid runtime event");
+          if (runId && event.run_id !== runId) throw new Error("Runtime event belongs to another run");
+          runId = event.run_id;
           if (seen.has(event.id)) continue;
           seen.add(event.id);
           yield event;
-          if (["run.completed", "run.failed", "run.cancelled"].includes(event.type)) return;
         }
-        if (done) throw new Error("Runtime stream ended before a terminal outcome");
+        if (done) {
+          if (buffer.trim() && !buffer.trim().startsWith(":")) throw new Error("Incomplete runtime event");
+          return;
+        }
       }
-    } finally { await reader.cancel(); reader.releaseLock(); }
+    } finally { try { await reader.cancel(); } catch { /* Preserve decoding/transport error. */ } reader.releaseLock(); }
+  }
+  async *replayEvents(runId: string, after?: string): AsyncGenerator<RunEvent> {
+    const response = await fetch(`${this.baseUrl}/${encodeURIComponent(runId)}/events${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: this.headers });
+    if (!response.ok) throw new Error(`Runtime replay failed (HTTP ${response.status})`);
+    yield* this.readEvents(response, runId);
+  }
+  async *streamRun(request: CreateRunRequest): AsyncGenerator<RunEvent> {
+    const { signal, identity: _identity, ...wire } = request;
+    const response = await fetch(this.baseUrl, { method: "POST", signal, headers: { ...this.headers, "Content-Type": "application/json", Accept: "text/event-stream" }, body: JSON.stringify({ ...wire, stream: true }) });
+    if (!response.ok || !response.body) throw new Error(`Runtime stream failed (HTTP ${response.status})`);
+    let runId: string | undefined, terminal = false;
+    try {
+      for await (const event of this.readEvents(response)) {
+        runId = event.run_id;
+        terminal = ["run.completed", "run.failed", "run.cancelled"].includes(event.type);
+        yield event;
+        if (terminal) return;
+      }
+      throw new Error("Runtime stream ended before a terminal outcome");
+    } finally {
+      if (runId && !terminal) {
+        try { await this.command(`/${encodeURIComponent(runId)}/cancel`, "POST", {}, AbortSignal.timeout(2000)); }
+        catch { /* Preserve the stream failure or consumer cancellation. */ }
+      }
+    }
   }
 }
