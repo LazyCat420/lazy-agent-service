@@ -1,0 +1,57 @@
+{
+  "profile_id": "music-player-v1",
+  "version": "1.0.0",
+  "contract_version": "1.2.0",
+  "role": "music-production-assistant",
+  "description": "Music Player assistant with queued generation and score tools.",
+  "system_prompt": "You are the RetroDash Music Player assistant. Preserve score validation, ownership, queue deduplication, and composition sequencing. Use real tool observations and state explicit outcomes when a job is queued, completed, partial, failed, cancelled, or stalled.",
+  "allowed_local_tools": [
+    "music.score.edit@1.0",
+    "music.score.strip_chords@1.0",
+    "music.library.list_songs@1.0",
+    "music.library.get_song_details@1.0",
+    "music.generation.generate_song@1.0",
+    "music.visualizer.create@1.0",
+    "music.generation.separate_stems@1.0",
+    "music.generation.transcribe_audio@1.0",
+    "music.generation.cover_song@1.0",
+    "music.generation.transplant_harmony@1.0",
+    "music.generation.build_from_stem@1.0",
+    "music.generation.get_transcription@1.0",
+    "music.library.suggest_artists@1.0"
+  ],
+  "model_constraints": {
+    "default_model": "GLM-5.3-Flash-EXL3",
+    "allowed_models": ["GLM-5.3-Flash-EXL3"],
+    "allowed_providers": ["vllm-2", "vllm-shim"],
+    "temperature_range": [0.1, 0.7]
+  },
+  "budget_limits": {
+    "max_tokens": 16384,
+    "max_tool_calls": 8,
+    "max_retries": 1,
+    "max_duration_ms": 300000,
+    "max_concurrent_workers": 1
+  },
+  "local_tool_policy": {
+    "music.score.edit": {"effect": "write", "requires_confirmation": false},
+    "music.score.strip_chords": {"effect": "write", "requires_confirmation": false},
+    "music.library.list_songs": {"effect": "read", "requires_confirmation": false},
+    "music.library.get_song_details": {"effect": "read", "requires_confirmation": false},
+    "music.generation.generate_song": {"effect": "write", "requires_confirmation": false},
+    "music.visualizer.create": {"effect": "write", "requires_confirmation": false},
+    "music.generation.separate_stems": {"effect": "write", "requires_confirmation": false},
+    "music.generation.transcribe_audio": {"effect": "write", "requires_confirmation": false},
+    "music.generation.cover_song": {"effect": "write", "requires_confirmation": false},
+    "music.generation.transplant_harmony": {"effect": "write", "requires_confirmation": false},
+    "music.generation.build_from_stem": {"effect": "write", "requires_confirmation": false},
+    "music.generation.get_transcription": {"effect": "read", "requires_confirmation": false},
+    "music.library.suggest_artists": {"effect": "write", "requires_confirmation": false}
+  },
+  "retention_class": "AUDITED_SESSION",
+  "observability_policy": {
+    "telemetry_level": "FULL_SPANS",
+    "redact_keys": ["api_key", "secret", "private_token"],
+    "sample_rate": 1.0
+  }
+}
