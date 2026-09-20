@@ -130,4 +130,33 @@ describe("Jetson pin", () => {
     expect(usable).toHaveLength(1);
     expect(usable[0].model).toBe(JETSON_MODEL);
   });
+
+  it("routes channel recommendations through the discovered Jetson", async () => {
+    const { recommendChannels } = await loadService();
+    vi.stubGlobal("fetch", async (url: any, init?: any) => {
+      const u = String(url);
+      if (u.endsWith("/v1/models")) {
+        const base = u.replace(/\/v1\/models$/, "");
+        return { ok: true, json: async () => ({ data: [{ id: onlineBoxes[base] }] }) } as any;
+      }
+      if (u.includes("/chat")) {
+        const body = JSON.parse(init.body);
+        expect(body.provider).toBe("vllm");
+        expect(body.model).toBe(JETSON_MODEL);
+        return { ok: true, json: async () => ({ text: '{"channels":[{"name":"Ceramic Lab","handle":"@ceramiclab","reason":"same craft depth"}]}' }) } as any;
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+    const result = await recommendChannels({ channels: ["Old Channel"], model: JETSON_MODEL, provider: "vllm" });
+    expect(result.channels[0].name).toBe("Ceramic Lab");
+  });
+
+  it("rejects a stale channel recommendation model hint", async () => {
+    const { recommendChannels } = await loadService();
+    await expect(recommendChannels({
+      channels: ["Old Channel"],
+      model: GOLD_SPARK_MODEL,
+      provider: "vllm-2",
+    })).rejects.toThrow(/Stale Wallgarden model selection/);
+  });
 });

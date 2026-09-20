@@ -9,6 +9,7 @@ import {
   generateTasteProfile,
   judgeTopicGrounding,
   classifyCandidateVideos,
+  recommendChannels,
   type BrainstormContext,
   type SimilarContext,
   type LikedVideoInput,
@@ -30,6 +31,23 @@ router.get("/models", async (_req: Request, res: Response) => {
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /models error: ${err.message}`);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /wallgarden/recommend-channels ────────────────────
+// Browser recommendations use the same completion-only backend as topics.
+// Model hints are checked against current Jetson discovery and stale hints
+// fail explicitly so an old tab cannot silently select another box.
+router.post("/recommend-channels", async (req: Request, res: Response) => {
+  try {
+    const { channels, likedVideos, interests, model, provider } = req.body || {};
+    const result = await recommendChannels({ channels, likedVideos, interests, model, provider });
+    res.json(result);
+  } catch (err: any) {
+    const message = err?.message || "Wallgarden recommendation failed";
+    const status = /stale|currently serves|refresh models/i.test(message) ? 409 : 502;
+    logger.error(`[WallgardenRoutes] /recommend-channels error: ${message}`);
+    res.status(status).json({ error: message, outcome: "failed" });
   }
 });
 

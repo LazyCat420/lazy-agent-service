@@ -361,7 +361,8 @@ export const EXPECTED_JETSON_MODEL = "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit";
 
 async function resolveProviderAndModel(
   preferredModel?: string,
-  preferredProvider?: string
+  preferredProvider?: string,
+  rejectStaleHint = false,
 ): Promise<{ model: string; provider: string }> {
   const boxes = await discoverModels();
   const jetson = boxes.find(
@@ -385,6 +386,12 @@ async function resolveProviderAndModel(
     (preferredProvider && preferredProvider !== JETSON_PROVIDER) ||
     (preferredModel && preferredModel !== jetson.model)
   ) {
+    if (rejectStaleHint) {
+      throw new Error(
+        `Stale Wallgarden model selection ${preferredProvider ?? "?"}::${preferredModel ?? "?"}; ` +
+        `the Jetson currently serves ${JETSON_PROVIDER}::${jetson.model}. Refresh models and retry.`,
+      );
+    }
     logger.warn(
       `[WallgardenService] Ignoring client model hint ` +
       `${preferredProvider ?? "?"}::${preferredModel ?? "?"} — pinned to ` +
@@ -401,6 +408,76 @@ async function resolveProviderAndModel(
   }
 
   return { model: jetson.model, provider: JETSON_PROVIDER };
+}
+
+export interface ChannelRecommendation {
+  name: string;
+  handle?: string;
+  reason?: string;
+}
+
+export interface ChannelRecommendationContext {
+  channels: string[];
+  likedVideos?: string[];
+  interests?: string[];
+  model?: string;
+  provider?: string;
+}
+
+/**
+ * Completion-only channel recommendations. This deliberately shares the
+ * server-side Jetson resolver and empty-completion checks with the topic
+ * workflows; browser callers never choose a provider or talk to Prism.
+ */
+export async function recommendChannels(
+  ctx: ChannelRecommendationContext,
+): Promise<{ channels: ChannelRecommendation[]; model: string; provider: string }> {
+  if (!Array.isArray(ctx.channels) || ctx.channels.length === 0) {
+    throw new Error("channels array is required and must be non-empty");
+  }
+  const { model, provider } = await resolveProviderAndModel(ctx.model, ctx.provider, true);
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You recommend high-quality YouTube channels. Return only JSON: " +
+        '{"channels":[{"name":"Channel Name","handle":"@handle","reason":"brief reason"}]}. ' +
+        "Recommend five distinct channels related to the user's actual interests. Do not repeat supplied channels.",
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        subscribed_channels: ctx.channels.slice(0, 30),
+        liked_videos: (ctx.likedVideos || []).slice(0, 20),
+        interests: (ctx.interests || []).slice(0, 20),
+      }),
+    },
+  ];
+  const data = await callPrismChat(model, provider, messages, 0.2, 1000);
+  const text = typeof data.text === "string" ? data.text.trim() : "";
+  const fenced = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  let parsed: any;
+  try {
+    parsed = JSON.parse(fenced);
+  } catch {
+    throw new Error("Wallgarden recommendation completion was not valid JSON");
+  }
+  const supplied = new Set(ctx.channels.map(c => c.trim().toLowerCase()).filter(Boolean));
+  const channels = Array.isArray(parsed?.channels)
+    ? parsed.channels
+        .filter((c: any) => c && typeof c.name === "string" && c.name.trim())
+        .map((c: any) => ({
+          name: c.name.trim(),
+          handle: typeof c.handle === "string" ? c.handle.trim() : undefined,
+          reason: typeof c.reason === "string" ? c.reason.trim() : undefined,
+        }))
+        .filter((c: ChannelRecommendation) => !supplied.has(c.name.toLowerCase()))
+        .slice(0, 10)
+    : [];
+  if (channels.length === 0) {
+    throw new Error("Wallgarden recommendation completion contained no channels");
+  }
+  return { channels, model, provider };
 }
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
@@ -1556,4 +1633,3 @@ Classify each video as ON_TOPIC, ADJACENT, NOVELTY, or OFF_TOPIC.`;
 
   return { classifications: fullResults, failed };
 }
-
