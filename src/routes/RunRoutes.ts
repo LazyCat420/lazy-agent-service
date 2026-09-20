@@ -8,15 +8,48 @@ import { randomUUID } from "node:crypto";
 
 import { LocalToolContinuation } from "../services/LocalToolContinuation.ts";
 
-import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
+import { runtimeAuth, getRuntimeScope, scopeOwnsRun, issueRuntimeSession } from "../middleware/RuntimeAuth.ts";
+
+import { RunEventSchema, RunResultSchema, ToolResultCommandSchema, ApprovalResolutionCommandSchema } from "../contracts/RuntimeWire.ts";
+import { RunApprovals } from "../services/RunApprovals.ts";
+import { DecisionService } from "../decision-fabric/DecisionService.ts";
 
 const router = express.Router();
 router.use(runtimeAuth);
+router.post("/sessions", asyncHandler(async (req: Request, res: Response) => {
+  if (!res.locals.runtimeBackend) return res.status(403).json({ error: { code: "BACKEND_REQUIRED" } });
+  try {
+    if (req.body.app_id !== req.project || req.body.username !== req.username) return res.status(403).json({ error: { code: "SCOPE_VIOLATION" } });
+    const bearer = issueRuntimeSession(req.body);
+    res.status(201).json({ bearer, expires_at: req.body.expires_at });
+  } catch { res.status(400).json({ error: { code: "INVALID_SESSION_SCOPE" } }); }
+}));
+router.post("/:runId/steer", asyncHandler(async (req: Request, res: Response) => {
+  const run = await RunStore.getRun(String(req.params.runId));
+  if (!run || !scopeOwnsRun(res, run) || run.identity?.project !== req.project || run.identity?.username !== req.username) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
+  const accepted = typeof req.body.instruction === "string" && RunExecutionEngine.steerRun(run.run_id, req.body.instruction);
+  res.status(accepted ? 202 : 409).json({ accepted, delivery: "next_model_turn" });
+}));
+router.post("/:runId/approvals/:approvalId", asyncHandler(async (req: Request, res: Response) => {
+  const run = await RunStore.getRun(String(req.params.runId));
+  if (!run || !scopeOwnsRun(res, run) || run.identity?.project !== req.project || run.identity?.username !== req.username) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
+  try { res.json(await RunApprovals.resolve(run.run_id, String(req.params.approvalId), ApprovalResolutionCommandSchema.parse(req.body).approved)); }
+  catch { res.status(409).json({ error: { code: "APPROVAL_REJECTED" } }); }
+}));
+router.post("/:runId/decisions", asyncHandler(async (req: Request, res: Response) => {
+  const run = await RunStore.getRun(String(req.params.runId));
+  if (!run || !scopeOwnsRun(res, run) || run.identity?.project !== req.project || run.identity?.username !== req.username) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
+  if (req.body.runId !== run.run_id) return res.status(400).json({ error: { code: "DECISION_RUN_MISMATCH" } });
+  const controller = new AbortController();
+  res.on("close", () => { if (!res.writableEnded) controller.abort(); });
+  try { res.json(await DecisionService.decide(req.body, controller.signal)); }
+  catch { res.status(400).json({ error: { code: "DECISION_REQUEST_REJECTED" } }); }
+}));
 router.post("/:runId/tools/:callId/result", asyncHandler(async (req: Request, res: Response) => {
   try {
     const run = await RunStore.getRun(String(req.params.runId));
-    if (!run || (run.identity && (run.identity.project !== req.project || run.identity.username !== req.username))) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
-    const result = await LocalToolContinuation.submit(String(req.params.runId), String(req.params.callId), req.body);
+    if (!run || !scopeOwnsRun(res, run) || (run.identity && (run.identity.project !== req.project || run.identity.username !== req.username))) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
+    const result = await LocalToolContinuation.submit(String(req.params.runId), String(req.params.callId), ToolResultCommandSchema.parse(req.body));
     res.json({ ok: true, ...result });
   } catch (err: any) {
     res.status(err.status || 400).json({ error: { code: "TOOL_RESULT_REJECTED", message: err.message } });
@@ -35,6 +68,8 @@ router.post(
     if (requestedApp && requestedApp !== payload.identity!.project) return res.status(403).json({ error: { code: "SCOPE_VIOLATION" } });
     payload.app_id = requestedApp || payload.identity!.project;
     const profileId = payload.profile_id || payload.profileId;
+    const scope = getRuntimeScope(res);
+    if (scope && (profileId !== scope.profile_id || (payload.session_id || payload.sessionId) !== scope.session_id)) return res.status(403).json({ error: { code: "SCOPE_VIOLATION" } });
 
     if (!profileId) {
       return res.status(400).json({
@@ -65,20 +100,25 @@ router.post(
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
+      let delivery = Promise.resolve();
       const sendEvent = (event: Omit<RunEvent, "id" | "timestamp">) => {
-        const fullEvent: RunEvent = {
+        const fullEvent = RunEventSchema.parse({
           ...event,
           id: `evt-${randomUUID()}`,
           timestamp: new Date().toISOString(),
-        };
-        res.write(`event: ${fullEvent.type}\ndata: ${JSON.stringify(fullEvent)}\n\n`);
+        }) as RunEvent;
+        delivery = delivery.then(async () => {
+          await RunStore.appendEvent(fullEvent);
+          if (!res.destroyed) res.write(`id: ${fullEvent.id}\nevent: ${fullEvent.type}\ndata: ${JSON.stringify(fullEvent)}\n\n`);
+        });
       };
 
       const controller = new AbortController();
       payload.signal = controller.signal;
       res.on("close", () => { if (!res.writableEnded) controller.abort(); });
       RunExecutionEngine.startRun(runId, payload, sendEvent)
-        .then(() => {
+        .then(async () => {
+          await delivery;
           res.end();
         })
         .catch(() => {
@@ -97,10 +137,25 @@ router.post(
         return res.status(400).json({ error: result.error });
       }
 
-      res.status(201).json(result);
+      res.status(201).json(RunResultSchema.parse(result));
     }
   }),
 );
+
+/** Resume delivery of recorded events only; never restart model or tool execution. */
+router.get("/:runId/events", asyncHandler(async (req: Request, res: Response) => {
+  const run = await RunStore.getRun(String(req.params.runId));
+  if (!run || !scopeOwnsRun(res, run) || run.identity?.project !== req.project || run.identity?.username !== req.username) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
+  const cursor = req.get("Last-Event-ID") || String(req.query.after || "");
+  const events = run.events || [];
+  const index = cursor ? events.findIndex(event => event.id === cursor) : -1;
+  if (cursor && index < 0) return res.status(409).json({ error: { code: "EVENT_CURSOR_UNKNOWN" } });
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  for (const event of events.slice(index + 1)) res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  // Snapshot delivery is explicit; clients may poll from the last event while active.
+  res.end();
+}));
 
 /**
  * GET /v1/runs/:runId
@@ -112,7 +167,7 @@ router.get(
     const { runId } = req.params;
     const run = await RunStore.getRun(runId as string);
 
-    if (!run || (run.identity && (run.identity.project !== (req.project || "default") || run.identity.username !== (req.username || "anonymous")))) {
+    if (!run || !scopeOwnsRun(res, run) || (run.identity && (run.identity.project !== (req.project || "default") || run.identity.username !== (req.username || "anonymous")))) {
       return res.status(404).json({
         error: {
           code: "RUN_NOT_FOUND",
@@ -120,17 +175,6 @@ router.get(
           retryable: false,
           category: "CLIENT",
         },
-      });
-    }
-
-    if (!RunStateMachine.isTerminal(run.status)) {
-      return res.json({
-        run_id: run.run_id,
-        status: run.status,
-        profile_id: run.profile_id,
-        current_turn: run.current_turn,
-        started_at: run.started_at,
-        deadline_at: run.deadline_at,
       });
     }
 
@@ -146,7 +190,7 @@ router.get(
       error: run.error,
     };
 
-    res.json(result);
+    res.json(RunResultSchema.parse(result));
   }),
 );
 
@@ -159,7 +203,7 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const { runId } = req.params;
     const run = await RunStore.getRun(runId as string);
-    if (!run || (run.identity && (run.identity.project !== (req.project || "default") || run.identity.username !== (req.username || "anonymous")))) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
+    if (!run || !scopeOwnsRun(res, run) || (run.identity && (run.identity.project !== (req.project || "default") || run.identity.username !== (req.username || "anonymous")))) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
     const cancelled = await RunExecutionEngine.cancelRun(runId as string);
     res.json({ ok: true, cancelled, run_id: runId as string, status: "cancelled" });
   }),

@@ -20,6 +20,21 @@ export class RuntimeClient {
   submitToolResult(runId: string, callId: string, result: unknown, authorization_receipt: Record<string, unknown>, is_error = false): Promise<unknown> {
     return this.command(`/${encodeURIComponent(runId)}/tools/${encodeURIComponent(callId)}/result`, "POST", { result, authorization_receipt, is_error });
   }
+  resolveApproval(runId: string, approvalId: string, approved: boolean): Promise<unknown> {
+    return this.command(`/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`, "POST", { approved });
+  }
+  steerRun(runId: string, instruction: string): Promise<unknown> { return this.command(`/${encodeURIComponent(runId)}/steer`, "POST", { instruction }); }
+  decide(runId: string, request: import("../decision-fabric/contracts.ts").TypedDecisionRequest): Promise<import("../decision-fabric/contracts.ts").DecisionReceipt> {
+    return this.command(`/${encodeURIComponent(runId)}/decisions`, "POST", request);
+  }
+  async *replayEvents(runId: string, after?: string): AsyncGenerator<RunEvent> {
+    const response = await fetch(`${this.baseUrl}/${encodeURIComponent(runId)}/events${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: this.headers });
+    if (!response.ok) throw new Error(`Runtime replay failed (HTTP ${response.status})`);
+    for (const block of (await response.text()).split(/\r?\n\r?\n/)) {
+      const data = block.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).replace(/^ /, "")).join("\n");
+      if (data) yield JSON.parse(data) as RunEvent;
+    }
+  }
   async *streamRun(request: CreateRunRequest): AsyncGenerator<RunEvent> {
     const { signal, identity: _identity, ...wire } = request;
     const response = await fetch(this.baseUrl, { method: "POST", signal, headers: { ...this.headers, "Content-Type": "application/json", Accept: "text/event-stream" }, body: JSON.stringify({ ...wire, stream: true }) });

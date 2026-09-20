@@ -15,7 +15,7 @@ export interface IdempotencyEntry {
 export class RunStore {
   private static runs: Map<string, RunRecord> = new Map();
   private static idempotency: Map<string, IdempotencyEntry> = new Map();
-  private static persistenceFile: string = path.resolve(
+  private static persistenceFile: string = process.env.RUNTIME_STORE_PATH || path.resolve(
     process.cwd(),
     "data",
     "run_store_durable.json",
@@ -65,7 +65,7 @@ export class RunStore {
         );
       }
     } catch (err: any) {
-      logger.warn(`[RunStore] Failed to load durable file: ${err.message}`);
+      throw new Error("Durable run store could not be loaded; refusing to lose execution history", { cause: err });
     }
   }
 
@@ -112,6 +112,12 @@ export class RunStore {
     await this.init();
     const run = this.runs.get(runId);
     return run ? { ...run } : null;
+  }
+
+  static async appendEvent(event: import("../types/run.ts").RunEvent): Promise<void> {
+    await this.init();
+    if (!this.runs.has(event.run_id)) return; // Rejected admission has no admitted run.
+    await this.mutateRun(event.run_id, run => ({ events: [...(run.events || []), event] }));
   }
 
   static async mutateRun(runId: string, mutate: (run: RunRecord) => Partial<RunRecord>): Promise<RunRecord> {

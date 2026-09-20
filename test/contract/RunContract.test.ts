@@ -262,8 +262,8 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
     expect(result.evidence_records?.[0].evidence_id).toBe("span-tool-001");
     expect(result.evidence_records?.[0].source).toBe("tool:fetch_financial_statement");
 
-    expect(result.usage?.prompt_tokens).toBe(150);
-    expect(result.usage?.completion_tokens).toBe(50);
+    expect(result.usage?.prompt_tokens).toBeNull(); // Tool spans cannot establish model billing.
+    expect(result.usage?.completion_tokens).toBeNull();
     expect(result.usage?.tool_calls_count).toBe(0); // Spans alone do not establish a dispatched call.
 
     // Check authoritative store

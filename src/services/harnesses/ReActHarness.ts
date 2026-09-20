@@ -321,6 +321,9 @@ export default class ReActHarness extends BaseAgenticHarness {
           resolvedPassTools.map((tool: ToolSchema) => tool.name),
         );
 
+        const steering = (context as any).runtimeSteering as string[] | undefined;
+        if (steering?.length) currentMessages.push(...steering.splice(0).map(content => ({ role: "user", content: `Updated user instruction: ${content}` })));
+
         // ── Context pressure management ──────────────────────────
         // Micro-compaction (pressure-gated) → auto-compaction → summary persistence
         const pressureResult = await manageContextPressure(

@@ -81,7 +81,10 @@ PRE_RESTART() {
   local trading_dir="${SCRIPT_DIR}/../trading-service"
   local preflight_python="${trading_dir}/.venv/bin/python"
   [ -x "$preflight_python" ] || preflight_python="python3"
-  "$preflight_python" "${trading_dir}/scripts/deploy_preflight.py"
+  "$preflight_python" "${trading_dir}/scripts/deploy_preflight.py" || return $?
+  # One-time move from the old container layer to a mounted durable directory.
+  # Never overwrite a store from an earlier migrated release.
+  ssh "$DEPLOY_SSH_HOST" "sudo mkdir -p '${DEPLOY_COMPOSE_DIR}/runtime-data' && if [ ! -f '${DEPLOY_COMPOSE_DIR}/runtime-data/run_store_durable.json' ]; then if sudo ${DEPLOY_DOCKER_BIN} exec lazy-agent-service test -f /app/data/run_store_durable.json; then sudo ${DEPLOY_DOCKER_BIN} cp lazy-agent-service:/app/data/run_store_durable.json '${DEPLOY_COMPOSE_DIR}/runtime-data/run_store_durable.json' || exit 1; fi; fi"
 }
 
 source "${SCRIPT_DIR}/../deploy-kit/lib.sh"

@@ -633,7 +633,7 @@ export default class BaseAgenticHarness {
           break;
         }
       }
-      if (pass.usage) {
+      if (pass.usageReported) {
         modelSpan.setAttributes({
           tokens_input: pass.usage.inputTokens,
           tokens_output: pass.usage.outputTokens,
@@ -696,6 +696,7 @@ export default class BaseAgenticHarness {
     // ── Usage event ──────────────────────────────────────
     if (streamChunk?.type === "usage") {
       const usageChunk = streamChunk.usage as TokenUsage | undefined;
+      pass.usageReported = usageChunk !== undefined && Object.values(usageChunk).some(value => typeof value === "number");
       mergeUsage(state.overallUsage, usageChunk);
       mergeUsage(pass.usage, usageChunk);
       const rawUsage = streamChunk.usage as Record<string, number> | undefined;

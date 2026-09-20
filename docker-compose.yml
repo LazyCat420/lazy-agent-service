@@ -11,6 +11,7 @@ services:
       - TZ=America/Los_Angeles
       - API_SERVER_KEY=sun-trading-secure-api-key-2026
       - CHART_OUTPUT_DIR=/app/data/charts
+      - RUNTIME_STORE_PATH=/app/runtime-data/run_store_durable.json
       # The /platform dashboard reads tool_usage_stats from the TRADING
       # database, not prism's. MONGO_URI comes from the deployed .env.
       - TRADING_MONGO_DB=${TRADING_MONGO_DB:-trading_bot}
@@ -18,6 +19,7 @@ services:
     volumes:
       - /usr/share/zoneinfo/America/Los_Angeles:/etc/localtime:ro
       - ./data/charts:/app/data/charts
+      - ./runtime-data:/app/runtime-data
       - ./projects.json:/app/projects.json:ro
 
     healthcheck:

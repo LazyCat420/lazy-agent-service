@@ -39,6 +39,7 @@ export interface ObservabilityPolicy {
 }
 
 export interface AgentProfile {
+  decision_policy?: { capabilities: string[]; data_classifications: Array<"public">; max_latency_ms: number };
   profile_id: string;
   version: string;
   contract_version?: string;
@@ -100,6 +101,11 @@ export class ProfileRegistry {
       throw new Error(
         `Invalid version '${data.version}': must follow semantic versioning X.Y.Z`,
       );
+    }
+
+    if (data.decision_policy) {
+      const policy = data.decision_policy;
+      if (!Array.isArray(policy.capabilities) || policy.capabilities.some((c: unknown) => c !== "semantic.choice.v1") || !Array.isArray(policy.data_classifications) || policy.data_classifications.some((c: unknown) => c !== "public") || !Number.isInteger(policy.max_latency_ms) || policy.max_latency_ms < 1 || policy.max_latency_ms > 2000) throw new Error("Invalid shadow decision policy");
     }
 
     // 1. Validate contract_version if provided
@@ -332,7 +338,7 @@ export class ProfileRegistry {
     if (Array.isArray(overrides.tools) && profile.tool_policy.mode === "STRICT_WHITELIST") {
       for (const tool of overrides.tools) {
         const toolName = typeof tool === "string" ? tool : tool.name;
-        if (toolName && !profile.tool_policy.whitelist.includes(toolName)) {
+        if (toolName && !profile.tool_policy.whitelist.some(registered => registered === toolName || (!toolName.includes("@") && registered.split("@")[0] === toolName))) {
           throw new Error(
             `Requested tool '${toolName}' is not allowed by profile '${profile.profile_id}' strict whitelist`,
           );

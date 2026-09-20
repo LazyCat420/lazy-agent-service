@@ -94,3 +94,9 @@ it("a restart seals interrupted work without replaying pending effects", async (
   expect(recovered?.error?.code).toBe("RUN_INTERRUPTED");
   expect(recovered?.pending_tools?.call).toBeDefined();
 });
+
+it("accepts an unversioned effective tool only at the registered version", async () => {
+  const active = await ProfileRegistry.loadProfile(profile);
+  expect(() => ProfileRegistry.validateOverrides(active!, { tools: [schema.name] })).not.toThrow();
+  expect(() => ProfileRegistry.validateOverrides(active!, { tools: [`${schema.name}@99.0`] })).toThrow();
+});

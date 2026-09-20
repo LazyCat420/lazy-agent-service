@@ -8,8 +8,12 @@ import type {
   RunRecord,
 } from "../types/run.ts";
 import crypto from "node:crypto";
+import { z } from "zod";
 import { normalizeRunRequest } from "./RunAdmission.ts";
 import { RuntimeExtensions } from "./RuntimeExtensions.ts";
+import { RunApprovals } from "./RunApprovals.ts";
+import { DecisionService } from "../decision-fabric/DecisionService.ts";
+import { CanonicalProviderBudget } from "./CanonicalProviderBudget.ts";
 import { LocalToolContinuation } from "./LocalToolContinuation.ts";
 import AgenticLoopService from "./AgenticLoopService.ts";
 import { ProfileRegistry } from "./ProfileRegistry.ts";
@@ -25,8 +29,14 @@ import { RunEvidenceStore } from "../platform/verify/RunEvidenceStore.ts";
 export class RunExecutionEngine {
   private static activeRuns: Map<
     string,
-    { abortController: AbortController; deadlineTimer?: NodeJS.Timeout }
+    { abortController: AbortController; deadlineTimer?: NodeJS.Timeout; steering: string[] }
   > = new Map();
+
+  static steerRun(runId: string, instruction: string): boolean {
+    const run = this.activeRuns.get(runId);
+    if (!run || run.abortController.signal.aborted || run.steering.length >= 8 || !instruction.trim() || instruction.length > 4096) return false;
+    run.steering.push(instruction); return true;
+  }
 
   static async cancelRun(runId: string): Promise<boolean> {
     const active = this.activeRuns.get(runId);
@@ -177,6 +187,7 @@ export class RunExecutionEngine {
     const initialRecord: RunRecord = {
       run_id: runId,
       identity,
+      session_id: request.session_id,
       status: "admitted",
       profile_id: profile.profile_id,
       profile_version: profile.version,
@@ -186,9 +197,9 @@ export class RunExecutionEngine {
       input: request.input,
       messages: [],
       usage: {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
+        prompt_tokens: null,
+        completion_tokens: null,
+        total_tokens: null,
         tool_calls_count: 0,
         retry_count: 0,
         duration_ms: 0,
@@ -227,7 +238,8 @@ export class RunExecutionEngine {
       }, deadlineMs);
     }
 
-    this.activeRuns.set(runId, { abortController, deadlineTimer });
+    const steering: string[] = [];
+    this.activeRuns.set(runId, { abortController, deadlineTimer, steering });
 
     if (request.signal) {
       request.signal.addEventListener("abort", () => {
@@ -271,6 +283,9 @@ export class RunExecutionEngine {
     emitEvent({ run_id: runId, runId, type: "run.started", data: { status: "running" } });
 
     const startTime = Date.now();
+    const accounting = new CanonicalProviderBudget(request.budget?.max_tokens ?? profile.budget_limits.max_tokens, abortController.signal);
+    let actualToolCalls = 0;
+    let partialText = "";
 
     try {
       const extensions = RuntimeExtensions.resolve(profile);
@@ -347,10 +362,11 @@ export class RunExecutionEngine {
 
       const context: any = {
         options,
+        runtimeSteering: steering,
         messages,
         providerName: preferredProvider,
         resolvedModel: selectedModel,
-        provider,
+        provider: accounting.wrap(provider),
         conversationId: runId,
         project: identity.project,
         username: identity.username,
@@ -370,22 +386,34 @@ export class RunExecutionEngine {
         return cap ? [{ name, description: cap.description, parameters: cap.parameters }] : [];
       });
       context.runtimeTools = { finalTools: [...localSchemas, ...globalSchemas], resolvedEnabledTools: options.enabledTools };
+      const toolValidators = new Map<string, z.ZodType>();
+      for (const schema of [...localSchemas, ...globalSchemas]) {
+        try { toolValidators.set(schema.name, z.fromJSONSchema(schema.parameters)); }
+        catch { throw Object.assign(new Error(`Unsupported tool schema: ${schema.name}`), { code: "TOOL_SCHEMA_UNSUPPORTED" }); }
+      }
+
       context.agentConversationId = runId;
       context.runId = runId;
       context.traceId = runId;
       context.emit = (event: any) => {
         if (event.type === "chunk") {
+          partialText += event.content || event.text || "";
           emitEvent({ run_id: runId, type: "message.delta", data: { delta: event.content || event.text || "" } });
         }
       };
       const requestContext = (request.runtime_overrides?.context || {}) as Record<string, string>;
-      let actualToolCalls = 0;
       context.runtimeToolExecutor = async (call: any) => {
         abortController.signal.throwIfAborted();
         if (!allowed.has(call.name) || profile.tool_policy.denylist?.includes(call.name)) throw Object.assign(new Error("Tool not allowed by effective policy"), { code: "POLICY_VIOLATION" });
         if (++actualToolCalls > maxToolCalls) throw Object.assign(new Error("Tool call budget exhausted"), { code: "TOOL_BUDGET_EXHAUSTED" });
+        const validator = toolValidators.get(call.name);
+        if (!validator || !validator.safeParse(call.args || {}).success) throw Object.assign(new Error("Tool arguments do not match the admitted schema"), { code: "TOOL_ARGUMENTS_INVALID" });
         for (const extension of extensions) await extension.beforeTool?.(structuredClone(call));
+        const localPolicy = profile.local_tool_policy?.[call.name];
+        const approvalId = localPolicy && (localPolicy.requires_confirmation || localPolicy.effect === "destructive")
+          ? await RunApprovals.wait(runId, call, request.app_id || "", request.session_id || "", abortController.signal, emitEvent) : undefined;
         const processed = await this.processToolCall(runId, call, {
+          approval_id: approvalId,
           profile_id: profile.profile_id,
           profile_version: profile.version,
           app_id: request.app_id ?? request.appId ?? requestContext.app_id,
@@ -398,6 +426,16 @@ export class RunExecutionEngine {
           emitEvent({ run_id: runId, type: "tool.completed", data: { tool_call_id: processed.event.data.tool_call_id, result: observation } });
           for (const extension of extensions) await extension.afterTool?.(call, observation);
           return observation;
+        }
+        // Only public web observations enter the optional shadow specialist layer.
+        // Its result is retained as telemetry and never modifies policy or model context.
+        if (profile.decision_policy && ["global.web.search", "global.web.read_page"].includes(call.name)) {
+          await DecisionService.decide({
+            requestId: crypto.randomUUID(), runId, capability: "semantic.choice.v1", questionId: "agent.evidence_sufficiency.v1", policyVersion: "shadow.v1", dataClassification: "public",
+            state: JSON.stringify(processed.result).slice(0, 4096),
+            questions: { evidence: { type: "choice", instructions: "Does this public source observation contain enough source text to support a sourced summary?", criteria: { source_text_available: "Substantive source text is available", insufficient_evidence: "Only links, empty results, errors, or insufficient text are available" }, requiredAbstainOption: true } },
+            constraints: { maxLatencyMs: profile.decision_policy.max_latency_ms, shadowOnly: true, noSideEffects: true, maxAttempts: 1 },
+          }, abortController.signal);
         }
         for (const extension of extensions) await extension.afterTool?.(call, processed.result);
         return processed.result;
@@ -424,28 +462,7 @@ export class RunExecutionEngine {
         redacted: false,
       }));
 
-      let promptTokens = 0;
-      let completionTokens = 0;
-      for (const s of spans) {
-        promptTokens += s.attributes?.tokens_input || 0;
-        completionTokens += s.attributes?.tokens_output || 0;
-      }
-      const measuredUsage = spans.some(s => typeof s.attributes?.tokens_input === "number" || typeof s.attributes?.tokens_output === "number");
-      const toolCallsCount = actualToolCalls;
-
-      const usage: RunUsage = {
-        prompt_tokens: measuredUsage ? promptTokens : null,
-        completion_tokens: measuredUsage ? completionTokens : null,
-        total_tokens: measuredUsage ? promptTokens + completionTokens : null,
-        tool_calls_count: toolCallsCount,
-        retry_count: 0,
-        duration_ms: durationMs,
-        // Aliases
-        promptTokens: measuredUsage ? promptTokens : null,
-        completionTokens: measuredUsage ? completionTokens : null,
-        totalTokens: measuredUsage ? promptTokens + completionTokens : null,
-        toolCalls: toolCallsCount,
-      };
+      const usage: RunUsage = accounting.usage(actualToolCalls, durationMs);
 
       const contextReceipt = {
         ...assembled.receipt,
@@ -490,6 +507,7 @@ export class RunExecutionEngine {
       return finalResult;
     } catch (err: any) {
       const durationMs = Date.now() - startTime;
+      await RunStore.updateRun(runId, { usage: accounting.usage(actualToolCalls, durationMs), messages: partialText ? [{ role: "assistant", content: partialText, outcome: "incomplete" }] : [] });
       if (abortController.signal.aborted) {
         if (isDeadlineTimeout || err.message?.includes("DEADLINE_EXCEEDED")) {
           const timeoutPayload: StructuredError = {
@@ -601,6 +619,7 @@ export class RunExecutionEngine {
     context: {
       profile_id: string;
       profile_version?: string;
+      approval_id?: string;
       app_id?: string;
       session_id?: string;
     },
@@ -799,7 +818,8 @@ export class RunExecutionEngine {
     const profileId = context.profile_id || "";
 
     const toolPolicy = profile.local_tool_policy?.[toolName];
-    if (!toolPolicy || toolPolicy.requires_confirmation || toolPolicy.effect === "destructive") {
+    const approved = await RunApprovals.permits(runId, context.approval_id, { id: toolCallId, name: toolName, args: toolArgs }, appId, sessionId);
+    if (!toolPolicy || ((toolPolicy.requires_confirmation || toolPolicy.effect === "destructive") && !approved)) {
       const error: StructuredError = { code: toolPolicy ? "CONFIRMATION_REQUIRED" : "TOOL_POLICY_MISSING", message: "Local tool requires registered effect metadata and satisfied approval policy", category: "POLICY", retryable: false };
       const event: RunEvent = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error } };
       emitEvent?.(event);
@@ -839,6 +859,7 @@ export class RunExecutionEngine {
       profile_id: profileId,
       execution: "local" as const,
       effect,
+      approval_id: context.approval_id,
       issued_at: issuedAt,
       expires_at: expiresAt,
       signature,

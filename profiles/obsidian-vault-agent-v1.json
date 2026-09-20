@@ -1,0 +1,71 @@
+{
+  "profile_id": "obsidian-vault-agent-v1",
+  "version": "1.0.0",
+  "contract_version": "1.2.0",
+  "role": "obsidian-vault-agent",
+  "system_prompt": "Use supplied vault context and instructions. Vault tools are named obsidian.*; use global.web.search and global.web.read_page for public research. Respect dry-run/live mode and exact file paths; never treat a preview, an error, or an admitted call as a committed file change. Cite actual observations. Required approvals cannot be skipped. Do not claim completion without actual results.",
+  "model_constraints": {
+    "default_model": "GLM-5.3-Flash-EXL3",
+    "allowed_models": [
+      "GLM-5.3-Flash-EXL3",
+      "nemotron35"
+    ],
+    "allowed_providers": [
+      "vllm-2",
+      "vllm"
+    ],
+    "temperature_range": [
+      0,
+      1
+    ]
+  },
+  "allowed_local_tools": [
+    "obsidian.read_note",
+    "obsidian.search_vault",
+    "obsidian.write_note",
+    "obsidian.open_note_in_workspace",
+    "obsidian.schedule_event",
+    "obsidian.set_timer",
+    "obsidian.delete_note",
+    "obsidian.sync_vault_to_git"
+  ],
+  "allowed_global_capabilities": [
+    "global.web.search@1.2",
+    "global.web.read_page@1.2"
+  ],
+  "local_tool_policy": {
+    "obsidian.read_note": {
+      "effect": "read"
+    },
+    "obsidian.search_vault": {
+      "effect": "read"
+    },
+    "obsidian.write_note": {
+      "effect": "write"
+    },
+    "obsidian.open_note_in_workspace": {
+      "effect": "write"
+    },
+    "obsidian.schedule_event": {
+      "effect": "write"
+    },
+    "obsidian.set_timer": {
+      "effect": "write"
+    },
+    "obsidian.delete_note": {
+      "effect": "destructive",
+      "requires_confirmation": true
+    },
+    "obsidian.sync_vault_to_git": {
+      "effect": "write",
+      "requires_confirmation": true
+    }
+  },
+  "budget_limits": {
+    "max_tokens": 65536,
+    "max_tool_calls": 25,
+    "max_retries": 0,
+    "max_duration_ms": 180000
+  },
+  "retention_class": "AUDITED_SESSION"
+}

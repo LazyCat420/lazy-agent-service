@@ -199,6 +199,7 @@ export interface AgenticOptions {
 // ── Generation Context ──────────────────────────────────────
 
 export interface AgenticContext {
+  runtimeSteering?: string[];
   options: AgenticOptions;
   agent?: string | null;
   project: string;
@@ -237,6 +238,7 @@ export interface AgenticContext {
 // ── Per-Iteration Pass State ────────────────────────────────
 
 export interface PassState {
+  usageReported?: boolean;
   streamedText: string;
   finalStreamedText: string;
   streamedThinking: string;

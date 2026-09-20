@@ -19,9 +19,56 @@ Compatibility and rollout gates:
 
 - SDK source must be deployed with runtime/HTML-Notes because local acknowledgement and runtime authentication are required. Existing signed local receipts and application ownership checks remain in force.
 - Runtime authentication grants trusted backend authority, not independent end-user authentication. Applications remain responsible for authenticating users before asserting identity.
-- Approvals have no resolution command yet; tools requiring approval are denied. Restart recovery preserves failure and effects; it does not resume an in-flight model process.
+- Approval resolution is implemented in the follow-up below. Restart recovery preserves failure and effects; it does not resume an in-flight model process.
 - Required trading financial/market validators and researcher worker plugins must be registered before those profiles can run. Their declarations no longer silently pass.
-- Full generated-model parity, resumable event replay, aggregate retry/usage coverage, and the other consumer cutovers remain release gates. Do not remove legacy loops or enable further applications based on this batch alone.
+- Generated contract checks, replay delivery, model accounting, and consumer migrations are being integrated below. Do not remove legacy loops or enable a consumer until its actual workflow passes parity.
 - Preserve the trading-service 20-replay/canary gate. Obsidian entrypoint selection, Music job parity and Wallgarden completion-only parity require their own subsequent application releases.
 
 Validation and deployment evidence are recorded in the session's release report; a successful build alone is not a deployed-workflow result.
+
+## Follow-up integration
+
+- Model-call accounting now wraps the provider itself, including compaction and
+  repair calls. Prompt bytes plus output allowance reserve the budget
+  conservatively; measured billing remains separate. Missing/partial reports
+  produce null totals with measured-call coverage, including failed runs.
+- Scoped desktop bearer sessions bind app, user, profile and vault session for
+  at most 24 hours. A trusted backend provisions them; the signing key never
+  belongs in a plugin. Local executors retain file/session authorization.
+- Approval requests pause execution. The authenticated resolution command is
+  bound to the exact call and arguments, persists the decision, and rejects
+  conflicting duplicates. Cancellation and expiry cannot authorize execution.
+- Event snapshots at `GET /v1/runs/{id}/events` accept `Last-Event-ID` or `after`.
+  They deliver recorded events only and do not restart reasoning or effects.
+  Closing the original run stream still cancels it. A reconnect can inspect that
+  outcome; it cannot silently restart a partially executed mutation.
+- Steering at `POST /v1/runs/{id}/steer` is bounded and applies at the next model
+  turn. It does not undo an already admitted effect.
+- Run data is now mounted at `/app/runtime-data`; deployment migrates the old
+  container-layer snapshot once, preserving the prior store.
+
+## TinyModels shadow bridge
+
+The runtime owns the decision-provider interface and receipt store. Profiles
+opt into `semantic.choice.v1` for public state only. The first automatic hook
+scores public search/page observations for evidence sufficiency. Signals never
+change tool availability, discard evidence, or authorize effects. All calls
+have a bounded payload/deadline and one attempt. Failures record a typed
+fallback and leave the primary model workflow intact. Replaying a request ID
+returns its frozen receipt rather than querying the current model.
+
+Configure `TINYMODELS_SHADOW_ENABLED=true`, `TINYMODELS_URL`, and credentials via
+Vault (`JETSON_FEATURES_API_KEY`) or the runtime environment. Pin
+`TINYMODELS_EXPECTED_VERSION` and `TINYMODELS_EXPECTED_DEPLOYMENT` to the reviewed
+release. The supported provider contract is `decision-provider.v1`, with
+`semantic.choice.v1` explicitly advertising `/v1/system1/decide`. Old feature
+API responses are refused; no model availability is inferred from health or a
+model catalogue. The provider response includes exact model/deployment identity,
+input/output hashes, calibration state, latency, and process-unload evidence.
+
+Read-only Jetson inspection on September 19 found commit
+`cd7e9300104711068e601978ad39311c5257f6d3`, feature capability schema 1, and no
+`/v1/system1/status` or `/v1/training/capabilities`. That deployment does not yet
+satisfy the new decision-provider contract. Training/lifecycle changes require
+its source checkout and actual worker/container acceptance; no training,
+model loading, promotion, or protected Nemotron changes were attempted.

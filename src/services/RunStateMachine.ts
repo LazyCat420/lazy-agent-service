@@ -2,7 +2,9 @@ import type { RunState } from "../types/run.ts";
 
 export const VALID_TRANSITIONS: Record<RunState, RunState[]> = {
   admitted: ["running", "cancelled", "failed", "timed_out"],
+  waiting_for_approval: ["running", "waiting_for_tool", "failed", "cancelled", "timed_out"],
   running: [
+    "waiting_for_approval",
     "waiting_for_tool",
     "waiting_for_worker",
     "completed",
@@ -10,7 +12,7 @@ export const VALID_TRANSITIONS: Record<RunState, RunState[]> = {
     "cancelled",
     "timed_out",
   ],
-  waiting_for_tool: ["running", "failed", "cancelled", "timed_out"],
+  waiting_for_tool: ["running", "waiting_for_approval", "failed", "cancelled", "timed_out"],
   waiting_for_worker: ["running", "failed", "cancelled", "timed_out"],
   completed: [],
   failed: [],

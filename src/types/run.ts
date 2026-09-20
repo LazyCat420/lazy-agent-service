@@ -3,6 +3,7 @@ import type { ContextReceipt } from "../platform/contracts/manifest.ts";
 export type RunState =
   | "admitted"
   | "running"
+  | "waiting_for_approval"
   | "waiting_for_tool"
   | "waiting_for_worker"
   | "completed"
@@ -86,6 +87,7 @@ export interface CreateRunRequest {
 }
 
 export type RunEventType =
+  | "approval.required"
   | "run.admitted"
   | "run.started"
   | "message.delta"
@@ -159,6 +161,10 @@ export interface RunResult {
 }
 
 export interface RunRecord {
+  approvals?: Record<string, import("../services/RunApprovals.ts").RunApproval>;
+  decision_receipts?: import("../decision-fabric/contracts.ts").DecisionReceipt[];
+  session_id?: string;
+  events?: RunEvent[];
   identity?: { project: string; username: string };
   pending_tools?: Record<string, { event: any; result_digest?: string; observation?: unknown }>;
   contract_version?: string;

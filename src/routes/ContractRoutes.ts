@@ -9,6 +9,12 @@ import { z } from "zod";
 import { RunRequestSchema } from "../services/RunAdmission.ts";
 
 const router = express.Router();
+router.get("/wire-schema", (_req, res) => {
+  const candidates = [path.resolve("contracts/generated/runtime-wire-v1.json"), path.resolve("dist/contracts/generated/runtime-wire-v1.json")];
+  const file = candidates.find(candidate => fs.existsSync(candidate));
+  if (!file) return res.status(503).json({ error: { code: "WIRE_CONTRACT_UNAVAILABLE" } });
+  res.json(JSON.parse(fs.readFileSync(file, "utf8")));
+});
 router.get("/request-schema", (_req, res) => res.json(z.toJSONSchema(RunRequestSchema)));
 
 const CONTRACT_VERSION = "1.2.0";

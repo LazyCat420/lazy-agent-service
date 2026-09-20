@@ -7,11 +7,38 @@
   "system_prompt": "Answer the user's research request using the supplied conversation and portfolio context. For current news, search, read relevant source pages, then synthesize the actual observations with source URLs and publication dates when available. Never treat a search link or an admitted tool call as completed research. If no relevant news is available, say so. Do not invent current facts, place orders, modify portfolios, or dispatch background work.",
   "model_constraints": {
     "default_model": "GLM-5.3-Flash-EXL3",
-    "allowed_models": ["GLM-5.3-Flash-EXL3", "nemotron35"],
-    "allowed_providers": ["vllm-2", "vllm"],
-    "temperature_range": [0, 0.4]
+    "allowed_models": [
+      "GLM-5.3-Flash-EXL3",
+      "nemotron35"
+    ],
+    "allowed_providers": [
+      "vllm-2",
+      "vllm"
+    ],
+    "temperature_range": [
+      0,
+      0.4
+    ]
   },
-  "allowed_global_capabilities": ["global.web.search@1.2", "global.web.read_page@1.2", "global.time.now@1.2"],
-  "budget_limits": {"max_tokens": 12288, "max_tool_calls": 6, "max_retries": 0, "max_duration_ms": 180000},
-  "retention_class": "AUDITED_SESSION"
+  "allowed_global_capabilities": [
+    "global.web.search@1.2",
+    "global.web.read_page@1.2",
+    "global.time.now@1.2"
+  ],
+  "budget_limits": {
+    "max_tokens": 49152,
+    "max_tool_calls": 6,
+    "max_retries": 0,
+    "max_duration_ms": 180000
+  },
+  "retention_class": "AUDITED_SESSION",
+  "decision_policy": {
+    "capabilities": [
+      "semantic.choice.v1"
+    ],
+    "data_classifications": [
+      "public"
+    ],
+    "max_latency_ms": 750
+  }
 }
