@@ -139,6 +139,7 @@ def analyze_row(row: dict[str, Any], source: str | None = None) -> dict[str, Any
         "evidence_completed": evidence,
         "false_completion_claim": completed_claim and not evidence,
         "original_false_completion": row.get("false_completion"),
+        "strict_completion_mismatch": row.get("strict_completion_mismatch"),
     }
 
 
