@@ -1,10 +1,11 @@
 /** JSON-lines offline fixture worker; all tool HTTP is intercepted. */
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import readline from "node:readline";
 const root = path.resolve(process.env.TOOL_BENCH_ROOT || process.cwd());
 const fixed = process.env.TOOL_BENCH_ARM === "after";
-process.env.TRADING_TOOL_CONTEXT_KEY = "offline-workflow-benchmark";
+process.env.TRADING_TOOL_CONTEXT_KEY = randomBytes(32).toString("hex");
 const { default: McpAdapter } = await import(pathToFileURL(path.join(root, "src/services/McpAdapter.ts")).href);
 const binding = fixed ? await import("../../src/services/TradingToolContext.ts") : null;
 const { bindToolResponse } = await import("../../src/services/TradingToolStream.ts");
