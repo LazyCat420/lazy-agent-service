@@ -72,6 +72,7 @@ EXTRA_SSH_SYNC() {
 
   info "Appending IMAGE_NAME and PORT to remote NAS .env..."
   ssh "$DEPLOY_SSH_HOST" "echo 'IMAGE_NAME=${IMAGE_NAME}' >> '${DEPLOY_COMPOSE_DIR}/.env' && echo 'PORT=${PORT}' >> '${DEPLOY_COMPOSE_DIR}/.env'"
+  ssh "$DEPLOY_SSH_HOST" "echo 'TINYMODELS_SHADOW_ENABLED=true' >> '${DEPLOY_COMPOSE_DIR}/.env' && echo 'DECISION_PROVIDER=semif' >> '${DEPLOY_COMPOSE_DIR}/.env'"
   ok "remote NAS .env updated"
 }
 
