@@ -1,13 +1,17 @@
 import crypto from "node:crypto";
 import { DecisionRequestSchema, type DecisionProvider, type DecisionReceipt } from "./contracts.ts";
 import { TinyModelsProvider, decisionHash } from "./TinyModelsProvider.ts";
+import { SemIfProvider } from "./SemIfProvider.ts";
 import { RunStore } from "../services/RunStore.ts";
 import { ProfileRegistry } from "../services/ProfileRegistry.ts";
+
+/** Shadow signal source: SemIf by default; DECISION_PROVIDER=tinymodels restores the legacy route. */
+const defaultProvider = (): DecisionProvider => process.env.DECISION_PROVIDER === "tinymodels" ? new TinyModelsProvider() : new SemIfProvider();
 
 /** Signals are recorded in shadow; they cannot edit context, authorize tools, or execute actions. */
 export class DecisionService {
   private static pending = new Map<string, Promise<DecisionReceipt>>();
-  static async decide(input: unknown, signal?: AbortSignal, provider: DecisionProvider = new TinyModelsProvider()): Promise<DecisionReceipt> {
+  static async decide(input: unknown, signal?: AbortSignal, provider: DecisionProvider = defaultProvider()): Promise<DecisionReceipt> {
     const request = DecisionRequestSchema.parse(input);
     const hash = decisionHash(request);
     const key = `${request.runId}:${request.requestId}`;
