@@ -277,7 +277,7 @@
  },
  {
   "name": "get_sec_filings",
-  "description": "Collect SEC institutional (13F) holdings data for a stock ticker \u2014 which top funds hold it and how positions changed. Executes on trading-service; takes a ticker symbol ('symbol' is accepted as an alias, and the ticker under analysis is used when neither is given).",
+  "description": "Legacy compatibility alias: refresh and read SEC 13F institutional holdings. This does not return 10-K or 10-Q company filings, balance sheets, or issuer disclosures. Use get_institutional_holdings for the stored 13F read.",
   "parameters": {
    "type": "object",
    "properties": {
@@ -293,9 +293,9 @@
    "required": []
   },
   "tier": 0,
-  "source": "sec",
+  "source": "sec_13f",
   "permission": "read_only",
-  "fallback_only": false,
+  "fallback_only": true,
   "concurrency_safe": true,
   "max_result_chars": 50000,
   "tags": [],
@@ -305,12 +305,7 @@
    "stock-analysis"
   ],
   "owner_app": "trading",
-  "agents": [
-   "tournament_pitch",
-   "user_chat",
-   "v3_worker_fundamental",
-   "v3_worker_insider"
-  ]
+  "agents": []
  },
  {
   "name": "get_smart_money_leaderboard",
