@@ -17,7 +17,7 @@ const acknowledgement = JSON.stringify({
 const isThink = (name: unknown) => typeof name === "string" && stripMcpPrefix(name) === "think";
 
 /** What the forced last turn is for. prism's exhaustion pass (its maxIterations
- * ceiling) strips the tools and appends an <iteration-limit> user turn asking for
+ * ceiling) turns the tools off and appends an <iteration-limit> user turn asking for
  * a prose progress summary; a trading agent's contract is its JSON artifact.
  * nemotron35 answers that turn with one more tool call, which a tool-less request
  * returns as an EMPTY reply: 169 of 170 bull and 166 of 168 bear runs that reached
@@ -31,10 +31,15 @@ export const FINAL_TURN_DIRECTIVE = "When an <iteration-limit> message arrives, 
   "JSON artifact, built from the evidence you already have, with anything you could not " +
   "verify stated as a gap.";
 
-/** prism's forced final turn: the last message is its <iteration-limit> notice and no tool is offered. */
-function isForcedFinalTurn(messages: any[], tools: unknown): boolean {
+/** prism's forced final turn: the last message is its <iteration-limit> notice and no tool can be
+ * called. prism builds up to 2026-09-27 removed the catalog on that turn; the build deployed that
+ * evening keeps the catalog byte-stable (for the prompt cache) and sends tool_choice "none" instead.
+ * Keyed on the catalog alone, the directive fired on 0 of 6 wall turns on 2026-09-28.
+ */
+function isForcedFinalTurn(messages: any[], tools: unknown, toolChoice: unknown): boolean {
   const last = messages[messages.length - 1];
-  return !(Array.isArray(tools) && tools.length > 0)
+  const callable = Array.isArray(tools) && tools.length > 0 && toolChoice !== "none";
+  return !callable
     && last?.role === "user" && typeof last.content === "string"
     && last.content.includes("<iteration-limit>") && !last.content.includes(FINAL_TURN_DIRECTIVE);
 }
@@ -74,7 +79,7 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
     return m;
   });
   if (!injected) messages.unshift({ role: "system", content: protocol });
-  const finalTurnDirected = isForcedFinalTurn(messages, tools);
+  const finalTurnDirected = isForcedFinalTurn(messages, tools, body.tool_choice);
   if (finalTurnDirected) {
     const last = messages[messages.length - 1];
     messages[messages.length - 1] = { ...last, content: last.content + "\n" + FINAL_TURN_DIRECTIVE };

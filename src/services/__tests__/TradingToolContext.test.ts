@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { signToolContext, verifyToolContext, prepareToolContext, extractToolContext, attachToolContext,
-  authorizeTradingTool, TOOL_CONTEXT_ARG, signMcpClient, verifyMcpClient } from "../TradingToolContext.ts";
+  authorizeTradingTool, TOOL_CONTEXT_ARG, signMcpClient, verifyMcpClient, markUnattended } from "../TradingToolContext.ts";
 import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 beforeEach(() => vi.stubEnv("TRADING_TOOL_CONTEXT_KEY", "offline-context-test-key"));
 afterEach(() => vi.unstubAllEnvs());
@@ -92,4 +92,15 @@ it("keeps provider-visible progress during long argument generation without rele
   }
   expect(JSON.parse(argumentsText)).toEqual({ content: "first second third fourth", [TOOL_CONTEXT_ARG]: token });
   expect(stream.finish()).toBe("");
+});
+
+it("marks every trading /agent run unattended so prism denies an approval ask instead of waiting", () => {
+  // 2026-09-28: prism parked scrape_url (x2) and whiteboard_annotate on a card nobody could
+  // answer; each run waited out trading's 1,800 s timeout. unattended turns the ask into a denial.
+  const trading = { project: "vllm-trading-bot", agent: "CUSTOM_V3_JUNIOR_ANALYST", autoApprove: true, messages: [] };
+  const marked = markUnattended(trading);
+  expect(marked).toEqual({ ...trading, unattended: true });
+  expect(trading).not.toHaveProperty("unattended");
+  const other = { project: "html-notes-client", messages: [] };
+  expect(markUnattended(other)).toBe(other);
 });

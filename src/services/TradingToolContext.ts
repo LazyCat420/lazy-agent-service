@@ -60,6 +60,18 @@ export function prepareToolContext(body: Record<string, any>): Record<string, an
   const token = signToolContext(context);
   return { ...body, systemPrompt: `<${TAG}>${token}</${TAG}>\n${body.systemPrompt || ""}` };
 }
+/** A trading /agent run has nobody to answer an approval card. prism (the build deployed
+ * 2026-09-27) asks before an MCP call whose arguments repeat text the run read from a tool
+ * result — full auto does not answer that ask — and then waits for a person with no timeout.
+ * In the 2026-09-28 market-open cycle that happened three times (scrape_url twice,
+ * whiteboard_annotate once), and each run sat until trading's 1,800 s agent timeout.
+ * `unattended` is prism's request field for runs with no person (its scheduled tasks and
+ * benchmarks send it): the same ask becomes an immediate denial the model reads as a tool
+ * result and works around. Nothing that ran before is refused by it.
+ */
+export function markUnattended(body: Record<string, any>): Record<string, any> {
+  return body.project === "vllm-trading-bot" ? { ...body, unattended: true } : body;
+}
 /** Remove gateway metadata from model input, including echoed prior tool calls. */
 export function extractToolContext(body: Record<string, any>): { body: Record<string, any>; token?: string } {
   let token: string | undefined;

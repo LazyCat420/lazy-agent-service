@@ -100,6 +100,24 @@ describe("prism's forced final turn", () => {
     expect(twice.body.messages[3].content.split(FINAL_TURN_DIRECTIVE).length).toBe(2);
   });
 
+  it("directs the forced turn when prism keeps the catalog and sets tool_choice none", () => {
+    // prism since its 2026-09-27 deploy: the tools stay byte-stable for the prompt cache and
+    // calling is switched off instead (cycle-v3-1790602200 CRH v3_junior_analyst, 22nd message).
+    const body = { ...wallTurn(), tools: [tool("get_market_data")], tool_choice: "none" };
+    const fixed = applyTradingToolProtocol(body, ["get_market_data"]);
+    expect(fixed.finalTurnDirected).toBe(true);
+    expect(fixed.body.messages[3].content).toBe(notice + "\n" + FINAL_TURN_DIRECTIVE);
+    expect(fixed.body.tools).toEqual([tool("get_market_data")]);
+    expect(fixed.body.tool_choice).toBe("none");
+  });
+
+  it("leaves a wall notice alone while a tool can still be called", () => {
+    for (const tool_choice of [undefined, "auto", "required"]) {
+      const body = { ...wallTurn(), tools: [tool("get_market_data")], ...(tool_choice && { tool_choice }) };
+      expect(applyTradingToolProtocol(body, ["get_market_data"]).finalTurnDirected).toBe(false);
+    }
+  });
+
   it("leaves ordinary tool-less requests alone", () => {
     const fixed = applyTradingToolProtocol({ messages: [{ role: "system", content: "role" }, { role: "user", content: "## Ticker: NSC" }] });
     expect(fixed.finalTurnDirected).toBe(false);

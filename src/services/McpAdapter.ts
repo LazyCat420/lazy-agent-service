@@ -11,6 +11,7 @@ import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { dispatchTool } from "./ToolDispatch.ts";
 import { classifyToolResult } from "./ToolResult.ts";
+import { modelVisibleText } from "./ModelVisibleToolResult.ts";
 import { verifyMcpClient } from "./TradingToolContext.ts";
 import { MCP_SERVER_NAME } from "./PrismRegistrationService.ts";
 
@@ -136,15 +137,18 @@ export default class McpAdapter {
         // TOOL_TIMEOUT result instead of protocol error -32001.
         return await raceToolDeadline(
           toolName,
-          dispatchTool(toolName, toolArgs, { transport: "mcp", authenticatedProject }).then((result) => ({
-            isError: !classifyToolResult(result).success,
-            content: [
-              {
-                type: "text" as const,
-                text: typeof result === "string" ? result : JSON.stringify(result),
-              },
-            ],
-          }))
+          dispatchTool(toolName, toolArgs, { transport: "mcp", authenticatedProject }).then((result) => {
+            // A trading bridge result goes to the model unwrapped and within prism's
+            // per-result limit (ModelVisibleToolResult.ts); everything else is unchanged.
+            const visible = modelVisibleText(result);
+            if (visible.cut) {
+              logger.info(`[McpAdapter] ${toolName} result cut to fit prism's per-result limit: ${visible.before} -> ${visible.after} chars`);
+            }
+            return {
+              isError: !classifyToolResult(result).success,
+              content: [{ type: "text" as const, text: visible.text }],
+            };
+          })
         );
       } catch (err: any) {
         logger.error(`[McpAdapter] Tool execution failed for ${toolName}: ${err.message}`);
