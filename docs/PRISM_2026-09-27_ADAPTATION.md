@@ -61,10 +61,16 @@ stream, which prism now counts as a failed pass.
 ## 4. The forced final turn changed shape (fixed: `isForcedFinalTurn`)
 
 prism now keeps the tool catalog on its `<iteration-limit>` turn and sends `tool_choice: "none"`
-instead of removing the tools. `FINAL_TURN_DIRECTIVE` (b645d4f) only fired when the catalog was
-gone, so it fired on 0 of 6 wall turns on 2026-09-28 and every nemotron wall answer was still empty
-(bull, bear, bull defense, junior; each rebuilt by a repair call). The directive now also fires
-when the catalog is kept but `tool_choice` is `"none"`. Replay of the stored new-shape wall turns
+instead of removing the tools, and it sends the notice as a **system** message. `rewriteMessages`
+demotes that message to `user` only after the trading protocol has run, which is why every stored
+payload shows it as `user`. `FINAL_TURN_DIRECTIVE` (b645d4f) needed a missing catalog and a user
+notice, so it fired on 0 of 5 wall turns on 2026-09-28 and every nemotron wall answer was still
+empty (bull, bear, bull defense, junior; each rebuilt by a repair call). `004e23b` fixed the
+catalog half only, and the first post-deploy verification run still showed
+`final_turn_directed: false` — the shim log gave the reason: `demoted 2 non-leading system
+message(s)` on the wall turn against 1 on every other turn. The directive now fires on a
+`<iteration-limit>` notice in the last message whether it is a user or a system message, when no
+tool is callable (no catalog, or `tool_choice: "none"`). Replay of the stored new-shape wall turns
 (trading-service `scripts/benchmarks/turn_wall_replay.py --since 2026-09-28T02:40:00 --wall-only
 --arms asis,wallmsg --repeats 2`, 5 nemotron and 1 GLM case): nemotron as sent 0 of 10 artifacts
 (calibration: production was empty on all of them), with the directive 10 of 10 complete artifacts,

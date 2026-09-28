@@ -33,14 +33,17 @@ export const FINAL_TURN_DIRECTIVE = "When an <iteration-limit> message arrives, 
 
 /** prism's forced final turn: the last message is its <iteration-limit> notice and no tool can be
  * called. prism builds up to 2026-09-27 removed the catalog on that turn; the build deployed that
- * evening keeps the catalog byte-stable (for the prompt cache) and sends tool_choice "none" instead.
- * Keyed on the catalog alone, the directive fired on 0 of 6 wall turns on 2026-09-28.
+ * evening keeps the catalog byte-stable (for the prompt cache) and sends tool_choice "none"
+ * instead, and it sends the notice as a SYSTEM message — rewriteMessages demotes it to user only
+ * after this protocol has run, so the stored payload shows "user". Keyed on a missing catalog and
+ * a user notice, the directive fired on 0 of 5 wall turns on 2026-09-28 (and on none of the first
+ * verification run of 004e23b, which fixed only the catalog half).
  */
 function isForcedFinalTurn(messages: any[], tools: unknown, toolChoice: unknown): boolean {
   const last = messages[messages.length - 1];
   const callable = Array.isArray(tools) && tools.length > 0 && toolChoice !== "none";
   return !callable
-    && last?.role === "user" && typeof last.content === "string"
+    && (last?.role === "user" || last?.role === "system") && typeof last.content === "string"
     && last.content.includes("<iteration-limit>") && !last.content.includes(FINAL_TURN_DIRECTIVE);
 }
 

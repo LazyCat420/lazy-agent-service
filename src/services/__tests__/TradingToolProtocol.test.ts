@@ -100,15 +100,32 @@ describe("prism's forced final turn", () => {
     expect(twice.body.messages[3].content.split(FINAL_TURN_DIRECTIVE).length).toBe(2);
   });
 
-  it("directs the forced turn when prism keeps the catalog and sets tool_choice none", () => {
-    // prism since its 2026-09-27 deploy: the tools stay byte-stable for the prompt cache and
-    // calling is switched off instead (cycle-v3-1790602200 CRH v3_junior_analyst, 22nd message).
-    const body = { ...wallTurn(), tools: [tool("get_market_data")], tool_choice: "none" };
-    const fixed = applyTradingToolProtocol(body, ["get_market_data"]);
-    expect(fixed.finalTurnDirected).toBe(true);
-    expect(fixed.body.messages[3].content).toBe(notice + "\n" + FINAL_TURN_DIRECTIVE);
-    expect(fixed.body.tools).toEqual([tool("get_market_data")]);
-    expect(fixed.body.tool_choice).toBe("none");
+  it("directs the forced turn as prism sends it since 2026-09-27: tools kept, tool_choice none, a system notice", () => {
+    // The tools stay byte-stable for the prompt cache and calling is switched off instead
+    // (cycle-v3-1790602200 CRH v3_junior_analyst, 22nd message), and the notice arrives as a
+    // system message: the shim's rewriteMessages demotes it to user only AFTER this protocol
+    // (lazy-agent-service log on the verification run: "demoted 2 non-leading system message(s)"
+    // on the wall turn, 1 on every other turn).
+    const systemNotice = () => {
+      const turn = wallTurn();
+      turn.messages[3] = { role: "system", content: notice };
+      return { ...turn, tools: [tool("get_market_data")], tool_choice: "none" };
+    };
+    for (const body of [systemNotice(), { ...wallTurn(), tools: [tool("get_market_data")], tool_choice: "none" }]) {
+      const fixed = applyTradingToolProtocol(body, ["get_market_data"]);
+      expect(fixed.finalTurnDirected).toBe(true);
+      expect(fixed.body.messages[3].content).toBe(notice + "\n" + FINAL_TURN_DIRECTIVE);
+      expect(fixed.body.messages[3].role).toBe(body.messages[3].role);
+      expect(fixed.body.tools).toEqual([tool("get_market_data")]);
+      expect(fixed.body.tool_choice).toBe("none");
+    }
+  });
+
+  it("does not direct an earlier system message that merely quotes the notice", () => {
+    const body = wallTurn();
+    body.messages.splice(1, 0, { role: "system", content: "Earlier: " + notice } as any);
+    body.messages.push({ role: "assistant", content: "{}" } as any);
+    expect(applyTradingToolProtocol(body).finalTurnDirected).toBe(false);
   });
 
   it("leaves a wall notice alone while a tool can still be called", () => {
