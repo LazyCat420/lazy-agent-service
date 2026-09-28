@@ -16,8 +16,32 @@ const acknowledgement = JSON.stringify({
 });
 const isThink = (name: unknown) => typeof name === "string" && stripMcpPrefix(name) === "think";
 
+/** What the forced last turn is for. prism's exhaustion pass (its maxIterations
+ * ceiling) strips the tools and appends an <iteration-limit> user turn asking for
+ * a prose progress summary; a trading agent's contract is its JSON artifact.
+ * nemotron35 answers that turn with one more tool call, which a tool-less request
+ * returns as an EMPTY reply: 169 of 170 bull and 166 of 168 bear runs that reached
+ * the wall (09-13..09-27) came back empty and needed a second, tool-less repair
+ * call. The sentence is appended to that turn only, so every earlier turn keeps
+ * its cached prefix. Text is the one replayed on stored wall turns
+ * (trading-service scripts/benchmarks/turn_wall_replay.py, arm `wallmsg`).
+ */
+export const FINAL_TURN_DIRECTIVE = "When an <iteration-limit> message arrives, your tools are gone for this task: do not " +
+  "call a tool and do not summarize progress. Reply at once with the complete required " +
+  "JSON artifact, built from the evidence you already have, with anything you could not " +
+  "verify stated as a gap.";
+
+/** prism's forced final turn: the last message is its <iteration-limit> notice and no tool is offered. */
+function isForcedFinalTurn(messages: any[], tools: unknown): boolean {
+  const last = messages[messages.length - 1];
+  return !(Array.isArray(tools) && tools.length > 0)
+    && last?.role === "user" && typeof last.content === "string"
+    && last.content.includes("<iteration-limit>") && !last.content.includes(FINAL_TURN_DIRECTIVE);
+}
+
 export function applyTradingToolProtocol(body: Record<string, any>, allowedTools?: string[]): {
   body: Record<string, any>; removedTools: number; correctedAcknowledgements: number; deniedTools: string[];
+  finalTurnDirected: boolean;
 } {
   const allowed = allowedTools ? new Set(allowedTools.map(stripMcpPrefix)) : null;
   const deniedTools: string[] = [];
@@ -50,6 +74,11 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
     return m;
   });
   if (!injected) messages.unshift({ role: "system", content: protocol });
+  const finalTurnDirected = isForcedFinalTurn(messages, tools);
+  if (finalTurnDirected) {
+    const last = messages[messages.length - 1];
+    messages[messages.length - 1] = { ...last, content: last.content + "\n" + FINAL_TURN_DIRECTIVE };
+  }
   const result: Record<string, any> = { ...body, messages, ...(Array.isArray(tools) ? { tools } : {}) };
   if (isThink(body.tool_choice?.function?.name) || deniedTools.includes(body.tool_choice?.function?.name)) result.tool_choice = tools?.length ? "auto" : "none";
   if (removedTools && !tools.length && body.tool_choice === "required") result.tool_choice = "none";
@@ -59,5 +88,5 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
     delete result.tools;
     delete result.tool_choice;
   }
-  return { body: result, removedTools, correctedAcknowledgements, deniedTools };
+  return { body: result, removedTools, correctedAcknowledgements, deniedTools, finalTurnDirected };
 }

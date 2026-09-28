@@ -790,6 +790,7 @@ export class VllmShimService {
           boundary.receipt.reasoning_tools_removed = protocol.removedTools - protocol.deniedTools.length;
           boundary.receipt.reasoning_acknowledgements_corrected = protocol.correctedAcknowledgements;
           boundary.receipt.unpermitted_tools_removed = protocol.deniedTools;
+          boundary.receipt.final_turn_directed = protocol.finalTurnDirected;
         }
       } catch (error) {
         res.status(422).json({ error: String(error) });
