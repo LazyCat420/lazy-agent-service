@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyTradingToolProtocol } from "../TradingToolProtocol.ts";
+import { applyTradingToolProtocol, FINAL_TURN_DIRECTIVE } from "../TradingToolProtocol.ts";
 
 const tool = (name: string) => ({ type: "function", function: { name, parameters: { type: "object" } } });
 describe("trading execution protocol", () => {
@@ -52,4 +52,57 @@ it("omits an emptied signed catalog for tool-less correction requests", () => {
   expect(result.body).not.toHaveProperty("tools");
   expect(result.body).not.toHaveProperty("tool_choice");
   expect(result.deniedTools).toEqual(["search_web","execute_python"]);
+});
+
+describe("prism's forced final turn", () => {
+  // The notice prism appends at its maxIterations ceiling, verbatim from a stored
+  // trading payload (cycle-v3-1790464211 NSC v3_bull_agent, 6th provider payload).
+  const notice = "<iteration-limit>\n\nMaximum tool-call iterations reached for this turn. Summarize progress so far, report partial results, and state what remains to be done.\n\n</iteration-limit>";
+  const wallTurn = () => ({ messages: [
+    { role: "system", content: "role" },
+    { role: "assistant", content: null, tool_calls: [{ id: "c1", function: { name: "get_market_data", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "c1", content: "quote" },
+    { role: "user", content: notice },
+  ] });
+
+  it("tells the model the turn is for the artifact when the tools are gone", () => {
+    const body = wallTurn();
+    const before = JSON.stringify(body);
+    const fixed = applyTradingToolProtocol(body, ["get_market_data"]);
+    const last = fixed.body.messages[fixed.body.messages.length - 1];
+    expect(fixed.finalTurnDirected).toBe(true);
+    expect(last.content).toBe(notice + "\n" + FINAL_TURN_DIRECTIVE);
+    expect(fixed.body.messages[2]).toBe(body.messages[2]);
+    expect(JSON.stringify(body)).toBe(before);
+  });
+
+  it("leaves a turn that still offers tools alone", () => {
+    const body = { ...wallTurn(), tools: [tool("get_market_data")] };
+    const fixed = applyTradingToolProtocol(body, ["get_market_data"]);
+    expect(fixed.finalTurnDirected).toBe(false);
+    expect(fixed.body.messages[3].content).toBe(notice);
+  });
+
+  it("treats a catalog the role filter emptied as no tools", () => {
+    const body = { ...wallTurn(), tools: [tool("execute_python")] };
+    const fixed = applyTradingToolProtocol(body, ["get_market_data"]);
+    expect(fixed.body).not.toHaveProperty("tools");
+    expect(fixed.finalTurnDirected).toBe(true);
+  });
+
+  it("does not touch a notice that is not the last turn, and never appends twice", () => {
+    const earlier = wallTurn();
+    earlier.messages.push({ role: "assistant", content: "{}", tool_calls: undefined } as any);
+    expect(applyTradingToolProtocol(earlier).finalTurnDirected).toBe(false);
+    const once = applyTradingToolProtocol(wallTurn()).body;
+    const twice = applyTradingToolProtocol(once);
+    expect(twice.finalTurnDirected).toBe(false);
+    expect(twice.body.messages[3].content.split(FINAL_TURN_DIRECTIVE).length).toBe(2);
+  });
+
+  it("leaves ordinary tool-less requests alone", () => {
+    const fixed = applyTradingToolProtocol({ messages: [{ role: "system", content: "role" }, { role: "user", content: "## Ticker: NSC" }] });
+    expect(fixed.finalTurnDirected).toBe(false);
+    expect(fixed.body.messages[1].content).toBe("## Ticker: NSC");
+  });
 });

@@ -128,7 +128,8 @@ export async function recordProviderSnapshot(receipt: Record<string, any> | null
       stage:"provider.payload", created_at, schema_version:1, snapshot,
       attributes:{conversation_id:receipt.conversationId, task_delivery:receipt.task_delivery,
         payload_hash:receipt.payload_hash, model:payload.model,
-        excluded_tags:receipt.excluded_tags, unpermitted_tools_removed:receipt.unpermitted_tools_removed},
+        excluded_tags:receipt.excluded_tags, unpermitted_tools_removed:receipt.unpermitted_tools_removed,
+        final_turn_directed:receipt.final_turn_directed === true},
     });
   } catch (error) {
     logger.error(`[TradingTrace] provider snapshot failed: ${String(error)}`);
