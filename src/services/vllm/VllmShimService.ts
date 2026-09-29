@@ -1,5 +1,6 @@
 import { applyTradingToolProtocol } from "../TradingToolProtocol.ts";
 import { extractToolContext, verifyToolContext } from "../TradingToolContext.ts";
+import { cutStreamBody, probeFault } from "../ProbeFault.ts";
 import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 import { filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
 import { type Request, type Response } from "express";
@@ -803,6 +804,18 @@ export class VllmShimService {
       body = this.rewriteMessages(body as Record<string, unknown>);
       body = this.sanitizeGenerationParams(body as Record<string, unknown>);
       await recordProviderSnapshot(boundary.receipt, body);
+      // The boundary probe's cut stream (see ProbeFault.ts): one delta, then the
+      // connection ends with no finish_reason — what prism must report as it does.
+      const probeCycle = toolContextToken ? verifyToolContext(toolContextToken).cycleId : undefined;
+      if (probeFault(probeCycle) === "cut") {
+        logger.warn(`[VllmShim] probe fault injected: cut stream (cycle ${probeCycle})`);
+        res.status(200);
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.flushHeaders?.();
+        res.write(cutStreamBody((body as Record<string, unknown>).model));
+        return res.end();
+      }
     }
 
     const isEmbedPost = basePath === "/v1/embeddings" && req.method === "POST" && !!body && typeof body === "object";
