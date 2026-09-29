@@ -708,7 +708,7 @@
   },
   {
     "name": "whiteboard_read",
-    "description": "Read a section of the team's shared whiteboard for a given ticker. Pipeline artifact sections (written by the desk as it works): 'desk_note', 'fundamental_report', 'quant_report', 'valuation_report', 'bull_argument', 'bear_rebuttal', 'debate_judge', 'tournament_result', 'regime_classification', 'final_decision'. Collaboration sections written during research: 'market_context', 'risk_flags', 'signals'. Board-written only late in the cycle (empty before the decision): 'consensus', 'trade_plan'. Omit section to get the full whiteboard summary.",
+    "description": "Read a section of the team's shared whiteboard for a given ticker. Pipeline artifact sections (written by the desk as it works, and ALREADY in your context \u2014 read only to expand one the summary marked truncated): 'desk_note', 'fundamental_report', 'quant_report', 'valuation_report', 'bull_argument', 'bear_rebuttal', 'bull_defense', 'debate_judge', 'tournament_result', 'regime_classification', 'final_decision'. Collaboration sections, which ONLY exist here: 'market_context' (junior analyst), 'risk_flags' (fundamental analyst), 'signals' (quant analyst) \u2014 each is written by its author partway through the cycle, so a read before that author has run returns empty and is not an error. Omit section to get the full whiteboard summary.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -719,6 +719,38 @@
         "section": {
           "type": "string",
           "description": "The exact section name to read, e.g. 'bull_argument' or 'quant_report' (NOT 'bull'/'bear' \u2014 those do not exist). Omit for the full whiteboard summary."
+        }
+      },
+      "required": [
+        "ticker"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_board_of_directors",
+      "v3_debate_judge"
+    ]
+  },
+  {
+    "name": "whiteboard_snapshot",
+    "description": "Expand the current ticker's upstream research, debate, Board verdict and collaboration evidence in one read. Use when synthesis needs several full sections omitted by prompt summaries; if supplied evidence is sufficient, finish without this read. Returns complete section contents with entry IDs, versions, source references and annotations. Reuse delivered sections; do not read them again without a new publication. Oversized sections are explicitly omitted and remain available through targeted whiteboard_read. An absent section has no current publication, not a proven producer failure. Excludes control records and the synthesizer's own output.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "The current ticker."
         }
       },
       "required": [

@@ -1,7 +1,18 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { bootstrapLocalEnvironment } from "../../bootstrap.ts";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 
-bootstrapLocalEnvironment();
+// This is a unit test, not a dependency on the developer's .env/provider list.
+// A clean worktree has no configured instances; the old test silently queried
+// none and then failed all healing assertions without exercising the service.
+vi.mock("../../providers/instance-registry.ts", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../providers/instance-registry.ts")>(),
+  getInstancesByType: () => [{ id: "vllm", type: "vllm" }, { id: "vllm-2", type: "vllm" }],
+}));
+vi.mock("../../providers/index.ts", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../providers/index.ts")>(),
+  getProvider: (id: string) => ({ listModels: async () => ({ data: [{ id:
+    id === "vllm" ? "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit" : "google/gemma-4-26B-A4B-it",
+  }] }) }),
+}));
 
 const { VllmModelSyncService, isEmbeddingModel } = await import("../VllmModelSyncService.ts");
 const { default: SettingsService } = await import("../SettingsService.ts");
@@ -33,6 +44,9 @@ let mockSettings: SettingsData = {
     allowEnvFiles: false,
   },
 } as SettingsData;
+
+const originalGet = SettingsService.get;
+const originalUpdate = SettingsService.update;
 
 // Override SettingsService methods to use mock data
 SettingsService.get = async () => {
@@ -101,6 +115,8 @@ describe("VllmModelSyncService — auto-healing of stale provider/model settings
 
   afterAll(() => {
     globalThis.fetch = originalFetch;
+    SettingsService.get = originalGet;
+    SettingsService.update = originalUpdate;
   });
 
   it("heals extractionProvider to 'vllm' (Jetson) to match the loaded Qwen model", () => {
