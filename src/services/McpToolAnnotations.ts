@@ -14,6 +14,9 @@ export interface McpToolAnnotations {
 // Fetches from the outside world, changes nothing.
 const READS_THE_WEB: McpToolAnnotations = { readOnlyHint: true, openWorldHint: true };
 
+// Reads this service's own stores and never leaves the desk.
+const READS_OWN_STORE: McpToolAnnotations = { readOnlyHint: true, openWorldHint: false };
+
 // Appends versioned rows to this service's own Mongo; never deletes or overwrites.
 const APPENDS_TO_OWN_STORE: McpToolAnnotations = {
   readOnlyHint: false,
@@ -26,6 +29,9 @@ export const MCP_TOOL_ANNOTATIONS: Readonly<Record<string, McpToolAnnotations>> 
   scrape_url: READS_THE_WEB,
   whiteboard_write: APPENDS_TO_OWN_STORE,
   whiteboard_annotate: APPENDS_TO_OWN_STORE,
+  // Stage 2 (2026-09-28): free-text queries that repeat a headline or an equation name
+  lazy_web_search: READS_THE_WEB,
+  search_equations: READS_OWN_STORE,
 };
 
 export function annotationsFor(toolName: string): McpToolAnnotations | undefined {

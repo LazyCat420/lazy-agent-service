@@ -39,18 +39,35 @@ function taintSensitive(caps: string[]): boolean {
 
 // Money movement, persistence that later agents run or obey, and scheduling:
 // a tool result must never be able to steer these without a human.
+// run_equation executes model-written Python (a raw `code` argument) and
+// run_tool_chain chains calls, so neither can be told apart from a write by
+// annotation alone: a copied span in their arguments must keep asking.
 const MUST_STAY_GATED = [
   "buy_stock",
   "sell_stock",
   "add_to_watchlist",
   "remove_from_watchlist",
   "save_equation",
+  "run_equation",
+  "run_tool_chain",
   "schedule_research",
   "request_research_now",
   "cancel_scheduled_research",
   "propose_parameter_change",
   "watch_ticker",
   "clear_watch",
+];
+
+// Tools whose free-text arguments repeated an earlier tool result (a URL, a
+// headline, an equation name) and were denied by prism in a live unattended
+// probe before they were annotated. Dropping one brings the denial back with
+// nothing else failing, so the membership is pinned here.
+const MUST_BE_ANNOTATED = [
+  "scrape_url",
+  "whiteboard_write",
+  "whiteboard_annotate",
+  "lazy_web_search",
+  "search_equations",
 ];
 
 describe("MCP tool annotations", () => {
@@ -91,7 +108,14 @@ describe("MCP tool annotations", () => {
     }
   });
 
-  it("trade execution, persistence and scheduling tools stay behind the gate", () => {
+  it("the tools the live probe saw denied stay annotated", () => {
+    for (const name of MUST_BE_ANNOTATED) {
+      expect(byName.has(name), `${name} left the catalog; drop it from this list`).toBe(true);
+      expect(annotationsFor(name), name).toBeDefined();
+    }
+  });
+
+  it("trade execution, code execution, persistence and scheduling tools stay behind the gate", () => {
     for (const name of MUST_STAY_GATED) {
       expect(byName.has(name), `${name} left the catalog; drop it from this list`).toBe(true);
       expect(annotationsFor(name), name).toBeUndefined();
