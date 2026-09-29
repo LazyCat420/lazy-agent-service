@@ -70,6 +70,7 @@ const MUST_BE_ANNOTATED = [
   "whiteboard_annotate",
   "lazy_web_search",
   "search_equations",
+  "screener_query",
 ];
 
 describe("MCP tool annotations", () => {

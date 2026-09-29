@@ -32,6 +32,9 @@ export const MCP_TOOL_ANNOTATIONS: Readonly<Record<string, McpToolAnnotations>> 
   // Stage 2 (2026-09-28): free-text queries that repeat a headline or an equation name
   lazy_web_search: READS_THE_WEB,
   search_equations: READS_OWN_STORE,
+  // Stage 4 (2026-09-29): an industry or sector name copied from an earlier result into a
+  // screener filter (11 of the 39 calls the gate still denied over 30 days of production)
+  screener_query: READS_OWN_STORE,
 };
 
 export function annotationsFor(toolName: string): McpToolAnnotations | undefined {
