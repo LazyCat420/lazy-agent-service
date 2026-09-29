@@ -14,6 +14,7 @@ import { classifyToolResult } from "./ToolResult.ts";
 import { modelVisibleText } from "./ModelVisibleToolResult.ts";
 import { verifyMcpClient } from "./TradingToolContext.ts";
 import { MCP_SERVER_NAME } from "./PrismRegistrationService.ts";
+import { toMcpTool } from "./McpToolAnnotations.ts";
 
 // One MCP tool result, in the shape the CallToolRequestSchema handler returns.
 type McpToolResult = {
@@ -113,11 +114,7 @@ export default class McpAdapter {
 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const rawTools = await this.loadTools();
-      const mcpTools = rawTools.map((t: any) => ({
-        name: t.name,
-        description: t.description || "",
-        inputSchema: t.parameters || { type: "object", properties: {} },
-      }));
+      const mcpTools = rawTools.map(toMcpTool);
 
       return {
         tools: mcpTools,
