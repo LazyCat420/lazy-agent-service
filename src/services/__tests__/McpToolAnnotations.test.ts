@@ -39,9 +39,10 @@ function taintSensitive(caps: string[]): boolean {
 
 // Money movement, persistence that later agents run or obey, and scheduling:
 // a tool result must never be able to steer these without a human.
-// run_equation executes model-written Python (a raw `code` argument) and
-// run_tool_chain chains calls, so neither can be told apart from a write by
-// annotation alone: a copied span in their arguments must keep asking.
+// The catalog labels run_equation, run_backtest, save_equation and
+// run_tool_chain read_only although they execute model-written Python,
+// overwrite a library equation's stats, persist a new equation, or chain other
+// calls, so the label is no guide and they are pinned by name.
 const MUST_STAY_GATED = [
   "buy_stock",
   "sell_stock",
@@ -49,6 +50,7 @@ const MUST_STAY_GATED = [
   "remove_from_watchlist",
   "save_equation",
   "run_equation",
+  "run_backtest",
   "run_tool_chain",
   "schedule_research",
   "request_research_now",
@@ -87,9 +89,9 @@ describe("MCP tool annotations", () => {
     }
   });
 
-  it("read-only is claimed only for tools the catalog labels read_only", () => {
+  it("read-only is claimed exactly for the tools the catalog labels read_only", () => {
     for (const [name, a] of Object.entries(MCP_TOOL_ANNOTATIONS)) {
-      if (a.readOnlyHint === true) expect(byName.get(name)?.permission, name).toBe("read_only");
+      expect(a.readOnlyHint === true, name).toBe(byName.get(name)?.permission === "read_only");
     }
   });
 
