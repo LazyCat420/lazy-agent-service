@@ -1,5 +1,6 @@
 import { CreateRunRequest } from "../../src/types/run.ts";
 import { RunExecutionEngine } from "../../src/services/RunExecutionEngine.ts";
+import { describe, it, expect } from "vitest";
 
 describe("Run API Contract Tests", () => {
   it("isolates execution requests", async () => {
