@@ -44,6 +44,23 @@ describe("Canonical repair regressions", () => {
     expect(events).toEqual(["run.failed"]);
   });
 
+  it("softly caps tool calls when budget is exceeded for non-zero budget, prompting model to synthesize", async () => {
+    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+      // First call (within budget)
+      await context.runtimeToolExecutor!({ id: "call1", name: "global.time.now", args: {} });
+      // Second call (exceeds budget)
+      const res2 = await context.runtimeToolExecutor!({ id: "call2", name: "global.time.now", args: {} });
+      expect((res2 as any)?.error).toBe("TOOL_BUDGET_EXHAUSTED");
+      expect((res2 as any)?.message).toContain("Tool call budget reached (1 tool calls)");
+      return { messages: [{ role: "assistant", content: "Synthesized answer after tool ceiling reached." }] };
+    });
+    const request = { profile_id: "trading-strategy-chat-v1", input: "news", app_id: "trading", session_id: "session-budget",
+      runtime_overrides: { tools: ["global.time.now"] }, budget: { max_tool_calls: 1 } };
+    const result = await Engine.startRun("soft-budget-run", request, () => {});
+    expect(result.status).toBe("completed");
+    expect(result.messages.at(-1)?.content).toBe("Synthesized answer after tool ceiling reached.");
+  });
+
   it("waits for real results, rejects cross-run results and safely acknowledges identical duplicates", async () => {
     let continued = false;
     let admission: any;

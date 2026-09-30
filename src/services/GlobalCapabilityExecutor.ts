@@ -342,7 +342,13 @@ export class GlobalCapabilityExecutor {
       else signal?.addEventListener("abort", abort, { once: true });
       let res: Response;
       try {
-        res = await fetch(url, { signal: controller.signal });
+        const headers: Record<string, string> = {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          ...(args.headers as Record<string, string> || {}),
+        };
+        res = await fetch(url, { signal: controller.signal, headers });
       } finally {
         clearTimeout(timer);
         signal?.removeEventListener("abort", abort);
@@ -350,10 +356,13 @@ export class GlobalCapabilityExecutor {
 
       if (!res.ok) {
         return {
-          success: false,
-          error: {
-            code: "PAGE_FETCH_ERROR",
-            message: `HTTP fetch failed with status ${res.status}`,
+          success: true,
+          result: {
+            url,
+            title: `HTTP ${res.status}`,
+            content: `Failed to fetch page content: HTTP ${res.status} ${res.statusText || ""}. The website blocked automated access or the page was not found. Please rely on the search snippet or alternative sources to answer.`,
+            character_count: 0,
+            status: res.status,
           },
         };
       }
@@ -382,10 +391,13 @@ export class GlobalCapabilityExecutor {
         return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Page read was cancelled" } };
       }
       return {
-        success: false,
-        error: {
-          code: "PAGE_READ_FAILED",
-          message: err.message || "Failed to read page content",
+        success: true,
+        result: {
+          url,
+          title: "Page Read Error",
+          content: `Failed to read page content: ${err.message || "Network error"}. Please rely on the search snippet or alternative sources to answer.`,
+          character_count: 0,
+          error: err.message,
         },
       };
     }

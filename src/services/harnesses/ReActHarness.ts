@@ -824,10 +824,6 @@ export default class ReActHarness extends BaseAgenticHarness {
         break;
       }
 
-      if (context.runtimeToolExecutor && !hasCleanTextBreak) {
-        throw Object.assign(new Error("Canonical run ended without a final model turn"), { code: "INCOMPLETE_RUN" });
-      }
-
       // ── Exhaustion Recovery Pass ─────────────────────────────
       // Triggers when the agent used tools but never produced a clean text-only
       // break — regardless of how the loop exited (max iterations, empty output,
@@ -842,6 +838,10 @@ export default class ReActHarness extends BaseAgenticHarness {
       ) {
         state.conversationOutcome = "exhausted";
         await runExhaustionRecoveryPass(this, context, state, currentMessages);
+      }
+
+      if (context.runtimeToolExecutor && !hasCleanTextBreak && state.conversationOutcome !== "exhausted") {
+        throw Object.assign(new Error("Canonical run ended without a final model turn"), { code: "INCOMPLETE_RUN" });
       }
 
       // ── Finalization (happy path) ──────────────────────────────

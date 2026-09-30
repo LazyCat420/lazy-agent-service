@@ -26,6 +26,20 @@ const provider = {
       yield `${fixturePage} Source: ${fixtureUrl}`;
       return;
     }
+    if (script.mode === "forbidden" && script.calls === 1) {
+      yield { type: "toolCall", id: "search-1", name: "global.web.search", args: { query: "fixture semiconductor news" } };
+      return;
+    }
+    if (script.mode === "forbidden" && script.calls === 2) {
+      yield { type: "toolCall", id: "read-1", name: "global.web.read_page", args: { url: fixtureUrl } };
+      return;
+    }
+    if (script.mode === "forbidden" && script.calls === 3) {
+      const transcript = JSON.stringify(messages);
+      if (!transcript.includes("HTTP 403")) throw new Error("HTTP 403 observation was not returned to the model");
+      yield "Synthesized result from snippet: Semiconductor revenue grew based on search snippet. Source: " + fixtureUrl;
+      return;
+    }
     if (script.mode === "empty" && script.calls === 1) {
       yield { type: "toolCall", id: "search-empty", name: "global.web.search", args: { query: "fixture empty" } };
       return;
@@ -68,7 +82,12 @@ describe("real runtime news workflow", () => {
     vi.stubEnv("RUNTIME_AUTH_SECRET", crypto.randomBytes(32).toString("hex"));
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === fixtureUrl) return new Response(`<html><body>${fixturePage}</body></html>`, { status: 200 });
+      if (url === fixtureUrl) {
+        if (script.mode === "forbidden") {
+          return new Response("Forbidden", { status: 403, statusText: "Forbidden" });
+        }
+        return new Response(`<html><body>${fixturePage}</body></html>`, { status: 200 });
+      }
       throw new Error(`Unexpected fixture URL: ${url}`);
     });
     await ProfileRegistry.loadProfilesFromDisk();
@@ -116,5 +135,22 @@ describe("real runtime news workflow", () => {
     expect(result.status).not.toBe("completed");
     expect(events.some(event => event.type === "tool.failed" && event.data.tool_name === "global.web.search")).toBe(true);
     expect(result.messages.at(-1)?.content ?? "").not.toContain("Source:");
+  });
+
+  it("softly handles page access restriction (HTTP 403) so model synthesizes from search snippet without crashing", async () => {
+    script.mode = "forbidden";
+    const events: any[] = [];
+    const result = await RunExecutionEngine.startRun("runtime-news-403", {
+      profile_id: "obsidian-vault-agent-v1", profile_version: "1.0.0", app_id: "obsidian",
+      session_id: "fixture-session", input: "Research the fixture feed with forbidden page.",
+      runtime_overrides: { tools: ["global.web.search", "global.web.read_page"] },
+    }, event => events.push(event));
+
+    expect(result.status).toBe("completed");
+    expect(events.filter(event => event.type === "tool.completed").map(event => event.data.tool_name)).toEqual([
+      "global.web.search", "global.web.read_page",
+    ]);
+    expect(result.messages.at(-1)?.content).toContain("Semiconductor revenue grew based on search snippet");
+    expect(script.calls).toBe(3);
   });
 });

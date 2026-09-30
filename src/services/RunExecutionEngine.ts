@@ -481,8 +481,15 @@ export class RunExecutionEngine {
       const requestContext = (request.runtime_overrides?.context || {}) as Record<string, string>;
       context.runtimeToolExecutor = async (call: any) => {
         abortController.signal.throwIfAborted();
-        if (!allowed.has(call.name) || profile.tool_policy.denylist?.includes(call.name)) throw Object.assign(new Error("Tool not allowed by effective policy"), { code: "POLICY_VIOLATION" });
-        if (++actualToolCalls > maxToolCalls) throw Object.assign(new Error("Tool call budget exhausted"), { code: "TOOL_BUDGET_EXHAUSTED" });
+        if (++actualToolCalls > maxToolCalls) {
+          if (maxToolCalls === 0) {
+            throw Object.assign(new Error("Tool call budget exhausted"), { code: "TOOL_BUDGET_EXHAUSTED" });
+          }
+          return {
+            error: "TOOL_BUDGET_EXHAUSTED",
+            message: `Tool call budget reached (${maxToolCalls} tool calls). You must now synthesize and deliver your final comprehensive answer using the information already gathered without calling any further tools.`,
+          };
+        }
         const validator = toolValidators.get(call.name);
         if (!validator || !validator.safeParse(call.args || {}).success) throw Object.assign(new Error("Tool arguments do not match the admitted schema"), { code: "TOOL_ARGUMENTS_INVALID" });
         for (const extension of extensions) await extension.beforeTool?.(structuredClone(call));

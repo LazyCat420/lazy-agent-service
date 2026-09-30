@@ -2,7 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 export function bootstrapLocalEnvironment() {
-  const projectsPath = path.resolve(process.cwd(), "projects.json");
+  let projectsPath = path.resolve(process.cwd(), "projects.json");
+  if (!fs.existsSync(projectsPath)) {
+    const parentCandidate = path.resolve(process.cwd(), "../..", "projects.json");
+    if (fs.existsSync(parentCandidate)) {
+      projectsPath = parentCandidate;
+    }
+  }
   if (!fs.existsSync(projectsPath)) {
     console.warn(`[Local-Vault] ⚠️ projects.json not found at ${projectsPath}, using raw process.env`);
     return;
