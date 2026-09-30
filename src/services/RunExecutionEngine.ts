@@ -25,6 +25,7 @@ import { getProvider } from "../providers/index.ts";
 import { ContextAssembly } from "../platform/context/ContextAssembly.ts";
 import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
 import { RunEvidenceStore } from "../platform/verify/RunEvidenceStore.ts";
+import { DynamicModelResolver } from "./DynamicModelResolver.ts";
 
 export class RunExecutionEngine {
   private static activeRuns: Map<
@@ -128,6 +129,8 @@ export class RunExecutionEngine {
       emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: err } });
       return { run_id: runId, id: runId, status: "failed", messages: [], error: err };
     }
+
+    await DynamicModelResolver.queryLiveHosts();
 
     try {
       ProfileRegistry.validateOverrides(profile, request.runtime_overrides);
@@ -367,13 +370,31 @@ export class RunExecutionEngine {
       });
 
       // 7. Model & Provider Resolution
-      const selectedModel =
+      const requestedModel =
         request.model ||
-        request.runtime_overrides?.model ||
+        request.runtime_overrides?.model;
+      const requestedProvider = request.runtime_overrides?.provider
+        ? String(request.runtime_overrides.provider)
+        : undefined;
+
+      const dynamicResolution = DynamicModelResolver.resolveProviderAndModel(
+        profile.role,
+        profile.model_constraints.allowed_providers,
+        requestedModel || profile.model_constraints.default_model,
+        requestedProvider,
+      );
+
+      const selectedModel =
+        requestedModel ||
+        dynamicResolution.model ||
         profile.model_constraints.default_model;
 
       const preferredProvider =
-        String(request.runtime_overrides?.provider ?? profile.model_constraints.provider_by_model?.[selectedModel] ?? profile.model_constraints.allowed_providers[0] ?? "vllm-shim");
+        requestedProvider ||
+        dynamicResolution.provider ||
+        profile.model_constraints.provider_by_model?.[selectedModel] ||
+        profile.model_constraints.allowed_providers[0] ||
+        "vllm-shim";
       let provider: any = {};
       try {
         provider = getProvider(preferredProvider) || {};

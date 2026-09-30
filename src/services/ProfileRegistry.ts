@@ -3,6 +3,7 @@ import path from "node:path";
 import logger from "../utils/logger.ts";
 import type { RuntimeOverrides } from "../types/run.ts";
 import { CapabilityRegistry } from "./CapabilityRegistry.ts";
+import { DynamicModelResolver } from "./DynamicModelResolver.ts";
 
 export interface ModelConstraints {
   max_output_tokens?: number;
@@ -317,9 +318,16 @@ export class ProfileRegistry {
     if (overrides.provider && !profile.model_constraints.allowed_providers.includes(String(overrides.provider))) throw new Error("Requested provider is outside profile policy");
 
     if (overrides.model && !profile.model_constraints.allowed_models.includes(overrides.model)) {
-      throw new Error(
-        `Requested model '${overrides.model}' is not permitted by profile '${profile.profile_id}'. Allowed models: ${profile.model_constraints.allowed_models.join(", ")}`,
+      const liveCheck = DynamicModelResolver.isModelAllowedForProfile(
+        overrides.model,
+        profile.model_constraints.allowed_providers,
+        profile.role,
       );
+      if (!liveCheck.allowed) {
+        throw new Error(
+          `Requested model '${overrides.model}' is not permitted by profile '${profile.profile_id}'. Allowed models: ${profile.model_constraints.allowed_models.join(", ")}`,
+        );
+      }
     }
 
     if (overrides.budget) {

@@ -8,7 +8,7 @@
   "model_constraints": {
     "default_model": "qwen-coder-32b",
     "allowed_models": ["qwen-coder-32b", "deepseek-coder-v2-lite"],
-    "allowed_providers": ["vllm-shim", "lmstudio"],
+    "allowed_providers": ["vllm-2", "vllm", "vllm-shim", "lmstudio"],
     "temperature_range": [0.0, 0.4]
   },
   "tool_policy": {
