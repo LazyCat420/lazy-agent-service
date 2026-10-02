@@ -69,6 +69,7 @@ import favoritesRouter from "./routes/FavoritesRoutes.ts";
 import conversationRouter from "./routes/ConversationExecutionRoute.ts";
 import statsRouter from "./routes/StatsRoutes.ts";
 import benchmarkRouter from "./routes/BenchmarkRoutes.ts";
+import experimentRouter from "./routes/ExperimentRoutes.ts";
 import synthesisRouter from "./routes/SynthesisRoutes.ts";
 import vramBenchmarksRouter from "./routes/VramBenchmarksRoutes.ts";
 import orchestratorRouter from "./routes/OrchestratorRoutes.ts";
@@ -209,6 +210,7 @@ app.use("/conversation", conversationRouter);
 
 app.use("/stats", statsRouter);
 app.use("/benchmark", benchmarkRouter);
+app.use("/experiment", experimentRouter);
 app.use("/synthesis", synthesisRouter);
 app.use("/vram-benchmarks", vramBenchmarksRouter);
 app.use("/orchestrator", orchestratorRouter);
