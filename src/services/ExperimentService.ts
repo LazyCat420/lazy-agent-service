@@ -59,6 +59,9 @@ export interface ExperimentRequest {
   minDetectableEffect?: number;
   /** Optional run label for persistence/telemetry. */
   label?: string;
+  /** Prism/runtime attribution identity (defaults to "experiment"). */
+  project?: string;
+  username?: string;
   signal?: AbortSignal;
 }
 
@@ -161,12 +164,12 @@ export class ExperimentService {
     for (let t = 0; t < req.trials; t++) {
       if (req.signal?.aborted) break;
       const b = await runSingleModel(
-        req.benchmark, this.toEntry(req.baseline), null, "experiment",
+        req.benchmark, this.toEntry(req.baseline), req.project ?? "experiment", req.username ?? "experiment",
         { signal: req.signal },
       );
       baselineResults.push(b);
       const c = await runSingleModel(
-        req.benchmark, this.toEntry(req.candidate), null, "experiment",
+        req.benchmark, this.toEntry(req.candidate), req.project ?? "experiment", req.username ?? "experiment",
         { signal: req.signal },
       );
       candidateResults.push(c);
