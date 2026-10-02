@@ -199,10 +199,24 @@ export class PromotionController {
     const current = this.get(profileId, currentVersion);
     if (!current) return { ok: false, blockers: [`unknown current version ${currentVersion}`] };
     if (!current.previousActive) return { ok: false, blockers: ["no previous_active recorded for this version"] };
-    return this.transition({
+    const previous = this.get(profileId, current.previousActive);
+    if (!previous) return { ok: false, blockers: [`previous_active ${current.previousActive} not found`] };
+
+    // Demote the current version (CAS from its actual channel).
+    const demote = this.transition({
       profileId, version: currentVersion,
       from: current.channel, to: "superseded",
       reason: `rollback: ${reason}`,
     });
+    if (!demote.ok) return demote;
+
+    // Promote the previous version back to active. Direct state write, not
+    // transition(): the recorded channel may be superseded (illegal CAS
+    // source), and this is the one operation that must always succeed.
+    previous.channel = "active";
+    previous.updatedAt = new Date().toISOString();
+    previous.history.push({ from: "superseded", to: "active", at: previous.updatedAt, reason: `restored by rollback of ${currentVersion}` });
+    this.flush();
+    return { ok: true, record: current };
   }
 }

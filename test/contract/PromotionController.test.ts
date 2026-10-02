@@ -113,6 +113,7 @@ describe("PromotionController", () => {
 		const rb = PromotionController.rollback("p", "2.0.0", "canary regression detected");
 		expect(rb.ok).toBe(true);
 		expect(PromotionController.get("p", "2.0.0")?.channel).toBe("superseded");
+		expect(PromotionController.getActive("p")?.version).toBe("1.0.0");
 	});
 
 	it("CAS: concurrent transitions from a stale state lose", () => {
