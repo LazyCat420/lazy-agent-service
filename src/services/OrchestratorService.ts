@@ -22,6 +22,7 @@ import { ORCHESTRATOR_ONLY_TOOLS } from "./OrchestratorPrompt.ts";
 import SettingsService from "./SettingsService.ts";
 import AgentPersonaRegistry from "./AgentPersonaRegistry.ts";
 import { createAbortController } from "../utils/AbortController.ts";
+import { InternalLoopRunner } from "./InternalLoopRunner.ts";
 import { registerCleanup } from "../utils/CleanupRegistry.ts";
 import { resolveModelForInstances } from "../utils/ModelResolution.ts";
 
@@ -1598,6 +1599,17 @@ export default class OrchestratorService {
     const delegateSpan = delegation.delegateSpan;
     const subAgentStartTime = performance.now();
 
+    // Canonical admission: sub-agents get profile-driven tool resolution and
+    // receipt-bound execution; falls back to legacy resolution when no
+    // profile is configured (INTERNAL_AGENT_PROFILE).
+    const admission = await InternalLoopRunner.admit({
+      profileId: process.env.INTERNAL_AGENT_PROFILE || "internal-agent-v1",
+      appId: "orchestrator",
+      sessionId: subAgent.subAgentConversationId,
+      enabledTools: subAgentEnabledTools,
+      signal: subAgent.abortController?.signal,
+    }).catch(() => undefined);
+
     try {
       loopResult = await AgenticLoopService.runAgenticLoop({
         provider: subAgentProviderInstance as LLMProvider,
@@ -1605,6 +1617,11 @@ export default class OrchestratorService {
         resolvedModel: subAgent.resolvedModel,
         modelDefinition: subAgentModelDefinition,
         messages: subAgentMessages,
+        ...(admission ? {
+          runtimeTools: admission.runtimeTools,
+          runtimeToolExecutor: admission.runtimeToolExecutor,
+          runId: admission.runId,
+        } : {}),
         options: {
           autoApprove: true,
           agenticLoopEnabled: true,

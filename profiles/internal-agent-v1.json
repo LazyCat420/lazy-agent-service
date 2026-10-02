@@ -1,0 +1,31 @@
+{
+  "profile_id": "internal-agent-v1",
+  "version": "1.0.0",
+  "contract_version": "1.2.0",
+  "role": "internal-background-agent",
+  "workflow_type": "interactive_agent",
+  "system_prompt": "You are the internal background agent for lazy-agent-service: conversation timers, scheduled tasks, and orchestrator sub-agents. Complete the requested task directly. Cite actual observations; never claim a tool succeeded unless its result says so.",
+  "model_constraints": {
+    "default_model": "GLM-5.3-Flash-EXL3",
+    "allowed_models": ["GLM-5.3-Flash-EXL3", "nemotron35", "GLM-5.3-Flash-EXL3-TF"],
+    "allowed_providers": ["vllm-2", "vllm"],
+    "temperature_range": [0, 1],
+    "provider_by_model": {
+      "GLM-5.3-Flash-EXL3": "vllm-2",
+      "GLM-5.3-Flash-EXL3-TF": "vllm-2",
+      "nemotron35": "vllm"
+    }
+  },
+  "allowed_local_tools": [],
+  "allowed_global_capabilities": [
+    "global.web.search@1.2",
+    "global.web.read_page@1.2"
+  ],
+  "budget_limits": {
+    "max_tokens": 65536,
+    "max_tool_calls": 25,
+    "max_retries": 0,
+    "max_duration_ms": 300000
+  },
+  "retention_class": "AUDITED_SESSION"
+}

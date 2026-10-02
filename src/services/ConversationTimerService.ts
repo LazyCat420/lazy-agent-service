@@ -8,6 +8,7 @@ import ConversationService from "./ConversationService.ts";
 import { getProvider } from "../providers/index.ts";
 import { getModelByName } from "../config.ts";
 import { matchCron } from "./ScheduledTaskService.ts";
+import { InternalLoopRunner } from "./InternalLoopRunner.ts";
 import { registerCleanup } from "../utils/CleanupRegistry.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import type { ConversationMessage } from "./harnesses/types.ts";
@@ -433,6 +434,16 @@ const ConversationTimerService = {
       throw new Error(`LLM provider ${providerName} is unavailable`);
     }
 
+    // Canonical admission: profile-driven tool resolution + receipt-bound
+    // execution. Falls back to undefined (legacy tool resolution) when the
+    // profile is absent — the loop behaves exactly as before.
+    const admission = await InternalLoopRunner.admit({
+      profileId: process.env.INTERNAL_AGENT_PROFILE || "internal-agent-v1",
+      appId: "conversation-timers",
+      sessionId: timer.conversationId,
+      enabledTools: settings.toolConfig?.enabledTools,
+    }).catch(() => undefined);
+
     const traceId =
       (conversation.traceId as string | undefined) || crypto.randomUUID();
     const requestId = crypto.randomUUID();
@@ -468,6 +479,11 @@ const ConversationTimerService = {
         modelDefinition,
         messages: contextMessages,
         originalMessages: contextMessages,
+        ...(admission ? {
+          runtimeTools: admission.runtimeTools,
+          runtimeToolExecutor: admission.runtimeToolExecutor,
+          runId: admission.runId,
+        } : {}),
         options: {
           agenticLoopEnabled: true,
           functionCallingEnabled: true,

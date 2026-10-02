@@ -5,6 +5,7 @@ import { COLLECTIONS } from "../constants.ts";
 import AgenticLoopService from "./AgenticLoopService.ts";
 import { getProvider } from "../providers/index.ts";
 import { getModelByName } from "../config.ts";
+import { InternalLoopRunner } from "./InternalLoopRunner.ts";
 import logger from "../utils/logger.ts";
 import { SseEvent } from "../types/SseTypes.ts";
 import { ConversationMessage } from "./harnesses/types.ts";
@@ -408,6 +409,15 @@ const ScheduledTaskService = {
       throw new Error(`Provider not found: ${effectiveProvider}`);
     }
 
+    // Canonical admission: profile-driven tool resolution + receipt-bound
+    // execution; falls back to legacy resolution when the profile is absent.
+    const admission = await InternalLoopRunner.admit({
+      profileId: process.env.INTERNAL_AGENT_PROFILE || "internal-agent-v1",
+      appId: "scheduled-tasks",
+      sessionId: resolvedConversationId,
+      enabledTools: task.toolConfig?.enabledTools,
+    }).catch(() => undefined);
+
     // 4. Trigger AgenticLoopService
     try {
       await AgenticLoopService.runAgenticLoop({
@@ -418,6 +428,11 @@ const ScheduledTaskService = {
         modelDefinition,
         messages: [userTriggerMessage as ConversationMessage],
         originalMessages: [userTriggerMessage as ConversationMessage],
+        ...(admission ? {
+          runtimeTools: admission.runtimeTools,
+          runtimeToolExecutor: admission.runtimeToolExecutor,
+          runId: admission.runId,
+        } : {}),
         options: {
           agenticLoopEnabled: true,
           functionCallingEnabled: true,
