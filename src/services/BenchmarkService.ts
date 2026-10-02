@@ -320,7 +320,7 @@ function filterAvailableModels(models: ModelEntry[]): ModelEntry[] {
   });
 }
 // ─── Run a single model against a benchmark prompt ──────────
-async function runSingleModel(
+export async function runSingleModel(
   benchmark: BenchmarkDoc,
   model: ModelEntry,
   project: string | null,
