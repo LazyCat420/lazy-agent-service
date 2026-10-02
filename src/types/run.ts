@@ -100,6 +100,7 @@ export type RunEventType =
   | "run.completed"
   | "run.failed"
   | "run.cancelled"
+  | "run.warning"
   // Legacy event aliases for backwards compatibility
   | "run.created"
   | "tool.called"

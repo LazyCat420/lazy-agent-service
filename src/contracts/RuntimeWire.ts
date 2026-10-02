@@ -11,7 +11,7 @@ export const RunStateSchema = z.enum([
 ]);
 
 export const RunEventTypeSchema = z.enum([
-  "run.admitted", "run.started", "run.created", "message.delta", "message.completed",
+  "run.admitted", "run.started", "run.created", "run.warning", "message.delta", "message.completed",
   "tool.invoked", "tool.called", "tool.completed", "tool.result", "tool.failed",
   "approval.required", "approval.resolved", "worker.dispatched", "worker.completed",
   "run.completed", "run.failed", "run.cancelled",

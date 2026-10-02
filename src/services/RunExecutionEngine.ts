@@ -458,6 +458,22 @@ export class RunExecutionEngine {
       const localSchemas = Array.isArray(suppliedSchemas) ? suppliedSchemas.filter((s: any) =>
         s && typeof s.name === "string" && !s.name.startsWith("global.") && allowed.has(s.name)
         && typeof s.description === "string" && s.parameters?.type === "object") : [];
+      // A profile-admitted local tool without a supplied schema is callable in
+      // name only: the model never receives it and will report it missing.
+      // Admit nothing silently — warn once per run with the dropped names.
+      const schemaSupplied = new Set((Array.isArray(suppliedSchemas) ? suppliedSchemas : []).map((s: any) => typeof s === "object" && s?.name).filter(Boolean));
+      const schemaless = options.enabledTools.filter((name: string) => !name.startsWith("global.") && !schemaSupplied.has(name));
+      if (schemaless.length > 0) {
+        emitEvent({
+          run_id: runId,
+          type: "run.warning",
+          data: {
+            code: "LOCAL_TOOL_SCHEMA_MISSING",
+            message: "Profile admits these local tools but no schema was supplied; the model will not be able to call them.",
+            tools: schemaless,
+          },
+        });
+      }
       const globalSchemas = options.enabledTools.filter((name: string) => name.startsWith("global.")).flatMap((name: string) => {
         const cap = CapabilityRegistry.listCapabilities().find(c => c.id === name);
         return cap ? [{ name, description: cap.description, parameters: cap.parameters }] : [];
