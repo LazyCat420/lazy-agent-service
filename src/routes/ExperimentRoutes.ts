@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { ExperimentService, type ExperimentRequest } from "../services/ExperimentService.ts";
+import { AttributionAnalyzer, type PairedTrial } from "../services/AttributionAnalyzer.ts";
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 
 const router = Router();
@@ -35,7 +36,15 @@ router.post(
       signal: req.query.abort === "1" ? undefined : undefined,
     });
 
-    res.json(result);
+    // Attribution: first divergence + failure clusters over the paired trials.
+    const paired: PairedTrial[] = result.pairedDeltas.map((p, i) => ({
+      trial: p.trial,
+      baseline: { passed: p.passedBaseline, error: result.baseline.failures[i] ?? null, response: null } as never,
+      candidate: { passed: p.passedCandidate, error: result.candidate.failures[i] ?? null, response: null } as never,
+    }));
+    const attribution = AttributionAnalyzer.analyze(paired);
+
+    res.json({ ...result, attribution });
   }),
 );
 

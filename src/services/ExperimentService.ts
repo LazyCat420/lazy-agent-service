@@ -32,11 +32,12 @@ export interface ExperimentBenchmark {
 }
 
 /** The trial result shape runSingleModel returns (module-private interface, structurally matched). */
-interface TrialResult {
+export interface TrialResult {
   passed: boolean;
   latency?: number;
   usage?: Record<string, number> | null;
   error?: string | null;
+  response?: string | null;
 }
 
 export interface ModelTarget {
