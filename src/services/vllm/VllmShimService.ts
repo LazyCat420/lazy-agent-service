@@ -653,10 +653,63 @@ export class VllmShimService {
     return modified ? (copy as T) : payload;
   }
 
-  public static enrichModels<T extends Record<string, any>>(payload: T): T {
+  /**
+   * Backends that omit max_model_len (e.g. TensorFold) still expose the real
+   * value on their own /metrics as `tensorfold_health:context_length`. Without
+   * it, downstream capability verification ("context capability unverified")
+   * refuses the endpoint and the router never schedules it. The value is the
+   * upstream's own reported number — nothing is invented here.
+   */
+  private static readonly contextLengthCache = new Map<string, { value: number | null; at: number }>();
+  private static readonly CONTEXT_LENGTH_TTL_MS = 300_000;
+
+  static parseContextLength(metricsText: string): number | null {
+    const m = metricsText.match(/^tensorfold_health:context_length\s+(\d+(?:\.\d+)?)/m);
+    return m ? Math.round(Number(m[1])) : null;
+  }
+
+  public static async upstreamContextLength(upstreamUrl: string): Promise<number | null> {
+    const cached = this.contextLengthCache.get(upstreamUrl);
+    if (cached && Date.now() - cached.at < this.CONTEXT_LENGTH_TTL_MS) return cached.value;
+    let value: number | null = null;
+    try {
+      const response = await fetch(`${upstreamUrl.replace(/\/$/, "")}/metrics`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (response.ok) {
+        value = this.parseContextLength(await response.text());
+      }
+    } catch {
+      value = null;
+    }
+    this.contextLengthCache.set(upstreamUrl, { value, at: Date.now() });
+    return value;
+  }
+
+  public static async enrichModels<T extends Record<string, any>>(payload: T, upstreamUrl?: string): Promise<T> {
     if (!payload || typeof payload !== "object") return payload;
-    // Preserve authentic upstream capacities; never invent synthetic context limits
-    return payload;
+    // Preserve authentic upstream capacities; only fill in the context length
+    // when the upstream reports it on /metrics but omits it here.
+    if (!upstreamUrl) return payload;
+    const list = ((payload as Record<string, any>).data ||
+      (payload as Record<string, any>).models) as Array<Record<string, any>> | undefined;
+    if (!Array.isArray(list) || list.length === 0) return payload;
+    const missing = list.some(
+      (m) => m && typeof m === "object" && !m.max_model_len && !m.context_length,
+    );
+    if (!missing) return payload;
+    return this.upstreamContextLength(upstreamUrl).then((ctx) => {
+      if (!ctx) return payload;
+      const patched = { ...(payload as Record<string, any>) };
+      for (const key of ["data", "models"]) {
+        if (Array.isArray(patched[key])) {
+          patched[key] = patched[key].map((m: Record<string, any>) =>
+            m && typeof m === "object" && !m.max_model_len ? { ...m, max_model_len: ctx } : m,
+          );
+        }
+      }
+      return patched as T;
+    });
   }
 
   /** Per-upstream semaphores, created on first use. Exported for tests. */
@@ -1008,7 +1061,9 @@ export class VllmShimService {
           const text = buf.toString("utf8");
           const parsed = JSON.parse(text);
           const filtered = VllmShimService.filterModels(parsed);
-          const enriched = VllmShimService.enrichModels(filtered);
+          const enriched = await VllmShimService.enrichModels(
+            filtered, resolved.upstreamUrl,
+          );
 
           const list = (((enriched as Record<string, any>).data || (enriched as Record<string, any>).models || []) as Array<Record<string, any>>);
           const gen = list.find((m: Record<string, any>) => {

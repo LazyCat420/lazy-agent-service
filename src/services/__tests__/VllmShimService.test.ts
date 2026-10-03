@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { VllmShimService } from "../vllm/VllmShimService.js";
 
 describe("VllmShimService.translateChatTemplateKwargs", () => {
@@ -112,15 +112,39 @@ describe("VllmShimService.filterModels", () => {
     expect(output).toEqual(input);
   });
 
-  it("does not invent synthetic 262144 max_model_len if missing from upstream", () => {
+  it("does not invent synthetic 262144 max_model_len if missing from upstream", async () => {
     const input = {
       data: [{ id: "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0" }],
       models: [{ name: "prism-ml/Ternary-Bonsai-2-27B-gguf:PTQ1_0" }],
     };
-    const output = VllmShimService.enrichModels(input);
-    expect((output.data[0] as any).max_model_len).toBeUndefined();
-    expect((output.data[0] as any).context_length).toBeUndefined();
-    expect((output.models[0] as any).max_model_len).toBeUndefined();
+    const output = await VllmShimService.enrichModels(input);
+    for (const m of [...output.data, ...output.models]) {
+      expect(m.max_model_len).toBeUndefined();
+      expect(m.context_length).toBeUndefined();
+    }
+  });
+
+  it("parses the TensorFold context length from upstream metrics", () => {
+    const metrics = [
+      "# HELP tensorfold_health:context_length Tokens a request's prompt and reply may hold.",
+      "# TYPE tensorfold_health:context_length gauge",
+      "tensorfold_health:context_length 1048576",
+    ].join("\n");
+    expect(VllmShimService.parseContextLength(metrics)).toBe(1048576);
+    expect(VllmShimService.parseContextLength("# nothing here")).toBeNull();
+  });
+
+  it("fills max_model_len from the upstream's own reported context length when the backend omits it", async () => {
+    // TensorFold omits max_model_len on /v1/models but reports the real
+    // window on /metrics; without this, downstream capability verification
+    // refuses the endpoint and the router never schedules it.
+    const input = { data: [{ id: "GLM-5.3-Flash-EXL3-TF", owned_by: "tensorfold" }] };
+    const spy = vi
+      .spyOn(VllmShimService, "upstreamContextLength")
+      .mockResolvedValue(1048576);
+    const output = await VllmShimService.enrichModels(input, "http://10.0.0.141:8000");
+    spy.mockRestore();
+    expect(output.data[0].max_model_len).toBe(1048576);
   });
 
   it("swaps alternate ports between 8080 and 8000 for Jetson", () => {
