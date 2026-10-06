@@ -1,0 +1,120 @@
+{
+  "date": "2026-10-06",
+  "model": "google/embeddinggemma-2",
+  "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "space": "google/embeddinggemma-2@914f7f89142e33e77833254d9c9b90c3cef7303b:768:retrieval:utf8-1800-mean-l2-v1",
+  "index_fields": [
+    "semanticEmbedding",
+    "summarySemanticEmbedding"
+  ],
+  "preserved_legacy_fields": [
+    "embedding",
+    "summaryEmbedding"
+  ],
+  "releases": [
+    {
+      "commit": "f583999",
+      "full_suite": {
+        "files": 68,
+        "tests_passed": 930
+      },
+      "container": {
+        "name": "lazy-agent-service",
+        "status": "running",
+        "health": "healthy"
+      },
+      "shared_api": [
+        {
+          "input_type": "query",
+          "dimensions": 768,
+          "norm": 1.0,
+          "seconds": 0.384
+        },
+        {
+          "input_type": "document",
+          "dimensions": 768,
+          "norm": 1.0,
+          "seconds": 0.164
+        },
+        {
+          "input_type": "query",
+          "dimensions": 256,
+          "norm": 1.0,
+          "seconds": 0.143
+        }
+      ]
+    },
+    {
+      "commit": "b772cac",
+      "change": "POST /embed accepts texts[] (1-32)",
+      "full_suite": {
+        "files": 69,
+        "tests_passed": 935
+      },
+      "deployed_at": "2026-10-06T23:09:28Z",
+      "live_batch": {
+        "texts": 3,
+        "input_type": "document",
+        "status": 200,
+        "seconds": 1.018,
+        "dimensions": [
+          768,
+          768,
+          768
+        ],
+        "norms": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    }
+  ],
+  "migration": {
+    "first_run": {
+      "stopped_at": "2026-10-06T22:50:42Z",
+      "reason": "runner session ended; release script exit trap stopped the container",
+      "completed": {
+        "memories": 7483,
+        "agent_skills": 3
+      },
+      "workflow_memories_done": 2104
+    },
+    "resumed_run": {
+      "container": "harness-embeddinggemma2-reindex-20261006b",
+      "started_at": "2026-10-06T23:05:01.061Z",
+      "completed_at": "2026-10-06T23:38:58.808Z",
+      "updated": {
+        "memories": 0,
+        "agent_skills": 0,
+        "workflow_memories": 5569,
+        "agent_conversations": 9490
+      },
+      "skipped_empty": 0,
+      "changed_during_migration": 0
+    },
+    "after": {
+      "memories": [
+        7483,
+        7483
+      ],
+      "agent_skills": [
+        3,
+        3
+      ],
+      "workflow_memories": [
+        7673,
+        7673
+      ],
+      "agent_conversations": [
+        9490,
+        9490
+      ]
+    },
+    "status": "complete"
+  },
+  "trading_corpus": {
+    "status": "re-embedding",
+    "handoff": "trading-service handoff/harness-embeddings"
+  }
+}
