@@ -31,6 +31,18 @@ describe("shared EmbeddingGemma 2 contract", () => {
     expect(inference).toHaveBeenCalledTimes(1);
     expect((await EmbeddingGemma2Client.generate("next", "document")).embedding).toHaveLength(768);
   });
+  it("limits the item count and aggregate bytes when packing a corpus batch", async () => {
+    const sizes: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      if (!init?.body) return health();
+      const body = JSON.parse(init.body);
+      sizes.push(body.input.length);
+      expect(body.input.reduce((sum: number, text: string) => sum + Buffer.byteLength(text), 0)).toBeLessThanOrEqual(7000);
+      return new Response(JSON.stringify({ data: body.input.map((_text, index) => ({ index, embedding: Array(768).fill(1) })) }));
+    }));
+    expect(await EmbeddingGemma2Client.embedMany(Array(9).fill("a".repeat(900)))).toHaveLength(9);
+    expect(sizes).toEqual([7, 2]);
+  });
   it("rejects wrong dimensions", async () => {
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => !init?.body ? health() : new Response(JSON.stringify({ data: [{ index: 0, embedding: [1] }] }))));
     await expect(EmbeddingGemma2Client.generate("text")).rejects.toMatchObject({ statusCode: 502 });

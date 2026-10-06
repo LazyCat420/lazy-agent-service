@@ -91,9 +91,17 @@ export const EmbeddingGemma2Client = {
       await checkIdentity();
       const chunks = texts.flatMap((text, owner) => embeddingChunks(text).map(input => ({ input, owner })));
       const sums = texts.map(() => Array<number>(dimensions).fill(0));
-      // Four byte-bounded chunks plus prefixes fit below the aggregate token budget.
-      for (let offset = 0; offset < chunks.length; offset += 4) {
-        const batch = chunks.slice(offset, offset + 4);
+      // Pack at most eight chunks under a conservative aggregate byte budget.
+      // The server remains responsible for exact tokenizer admission.
+      for (let offset = 0; offset < chunks.length;) {
+        const batch: typeof chunks = [];
+        let bytes = 0;
+        while (offset < chunks.length && batch.length < 8) {
+          const chunk = chunks[offset];
+          const size = Buffer.byteLength(chunk.input);
+          if (batch.length && bytes + size > 7000) break;
+          batch.push(chunk); bytes += size; offset++;
+        }
         const vectors = await request(batch.map(chunk => chunk.input), inputType, dimensions);
         batch.forEach((chunk, i) => vectors[i].forEach((value, d) => sums[chunk.owner][d] += value));
       }
