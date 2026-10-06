@@ -65,3 +65,5 @@ Rollback requires the matching old service code and retained old fields. New rec
 Live Jetson health/models matched the pinned revision. A query request returned 768 unit-normalized floats in 0.365 seconds; an eight-item document batch returned eight ordered 768-dimensional unit vectors in 0.951 seconds. These synthetic timings do not establish sustained load or real-corpus quality.
 
 Contract checks cover query/document task forwarding, returned ordering/dimensions, Unicode chunk preservation, no retries on quarantine, legacy-vector exclusion, provider/model resolution, and workflow/summary storage for a repo outside the persona list. All 46 tests in seven selected suites and the runtime build passed. Final release/migration evidence is recorded below when verified.
+
+The first deployed release (`f602453`) passed all 929 tests and the NAS health gate. Consolidation projections and vector cleanup now read the versioned field as well; a regression check confirms that legacy/different-model vectors do not join new-model clusters.

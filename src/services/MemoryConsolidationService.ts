@@ -372,7 +372,7 @@ const MemoryConsolidationService = {
 
     const projection = isConversational
       ? {
-          embedding: 1,
+          semanticEmbedding: 1,
           id: 1,
           type: 1,
           title: 1,
@@ -384,7 +384,7 @@ const MemoryConsolidationService = {
           sourceUsername: 1,
           guildId: 1,
         }
-      : { embedding: 1, id: 1, type: 1, title: 1, content: 1, createdAt: 1 };
+      : { semanticEmbedding: 1, id: 1, type: 1, title: 1, content: 1, createdAt: 1 };
 
     const allMemories = (await db
       .collection(COLLECTIONS.MEMORIES)
@@ -481,11 +481,11 @@ const MemoryConsolidationService = {
         const partitionStale = findStaleConversationalMemories(memories);
 
         // ── Release embeddings after clustering ──────────────────────
-        // Embeddings (1536-dim float arrays, ~12KB each) are only needed
+        // Versioned embeddings (768-dim float arrays) are only needed
         // for cosine similarity in findClusters(). Strip them now so
         // GC can reclaim before the LLM batch loop.
         for (const message of memories) {
-          message.embedding = null;
+          delete message.semanticEmbedding;
         }
 
         if (partitionClusters.length === 0 && partitionStale.length === 0)
@@ -551,11 +551,11 @@ const MemoryConsolidationService = {
       const clusters = findClusters(allMemories);
 
       // ── Release embeddings after clustering ──────────────────────
-      // Embeddings (1536-dim float arrays, ~12KB each) are only needed
+      // Versioned embeddings (768-dim float arrays) are only needed
       // for cosine similarity in findClusters(). Strip them now so
       // GC can reclaim before the LLM batch loop.
       for (const message of allMemories) {
-        message.embedding = null;
+        delete message.semanticEmbedding;
       }
 
       logger.info(

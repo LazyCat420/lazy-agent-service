@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { embeddingSpace } from "../../src/services/EmbeddingGemma2Client.ts";
+import { findClusters } from "../../src/services/memory/ClusterDetection.ts";
 const fixture = vi.hoisted(() => ({ rows: [] as any[], write: vi.fn(), embed: vi.fn(), query: vi.fn() }));
 vi.mock("../../src/wrappers/MongoWrapper.ts", () => {
   const collection = { findOne: async () => null, updateOne: fixture.write, insertOne: fixture.write, countDocuments: async () => fixture.rows.length,
@@ -15,6 +16,17 @@ beforeEach(() => {
   fixture.embed.mockResolvedValue({ embedding: Array(768).fill(1 / Math.sqrt(768)), space: embeddingSpace() });
 });
 describe("semantic memory on arbitrary harness projects", () => {
+  it("clusters only vectors from the same versioned space", () => {
+    const base = { type: "project", content: "content", createdAt: new Date().toISOString() };
+    const vector = Array(768).fill(1);
+    const records = [
+      { ...base, id: "first", semanticEmbedding: { vector, space: embeddingSpace() } },
+      { ...base, id: "second", semanticEmbedding: { vector, space: embeddingSpace() } },
+      { ...base, id: "legacy", embedding: vector },
+      { ...base, id: "different", semanticEmbedding: { vector, space: "another-model" } },
+    ];
+    expect(findClusters(records).map(cluster => cluster.map(row => row.id))).toEqual([["first", "second"]]);
+  });
   it("stores successful workflows outside the persona project list", async () => {
     const messages = [{ role: "user", content: "Review repo" }, { role: "assistant", content: "Reading" }, { role: "tool", content: "Source" }, { role: "assistant", content: "Reviewed", toolCalls: [1, 2, 3].map(i => ({ name: `read_${i}`, args: {}, result: { ok: true } })) }];
     await WorkflowMemoryService.extractAndPersist({ conversationId: "run", agentConversationId: "run", project: "repo-with-no-persona", username: "test-user", messages } as any, { messages });
