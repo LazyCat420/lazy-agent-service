@@ -3,6 +3,17 @@ import crypto from 'node:crypto';
 import { LocalToolContinuation } from '../LocalToolContinuation.ts';
 import { RunStore } from '../RunStore.ts';
 afterEach(()=>vi.restoreAllMocks());
+it('accepts omitted undefined optional fields across JSON delivery and rejects additions',async()=>{
+ const receipt={signature:crypto.randomBytes(32).toString('hex'),run_id:'wire-run',tool_call_id:'wire-call',arguments_json:'{}',expires_at:new Date(Date.now()+60000).toISOString(),effect:'read',approval_id:undefined};
+ const run:any={status:'waiting_for_tool',pending_tools:{'wire-call':{event:{authorization_receipt:receipt}}}};
+ vi.spyOn(RunStore,'getRun').mockResolvedValue(run);
+ (LocalToolContinuation as any).waiters.set('wire-run:wire-call',{resolve:()=>{},reject:()=>{}});
+ try {
+   const delivered=JSON.parse(JSON.stringify(receipt));
+   await expect(LocalToolContinuation.verify('wire-run','wire-call',delivered)).resolves.toBeUndefined();
+   await expect(LocalToolContinuation.verify('wire-run','wire-call',{...delivered,approval_id:'unapproved'})).rejects.toThrow('scope or signature');
+ } finally {(LocalToolContinuation as any).waiters.delete('wire-run:wire-call');}
+});
 it('verifies every receipt field and refuses expired or inactive effects',async()=>{
  const receipt={signature:crypto.randomBytes(32).toString('hex'),run_id:'run',tool_call_id:'call',arguments_json:'{}',expires_at:new Date(Date.now()+60000).toISOString(),effect:'write'};
  const run:any={status:'waiting_for_tool',pending_tools:{call:{event:{authorization_receipt:receipt}}}};

@@ -35,7 +35,9 @@ export class LocalToolContinuation {
     const run = await RunStore.getRun(runId); const pending = run?.pending_tools?.[callId];
     const fail = (message: string): never => { throw Object.assign(new Error(message), { status: 409 }); };
     if (!pending || !supplied || typeof supplied.signature !== "string") fail("Unknown call or missing signed receipt");
-    const receipt = pending!.event.authorization_receipt;
+    // HTTP/SSE omit undefined optional fields. Compare the exact wire receipt,
+    // including all defined fields, against its persisted trusted counterpart.
+    const receipt = JSON.parse(JSON.stringify(pending!.event.authorization_receipt));
     const expected = Buffer.from(receipt.signature); const actual = Buffer.from(supplied.signature);
     if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)
       || Object.keys(receipt).some(key => key !== "signature" && JSON.stringify(supplied[key]) !== JSON.stringify(receipt[key]))
