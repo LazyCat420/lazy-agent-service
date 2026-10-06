@@ -1,0 +1,74 @@
+{
+  "startedAt": "2026-10-06T21:49:01.593Z",
+  "passed": true,
+  "cancellation": {
+    "passed": true,
+    "crossScopeStatus": 404,
+    "cancelStatus": 202,
+    "savedStatus": 499,
+    "replayStatus": 499
+  },
+  "runId": "run-78e246f0-4d4b-47c6-bc7e-286712b123f1",
+  "status": "completed",
+  "durationMs": 16259.011023000001,
+  "injectedAcknowledgementLoss": true,
+  "checkpointRecoveredFromDisk": true,
+  "firstDeliveryInterrupted": true,
+  "firstError": "Error: Injected acknowledgement delivery loss",
+  "receiptKeys": [
+    "receipt_id",
+    "arguments_json",
+    "arguments_hash",
+    "nonce",
+    "run_id",
+    "tool_call_id",
+    "tool_name",
+    "canonical_tool_id",
+    "app_id",
+    "session_id",
+    "profile_id",
+    "execution",
+    "effect",
+    "issued_at",
+    "expires_at",
+    "signature"
+  ],
+  "tamperStatus": 409,
+  "crossVaultStatus": 404,
+  "replayVerificationStatus": 200,
+  "noteMutations": 1,
+  "calls": [
+    {
+      "name": "read_note_outline",
+      "ok": true,
+      "effect": "read"
+    },
+    {
+      "name": "read_note",
+      "ok": true,
+      "effect": "read"
+    },
+    {
+      "name": "patch_note_section",
+      "ok": true,
+      "effect": "write"
+    }
+  ],
+  "response": "Done — the **Next Steps** section now reads \"Ship on Friday.\" while **Overview** and **Notes** were left byte-for-byte intact.\n\n**Note link:** [[wiki/Plan]]",
+  "note": "# Plan\n\n## Overview\nKeep this exactly.\n\n## Next Steps\n\nShip on Friday.\n\n## Notes\nKeep **formatting**.\n",
+  "usage": {
+    "prompt_tokens": 1090,
+    "completion_tokens": 630,
+    "total_tokens": 1720,
+    "tool_calls_count": 3,
+    "retry_count": 0,
+    "duration_ms": 16256,
+    "coverage": {
+      "model_calls": 3,
+      "measured_calls": 3,
+      "state": "complete",
+      "measured_prompt_tokens": 1090,
+      "measured_completion_tokens": 630
+    }
+  }
+}
