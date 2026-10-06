@@ -11,6 +11,7 @@ const router = express.Router();
  *   provider?,         // optional — shared harness embedding default
  *   model?,            // optional, falls back to provider default
  *   text?,             // optional — text content
+ *   texts?,            // optional — 1–32 strings; returns { embeddings[] } instead
  *   images?,           // optional — array of base64 / data URL strings
  *   audio?,            // optional — base64 / data URL string
  *   video?,            // optional — base64 / data URL string
@@ -36,6 +37,27 @@ router.post(
         dimensions,
         traceId,
       } = req.body;
+
+      // Text batch: one vector per input, in input order, same space as `text`.
+      if (req.body.texts !== undefined) {
+        if (text || images || audio || video || pdf) {
+          throw new ProviderError("server", "Send either texts or a single content input, not both", 400);
+        }
+        const result = await EmbeddingService.generateMany(req.body.texts, {
+          provider: pName,
+          model,
+          taskType: taskType || req.body.input_type,
+          dimensions,
+          project: req.project,
+          username: req.username,
+          clientIp: req.clientIp,
+          source: "api",
+          endpoint: "/embed",
+          traceId: traceId || null,
+        });
+        res.json(result);
+        return;
+      }
 
       // At least one content input is required
       const hasContent =
