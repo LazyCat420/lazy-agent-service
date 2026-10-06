@@ -575,7 +575,7 @@ PAGE = """<!doctype html>
       if (seconds < 0) seconds = 0;
       var isRecent = seconds < 86400 * 2; /* 2 days */
       nodes[i].classList.toggle("recent", isRecent);
-      
+
       if (nodes[i].classList.contains("badge")) {{
          nodes[i].textContent = isRecent ? "UPDATED" : "";
          if (!isRecent) nodes[i].style.display = "none";

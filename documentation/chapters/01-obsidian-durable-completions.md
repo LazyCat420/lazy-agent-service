@@ -8,6 +8,8 @@ updated: 2026-10-06
 
 `PUT /obsidian-completions/:id` accepts a client-generated UUID, a permitted model endpoint and the OpenAI completion payload. `GET /obsidian-completions/:id` fetches status and the saved response. Requests follow the service's existing project/username tracking middleware; the UUID is also required to retrieve the job. These headers are application scoping, not a new authentication mechanism.
 
+`GET /obsidian-completions` reports `{version: 1, durableVaultChat: true}`. The plugin checks this contract with a bounded timeout before routing a new message to durable storage. Older and unreachable servers retain the original direct model transport, preventing a missing backend deployment from blocking ordinary chat.
+
 The endpoint permits only the existing Jetson and Gold Spark text servers and limits concurrent jobs to eight. It writes an acceptance record before returning HTTP 202 and starts one bounded, non-streaming model request. Disconnecting the initiating HTTP client does not cancel inference. The identical UUID and payload return the existing job, while a changed payload with that UUID is rejected.
 
 Jobs are scoped by project/username and stored in `obsidian-completions/` beside the configured runtime store. On the NAS this is inside the mounted `runtime-data` directory. Completion and failure outcomes are saved using a temporary file and rename. If the process restarts during a running job, retrieval records a failure explaining the interruption; it does not replay the model request. Results currently remain on disk until explicitly removed by the operator.

@@ -3,6 +3,7 @@ import { ObsidianCompletionJobs } from "../services/ObsidianCompletionJobs.ts";
 
 export function createObsidianCompletionRouter(jobs = new ObsidianCompletionJobs()) {
   const router = express.Router();
+  router.get("/", (_req, res) => res.json({ version: 1, durableVaultChat: true }));
   router.put("/:id", (req, res) => {
     try {
       const job = jobs.submit(JSON.stringify([req.project, req.username]), String(req.params.id), req.body.target, req.body.payload);
