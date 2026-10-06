@@ -45,6 +45,14 @@ router.post("/:runId/decisions", asyncHandler(async (req: Request, res: Response
   try { res.json(await DecisionService.decide(req.body, controller.signal)); }
   catch { res.status(400).json({ error: { code: "DECISION_REQUEST_REJECTED" } }); }
 }));
+router.post("/:runId/tools/:callId/verify", asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const run = await RunStore.getRun(String(req.params.runId));
+    if (!run || !scopeOwnsRun(res, run) || (run.identity && (run.identity.project !== req.project || run.identity.username !== req.username))) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
+    await LocalToolContinuation.verify(String(req.params.runId), String(req.params.callId), req.body?.authorization_receipt);
+    res.json({ ok: true });
+  } catch (err: any) { res.status(err.status || 400).json({ error: { code: "TOOL_ADMISSION_REJECTED", message: err.message } }); }
+}));
 router.post("/:runId/tools/:callId/result", asyncHandler(async (req: Request, res: Response) => {
   try {
     const run = await RunStore.getRun(String(req.params.runId));
@@ -115,7 +123,7 @@ router.post(
 
       const controller = new AbortController();
       payload.signal = controller.signal;
-      res.on("close", () => { if (!res.writableEnded) controller.abort(); });
+      res.on("close", () => { if (!res.writableEnded && payload.runtime_overrides?.detached_delivery !== true) controller.abort(); });
       RunExecutionEngine.startRun(runId, payload, sendEvent)
         .then(async () => {
           await delivery;

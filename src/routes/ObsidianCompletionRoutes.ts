@@ -10,6 +10,13 @@ export function createObsidianCompletionRouter(jobs = new ObsidianCompletionJobs
       res.status(job.status === "running" ? 202 : 200).json(job);
     } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
+  router.post("/:id/cancel", (req, res) => {
+    try {
+      const job = jobs.cancel(JSON.stringify([req.project, req.username]), String(req.params.id));
+      if (!job) return res.status(404).json({ error: "Completion not found" });
+      res.status(202).json({ accepted: true });
+    } catch { res.status(400).json({ error: "Invalid completion id" }); }
+  });
   router.get("/:id", (req, res) => {
     try {
       const job = jobs.get(JSON.stringify([req.project, req.username]), String(req.params.id));

@@ -10,7 +10,7 @@ export const RunRequestSchema = z.object({
   input: z.union([z.string(), z.array(z.object({ role: z.enum(["system", "user", "assistant", "tool"]), content: z.string() }).passthrough())]),
   model: z.string().optional(), budget: budget.optional(), tools: z.array(tool).optional(), stream: z.boolean().optional(),
   idempotency_key: z.string().optional(), idempotencyKey: z.string().optional(), deadline_ms: limit.optional(),
-  runtime_overrides: z.object({ model: z.string().optional(), provider: z.string().optional(), sampling_temperature: z.number().optional(), budget: budget.optional(), tools: z.array(tool).optional(), context: z.record(z.string(), z.unknown()).optional(), local_tool_schemas: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.object({ type: z.literal("object") }).passthrough() }).passthrough()).optional() }).strict().optional(),
+  runtime_overrides: z.object({ detached_delivery: z.boolean().optional(), model: z.string().optional(), provider: z.string().optional(), sampling_temperature: z.number().optional(), budget: budget.optional(), tools: z.array(tool).optional(), context: z.record(z.string(), z.unknown()).optional(), local_tool_schemas: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.object({ type: z.literal("object") }).passthrough() }).passthrough()).optional() }).strict().optional(),
 }).strict();
 
 export function normalizeRunRequest(request: CreateRunRequest): CreateRunRequest {

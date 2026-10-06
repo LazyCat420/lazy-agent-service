@@ -98,6 +98,20 @@ describe("ObsidianCompletionJobs", () => {
     }
   });
 
+  it("cancels only the matching scoped job and persists its aborted outcome", async () => {
+    const temp = store(); const id = crypto.randomUUID();
+    const transport = vi.fn((_url: any, options: any) => new Promise<Response>((_resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("aborted")))));
+    const jobs = new ObsidianCompletionJobs(temp.directory, transport as any);
+    try {
+      jobs.submit("desktop", id, target, payload());
+      expect(jobs.cancel("other", id)).toBeNull();
+      expect(jobs.get("desktop", id)?.status).toBe("running");
+      jobs.cancel("desktop", id);
+      await vi.waitFor(() => expect(jobs.get("desktop", id)).toMatchObject({ status: "failed", response: { status: 499 } }));
+      expect(new ObsidianCompletionJobs(temp.directory, vi.fn()).get("desktop", id)?.response?.status).toBe(499);
+    } finally { temp.cleanup(); }
+  });
+
   it("marks an interrupted running record failed without replaying transport", async () => {
     const temp = store();
     const pending = deferred<Response>();

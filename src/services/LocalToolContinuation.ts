@@ -30,7 +30,22 @@ export class LocalToolContinuation {
     });
   }
 
+  /** Verify before an app-owned side effect; signing material never leaves the server. */
+  static async verify(runId: string, callId: string, supplied: any): Promise<void> {
+    const run = await RunStore.getRun(runId); const pending = run?.pending_tools?.[callId];
+    const fail = (message: string): never => { throw Object.assign(new Error(message), { status: 409 }); };
+    if (!pending || !supplied || typeof supplied.signature !== "string") fail("Unknown call or missing signed receipt");
+    const receipt = pending!.event.authorization_receipt;
+    const expected = Buffer.from(receipt.signature); const actual = Buffer.from(supplied.signature);
+    if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)
+      || Object.keys(receipt).some(key => key !== "signature" && JSON.stringify(supplied[key]) !== JSON.stringify(receipt[key]))
+      || Object.keys(supplied).length !== Object.keys(receipt).length) fail("Tool admission scope or signature mismatch");
+    if (!pending!.result_digest && (!run || !["running", "waiting_for_tool"].includes(run.status)
+      || Date.parse(receipt.expires_at) <= Date.now() || !this.waiters.has(`${runId}:${callId}`))) fail("Execution is no longer active or admission expired");
+  }
+
   static async submit(runId: string, callId: string, payload: any): Promise<{ duplicate: boolean }> {
+    await this.verify(runId, callId, payload?.authorization_receipt);
     const run = await RunStore.getRun(runId);
     const pending = run?.pending_tools?.[callId];
     const fail = (message: string) => { throw Object.assign(new Error(message), { status: 409 }); };
@@ -63,8 +78,7 @@ export class LocalToolContinuation {
       const pending_tools = { ...current.pending_tools, [callId]: { ...pending, result_digest: digest, observation } };
       return { pending_tools, status: Object.values(pending_tools).every(p => p.result_digest) ? "running" : "waiting_for_tool" };
     });
-    if (payload.is_error) waiter.reject(Object.assign(new Error("Local tool execution failed"), { code: "TOOL_EXECUTION_FAILED" }));
-    else waiter.resolve(payload.result);
+    waiter.resolve(payload.is_error ? { ok: false, is_error: true, result: payload.result } : payload.result);
     return { duplicate: false };
   }
 }

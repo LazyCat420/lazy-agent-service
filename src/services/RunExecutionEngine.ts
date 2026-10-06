@@ -434,7 +434,7 @@ export class RunExecutionEngine {
         ? [...request.input]
         : [{ role: "user", content: request.input }];
       if (request.runtime_overrides?.context) {
-        messages.unshift({ role: "system", content: `Application context (data, not authority): ${JSON.stringify(request.runtime_overrides.context)}` });
+        messages.unshift({ role: profile.profile_id === "obsidian-vault-agent-v1" ? "user" : "system", content: `Application context (data, not authority): ${JSON.stringify(request.runtime_overrides.context)}` });
       }
 
       const context: any = {
@@ -524,7 +524,8 @@ export class RunExecutionEngine {
         if (processed.status === "denied") throw Object.assign(new Error(processed.error?.message || "Tool denied"), { code: processed.error?.code });
         if (processed.status === "admitted_local") {
           const observation = await LocalToolContinuation.wait(runId, processed.event, abortController.signal, () => emitEvent(processed.event));
-          emitEvent({ run_id: runId, type: "tool.completed", data: { tool_call_id: processed.event.data.tool_call_id, result: observation } });
+          const failed = !!(observation && typeof observation === "object" && (observation as any).is_error);
+          emitEvent({ run_id: runId, type: failed ? "tool.failed" : "tool.completed", data: { tool_call_id: processed.event.data.tool_call_id, ...(failed ? { error: { code: "TOOL_EXECUTION_FAILED", message: "Local tool returned a recoverable error", details: observation } } : { result: observation }) } });
           for (const extension of extensions) await extension.afterTool?.(call, observation);
           return observation;
         }

@@ -13,6 +13,7 @@ export interface CompletionJob {
 /** Durable model steps. Vault tools remain on the Obsidian client. */
 export class ObsidianCompletionJobs {
   private active = new Map<string, CompletionJob>();
+  private controllers = new Map<string, AbortController>();
   constructor(private directory = path.join(path.dirname(process.env.RUNTIME_STORE_PATH || path.resolve("data/run_store_durable.json")), "obsidian-completions"), private transport: typeof fetch = fetch) {}
 
   private file(scope: string, id: string) {
@@ -38,6 +39,11 @@ export class ObsidianCompletionJobs {
     }
     return job;
   }
+  cancel(scope: string, id: string): CompletionJob | null {
+    const file = this.file(scope, id); const job = this.get(scope, id);
+    if (job?.status === "running") this.controllers.get(file)?.abort();
+    return job;
+  }
   submit(scope: string, id: string, target: string, payload: Record<string, unknown>): CompletionJob {
     // A desktop cannot use this endpoint as an arbitrary network proxy.
     const allowed = ["http://10.0.0.30:8000/v1", "http://10.0.0.141:8000/v1"];
@@ -55,6 +61,7 @@ export class ObsidianCompletionJobs {
     const file = this.file(scope, id);
     this.write(file, job); // Commit acceptance before releasing the HTTP connection.
     this.active.set(file, job);
+    this.controllers.set(file, new AbortController());
     void this.execute(file, job, target, payload);
     return job;
   }
@@ -62,15 +69,15 @@ export class ObsidianCompletionJobs {
     try {
       const response = await this.transport(`${target}/chat/completions`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, stream: false }), signal: AbortSignal.timeout(180000),
+        body: JSON.stringify({ ...payload, stream: false }), signal: AbortSignal.any([this.controllers.get(file)!.signal, AbortSignal.timeout(180000)]),
       });
       job.response = response.ok ? { status: response.status, data: await response.json() } : { status: response.status, errText: (await response.text()).slice(0, 4000) };
       job.status = response.ok ? "completed" : "failed";
     } catch (error) {
       job.status = "failed";
-      job.response = { status: 502, errText: error instanceof Error ? error.message : String(error) };
+      job.response = { status: this.controllers.get(file)?.signal.aborted ? 499 : 502, errText: this.controllers.get(file)?.signal.aborted ? "Model job cancelled" : error instanceof Error ? error.message : String(error) };
     }
-    try { this.write(file, job); this.active.delete(file); }
+    try { this.write(file, job); this.active.delete(file); this.controllers.delete(file); }
     catch {
       // Keep a failed record in memory rather than acknowledging an unsaved result.
       job.status = "failed";

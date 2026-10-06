@@ -102,6 +102,25 @@ describe("scoped runtime HTTP routes", () => {
     expect(unknown.status).toBe(409);
   });
 
+  it.each([false, true])("client disconnect preserves only detached delivery (%s)", async detached => {
+    let runSignal: AbortSignal | undefined; let finish!: () => void;
+    vi.spyOn(RunExecutionEngine, "startRun").mockImplementation(async (id: any, request: any, emit: any) => {
+      runSignal = request.signal;
+      emit({run_id: id, type: "run.started", data: {status: "running"}});
+      await new Promise<void>(resolve => { finish = resolve; });
+      return {} as any;
+    });
+    const client = new AbortController();
+    try {
+      const response = await fetch(baseUrl, {method: "POST", signal: client.signal,
+        headers: {authorization: `Bearer ${bearer()}`, "content-type": "application/json"},
+        body: JSON.stringify({app_id: appId, session_id: sessionId, profile_id: profileId, input: "Read", stream: true, runtime_overrides: {detached_delivery: detached}})});
+      await response.body!.getReader().read(); client.abort();
+      if (!detached) await vi.waitFor(() => expect(runSignal?.aborted).toBe(true));
+      else { await new Promise(resolve => setTimeout(resolve, 30)); expect(runSignal?.aborted).toBe(false); }
+    } finally { finish?.(); }
+  });
+
   it("returns 404 for cross-vault reads, cancellation, and tool results", async () => {
     const runId = "cross-vault-run";
     await seedRun(runId, "running");
@@ -109,6 +128,7 @@ describe("scoped runtime HTTP routes", () => {
     const headers = { authorization: `Bearer ${other}`, "content-type": "application/json" };
     expect((await fetch(`${baseUrl}/${runId}`, { headers })).status).toBe(404);
     expect((await fetch(`${baseUrl}/${runId}/cancel`, { method: "POST", headers })).status).toBe(404);
+    expect((await fetch(`${baseUrl}/${runId}/tools/call-1/verify`, { method: "POST", headers, body: JSON.stringify({ authorization_receipt: {} }) })).status).toBe(404);
     expect((await fetch(`${baseUrl}/${runId}/tools/call-1/result`, {
       method: "POST", headers, body: JSON.stringify({ result: "x", is_error: false, authorization_receipt: {} }),
     })).status).toBe(404);
