@@ -84,6 +84,7 @@ import webhookRouter from "./routes/WebhookRoutes.ts";
 import platformRouter from "./routes/PlatformRoutes.ts";
 import executeRouter from "./routes/ExecuteRoutes.ts";
 import runRouter from "./routes/RunRoutes.ts";
+import { createObsidianCompletionRouter } from "./routes/ObsidianCompletionRoutes.ts";
 import contractRouter from "./routes/ContractRoutes.ts";
 import { ProfileRegistry } from "./services/ProfileRegistry.ts";
 
@@ -158,6 +159,7 @@ const ENDPOINTS = {
     "/prompts",
     "/webhooks",
     "/v1/runs",
+    "/obsidian-completions",
   ],
   websocket: ["/ws/chat", "/ws/text-to-audio"],
   admin: ["/admin", "/admin/lm-studio"],
@@ -192,6 +194,7 @@ app.use("/config", configRouter);
 app.use("/config-local", localConfigRouter);
 app.use("/chat", chatRouter);
 app.use("/agent", agentRouter);
+app.use("/obsidian-completions", createObsidianCompletionRouter());
 app.use("/text-to-audio", audioRouter);
 app.use("/audio-to-text", audioRouter);
 app.use("/embed", embedRouter);

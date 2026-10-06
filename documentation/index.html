@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Documentation</title>
+<style>
+:root{
+  --ground:#f6f7f9; --panel:#ffffff; --panel-2:#eef1f5;
+  --ink:#1b2027; --ink-soft:#5a6472; --rule:#d8dee7;
+  --accent:#0f6f6c; --accent-soft:#e2f0ef;
+  --ok:#1f7a4d; --warn:#8a6100; --bad:#a32b25;
+  --ok-bg:#e4f2ea; --warn-bg:#fbf0d8; --bad-bg:#f9e5e3;
+  --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.04);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ground:#111419; --panel:#181c23; --panel-2:#1f242c;
+    --ink:#e5e9ef; --ink-soft:#9aa5b4; --rule:#2b323c;
+    --accent:#5ec8c0; --accent-soft:#16302f;
+    --ok:#6ed49b; --warn:#e8bb5c; --bad:#f2867e;
+    --ok-bg:#14291f; --warn-bg:#2c2413; --bad-bg:#2e1a19;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#111419; --panel:#181c23; --panel-2:#1f242c;
+  --ink:#e5e9ef; --ink-soft:#9aa5b4; --rule:#2b323c;
+  --accent:#5ec8c0; --accent-soft:#16302f;
+  --ok:#6ed49b; --warn:#e8bb5c; --bad:#f2867e;
+  --ok-bg:#14291f; --warn-bg:#2c2413; --bad-bg:#2e1a19;
+  --shadow:none;
+}
+:root[data-theme="light"]{
+  --ground:#f6f7f9; --panel:#ffffff; --panel-2:#eef1f5;
+  --ink:#1b2027; --ink-soft:#5a6472; --rule:#d8dee7;
+  --accent:#0f6f6c; --accent-soft:#e2f0ef;
+  --ok:#1f7a4d; --warn:#8a6100; --bad:#a32b25;
+  --ok-bg:#e4f2ea; --warn-bg:#fbf0d8; --bad-bg:#f9e5e3;
+  --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.04);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:16px; line-height:1.65; -webkit-font-smoothing:antialiased;
+}
+.masthead{
+  border-bottom:1px solid var(--rule); background:var(--panel);
+  padding:2.2rem 1.5rem 1.6rem;
+}
+.masthead-inner{max-width:1180px;margin:0 auto;display:flex;flex-wrap:wrap;gap:1rem;align-items:baseline;justify-content:space-between}
+.masthead h1{
+  font-family:ui-serif,Charter,"Bitstream Charter",Georgia,serif;
+  font-size:1.9rem;font-weight:600;margin:0;letter-spacing:-.01em;text-wrap:balance;
+}
+.masthead .sub{color:var(--ink-soft);font-size:.9rem;margin:.35rem 0 0}
+.stamp{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.75rem;
+  color:var(--ink-soft);background:var(--panel-2);border:1px solid var(--rule);
+  border-radius:999px;padding:.3rem .7rem;white-space:nowrap;
+}
+/* Freshness — "updated 5 minutes ago", computed in the browser so it stays
+   true long after the build. Empty until the script fills it, so a page opened
+   with JS off shows nothing rather than a stale or broken label. */
+.freshness{display:none}
+.freshness:not(:empty){
+  display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:.68rem;letter-spacing:.02em;color:var(--ink-soft);
+  border:1px solid var(--rule);border-radius:999px;padding:.12rem .5rem;
+  margin:0 0 .9rem;vertical-align:middle;
+}
+.freshness.lede:not(:empty){margin:0 .5rem 0 0;border:0;padding:0}
+/* Anything changed in the last day is what a returning reader is looking for. */
+.freshness.recent:not(:empty){
+  color:var(--accent);border-color:var(--accent);background:var(--accent-soft);font-weight:600;
+}
+.freshness.badge:not(:empty){
+  font-size:0.65rem; background:var(--accent); color:var(--panel);
+  padding:0.12rem 0.45rem; border-radius:4px; font-weight:700; border:none;
+  margin-left:auto; line-height:1; vertical-align:middle; letter-spacing:0.04em;
+}
+/* Status — the lifecycle a chapter is in. A plan that says "approved" and a
+   plan that says "shipped" are different documents, and a reader who cannot
+   tell them apart at a glance will act on the wrong one. */
+.statusbar{display:flex;flex-wrap:wrap;gap:.4rem;margin:0 0 1.1rem}
+.status,.meta-pill{
+  display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:.66rem;letter-spacing:.04em;text-transform:uppercase;font-weight:700;
+  border-radius:4px;padding:.16rem .45rem;line-height:1.35;white-space:nowrap;
+}
+.meta-pill{
+  text-transform:none;font-weight:500;letter-spacing:.02em;
+  color:var(--ink-soft);background:var(--panel-2);border:1px solid var(--rule);
+}
+.status.s-ok{color:var(--ok);background:var(--ok-bg);border:1px solid var(--ok)}
+.status.s-warn{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn)}
+.status.s-bad{color:var(--bad);background:var(--bad-bg);border:1px solid var(--bad)}
+.status.s-muted{color:var(--ink-soft);background:var(--panel-2);border:1px solid var(--rule)}
+/* Overdue is set by the browser, never baked into the build — see _status_bar. */
+.meta-pill.overdue{color:var(--bad);background:var(--bad-bg);border-color:var(--bad);font-weight:700}
+nav.toc .status{
+  margin-left:auto;font-size:.58rem;padding:.08rem .3rem;letter-spacing:.02em;
+  border-radius:3px;
+}
+nav.toc a.chapter .status + .freshness.badge{margin-left:.25rem}
+.shell{max-width:1180px;margin:0 auto;padding:2rem 1.5rem 5rem;display:grid;grid-template-columns:220px minmax(0,1fr);gap:2.6rem;align-items:start}
+/* The sidebar scrolls ITSELF. It is `position:sticky`, so without a height
+   bound it grows past the bottom of the window and the only way to reach its
+   last entries is to scroll the article — which moves the thing you were
+   trying to navigate away from you. With nine chapters and their sub-headings
+   the list is comfortably taller than a laptop screen, so this was the normal
+   case, not an edge one.
+   `overscroll-behavior:contain` stops a scroll that reaches the end of the
+   list from continuing into the page behind it. */
+nav.toc{
+  position:sticky;top:1.5rem;font-size:.86rem;
+  max-height:calc(100vh - 3rem);overflow-y:auto;overscroll-behavior:contain;
+  scrollbar-width:thin;scrollbar-color:var(--rule) transparent;
+  padding-right:.3rem;
+}
+nav.toc::-webkit-scrollbar{width:8px}
+nav.toc::-webkit-scrollbar-track{background:transparent}
+nav.toc::-webkit-scrollbar-thumb{background:var(--rule);border-radius:4px}
+nav.toc:hover::-webkit-scrollbar-thumb{background:var(--ink-soft)}
+nav.toc h2{
+  font-size:.7rem;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--ink-soft);margin:0 0 .7rem;font-weight:600;
+  font-family:system-ui,sans-serif;border:0;padding:0;
+}
+nav.toc ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.1rem}
+nav.toc a{
+  display:block;padding:.32rem .6rem;border-radius:6px;color:var(--ink-soft);
+  text-decoration:none;border-left:2px solid transparent;
+}
+nav.toc a:hover{color:var(--ink);background:var(--panel-2)}
+nav.toc a.chapter{color:var(--ink);font-weight:550;display:flex;gap:.5rem;align-items:baseline}
+nav.toc a.sub{padding-left:2.05rem;font-size:.82rem}
+/* Part headings group the chapters. Not links — a part is a shelf, not a page,
+   and a heading that looks clickable but is not is worse than a plain one. */
+nav.toc li.part{
+  font-size:.68rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
+  color:var(--ink-soft);font-family:system-ui,sans-serif;
+  margin:1.15rem 0 .35rem;padding:0 .6rem;
+}
+nav.toc li.part:first-child{margin-top:0}
+nav.toc li.part{cursor:default}
+/* Part dividers in the body. Deliberately NOT a panel like a chapter — a part
+   is a label on the pile, and dressing it as a card makes it read as content. */
+.part-divider{margin:2.6rem 0 1.1rem;padding:0 .2rem}
+.part-divider:first-child{margin-top:0}
+.part-divider h2{
+  font-size:.78rem;text-transform:uppercase;letter-spacing:.13em;font-weight:700;
+  color:var(--accent);font-family:system-ui,sans-serif;
+  margin:0 0 .3rem;padding:0 0 .55rem;border-bottom:1px solid var(--rule);
+}
+.part-divider p{margin:.55rem 0 0;color:var(--ink-soft);font-size:.9rem}
+nav.toc a.chapter .num{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.74rem;
+  color:var(--ink-soft);font-weight:600;min-width:1.05em;text-align:right;flex:none;
+}
+nav.toc a.chapter:hover .num{color:var(--accent)}
+/* Body eyebrow: which part am I in, and which chapter is this. Carries the
+   sidebar's context to readers who cannot see the sidebar. */
+p.eyebrow{
+  font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
+  color:var(--ink-soft);font-family:system-ui,sans-serif;margin:0 0 .5rem;
+}
+p.eyebrow .sep{margin:0 .45rem;opacity:.5}
+main{min-width:0}
+section.chapter{
+  background:var(--panel);border:1px solid var(--rule);border-radius:10px;
+  padding:1.9rem 2.1rem;margin-bottom:1.5rem;box-shadow:var(--shadow);
+}
+main h1,main h2,main h3,main h4{
+  font-family:ui-serif,Charter,"Bitstream Charter",Georgia,serif;
+  letter-spacing:-.01em;text-wrap:balance;
+}
+main h1{font-size:1.55rem;margin:0 0 1.1rem;padding-bottom:.6rem;border-bottom:1px solid var(--rule);font-weight:600}
+main h2{font-size:1.18rem;margin:2.1rem 0 .7rem;font-weight:600}
+main h3{font-size:1rem;margin:1.5rem 0 .5rem;font-weight:650}
+main h4{font-size:.92rem;margin:1.2rem 0 .4rem;font-weight:650;color:var(--ink-soft)}
+main p,main li{max-width:70ch}
+main p{margin:0 0 .95rem}
+main ul,main ol{margin:0 0 1rem;padding-left:1.35rem;display:flex;flex-direction:column;gap:.3rem}
+main li{margin:0}
+a{color:var(--accent)}
+a:focus-visible,nav.toc a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+code{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.87em;
+  background:var(--panel-2);border:1px solid var(--rule);border-radius:4px;padding:.08em .35em;
+}
+pre{
+  background:var(--panel-2);border:1px solid var(--rule);border-radius:8px;
+  padding:.9rem 1.05rem;margin:0 0 1rem;overflow-x:auto;
+}
+pre code{background:none;border:0;padding:0;font-size:.83rem;line-height:1.6}
+.scroll-x{overflow-x:auto;max-width:100%}
+table{border-collapse:collapse;width:100%;font-size:.89rem;margin:0 0 1rem;font-variant-numeric:tabular-nums}
+th,td{border-bottom:1px solid var(--rule);padding:.55rem .7rem;text-align:left;vertical-align:top}
+th{
+  font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--ink-soft);font-weight:600;border-bottom:1.5px solid var(--rule);white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:0}
+blockquote{
+  margin:0 0 1rem;padding:.7rem 1.1rem;border-left:3px solid var(--accent);
+  background:var(--accent-soft);border-radius:0 6px 6px 0;color:var(--ink);
+}
+blockquote p:last-child{margin-bottom:0}
+hr{border:0;border-top:1px solid var(--rule);margin:1.8rem 0}
+figure{margin:1.4rem 0;padding:1.1rem;background:var(--panel-2);border:1px solid var(--rule);border-radius:8px;overflow-x:auto}
+figure svg{max-width:100%;height:auto;display:block;margin:0 auto;color:var(--ink)}
+figcaption{margin-top:.8rem;font-size:.82rem;color:var(--ink-soft);text-align:center;max-width:none}
+.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.8rem;margin:0 0 1.4rem}
+.tile{border:1px solid var(--rule);border-radius:8px;padding:.8rem .9rem;background:var(--panel);border-left-width:3px}
+.tile .label{font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-soft);font-weight:600}
+.tile .value{font-size:1.32rem;font-weight:650;margin-top:.15rem;font-variant-numeric:tabular-nums;font-family:ui-serif,Charter,Georgia,serif}
+.tile .note{font-size:.78rem;color:var(--ink-soft);margin-top:.15rem}
+.tile.ok{border-left-color:var(--ok)} .tile.ok .value{color:var(--ok)}
+.tile.warn{border-left-color:var(--warn)} .tile.warn .value{color:var(--warn)}
+.tile.bad{border-left-color:var(--bad)} .tile.bad .value{color:var(--bad)}
+.pill{
+  display:inline-block;font-size:.7rem;font-weight:650;letter-spacing:.04em;
+  text-transform:uppercase;padding:.16rem .5rem;border-radius:999px;
+  border:1px solid transparent;white-space:nowrap;vertical-align:.06em;
+}
+.pill.ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}
+.pill.bad{background:var(--bad-bg);color:var(--bad);border-color:var(--bad)}
+.pill.info{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr;gap:1.4rem;padding:1.2rem 1rem 3rem}
+  /* Narrow screens stack the nav above the article, so it is no longer sticky
+     and must NOT keep a viewport height cap — that would put a second scroll
+     region at the top of the page. */
+  nav.toc{
+    position:static;border-bottom:1px solid var(--rule);padding-bottom:1rem;
+    max-height:none;overflow:visible;
+  }
+  nav.toc ol{flex-direction:row;flex-wrap:wrap;gap:.3rem}
+  section.chapter{padding:1.3rem 1.15rem}
+}
+@media print{
+  body{background:#fff}
+  nav.toc,.stamp{display:none}
+  .shell{display:block;max-width:none;padding:0}
+  section.chapter{border:0;box-shadow:none;page-break-inside:avoid;padding:0 0 1.5rem}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <div>
+      <h1>Documentation</h1>
+      <p class="sub"></p>
+    </div>
+    <span class="stamp"><span class="freshness lede" data-ts="2026-10-06T19:20:23.682748+00:00"></span>generated 2026-10-06 19:22 UTC · do not edit by hand</span>
+  </div>
+</header>
+<div class="shell">
+  <nav class="toc" aria-label="Contents">
+    <h2>Contents</h2>
+    <ol><li class="part" title="">Features</li><li><a class="chapter" href="#obsidian-durable-completions"><span class="num">1</span><span class="title-text">Durable model completions for Obsidian Vault Notes</span><span class="status s-ok">verified</span><span class="freshness badge" data-ts="2026-10-06T19:20:23.682748+00:00"></span></a></li></ol>
+  </nav>
+  <main><div class="part-divider"><h2>Features</h2></div>
+<section class="chapter" id="obsidian-durable-completions"><span class="freshness" data-ts="2026-10-06T19:20:23.682748+00:00"></span><p class="eyebrow">Features<span class="sep">·</span>Chapter 1</p><p class="statusbar"><span class="status s-ok">verified</span><span class="meta-pill">updated 2026-10-06</span></p><h1 id="durable-model-completions-for-obsidian-vault-notes">Durable model completions for Obsidian Vault Notes</h1>
+<p><code>PUT /obsidian-completions/:id</code> accepts a client-generated UUID, a permitted model endpoint and the OpenAI completion payload. <code>GET /obsidian-completions/:id</code> fetches status and the saved response. Requests follow the service's existing project/username tracking middleware; the UUID is also required to retrieve the job. These headers are application scoping, not a new authentication mechanism.</p>
+<p>The endpoint permits only the existing Jetson and Gold Spark text servers and limits concurrent jobs to eight. It writes an acceptance record before returning HTTP 202 and starts one bounded, non-streaming model request. Disconnecting the initiating HTTP client does not cancel inference. The identical UUID and payload return the existing job, while a changed payload with that UUID is rejected.</p>
+<p>Jobs are scoped by project/username and stored in <code>obsidian-completions/</code> beside the configured runtime store. On the NAS this is inside the mounted <code>runtime-data</code> directory. Completion and failure outcomes are saved using a temporary file and rename. If the process restarts during a running job, retrieval records a failure explaining the interruption; it does not replay the model request. Results currently remain on disk until explicitly removed by the operator.</p>
+<p>The plugin owns the agent loop and vault tools. A model step finishes on this service while Obsidian is closed; subsequent vault operations continue when Obsidian reopens. No Prism repository changes are required.</p>
+<p>Validation covers persisted acceptance before transport completion, duplicate PUTs with a single model call, durable result retrieval from a second store, scope isolation, mismatched request rejection, endpoint/ID validation and interrupted jobs without replay. The runtime TypeScript build must pass. Deploy from deploy-kit using the existing <code>lazy-tool-service</code> registry ID and verify <code>/health</code> and an accepted/completed model job after restart.</p></section></main>
+</div>
+<script>
+/* Relative "updated N ago" labels. Rendered at VIEW time, not build time: a
+   relative string baked into static HTML is wrong the moment it is written,
+   and the generation stamp answers a different question ("when did the builder
+   run") from the one a reader has ("is this current"). */
+(function () {
+  var UNITS = [
+    ["year", 31536000], ["month", 2592000], ["week", 604800],
+    ["day", 86400], ["hour", 3600], ["minute", 60]
+  ];
+  function ago(seconds) {
+    for (var i = 0; i < UNITS.length; i++) {
+      var n = Math.floor(seconds / UNITS[i][1]);
+      if (n >= 1) return n + " " + UNITS[i][0] + (n === 1 ? "" : "s") + " ago";
+    }
+    return "just now";
+  }
+  function paint() {
+    var now = Date.now();
+    var nodes = document.querySelectorAll(".freshness[data-ts]");
+    for (var i = 0; i < nodes.length; i++) {
+      var raw = nodes[i].getAttribute("data-ts");
+      var when = raw ? new Date(raw) : null;
+      if (!when || isNaN(when.getTime())) continue;
+      var seconds = (now - when.getTime()) / 1000;
+      if (seconds < 0) seconds = 0;
+      var isRecent = seconds < 86400 * 2; /* 2 days */
+      nodes[i].classList.toggle("recent", isRecent);
+      
+      if (nodes[i].classList.contains("badge")) {
+         nodes[i].textContent = isRecent ? "UPDATED" : "";
+         if (!isRecent) nodes[i].style.display = "none";
+      } else if (nodes[i].classList.contains("lede")) {
+         nodes[i].textContent = "last commit " + ago(seconds) + " · ";
+      } else {
+         nodes[i].textContent = "last commit " + ago(seconds);
+      }
+      nodes[i].title = when.toLocaleString();
+    }
+    /* A review date that has passed is the whole point of writing one down.
+       Decided here, not at build time — the page is rebuilt when a chapter
+       CHANGES, which is never the case for the chapters that go stale. */
+    var due = document.querySelectorAll(".meta-pill.review[data-review]");
+    for (var j = 0; j < due.length; j++) {
+      var by = new Date(due[j].getAttribute("data-review") + "T23:59:59");
+      if (isNaN(by.getTime())) continue;
+      var late = now > by.getTime();
+      due[j].classList.toggle("overdue", late);
+      if (late) {
+        var days = Math.floor((now - by.getTime()) / 86400000);
+        due[j].textContent = "review overdue by " + days + " day" + (days === 1 ? "" : "s");
+      }
+    }
+  }
+  paint();
+  /* A page left open overnight must not still claim "updated 2 minutes ago". */
+  setInterval(paint, 60000);
+})();
+</script>
+</body>
+</html>
