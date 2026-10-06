@@ -46,6 +46,7 @@ COPY contracts ./contracts
 
 # Platform dashboard static assets (served at /dashboard)
 COPY public ./public
+COPY scripts/reindex-harness-embeddings.mjs ./scripts/reindex-harness-embeddings.mjs
 
 # Expose port
 EXPOSE 7778

@@ -11,6 +11,7 @@ import RequestLogger from "./RequestLogger.ts";
 import logger from "../utils/logger.ts";
 import { calculateTokensPerSec } from "../utils/math.ts";
 import SettingsService from "./SettingsService.ts";
+import { EMBEDDING_PROVIDER, EMBEDDING_MODEL, embeddingSpace } from "./EmbeddingGemma2Client.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import type {
   EmbeddingMultimodalPart,
@@ -49,16 +50,16 @@ const EmbeddingService = {
     const requestId = crypto.randomUUID();
     const requestStart = performance.now();
     // Resolve defaults from settings when no explicit provider/model given
-    const embedConfig = await getEmbeddingConfig();
-    const providerName = options.provider || embedConfig.provider;
-    const resolvedModel =
-      options.model ||
-      (
-        getDefaultModels(TYPES.TEXT, TYPES.EMBEDDING) as
-          | Record<string, string>
-          | undefined
-      )?.[providerName] ||
-      embedConfig.model;
+    const embedConfig = options.provider && options.model
+      ? { provider: options.provider, model: options.model }
+      : await getEmbeddingConfig();
+    const requestedProvider = options.provider || embedConfig.provider;
+    const requestedModel = options.model || (!options.provider ? embedConfig.model : undefined) ||
+      (getDefaultModels(TYPES.TEXT, TYPES.EMBEDDING) as Record<string, string> | undefined)?.[requestedProvider] || embedConfig.model;
+    const useGemma = /embeddinggemma/i.test(requestedModel) || requestedProvider === EMBEDDING_PROVIDER;
+    const taskType = options.taskType || (useGemma ? "RETRIEVAL_DOCUMENT" : undefined);
+    const providerName = useGemma ? EMBEDDING_PROVIDER : requestedProvider;
+    const resolvedModel = useGemma ? EMBEDDING_MODEL : requestedModel;
     let result: { embedding: number[]; dimensions: number } | undefined =
       undefined;
     let success = true;
@@ -73,13 +74,14 @@ const EmbeddingService = {
         );
       }
       const providerOptions: Record<string, unknown> = {};
-      if (options.taskType) providerOptions.taskType = options.taskType;
-      if (options.dimensions) providerOptions.dimensions = options.dimensions;
+      if (taskType) providerOptions.taskType = taskType;
+      if (options.dimensions !== undefined) providerOptions.dimensions = options.dimensions;
       result = await provider.generateEmbedding(
         content,
         resolvedModel,
         providerOptions,
       );
+      result.dimensions = result.embedding.length;
     } catch (error: unknown) {
       success = false;
       errorMessage = getErrorMessage(error);
@@ -158,7 +160,7 @@ const EmbeddingService = {
         requestPayload: {
           source,
           contentType,
-          ...(options.taskType ? { taskType: options.taskType } : {}),
+          ...(taskType ? { taskType } : {}),
           ...(options.dimensions ? { dimensions: options.dimensions } : {}),
           ...(contentType === "text"
             ? { text: typeof content === "string" ? content : "" }
@@ -182,6 +184,7 @@ const EmbeddingService = {
       dimensions: result.dimensions,
       provider: providerName,
       model: resolvedModel,
+      space: useGemma ? `${embeddingSpace(result.dimensions)}${taskType === "similarity" || taskType === "SEMANTIC_SIMILARITY" ? ":similarity" : ""}` : `${providerName}:${resolvedModel}:${result.dimensions}:retrieval-v1`,
     };
   },
   async embed(text: EmbeddingContent, options: EmbeddingOptions = {}) {

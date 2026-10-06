@@ -8,6 +8,7 @@ import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { getProvider } from "../providers/index.ts";
 import { MONGO_DB_NAME } from "../../config.ts";
 import EmbeddingService from "./EmbeddingService.ts";
+import { indexedEmbedding, compatibleVector, type IndexedEmbedding } from "./SemanticEmbedding.ts";
 import PromptLocaleService from "./PromptLocaleService.ts";
 import RequestLogger from "./RequestLogger.ts";
 import logger from "../utils/logger.ts";
@@ -46,6 +47,7 @@ export interface MemoryStoreParams {
   title?: string | null;
   content: string;
   embedding?: number[];
+  semanticEmbedding?: IndexedEmbedding;
   metadata?: Record<string, unknown>;
   conversationId?: string | null;
   traceId?: string;
@@ -95,6 +97,7 @@ export interface MemoryUpdateParams {
 
 export interface EmbedOptions {
   source?: string;
+  taskType?: string;
   project?: string | null;
   conversationId?: string;
   traceId?: string;
@@ -106,7 +109,7 @@ export interface EmbedOptions {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 async function generateEmbedding(text: string, options: EmbedOptions = {}) {
-  return EmbeddingService.embed(text, { source: "memory", ...options });
+  return EmbeddingService.generate(text, { source: "memory", taskType: "RETRIEVAL_DOCUMENT", ...options });
 }
 function memoryAgeDays(createdAt: string) {
   return daysSinceIso(createdAt);
@@ -246,7 +249,7 @@ const MemoryService = {
     type,
     title,
     content,
-    embedding,
+    semanticEmbedding,
     metadata = {},
     conversationId,
     traceId,
@@ -263,7 +266,7 @@ const MemoryService = {
     const collection = MongoWrapper.getCollection(MONGO_DB_NAME, COLLECTION);
     const embedText = title ? `${title}: ${content}` : content;
     // Generate embedding if not provided
-    if (!embedding) {
+    if (!semanticEmbedding) {
       const embedOpts: EmbedOptions = { project };
       if (conversationId) embedOpts.conversationId = conversationId;
       if (traceId) embedOpts.traceId = traceId;
@@ -271,7 +274,7 @@ const MemoryService = {
       if (endpoint) embedOpts.endpoint = endpoint;
       if (agent) embedOpts.agent = agent;
       if (username) embedOpts.username = username;
-      embedding = await generateEmbedding(embedText, embedOpts);
+      semanticEmbedding = indexedEmbedding(await generateEmbedding(embedText, embedOpts));
     }
     // Duplicate detection — compare against existing memories for the same agent
     const dedupFilter: Record<string, unknown> = { agent };
@@ -280,16 +283,17 @@ const MemoryService = {
     if (metadata.aboutUserId) dedupFilter.aboutUserId = metadata.aboutUserId;
     const existing = await collection
       .find(dedupFilter)
-      .project({ embedding: 1 })
+      .project({ semanticEmbedding: 1 })
       .sort({ createdAt: -1 })
       .limit(200)
       .toArray();
     const isDuplicate = existing.some((document: Record<string, unknown>) => {
-      if (!document.embedding) return false;
+      const vector = compatibleVector(document.semanticEmbedding, semanticEmbedding.space);
+      if (!vector) return false;
       return (
         cosineSimilarity(
-          embedding as number[],
-          document.embedding as number[],
+          semanticEmbedding.vector,
+          vector,
         ) > DUPLICATE_THRESHOLD
       );
     });
@@ -311,7 +315,7 @@ const MemoryService = {
       type: type || "other",
       title: title || null,
       content,
-      embedding,
+      semanticEmbedding,
       conversationId: conversationId || null,
       agentConversationId: agentConversationId || null,
       createdAt: now,
@@ -353,12 +357,12 @@ const MemoryService = {
     const storedMemories: Record<string, unknown>[] = [];
     for (const fact of facts) {
       try {
-        const embedding = await generateEmbedding(fact.fact, {
+        const semanticEmbedding = indexedEmbedding(await generateEmbedding(fact.fact, {
           project,
           traceId,
           endpoint,
           agent: AGENT_IDS.LUPOS,
-        });
+        }));
         const memory = await this.store({
           agent: AGENT_IDS.LUPOS,
           project: project || null,
@@ -366,7 +370,7 @@ const MemoryService = {
           type: fact.category || "other",
           title: null,
           content: fact.fact,
-          embedding,
+          semanticEmbedding,
           metadata: {
             guildId,
             channelId,
@@ -422,7 +426,7 @@ const MemoryService = {
     if (endpoint) embeddingOpts.endpoint = endpoint;
     if (agent) embeddingOpts.agent = agent;
     if (username) embeddingOpts.username = username;
-    const queryEmbedding = await generateEmbedding(queryText, embeddingOpts);
+    const queryEmbedding = await generateEmbedding(queryText, { ...embeddingOpts, taskType: "RETRIEVAL_QUERY" });
     // Build the filter — always scoped by agent
     const filter: Record<string, unknown> = { agent };
     if (project) filter.project = project;
@@ -434,7 +438,7 @@ const MemoryService = {
     const memories = await collection
       .find(filter, {
         projection: {
-          embedding: 1,
+          semanticEmbedding: 1,
           type: 1,
           title: 1,
           content: 1,
@@ -452,7 +456,7 @@ const MemoryService = {
     const scored = memories
       .filter(
         (memory: Record<string, unknown>) =>
-          memory.embedding && (memory.embedding as number[]).length > 0,
+          compatibleVector(memory.semanticEmbedding, queryEmbedding.space),
       )
       .map((memory: Record<string, unknown>) => ({
         id: memory._id,
@@ -470,8 +474,8 @@ const MemoryService = {
         age: memoryAge(memory.createdAt as string),
         ageDays: memoryAgeDays(memory.createdAt as string),
         score: cosineSimilarity(
-          queryEmbedding as number[],
-          memory.embedding as number[],
+          queryEmbedding.embedding,
+          compatibleVector(memory.semanticEmbedding, queryEmbedding.space)!,
         ),
       }))
       .filter((message) => message.score > RELEVANCE_THRESHOLD)
@@ -501,7 +505,7 @@ const MemoryService = {
     if (type) filter.type = type;
     const [memories, total] = await Promise.all([
       collection
-        .find(filter, { projection: { embedding: 0 } })
+        .find(filter, { projection: { embedding: 0, semanticEmbedding: 0 } })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -556,18 +560,17 @@ const MemoryService = {
     if (content !== undefined) $set.content = content;
     if (type !== undefined) $set.type = type;
     // Re-generate embedding if content changed
-    if (content !== undefined) {
+    if (content !== undefined || title !== undefined) {
       const document = await collection.findOne(
         { id: memoryId },
-        { projection: { project: 1, title: 1 } },
+        { projection: { project: 1, title: 1, content: 1 } },
       );
-      const embedText =
-        title || document?.title
-          ? `${title || document?.title}: ${content}`
-          : content;
-      $set.embedding = await generateEmbedding(embedText, {
+      const updatedTitle = title ?? document?.title;
+      const updatedContent = content ?? document?.content ?? "";
+      const embedText = updatedTitle ? `${updatedTitle}: ${updatedContent}` : updatedContent;
+      $set.semanticEmbedding = indexedEmbedding(await generateEmbedding(embedText, {
         project: document?.project,
-      });
+      }));
     }
     const result = await collection.updateOne({ id: memoryId }, { $set });
     return result.modifiedCount > 0;

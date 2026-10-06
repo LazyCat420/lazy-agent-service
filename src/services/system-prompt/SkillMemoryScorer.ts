@@ -1,5 +1,6 @@
 import MemoryService from "../MemoryService.ts";
 import EmbeddingService from "../EmbeddingService.ts";
+import { compatibleVector } from "../SemanticEmbedding.ts";
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
 import { MONGO_DB_NAME } from "../../../config.ts";
 import { COLLECTIONS } from "../../constants.ts";
@@ -72,14 +73,14 @@ export class SkillMemoryScorer {
       const skills = await db
         .collection(COLLECTIONS.AGENT_SKILLS)
         .find({ project, username, enabled: true })
-        .project({ name: 1, content: 1, description: 1, embedding: 1 })
+        .project({ name: 1, content: 1, description: 1, semanticEmbedding: 1 })
         .toArray();
 
       if (skills.length === 0) return [];
 
       // If no query or no skills have embeddings, return all (graceful fallback)
       const hasEmbeddings = skills.some(
-        (skill) => Array.isArray(skill.embedding) && skill.embedding.length > 0,
+        (skill) => !!skill.semanticEmbedding,
       );
       if (!queryText || !hasEmbeddings) {
         logger.info(
@@ -94,9 +95,10 @@ export class SkillMemoryScorer {
       }
 
       // Generate query embedding
-      let queryEmbedding: number[];
+      let queryEmbedding: Awaited<ReturnType<typeof EmbeddingService.generate>>;
       try {
-        queryEmbedding = await EmbeddingService.embed(queryText, {
+        queryEmbedding = await EmbeddingService.generate(queryText, {
+          taskType: "RETRIEVAL_QUERY",
           source: "skill-relevance",
           project,
           endpoint: endpoint || "/agent",
@@ -122,9 +124,9 @@ export class SkillMemoryScorer {
           name: skill.name as string,
           content: skill.content as string,
           description: skill.description as string,
-          score: skill.embedding
-            ? cosineSimilarity(queryEmbedding, skill.embedding as number[])
-            : 0,
+          score: compatibleVector(skill.semanticEmbedding, queryEmbedding.space)
+            ? cosineSimilarity(queryEmbedding.embedding, compatibleVector(skill.semanticEmbedding, queryEmbedding.space)!)
+            : 1, // Untagged/legacy skills remain available without false semantic ranking.
         }))
         .filter((skill) => skill.score >= SKILL_RELEVANCE_THRESHOLD)
         .sort((firstItem, b) => b.score - firstItem.score);

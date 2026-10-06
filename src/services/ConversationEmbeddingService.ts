@@ -2,6 +2,7 @@ import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { MONGO_DB_NAME } from "../../config.ts";
 import { COLLECTIONS } from "../constants.ts";
 import EmbeddingService from "./EmbeddingService.ts";
+import { indexedEmbedding } from "./SemanticEmbedding.ts";
 import AgentPersonaRegistry from "./AgentPersonaRegistry.ts";
 import logger from "../utils/logger.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
@@ -50,6 +51,7 @@ const ConversationEmbeddingService = {
         agent: context.agent || null,
         traceId: context.traceId || null,
         messageCount: (messages || context.messages || []).length,
+        title: (context.messages || []).find(message => message.role === "user" && typeof message.content === "string")?.content?.toString().slice(0, 120),
         endpoint:
           ((context as Record<string, unknown>).endpoint as string | null) ||
           "/agent",
@@ -74,6 +76,7 @@ const ConversationEmbeddingService = {
     traceId,
     messageCount,
     endpoint,
+    title,
   }: {
     conversationId: string | null;
     agentConversationId: string;
@@ -83,11 +86,12 @@ const ConversationEmbeddingService = {
     traceId: string | null;
     messageCount: number;
     endpoint: string | null;
+    title?: string;
   }): Promise<void> {
     if (!conversationId) return;
 
-    // Agent sessions only — regular chat conversations don't need cross-session search
-    if (!AgentPersonaRegistry.isAgentProject(project)) return;
+    // This hook is attached to harness sessions, including arbitrary repo projects.
+    if (!project) return;
 
     // Minimum message threshold
     if (messageCount < MINIMUM_MESSAGES_FOR_EMBEDDING) {
@@ -105,12 +109,15 @@ const ConversationEmbeddingService = {
     );
 
     // Cooldown check — don't re-embed if we did it recently
-    const existingConversation = await conversationCollection.findOne(
+    let existingConversation: Record<string, unknown> | null = await conversationCollection.findOne(
       { id: conversationId, project, username },
       { projection: { title: 1, summaryUpdatedAt: 1, compactionSummary: 1 } },
     );
 
-    if (!existingConversation) return;
+    if (!existingConversation) {
+      if (!title) return;
+      existingConversation = { title };
+    }
 
     if (existingConversation.summaryUpdatedAt) {
       const lastUpdated = new Date(
@@ -182,7 +189,8 @@ const ConversationEmbeddingService = {
         : embeddingSourceText;
 
     // Generate the embedding
-    const summaryEmbedding = await EmbeddingService.embed(truncatedText, {
+    const summaryEmbedding = await EmbeddingService.generate(truncatedText, {
+      taskType: "RETRIEVAL_DOCUMENT",
       source: "conversation-summary",
       project,
       endpoint: endpoint || "/agent",
@@ -197,10 +205,12 @@ const ConversationEmbeddingService = {
       { id: conversationId, project, username },
       {
         $set: {
-          summaryEmbedding,
+          summarySemanticEmbedding: indexedEmbedding(summaryEmbedding),
           summaryUpdatedAt: new Date().toISOString(),
         },
+        $setOnInsert: { id: conversationId, project, username, title, agent: agent || "CODING", createdAt: new Date().toISOString() },
       },
+      { upsert: true },
     );
 
     logger.info(
@@ -224,7 +234,8 @@ const ConversationEmbeddingService = {
     const database = MongoWrapper.getDb(MONGO_DB_NAME);
     if (!database) return;
 
-    const collection = AgentPersonaRegistry.isAgentProject(project)
+    const agentConversation = await database.collection(COLLECTIONS.AGENT_CONVERSATIONS).findOne({ id: conversationId, project, username }, { projection: { id: 1 } });
+    const collection = agentConversation || AgentPersonaRegistry.isAgentProject(project)
       ? database.collection(COLLECTIONS.AGENT_CONVERSATIONS)
       : database.collection(COLLECTIONS.MODEL_CONVERSATIONS);
 

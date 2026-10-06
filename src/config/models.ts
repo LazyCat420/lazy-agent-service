@@ -1274,6 +1274,20 @@ export const MODELS = {
   },
 
   // ----- Embeddings -----
+  EMBEDDINGGEMMA_2: {
+    description: "Shared Jetson text embeddings for harness retrieval, pinned to the deployed EmbeddingGemma 2 revision.",
+    name: "embeddinggemma-2",
+    label: "EmbeddingGemma 2 (Jetson)",
+    provider: "jetson-embedding",
+    modelType: MODEL_TYPES.EMBED,
+    year: 2026,
+    default: true,
+    pricing: { inputPerMillion: 0 },
+    maxInputTokens: 2048,
+    dimensions: 768,
+    inputTypes: [TYPES.TEXT],
+    outputTypes: [TYPES.EMBEDDING],
+  },
   TEXT_EMBEDDING_3_SMALL: {
     description:
       "OpenAI's efficient text embedding model, generating 1536-dimensional vectors for semantic search and retrieval.",
@@ -1432,4 +1446,3 @@ export const MODELS = {
     outputTypes: [TYPES.TEXT],
   },
 };
-

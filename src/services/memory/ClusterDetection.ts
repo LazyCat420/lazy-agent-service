@@ -56,10 +56,12 @@ export function findClusters(
   // Pairwise comparison
   for (let i = 0; i < memoryCount; i++) {
     for (let j = i + 1; j < memoryCount; j++) {
-      if (!memories[i].embedding || !memories[j].embedding) continue;
+      const first = memories[i].semanticEmbedding;
+      const second = memories[j].semanticEmbedding;
+      if (!first || !second || first.space !== second.space || first.vector.length !== second.vector.length) continue;
       const similarity = cosineSimilarity(
-        memories[i].embedding!,
-        memories[j].embedding!,
+        first.vector,
+        second.vector,
       );
       if (similarity > threshold) {
         union(i, j);

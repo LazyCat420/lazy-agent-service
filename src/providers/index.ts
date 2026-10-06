@@ -1,4 +1,5 @@
 import openaiProvider from "./openai.ts";
+import { EmbeddingGemma2Client, EMBEDDING_PROVIDER } from "../services/EmbeddingGemma2Client.ts";
 import anthropicProvider from "./anthropic.ts";
 import googleProvider from "./google.ts";
 import elevenlabsProvider from "./elevenlabs.ts";
@@ -10,6 +11,8 @@ import { PROVIDERS } from "../constants.ts";
 
 // Static cloud providers — local providers are resolved via instance registry
 const providers: Record<string, Provider> = {
+  [EMBEDDING_PROVIDER]: { generateEmbedding: async (content, _model, options = {}) =>
+    EmbeddingGemma2Client.generate(content, options.taskType, options.dimensions) } as Provider,
   [PROVIDERS.OPENAI]: openaiProvider as unknown as Provider,
   [PROVIDERS.ANTHROPIC]: anthropicProvider as Provider,
   [PROVIDERS.GOOGLE]: googleProvider as Provider,

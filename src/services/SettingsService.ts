@@ -5,6 +5,7 @@ import { MONGO_DB_NAME } from "../../config.ts";
 import { COLLECTIONS, PROVIDERS } from "../constants.ts";
 import { MODELS } from "../config.ts";
 import logger from "../utils/logger.ts";
+import { EMBEDDING_MODEL, EMBEDDING_PROVIDER } from "./EmbeddingGemma2Client.ts";
 
 // ─── In-memory cache ──────────────────────────────────────────────────────────
 // Hot path: MemoryService + EmbeddingService read these on every call.
@@ -62,8 +63,8 @@ const DEFAULTS: SettingsData = {
     extractionModel: "",
     consolidationProvider: "",
     consolidationModel: "",
-    embeddingProvider: "",
-    embeddingModel: "",
+    embeddingProvider: EMBEDDING_PROVIDER,
+    embeddingModel: EMBEDDING_MODEL,
   },
   agents: {
     subAgentProvider: "",
@@ -152,6 +153,14 @@ const SettingsService = {
       ) {
         creative.visionProvider = PROVIDERS.VLLM;
         creative.visionModel = "";
+      }
+    }
+
+    if (section === "memory" && sectionData) {
+      const memory = sectionData as SettingsData["memory"];
+      if (!memory.embeddingModel || /embeddinggemma/i.test(memory.embeddingModel)) {
+        memory.embeddingProvider = EMBEDDING_PROVIDER;
+        memory.embeddingModel = EMBEDDING_MODEL;
       }
     }
 

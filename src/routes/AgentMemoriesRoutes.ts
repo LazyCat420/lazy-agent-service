@@ -46,7 +46,7 @@ router.post(
       }
 
       // Strip embedding from response (large vector, not needed by caller)
-      const { embedding: _emb, ...safe } = result;
+      const { semanticEmbedding: _emb, ...safe } = result;
       res.json(safe);
     } catch (error: unknown) {
       logger.error(`[agent-memories] POST ${getErrorMessage(error)}`);

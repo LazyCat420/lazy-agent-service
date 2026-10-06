@@ -495,7 +495,7 @@ export default class SystemPromptAssembler {
     // Same rationale as Step 9 — sub-agents don't need cross-conversation
     // procedural workflows. They execute a single task and are destroyed.
     let workflowsText = "";
-    if (memoryQuery && !isDirectMode && !isSubAgent) {
+    if (memoryQuery && !isSubAgent) {
       try {
         const workflows = await WorkflowMemoryService.retrieveRelevantWorkflows(
           agentId,

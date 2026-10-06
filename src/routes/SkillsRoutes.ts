@@ -3,6 +3,7 @@ import express, { Request, Response, NextFunction } from "express";
 import { ObjectId } from "mongodb";
 import requireDb from "../middleware/RequireDbMiddleware.ts";
 import EmbeddingService from "../services/EmbeddingService.ts";
+import { indexedEmbedding, type IndexedEmbedding } from "../services/SemanticEmbedding.ts";
 import logger from "../utils/logger.ts";
 import { COLLECTIONS } from "../constants.ts";
 import { PostSkillSchema, PutSkillSchema } from "../types/index.ts";
@@ -24,6 +25,7 @@ interface SkillDocument {
   createdAt: Date;
   updatedAt: Date;
   embedding?: number[] | null;
+  semanticEmbedding?: IndexedEmbedding | null;
 }
 
 /**
@@ -36,10 +38,11 @@ async function generateSkillEmbedding(
   const text = [skill.name, skill.description, skill.content]
     .filter(Boolean)
     .join("\n");
-  return EmbeddingService.embed(text, {
+  return indexedEmbedding(await EmbeddingService.generate(text, {
+    taskType: "RETRIEVAL_DOCUMENT",
     source: "skill-creation",
     endpoint: "/skills",
-  });
+  }));
 }
 
 /**
@@ -59,7 +62,7 @@ router.get(
         .find({ project, username })
         .sort({ createdAt: -1 })
         // Don't return embedding vectors to the client — they're large
-        .project<SkillDocument>({ embedding: 0 })
+        .project<SkillDocument>({ embedding: 0, semanticEmbedding: 0 })
         .toArray();
 
       res.json(
@@ -101,12 +104,12 @@ router.post(
 
       // Generate embedding for semantic similarity search
       try {
-        document.embedding = await generateSkillEmbedding(document);
+        document.semanticEmbedding = await generateSkillEmbedding(document);
       } catch (error: unknown) {
         logger.warn(
           `[Skills] Embedding generation failed: ${getErrorMessage(error)}`,
         );
-        document.embedding = null;
+        document.semanticEmbedding = null;
       }
 
       const result = await db
@@ -114,7 +117,7 @@ router.post(
         .insertOne(document);
 
       logger.info(`Skill created: ${document.name} (${result.insertedId})`);
-      const { embedding: _, ...response } = document;
+      const { embedding: _, semanticEmbedding: _semantic, ...response } = document;
       res.status(201).json({ ...response, id: result.insertedId.toString() });
     } catch (error: unknown) {
       next(error);
@@ -162,7 +165,7 @@ router.put(
               description: updates.description ?? current.description,
               content: updates.content ?? current.content,
             };
-            updates.embedding = await generateSkillEmbedding(merged);
+            updates.semanticEmbedding = await generateSkillEmbedding(merged);
           }
         } catch (error: unknown) {
           logger.warn(

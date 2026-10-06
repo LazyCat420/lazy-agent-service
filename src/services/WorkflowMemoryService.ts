@@ -2,7 +2,7 @@ import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { MONGO_DB_NAME } from "../../config.ts";
 import { COLLECTIONS } from "../constants.ts";
 import EmbeddingService from "./EmbeddingService.ts";
-import AgentPersonaRegistry from "./AgentPersonaRegistry.ts";
+import { indexedEmbedding, compatibleVector, type IndexedEmbedding } from "./SemanticEmbedding.ts";
 import logger from "../utils/logger.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import type {
@@ -58,7 +58,7 @@ interface WorkflowDocument {
   stepCount: number;
   steps: WorkflowStep[];
   summary: string;
-  embedding: number[];
+  semanticEmbedding: IndexedEmbedding;
   createdAt: string;
 }
 
@@ -170,7 +170,7 @@ const WorkflowMemoryService = {
     const resolvedAgentConversationId = agentConversationId || "";
 
     if (!conversationId || !resolvedAgentConversationId) return;
-    if (!AgentPersonaRegistry.isAgentProject(project)) return;
+    if (!project) return;
 
     // Only persist workflows from sessions that completed successfully.
     // Exhausted, errored, or aborted sessions produce unreliable procedures.
@@ -216,7 +216,8 @@ const WorkflowMemoryService = {
     }
 
     const embeddingSourceText = trajectory.summary.slice(0, 2000);
-    const embedding = await EmbeddingService.embed(embeddingSourceText, {
+    const embedding = await EmbeddingService.generate(embeddingSourceText, {
+      taskType: "RETRIEVAL_DOCUMENT",
       source: "workflow-memory",
       project,
       endpoint: "/agent",
@@ -235,7 +236,7 @@ const WorkflowMemoryService = {
       stepCount: trajectory.steps.length,
       steps: trajectory.steps,
       summary: trajectory.summary,
-      embedding,
+      semanticEmbedding: indexedEmbedding(embedding),
       createdAt: new Date().toISOString(),
     };
 
@@ -289,7 +290,8 @@ const WorkflowMemoryService = {
 
     if (workflowCount === 0) return null;
 
-    const queryEmbedding = await EmbeddingService.embed(queryText, {
+    const queryEmbedding = await EmbeddingService.generate(queryText, {
+      taskType: "RETRIEVAL_QUERY",
       source: "workflow-query",
       project,
       endpoint: options.endpoint || "/agent",
@@ -308,7 +310,7 @@ const WorkflowMemoryService = {
         {
           projection: {
             summary: 1,
-            embedding: 1,
+            semanticEmbedding: 1,
             userRequest: 1,
             stepCount: 1,
             createdAt: 1,
@@ -322,13 +324,13 @@ const WorkflowMemoryService = {
     const scoredWorkflows = allWorkflows
       .filter(
         (workflow) =>
-          Array.isArray(workflow.embedding) && workflow.embedding.length > 0,
+          compatibleVector(workflow.semanticEmbedding, queryEmbedding.space),
       )
       .map((workflow) => ({
         summary: workflow.summary as string,
         userRequest: workflow.userRequest as string,
         stepCount: workflow.stepCount as number,
-        score: cosineSimilarity(queryEmbedding, workflow.embedding as number[]),
+        score: cosineSimilarity(queryEmbedding.embedding, compatibleVector(workflow.semanticEmbedding, queryEmbedding.space)!),
       }))
       .filter((scored) => scored.score > 0.4)
       .sort((workflowA, workflowB) => workflowB.score - workflowA.score)

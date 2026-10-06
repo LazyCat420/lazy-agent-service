@@ -445,6 +445,7 @@ export class RunExecutionEngine {
         resolvedModel: selectedModel,
         provider: accounting.wrap(provider),
         conversationId: runId,
+        agentConversationId: runId,
         project: identity.project,
         username: identity.username,
         clientIp: "127.0.0.1",

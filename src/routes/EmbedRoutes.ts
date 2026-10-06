@@ -8,7 +8,7 @@ const router = express.Router();
 /**
  * POST /embed
  * Body: {
- *   provider,          // required
+ *   provider?,         // optional — shared harness embedding default
  *   model?,            // optional, falls back to provider default
  *   text?,             // optional — text content
  *   images?,           // optional — array of base64 / data URL strings
@@ -36,14 +36,6 @@ router.post(
         dimensions,
         traceId,
       } = req.body;
-
-      if (!pName) {
-        throw new ProviderError(
-          "server",
-          "Missing required field: provider",
-          400,
-        );
-      }
 
       // At least one content input is required
       const hasContent =
@@ -109,7 +101,7 @@ router.post(
       const result = await EmbeddingService.generate(content, {
         provider: pName,
         model,
-        taskType,
+        taskType: taskType || req.body.input_type,
         dimensions,
         project: req.project,
         username: req.username,

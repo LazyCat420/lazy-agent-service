@@ -9,6 +9,7 @@ export interface MemoryDoc {
   content: string;
   createdAt: string;
   embedding?: number[] | null;
+  semanticEmbedding?: import("../SemanticEmbedding.ts").IndexedEmbedding;
   aboutUserId?: string;
   aboutUsername?: string;
   sourceUserId?: string;
