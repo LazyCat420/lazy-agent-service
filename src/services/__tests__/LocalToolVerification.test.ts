@@ -10,6 +10,7 @@ it('accepts omitted undefined optional fields across JSON delivery and rejects a
  (LocalToolContinuation as any).waiters.set('wire-run:wire-call',{resolve:()=>{},reject:()=>{}});
  try {
    const delivered=JSON.parse(JSON.stringify(receipt));
+   await expect(LocalToolContinuation.verify('wire-run','wire-call',receipt)).resolves.toBeUndefined();
    await expect(LocalToolContinuation.verify('wire-run','wire-call',delivered)).resolves.toBeUndefined();
    await expect(LocalToolContinuation.verify('wire-run','wire-call',{...delivered,approval_id:'unapproved'})).rejects.toThrow('scope or signature');
  } finally {(LocalToolContinuation as any).waiters.delete('wire-run:wire-call');}

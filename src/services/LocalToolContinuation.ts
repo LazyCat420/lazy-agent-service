@@ -38,10 +38,11 @@ export class LocalToolContinuation {
     // HTTP/SSE omit undefined optional fields. Compare the exact wire receipt,
     // including all defined fields, against its persisted trusted counterpart.
     const receipt = JSON.parse(JSON.stringify(pending!.event.authorization_receipt));
+    const delivered = JSON.parse(JSON.stringify(supplied));
     const expected = Buffer.from(receipt.signature); const actual = Buffer.from(supplied.signature);
     if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)
-      || Object.keys(receipt).some(key => key !== "signature" && JSON.stringify(supplied[key]) !== JSON.stringify(receipt[key]))
-      || Object.keys(supplied).length !== Object.keys(receipt).length) fail("Tool admission scope or signature mismatch");
+      || Object.keys(receipt).some(key => key !== "signature" && JSON.stringify(delivered[key]) !== JSON.stringify(receipt[key]))
+      || Object.keys(delivered).length !== Object.keys(receipt).length) fail("Tool admission scope or signature mismatch");
     if (!pending!.result_digest && (!run || !["running", "waiting_for_tool"].includes(run.status)
       || Date.parse(receipt.expires_at) <= Date.now() || !this.waiters.has(`${runId}:${callId}`))) fail("Execution is no longer active or admission expired");
   }
