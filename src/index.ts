@@ -601,6 +601,17 @@ setupWebSocket(wss);
     );
   }
 
+  // ── Embedding corpus re-index (all repos, through the shared Jetson queue) ──
+  try {
+    const { default: EmbeddingCorpusService } = await import("./services/EmbeddingCorpusService.ts");
+    EmbeddingCorpusService.start();
+    registerCleanup(async () => EmbeddingCorpusService.stop());
+  } catch (error: unknown) {
+    logger.error(
+      "Failed to initialize the embedding corpus re-index: " + errorMessage(error),
+    );
+  }
+
   // Initialize MinIO if all secrets are configured
   if (
     MINIO_ENDPOINT &&

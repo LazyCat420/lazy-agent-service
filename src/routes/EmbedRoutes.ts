@@ -2,6 +2,7 @@ import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import express, { Request, Response, NextFunction } from "express";
 import { ProviderError } from "../utils/errors.ts";
 import EmbeddingService from "../services/EmbeddingService.ts";
+import EmbeddingCorpusService from "../services/EmbeddingCorpusService.ts";
 
 const router = express.Router();
 
@@ -137,6 +138,29 @@ router.post(
     } catch (error: unknown) {
       next(error);
     }
+  }),
+);
+
+/**
+ * GET /embed/corpora — every registered corpus: docs, docs not yet in the current
+ * embedding space, and the last re-embed pass.
+ */
+router.get(
+  "/corpora",
+  asyncHandler(async (_req: Request, res: Response) => {
+    res.json(await EmbeddingCorpusService.status());
+  }),
+);
+
+/**
+ * POST /embed/corpora/run — start a re-embed pass now (it also runs on a schedule).
+ * Answers at once; the pass runs in the background.
+ */
+router.post(
+  "/corpora/run",
+  asyncHandler(async (_req: Request, res: Response) => {
+    EmbeddingCorpusService.runAll().catch(() => undefined);
+    res.status(202).json({ started: true });
   }),
 );
 
