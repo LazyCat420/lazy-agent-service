@@ -6,6 +6,7 @@ import AgentPersonaRegistry from "./AgentPersonaRegistry.ts";
 import logger from "../utils/logger.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import { ORCHESTRATOR_ONLY_TOOLS } from "./OrchestratorPrompt.ts";
+import { webSearch } from "./WebSearchService.ts";
 import { createAbortController } from "../utils/AbortController.ts";
 import {
   DOMAINS,
@@ -1265,6 +1266,15 @@ export default class ToolOrchestratorService {
       return ToolOrchestratorService.executeMCPTool(name, args, context);
     }
 
+    // search_web is never sent to tools-service. Its search there is
+    // DuckDuckGo alone (Brave is unfunded and trading-client clears its key at
+    // startup), and DuckDuckGo bot-blocks this network's one public IP, so
+    // every call both fails and deepens the block. The shared keyless search
+    // answers it instead, under the same name and arguments.
+    if (name === TOOL_NAMES.SEARCH_WEB) {
+      return ToolOrchestratorService.executeSharedWebSearch(args);
+    }
+
 
 
 
@@ -1609,6 +1619,59 @@ export default class ToolOrchestratorService {
   }
 
   /**
+   * `search_web`, answered by WebSearchService (Exa, with one cache and one
+   * rate limit for the whole network) in the shape tools-service returns:
+   * {query, limit, results: [{title, url, snippet, displayUrl}], totalResults,
+   * provider}. siteSearch becomes a site: prefix, as tools-service does it.
+   * dateRestrict has no equivalent and is ignored; a result carries
+   * `published` when Exa knows the date. A search that did not run (Exa
+   * rate-limited, the queue full, Exa down) returns `error`, so the model
+   * reads a failure instead of "the web has nothing on this".
+   */
+  static async executeSharedWebSearch(args: Record<string, unknown> = {}) {
+    const query = typeof args.query === "string" ? args.query.trim() : "";
+    if (!query) {
+      return { error: "'query' is required and must be a non-empty string" };
+    }
+    const site = typeof args.siteSearch === "string" ? args.siteSearch.trim() : "";
+    const limit = Math.max(1, Math.min(10, Math.floor(Number(args.limit) || 5)));
+    const found = await webSearch(site ? `site:${site} ${query}` : query, limit);
+    const results = found.results.map((result) => {
+      let displayUrl = "";
+      try {
+        displayUrl = new URL(result.url).hostname.replace(/^www\./, "");
+      } catch {
+        // An unparseable URL keeps an empty displayUrl.
+      }
+      return {
+        title: result.title,
+        url: result.url,
+        snippet: result.snippet,
+        displayUrl,
+        ...(result.published ? { published: result.published } : {}),
+      };
+    });
+    if (found.status !== "ok") {
+      return {
+        query,
+        limit,
+        results,
+        provider: found.provider,
+        status: found.status,
+        error: `Web search did not run (${found.status}): ${found.error || "no detail"}. Try again later or use another source.`,
+      };
+    }
+    return {
+      query,
+      limit,
+      results,
+      totalResults: String(results.length),
+      provider: found.provider,
+      cached: found.cached,
+    };
+  }
+
+  /**
    * Expose the HTML-Notes-facing subset of the local tool_schemas.json
    * catalog under the mcp__lazy-tool-service__ namespace, so clients like
    * HTML-Notes can enable them by their namespaced names on /agent.
@@ -1648,9 +1711,9 @@ export default class ToolOrchestratorService {
             WIDGET_TOOLS.has(tool.name) ||
             tool.name.startsWith("html_notes_") ||
             tool.name.startsWith("canvas_") ||
-            // Keyless DDG search for research agents (e.g. music-player's
-            // CUSTOM_MUSIC_PLAYER) — tools-api's search_web needs Brave/CSE
-            // keys that are not configured, so this is the working fallback.
+            // Keyless news search for research agents (e.g. music-player's
+            // CUSTOM_MUSIC_PLAYER): Bing News and Google News RSS, run by
+            // trading-service's tool bridge.
             tool.name === "lazy_web_search" ||
             // Cannabis strain research, backed by treesearch-service: strain names,
             // forum posts, photos and terpene data.

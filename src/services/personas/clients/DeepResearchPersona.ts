@@ -18,9 +18,11 @@ import { Persona } from "../types.ts";
  * gateway 2026-07-17: search_web AND the emit_structured_output finish both
  * execute and return real content), minus get_music which is music-specific:
  *   - search_web / read_url / read_web_page / search_news — web + news access.
- *     NB: despite an older HTML-Notes config comment calling search_web "dead",
- *     it executes on the gateway; lazy_web_search is deliberately omitted to keep
- *     the model from dithering between two web tools (music-player's choice too).
+ *     On this gateway search_web is answered by the shared keyless search
+ *     (WebSearchService), never by tools-service's DuckDuckGo scrape; see
+ *     ToolOrchestratorService.executeSharedWebSearch. lazy_web_search is
+ *     deliberately omitted to keep the model from dithering between two web
+ *     tools (music-player's choice too).
  *   - create_subagents / get_subagent_output — fan a broad topic into parallel
  *     sub-researchers (divide_and_conquer topology) and collect their findings.
  *   - emit_structured_output — the schema-shaped finish that survives the

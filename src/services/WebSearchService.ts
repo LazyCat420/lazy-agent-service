@@ -19,8 +19,10 @@
 // There is no fallback to a scraping engine, on purpose. Callers that want news
 // use news_search (keyed news APIs) instead.
 //
-// Reached through POST /execute/web_search. It is deliberately not in
-// tool_schemas.json, so agents do not see it; services call it.
+// Services reach it through POST /execute/web_search, which is deliberately
+// not in tool_schemas.json. Agents on this service's harness reach it through
+// the ordinary `search_web` tool, which ToolOrchestratorService answers here
+// instead of forwarding it to tools-service's DuckDuckGo scrape.
 // ============================================================
 import logger from "../utils/logger.ts";
 
