@@ -3,6 +3,7 @@ import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { callKey, guardedRun } from "./ToolCallGuard.ts";
 import { newsSearch, newsProviderStatus } from "./NewsSearchService.ts";
+import { webSearch, webSearchStatus } from "./WebSearchService.ts";
 import { CATEGORIES } from "./EditorialHeadlinesService.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 
@@ -18,6 +19,8 @@ import { stripMcpPrefix } from "./McpPrefix.ts";
  *
  * Routing:
  *   news_search                          → implemented HERE (NewsSearchService)
+ *   web_search                           → implemented HERE (WebSearchService); not in
+ *                                          tool_schemas.json, so services call it, agents don't
  *   music_player_*                       → music-player HTTP API
  *   *_widget tools                       → validated locally, forwarded to HTML-Notes /internal/execute
  *   html_notes_* / canvas_* → HTML-Notes /internal/execute
@@ -442,6 +445,23 @@ export async function routeLocalTool(
       }
     }
     return forwardToHtmlNotes(tName, toolArguments);
+  }
+
+  // Natively implemented here: one keyless web search (Exa) with one cache and
+  // one rate limit for every service on the network, instead of each project
+  // scraping DuckDuckGo from an IP the search engines bot-block. Services call
+  // POST /execute/web_search. See WebSearchService.
+  if (tName === "web_search") {
+    const query = String(toolArguments.query ?? toolArguments.q ?? "").trim();
+    const result = await webSearch(query, Number(toolArguments.limit ?? 6) || 6);
+    return {
+      query,
+      ...result,
+      count: result.results.length,
+      // Telemetry counts anything but "ok" as a failure; callers read `status`.
+      ...(result.status === "ok" ? {} : { is_error: true }),
+      search: webSearchStatus(),
+    };
   }
 
   // Natively implemented here — not proxied anywhere. news is wanted by more
