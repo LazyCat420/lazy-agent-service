@@ -233,9 +233,12 @@ const RequestLogger = {
         logger.error("RequestLogger: MongoDB client not available");
         return;
       }
+      // `createdAt` mirrors `timestamp` — see insertPending for why both.
+      const now = new Date().toISOString();
       const document = {
         requestId,
-        timestamp: new Date().toISOString(),
+        timestamp: now,
+        createdAt: now,
         endpoint,
         operation: operation || null,
         project,
@@ -252,6 +255,7 @@ const RequestLogger = {
         toolsUsed,
         toolDisplayNames,
         toolApiNames,
+        toolApiNameCount: toolApiNames.length,
         success,
         errorMessage,
         inputTokens,
@@ -606,9 +610,15 @@ const RequestLogger = {
         logger.error("RequestLogger: MongoDB client not available (insertPending)");
         return null;
       }
+      // `createdAt` mirrors `timestamp`: prism writes `createdAt`, and every
+      // reader of the shared `prism.requests` collection (trading's Monitor
+      // and audits, prism-client) filters and sorts on it. Our own admin
+      // routes and indexes read `timestamp`, so both are written.
+      const pendingNow = new Date().toISOString();
       const pendingDocument = {
         requestId,
-        timestamp: new Date().toISOString(),
+        timestamp: pendingNow,
+        createdAt: pendingNow,
         endpoint: endpoint || null,
         operation: operation || null,
         project: project || null,
@@ -720,6 +730,7 @@ const RequestLogger = {
         toolsUsed,
         toolDisplayNames,
         toolApiNames,
+        toolApiNameCount: Array.isArray(toolApiNames) ? toolApiNames.length : 0,
         success,
         errorMessage,
         inputTokens,
