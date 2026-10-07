@@ -144,6 +144,7 @@ export interface ModelDefinition {
 }
 
 import type { PolicyRule } from "../PolicyEngine.ts";
+import type { SessionState } from "../SessionState.ts";
 
 // ── Agentic Options ─────────────────────────────────────────
 
@@ -218,6 +219,8 @@ export interface AgenticContext {
   /** Canonical runtime adapter, installed only by RunExecutionEngine. */
   runtimeTools?: ResolvedTools;
   runtimeToolExecutor?: (call: ToolCall) => Promise<unknown>;
+  /** Per-run ambient session state (SWE-agent state_command), installed only by RunExecutionEngine. */
+  sessionState?: SessionState;
   requestId?: string;
   requestStart?: number;
   clientIp?: string | null;

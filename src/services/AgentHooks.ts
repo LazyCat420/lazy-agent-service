@@ -16,6 +16,17 @@ import { errorMessage } from "@rodrigo-barraza/utilities-library";
  *   runStop          — Fires when the run loop exits with the final response
  *                       (canonical RunExecutionEngine path). Listeners receive
  *                       (ctx, { runId, messages, toolCalls }).
+ *   sessionStart     — Fires when a canonical run begins (RunExecutionEngine).
+ *   sessionEnd       — Fires when the canonical run exits with the final
+ *                       response — aliases runStop timing.
+ *   preCompact       — TODO: fire from ContextPressureManager.manageContextPressure
+ *                       (and the ReActHarness overflow-retry compaction paths)
+ *                       around each micro/auto compaction call. Compaction
+ *                       lives in harness files outside this module's wiring,
+ *                       so the event is declared here and the fire sites are
+ *                       documented until wired.
+ *   postCompact      — TODO: same fire sites as preCompact, after compaction
+ *                       returns the (possibly replaced) message array.
  *   onError          — Fires on any loop error. Listeners receive (error, ctx).
  *
  * Hook Categories (inspired by Antigravity SDK):
@@ -44,6 +55,10 @@ type HookEvent =
   | "afterToolCall"
   | "afterResponse"
   | "runStop"
+  | "sessionStart"
+  | "sessionEnd"
+  | "preCompact"
+  | "postCompact"
   | "onError";
 
 /**

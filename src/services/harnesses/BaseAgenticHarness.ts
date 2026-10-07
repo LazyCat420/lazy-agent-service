@@ -38,6 +38,7 @@ import {
   CORE_ORCHESTRATOR_TOOLS as CORE_ORCHESTRATOR_TOOLS_LIST,
 } from "@rodrigo-barraza/utilities-library/taxonomy";
 import { Span } from "../../platform/trace/Span.ts";
+import { sessionStateContextBlock, sessionStateHash } from "../SessionState.ts";
 import { TraceExporter } from "../../platform/trace/TraceExporter.ts";
 import { TraceContext } from "../../platform/trace/TraceContext.ts";
 import crypto from "node:crypto";
@@ -553,6 +554,18 @@ export default class BaseAgenticHarness {
       },
     );
 
+    // ── Ambient session state (SWE-agent state_command) ──────
+    // Inject the per-run SessionState as an ephemeral trailing context message
+    // for this call only. Ephemeral: never persisted, so the persisted message
+    // prefix stays append-only (KV-cache safe); only the newest suffix grows.
+    const sessionState = this.context.sessionState;
+    if (sessionState) {
+      expandedMessages.push({
+        role: "user",
+        content: sessionStateContextBlock(sessionState),
+      });
+    }
+
     // Start model span before provider invocation to capture setup errors and initial latency
     const activeCtx = TraceContext.get();
     const parentSpan = (this.context as any).rootSpan;
@@ -565,6 +578,7 @@ export default class BaseAgenticHarness {
       attributes: {
         model: resolvedModel,
         provider: providerName,
+        ...(sessionState && { session_state_hash: sessionStateHash(sessionState) }),
         ...(typeof passOptions.reasoningEffort === "string" && {
           reasoning_effort: passOptions.reasoningEffort,
         }),

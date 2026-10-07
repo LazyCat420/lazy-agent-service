@@ -29,6 +29,9 @@ import { DynamicModelResolver } from "./DynamicModelResolver.ts";
 import AgentHooks from "./AgentHooks.ts";
 import { permissionModeOf, resolvePermission } from "./PermissionModes.ts";
 import { EMPTY_TOOL_OUTPUT_MESSAGE, normalizeEmptyToolContent } from "./ToolResult.ts";
+import { captureWriteSyntaxGuard, enforceWriteSyntaxGuard } from "./WriteSyntaxGuard.ts";
+import { applyObservation, createSessionState, sessionStateHash } from "./SessionState.ts";
+import type { ToolCall } from "./harnesses/types.ts";
 
 /**
  * The structured denial an execution returns when a decide hook blocks a tool
@@ -524,17 +527,27 @@ export class RunExecutionEngine {
       };
       const requestContext = (request.runtime_overrides?.context || {}) as Record<string, string>;
       const hooks = new AgentHooks();
+      // Ambient session state (SWE-agent state_command): a per-run snapshot
+      // updated from observations in the runtime tool executor below and
+      // injected per model call by BaseAgenticHarness.createProviderStream.
+      context.sessionState = createSessionState(new Date().toISOString());
+      await hooks.run("sessionStart", context, { runId });
       const permissionMode = permissionModeOf(profile);
       const planApproved = !!(context as any).planApproved || !!((request.runtime_overrides as any)?.planApproved);
-      context.runtimeToolExecutor = async (call: any) => {
+      const executeAdmittedTool = async (
+        call: ToolCall & { arguments?: Record<string, unknown> },
+      ): Promise<{ observation: unknown; dispatched: boolean }> => {
         abortController.signal.throwIfAborted();
         if (++actualToolCalls > maxToolCalls) {
           if (maxToolCalls === 0) {
             throw Object.assign(new Error("Tool call budget exhausted"), { code: "TOOL_BUDGET_EXHAUSTED" });
           }
           return {
-            error: "TOOL_BUDGET_EXHAUSTED",
-            message: `Tool call budget reached (${maxToolCalls} tool calls). You must now synthesize and deliver your final comprehensive answer using the information already gathered without calling any further tools.`,
+            observation: {
+              error: "TOOL_BUDGET_EXHAUSTED",
+              message: `Tool call budget reached (${maxToolCalls} tool calls). You must now synthesize and deliver your final comprehensive answer using the information already gathered without calling any further tools.`,
+            },
+            dispatched: false,
           };
         }
         const validator = toolValidators.get(call.name);
@@ -543,7 +556,7 @@ export class RunExecutionEngine {
         // outright: the model receives a structured denial, nothing executes.
         const hookVerdict = await hooks.run("beforeToolCall", structuredClone(call), context);
         if (hookVerdict && hookVerdict.isApproved === false) {
-          return hookDenialObservation(call.name, hookVerdict);
+          return { observation: hookDenialObservation(call.name, hookVerdict), dispatched: false };
         }
         for (const extension of extensions) await extension.beforeTool?.(structuredClone(call));
         const localPolicy = profile.local_tool_policy?.[call.name];
@@ -570,7 +583,7 @@ export class RunExecutionEngine {
           emitEvent({ run_id: runId, type: failed ? "tool.failed" : "tool.completed", data: { tool_call_id: processed.event.data.tool_call_id, ...(failed ? { error: { code: "TOOL_EXECUTION_FAILED", message: "Local tool returned a recoverable error", details: observation } } : { result: observation }) } });
           for (const extension of extensions) await extension.afterTool?.(call, observation);
           await hooks.run("afterToolCall", call, observation, context);
-          return normalizeEmptyToolContent(observation);
+          return { observation: normalizeEmptyToolContent(observation), dispatched: true };
         }
         // Only public web observations enter the optional shadow specialist layer.
         // Its result is retained as telemetry and never modifies policy or model context.
@@ -584,7 +597,29 @@ export class RunExecutionEngine {
         }
         for (const extension of extensions) await extension.afterTool?.(call, processed.result);
         await hooks.run("afterToolCall", call, processed.result, context);
-        return normalizeEmptyToolContent(processed.result);
+        return { observation: normalizeEmptyToolContent(processed.result), dispatched: true };
+      };
+
+      // Tool-execution chokepoint: capture pre-write content of locally
+      // available write targets (SWE-agent lint-guarded writes), then fold the
+      // final observation into the run's session state. Undispatched calls
+      // (budget exhausted / hook denial) never engage the write guard —
+      // nothing was written — but every observation the model receives still
+      // updates session state.
+      context.runtimeToolExecutor = async (
+        call: ToolCall & { arguments?: Record<string, unknown> },
+      ) => {
+        const localPolicy = profile.local_tool_policy?.[call.name];
+        const writeCapture = captureWriteSyntaxGuard(
+          (call.args || call.arguments || {}) as Record<string, unknown>,
+          localPolicy?.effect,
+        );
+        const { observation, dispatched } = await executeAdmittedTool(call);
+        const guarded = dispatched
+          ? enforceWriteSyntaxGuard(writeCapture, observation)
+          : observation;
+        context.sessionState = applyObservation(context.sessionState, call.name, guarded);
+        return guarded;
       };
 
       if (options.maxTokens === 0) throw Object.assign(new Error("Token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
@@ -600,6 +635,12 @@ export class RunExecutionEngine {
       abortController.signal.throwIfAborted();
       // The loop exited with a final response — notify lifecycle hooks.
       await hooks.run("runStop", context, {
+        runId,
+        messages: result.messages || [],
+        toolCalls: actualToolCalls,
+      });
+      // sessionEnd aliases runStop timing (final response produced).
+      await hooks.run("sessionEnd", context, {
         runId,
         messages: result.messages || [],
         toolCalls: actualToolCalls,
@@ -622,6 +663,7 @@ export class RunExecutionEngine {
         input_hash: `sha256-${crypto.createHash("sha256").update(JSON.stringify(request.input)).digest("hex")}`,
         contract_version: requestedContractVersion || "1.2.0",
         profile_version: profile.version,
+        session_state_hash: sessionStateHash(context.sessionState),
         receipt_id: assembled.receipt.receipt_id.startsWith("sha256-")
           ? assembled.receipt.receipt_id
           : `sha256-${assembled.receipt.receipt_id}`,
