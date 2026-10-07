@@ -129,6 +129,18 @@ it("builds a conversation's text from its title, summary and linked memories", a
   expect(conversations.docs[0].summarySemanticEmbedding.space).toBe(embeddingSpace());
 });
 
+it("passes again so docs that arrive during a pass are not left for the next run", async () => {
+  const embeddings = fake([{ _id: 1, embed_text: "first" }]);
+  fixture.collections.embeddings = embeddings;
+  let arrived = false;
+  fixture.embed.mockImplementation(async (texts: string[]) => {
+    if (!arrived) { arrived = true; embeddings.docs.push({ _id: 99, embed_text: "arrived mid-pass" }); }
+    return texts.map((_t, i) => unit(768, i));
+  });
+  await EmbeddingCorpusService.runAll();
+  expect(embeddings.docs.map((doc: any) => doc.space)).toEqual([embeddingSpace(), embeddingSpace()]);
+});
+
 it("reports stale and total docs per corpus, and a run re-embeds every corpus", async () => {
   fixture.collections.memories = fake([{ _id: 1, content: "legacy memory" }]);
   fixture.collections.embeddings = fake([{ _id: 1, embed_text: "chunk" }, { _id: 2, content_preview: "no text yet" }]);
