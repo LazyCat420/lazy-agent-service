@@ -20,6 +20,22 @@ import type { AgenticContext, ConversationMessage } from "../types.ts";
  * Extracted from ReActHarness to be reusable by any iterating harness.
  */
 
+/** prism's tag for its iteration-limit notice (SystemMessageTags.ITERATION_LIMIT). */
+export const ITERATION_LIMIT_TAG = "iteration-limit";
+
+/**
+ * The iteration-limit notice, tagged exactly as prism tags it
+ * (`<iteration-limit>\n\n…\n\n</iteration-limit>`). The tag is what the vLLM
+ * shim's TradingToolProtocol keys on to direct the forced final turn
+ * (FINAL_TURN_DIRECTIVE: reply with the JSON artifact now, no tool, no prose
+ * summary), and what trading's audits use to find wall turns. Untagged, our
+ * final turn was never directed (boundary probe `forced_final_turn` through
+ * the native loop, 2026-10-07), where prism's was.
+ */
+export function iterationLimitNotice(message: string): string {
+  return `<${ITERATION_LIMIT_TAG}>\n\n${message}\n\n</${ITERATION_LIMIT_TAG}>`;
+}
+
 /**
  * Run a tool-free exhaustion recovery pass.
  *
@@ -42,10 +58,10 @@ export async function runExhaustionRecoveryPass(
 
   currentMessages.push({
     role: "system",
-    content: PromptLocaleService.get(
+    content: iterationLimitNotice(PromptLocaleService.get(
       (options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
       "harness.exhaustionRecovery.message",
-    ),
+    )),
   });
 
   const { tools: _tools, ...exhaustionOptions } = options;
