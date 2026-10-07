@@ -79,6 +79,10 @@ export async function manageContextPressure(
       : 0;
 
   if (contextPressureRatio > CONTEXT_PRESSURE_THRESHOLD) {
+    await context.hooks?.run("preCompact", {
+      reason: "micro-compaction",
+      pressureRatio: contextPressureRatio,
+    });
     const microCompactionResult =
       MicroCompactionService.microcompactMessages(
         messages as ChatMessage[],
@@ -89,6 +93,10 @@ export async function manageContextPressure(
       currentTokenEstimate = ContextWindowManager.estimateTokens(
         messages as ChatMessage[],
       );
+      await context.hooks?.run("postCompact", {
+        reason: "micro-compaction",
+        freedTokens: microCompactionResult.freedTokens,
+      });
       logger.info(
         `[${harnessLabel}] Micro-compaction at ${(contextPressureRatio * 100).toFixed(0)}% context pressure — ` +
           `freed ~${microCompactionResult.freedTokens} tokens`,

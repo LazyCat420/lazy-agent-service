@@ -145,6 +145,7 @@ export interface ModelDefinition {
 
 import type { PolicyRule } from "../PolicyEngine.ts";
 import type { SessionState } from "../SessionState.ts";
+import type AgentHooks from "../AgentHooks.ts";
 
 // ── Agentic Options ─────────────────────────────────────────
 
@@ -221,6 +222,8 @@ export interface AgenticContext {
   runtimeToolExecutor?: (call: ToolCall) => Promise<unknown>;
   /** Per-run ambient session state (SWE-agent state_command), installed only by RunExecutionEngine. */
   sessionState?: SessionState;
+  /** Lifecycle hooks (wave 1 AgentHooks). Compaction fires preCompact/postCompact through it. */
+  hooks?: AgentHooks;
   requestId?: string;
   requestStart?: number;
   clientIp?: string | null;

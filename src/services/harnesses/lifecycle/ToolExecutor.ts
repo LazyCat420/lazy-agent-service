@@ -37,6 +37,7 @@ function truncateResultIfNeeded(result: any, project?: string, toolName?: string
   return result;
 }
 import type AgentHooks from "../../AgentHooks.ts";
+import { executeTakeNote, NoteStore } from "../../../platform/memory/NoteStore.ts";
 import type {
   ToolCall,
   ToolResult,
@@ -113,6 +114,24 @@ export async function executeToolBatch(
                 message: `No skill named "${requestedName}" is registered. Check the Available Skills section of the system prompt.`,
               }),
         };
+        await hooks.run("afterToolCall", toolCall, result, context);
+        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+      }
+
+      // ── take_note internal tool ──────────────────────────────
+      // Persists per-run notes to <repoRoot>/data/notes/<runId>.md;
+      // never dispatched to tools-api.
+      if (toolCall.name === "take_note") {
+        const started = Date.now();
+        const runId =
+          typeof (context as { runId?: unknown }).runId === "string"
+            ? String((context as { runId?: unknown }).runId)
+            : resolvedAgentConversationId;
+        const result = await executeTakeNote(
+          toolCall.args ?? {},
+          runId,
+          new NoteStore({ repoRoot: workspaceRoot || undefined }),
+        );
         await hooks.run("afterToolCall", toolCall, result, context);
         return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
       }

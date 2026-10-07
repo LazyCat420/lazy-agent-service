@@ -20,6 +20,15 @@ import { manageContextPressure } from "./lifecycle/ContextPressureManager.ts";
 import { finalizePassTracker } from "./lifecycle/TrackerFinalizer.ts";
 import { checkCostBudget } from "./lifecycle/CostBudgetEnforcer.ts";
 import { applyAssembledSystemPrompt } from "./lifecycle/IdentityPrompt.ts";
+import {
+  partitionCodeInterpreterCalls,
+  runCodeInterpreterCalls,
+} from "./CodeInterpreter.ts";
+import {
+  RUNNING_SUMMARY_INSTRUCTIONS,
+  applyRunningSummary,
+  extractLatestRunningSummary,
+} from "./RunningSummary.ts";
 
 import type {
   AgenticOptions,
@@ -170,7 +179,9 @@ Are the params known yet? yes/no — if no, ask the user or gather more informat
 Rules:
 - Emit at most ONE <tool_call> block per message. Wait for the tool result before issuing another call.
 - After a <tool_result> observation, either issue the next call or give your final answer as plain text (no <tool_call> block) to finish.
-- Never invent tool results. Never emit a <tool_call> block after your final answer.`;
+- Never invent tool results. Never emit a <tool_call> block after your final answer.
+
+${RUNNING_SUMMARY_INSTRUCTIONS}`;
 
 /** Build the full system prompt embedding the tool catalog. */
 export function buildPromptedToolSystemPrompt(tools: ToolSchema[]): string {
@@ -422,37 +433,47 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
         // ── One call per turn: execute the first, defer the rest ──
         const extraCallCount = blocks.length - 1;
 
-        // ── Execute through the same path ReActHarness uses ──────
-        context._currentMessages = currentMessages;
-
-        const { isApproved, shouldApproveAll } = await checkAndWaitForApproval(
-          [toolCall],
-          context,
-          approvalEngine,
-        );
+        // ── code_interpreter escape hatch (Hermes pattern) ───────
+        // If no sandboxed code-execution tool is registered, evaluate the
+        // fenced block locally instead of failing as an unknown tool.
+        const partition = partitionCodeInterpreterCalls([toolCall], tools);
+        const hasRegisteredCodeInterpreter = partition.dispatchable.length > 0;
 
         let results: ToolResult[];
-        if (!isApproved) {
-          results = [
-            {
-              name: toolCall.name,
-              id: toolCall.id,
-              result: {
-                success: false,
-                error: "USER_REJECTED",
-                message: "Tool execution was manually rejected by the user.",
-              },
-            },
-          ];
+        if (!hasRegisteredCodeInterpreter) {
+          results = await runCodeInterpreterCalls([toolCall]);
         } else {
-          if (shouldApproveAll) options.autoApprove = true;
-          results = await executeToolBatch(
+          // ── Execute through the same path ReActHarness uses ────
+          context._currentMessages = currentMessages;
+
+          const { isApproved, shouldApproveAll } = await checkAndWaitForApproval(
             [toolCall],
             context,
-            this.tools,
-            hooks,
-            state,
+            approvalEngine,
           );
+
+          if (!isApproved) {
+            results = [
+              {
+                name: toolCall.name,
+                id: toolCall.id,
+                result: {
+                  success: false,
+                  error: "USER_REJECTED",
+                  message: "Tool execution was manually rejected by the user.",
+                },
+              },
+            ];
+          } else {
+            if (shouldApproveAll) options.autoApprove = true;
+            results = await executeToolBatch(
+              [toolCall],
+              context,
+              this.tools,
+              hooks,
+              state,
+            );
+          }
         }
 
         await processToolResultMedia([toolCall], results, state, pass, emit, context);
@@ -485,6 +506,21 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
           content: observationParts.join("\n\n"),
           _isSystemWarning: true,
         });
+
+        // ── Running-summary discipline (Hermes) ──────────────────
+        // The newest model-emitted <running_summary> replaces the stale
+        // one in the system prompt instead of scrolling away.
+        const latestSummary = extractLatestRunningSummary(currentMessages);
+        if (
+          latestSummary !== null &&
+          currentMessages[0]?.role === "system" &&
+          typeof currentMessages[0].content === "string"
+        ) {
+          currentMessages[0] = {
+            ...currentMessages[0],
+            content: applyRunningSummary(currentMessages[0].content, latestSummary),
+          };
+        }
 
         this.checkAndApplyToolSetChanges(currentMessages);
         this.logIteration(pass, currentMessages);

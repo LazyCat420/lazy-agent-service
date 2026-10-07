@@ -16,6 +16,8 @@ import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
 import { TraceContext } from "../platform/trace/TraceContext.ts";
 import { DEFAULT_CONTEXT_BUDGET } from "../platform/context/ContextBudget.ts";
 import { SkillRegistry } from "../platform/skills/SkillRegistry.ts";
+import { enforceVerificationContract, type VerificationResult } from "../platform/verify/VerificationContract.ts";
+import { TAKE_NOTE_TOOL_SCHEMA } from "../platform/memory/NoteStore.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
 
@@ -32,6 +34,16 @@ export interface CompactionPressureOptions {
   force?: boolean;
   /** Most recent tool turns left untouched (default: 3). */
   keepLastNTurns?: number;
+  /** Original user request text (from run options) for the plan summary. */
+  originalRequest?: string;
+  /**
+   * Duck-typed AgentHooks instance. When plan-summary compaction fires,
+   * a `postCompact` hook event is emitted (fire-and-forget) with
+   * `{ turnCount, toolsUsed, openItemCount }`. Accepts any object with a
+   * `run(event, payload)` method, so it works before and after the
+   * preCompact/postCompact AgentHooks event-type upgrade.
+   */
+  hooks?: unknown;
 }
 
 const COMPACTION_SUMMARY_PREFIX = "[compacted]";
@@ -110,6 +122,107 @@ export function compactToolResultsForPressure(
   });
 }
 
+/** Truncate a string to `max` chars on a single line. */
+function excerptLine(text: string, max: number): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+interface PlanSummaryFacts {
+  turnCount: number;
+  toolsUsed: string[];
+  openItems: string[];
+  lastAssistantExcerpt: string | null;
+}
+
+/**
+ * Mechanically derive run facts from the message list — no LLM call,
+ * fully deterministic. Open items are tool calls that were issued but
+ * never received a result; when every call is resolved, the latest
+ * assistant statement stands in as the current focus.
+ */
+function derivePlanSummaryFacts(messages: ConversationMessage[]): PlanSummaryFacts {
+  const toolsUsed = new Set<string>();
+  const openItems: string[] = [];
+  let turnCount = 0;
+  let lastAssistantExcerpt: string | null = null;
+
+  for (const message of messages) {
+    if (message.role === "assistant" && typeof message.content === "string" && message.content.trim()) {
+      lastAssistantExcerpt = excerptLine(message.content, 200);
+    }
+    if (!message.toolCalls || message.toolCalls.length === 0) continue;
+    turnCount += 1;
+    for (const toolCall of message.toolCalls) {
+      toolsUsed.add(toolCall.name);
+      if (toolCall.result === undefined) {
+        openItems.push(`${toolCall.name}(${excerptLine(JSON.stringify(toolCall.args ?? {}), 80)}) — no result recorded`);
+      }
+    }
+  }
+
+  return { turnCount, toolsUsed: [...toolsUsed].sort(), openItems, lastAssistantExcerpt };
+}
+
+/**
+ * Build the deterministic plan-summary system message that is prepended
+ * when compaction fires: original request (when available), current run
+ * state, and open items — all derived from the message list itself.
+ */
+function buildPlanSummaryMessage(
+  messages: ConversationMessage[],
+  options: CompactionPressureOptions,
+): ConversationMessage {
+  const facts = derivePlanSummaryFacts(messages);
+  const lines = [
+    "[plan summary] Context compaction fired for this run. The summary below is mechanically derived; older tool results above are one-line placeholders.",
+    `- Original request: ${options.originalRequest ? excerptLine(options.originalRequest, 400) : "(not provided)"}`,
+    `- Run state: ${facts.turnCount} tool turn(s) so far; tools used: ${facts.toolsUsed.length > 0 ? facts.toolsUsed.join(", ") : "(none)"}`,
+    `- Open items: ${facts.openItems.length > 0 ? facts.openItems.join("; ") : "none — all issued tool calls have results"}`,
+  ];
+  if (facts.openItems.length === 0 && facts.lastAssistantExcerpt) {
+    lines.push(`- Current focus (latest assistant statement): ${facts.lastAssistantExcerpt}`);
+  }
+  return { role: "system", content: lines.join("\n") };
+}
+
+/** Fire-and-forget `postCompact` hook emission (duck-typed AgentHooks). */
+function firePostCompact(hooks: unknown, payload: Record<string, unknown>): void {
+  const run = (hooks as { run?: (event: string, p?: unknown) => unknown } | null)?.run;
+  if (typeof run !== "function") return;
+  try {
+    const outcome = run.call(hooks, "postCompact", payload);
+    if (outcome && typeof (outcome as Promise<unknown>).catch === "function") {
+      (outcome as Promise<unknown>).catch(() => {
+        /* hook errors are non-blocking */
+      });
+    }
+  } catch {
+    /* hook errors are non-blocking */
+  }
+}
+
+/**
+ * Plan-style compaction (omp pattern): when pressure compaction fires,
+ * ALSO prepend one deterministic system message summarizing the run's
+ * original request, current state, and open items. Returns the input
+ * array unchanged when compaction does not fire.
+ */
+export function compactWithPlanSummary(
+  messages: ConversationMessage[],
+  options: CompactionPressureOptions = {},
+): ConversationMessage[] {
+  const compacted = compactToolResultsForPressure(messages, options);
+  if (compacted === messages) return messages;
+
+  const facts = derivePlanSummaryFacts(messages);
+  firePostCompact(options.hooks, {
+    turnCount: facts.turnCount,
+    toolsUsed: facts.toolsUsed,
+    openItemCount: facts.openItems.length,
+  });
+  return [buildPlanSummaryMessage(messages, options), ...compacted];
+}
+
 const CONTEXT_WINDOW_ERROR_SIGNATURES =
   /context_length_exceeded|context length|context window|maximum context length|prompt is too long|input length exceeds|too many input tokens|request too large|\b413\b/i;
 
@@ -170,7 +283,7 @@ export default class AgenticLoopService {
   /** Run an agentic loop using the specified (or default) harness. */
   static async runAgenticLoop(
     context: AgenticContext,
-  ): Promise<{ messages: ConversationMessage[] }> {
+  ): Promise<{ messages: ConversationMessage[]; verification?: VerificationResult }> {
     const {
       options,
       agent,
@@ -226,15 +339,18 @@ export default class AgenticLoopService {
     // If dynamicEnabledTools is not in ToolContext, populate it with the resolved tools
     const toolContextStore = ToolContext.getStore(resolvedAgentConversationId);
 
-    // ── Inject the skill_read internal tool when skills exist ──
-    // Discovered from <repoRoot>/skills/<name>/SKILL.md; bodies load
-    // on demand (handled in harnesses/lifecycle/ToolExecutor.ts).
+    // ── Inject internal tools (skill_read, take_note) ──────────
+    // skill_read: bodies load from <repoRoot>/skills/<name>/SKILL.md on
+    //   demand (handled in harnesses/lifecycle/ToolExecutor.ts).
+    // take_note: persists per-run notes to <repoRoot>/data/notes/<runId>.md
+    //   (handled in harnesses/lifecycle/ToolExecutor.ts).
     try {
-      if (new SkillRegistry().discover().length > 0) {
-        resolvedTools.finalTools = [
-          ...resolvedTools.finalTools,
-          { ...SKILL_READ_TOOL_SCHEMA },
-        ];
+      const hasSkills = new SkillRegistry().discover().length > 0;
+      const internalTools: Array<{ name: string }> = [];
+      if (hasSkills) internalTools.push({ ...SKILL_READ_TOOL_SCHEMA });
+      internalTools.push({ ...TAKE_NOTE_TOOL_SCHEMA });
+      if (internalTools.length > 0) {
+        resolvedTools.finalTools = [...resolvedTools.finalTools, ...internalTools];
       }
     } catch (skillErr: unknown) {
       logger.debug(`[AgenticLoop] Skill discovery failed: ${skillErr instanceof Error ? skillErr.message : String(skillErr)}`);
@@ -346,7 +462,7 @@ export default class AgenticLoopService {
     let runStatus: "completed" | "failed" | "cancelled" | "setup_error" = "completed";
     let stopReason: string | undefined;
     try {
-      return await TraceContext.run(
+      const runResult = await TraceContext.run(
         {
           trace_id: instrumenter.runManifest.trace_id,
           run_id: instrumenter.runManifest.run_id,
@@ -359,6 +475,46 @@ export default class AgenticLoopService {
           return await harness.run();
         },
       );
+
+      // ── Verification contract (omp pattern) at the loop exit point ──
+      // Soft mode: warn + attach verification status. Strict mode
+      // (options.requireEvidence): grant ONE evidence-demand turn.
+      try {
+        const verificationInput = {
+          messages: runResult.messages,
+          options: options as Record<string, unknown>,
+          warn: (message: string) => logger.warn(message),
+          ...(options.requireEvidence === true
+            ? {
+                runExtraTurn: async (currentMessages: ConversationMessage[]) => {
+                  const extraContext: AgenticContext = {
+                    ...context,
+                    messages: currentMessages,
+                  };
+                  const extraState = new AgenticLoopState({
+                    originalMessageCount: currentMessages.length,
+                    planModeActive: false,
+                  });
+                  const continuationHarness = new HarnessClass(extraContext, extraState, resolvedTools);
+                  const extra = await continuationHarness.run();
+                  return extra.messages;
+                },
+              }
+            : {}),
+        };
+        const outcome = await enforceVerificationContract(verificationInput);
+        if (outcome.verification.status === "no-evidence") {
+          logger.warn(
+            `[AgenticLoop] Verification contract: ${outcome.verification.reason}`,
+          );
+        }
+        return { ...runResult, messages: outcome.messages, verification: outcome.verification };
+      } catch (verifyErr: unknown) {
+        logger.debug(
+          `[AgenticLoop] Verification contract check failed (non-blocking): ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`,
+        );
+        return runResult;
+      }
     } catch (err: unknown) {
       if (context.signal?.aborted) {
         runStatus = "cancelled";
