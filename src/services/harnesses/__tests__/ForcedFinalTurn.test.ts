@@ -37,3 +37,33 @@ describe("the forced final turn", () => {
     expect(result.finalTurnDirected).toBe(false);
   });
 });
+
+describe("the exhaustion pass", () => {
+  it("sends the model the tagged notice as its last message", async () => {
+    const { runExhaustionRecoveryPass } = await import("../lifecycle/ExhaustionRecovery.ts");
+    let sent: Array<{ role: string; content: unknown }> = [];
+    const harness = {
+      enforceContextWindow: (messages: unknown[]) => messages,
+      registerTrackerRequest: () => {},
+      createPassState: () => ({}),
+      consumeStream: async () => {},
+      logIteration: () => {},
+      emitGenerationProgress: () => {},
+    };
+    const context = {
+      emit: () => {}, options: {}, resolvedModel: "m", modelDefinition: {}, requestId: "forced-final-turn-test",
+      project: "vllm-trading-bot", agent: "CUSTOM_V3_JUNIOR_ANALYST", username: "u",
+      provider: {
+        generateTextStream: (messages: Array<{ role: string; content: unknown }>) => {
+          sent = messages;
+          return (async function* () {})();
+        },
+      },
+    };
+    await runExhaustionRecoveryPass(harness as never, context as never, {} as never,
+      [{ role: "user", content: "## Ticker: COF" }] as never);
+    const last = sent[sent.length - 1];
+    expect(String(last.content)).toContain("<iteration-limit>");
+    expect(applyTradingToolProtocol({ model: "m", messages: sent }, ["get_market_data"]).finalTurnDirected).toBe(true);
+  });
+});
