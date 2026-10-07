@@ -1761,12 +1761,25 @@ export default class ToolOrchestratorService {
     context: ToolExecutionContext = {},
   ) {
     const { dispatchTool } = await import("./ToolDispatch.js");
+    const { bridgeContent, modelVisibleText } = await import("./ModelVisibleToolResult.js");
     try {
-      return await dispatchTool(name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, ""), args, {
+      const result = await dispatchTool(name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, ""), args, {
         project: context.project || undefined,
         agentName: context.agent || undefined,
         transport: "rest",
       });
+      // The model gets what prism's MCP call gives it for the same result
+      // (McpAdapter): a bridge tool message unwrapped to its content and fitted
+      // to the per-result limit with a note. Measured 2026-10-07: without
+      // this the native loop handed the model the bridge's raw
+      // {"role":"tool",...,"content":...} envelope, whole (8,186 chars where
+      // prism showed 7,333). Errors and other results pass through unchanged.
+      if (bridgeContent(result) === null) return result;
+      const visible = modelVisibleText(result);
+      if (visible.cut) {
+        logger.info(`[ToolOrchestrator] ${name} result cut to the per-result limit: ${visible.before} -> ${visible.after} chars`);
+      }
+      return visible.text;
     } catch (error: unknown) {
       return { error: getErrorMessage(error), is_error: true };
     }

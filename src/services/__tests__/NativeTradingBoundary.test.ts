@@ -140,6 +140,26 @@ describe("trading tools on the native loop", () => {
     expect(ToolOrchestratorService.isTradingToolCall("mcp__other-server__get_market_data", { project: TRADING })).toBe(false);
   });
 
+  it("gives the model the bridge result's content, fitted to the per-result limit, as prism's MCP path does", async () => {
+    const bridge = (content: string) => ({ role: "tool", tool_call_id: "call_lazy_tool_bridge", name: "get_finnhub_news", content });
+    const ctx = { project: TRADING, agent: "CUSTOM_V3_JUNIOR_ANALYST" };
+
+    dispatchTool.mockResolvedValueOnce(bridge("## Recent News\n- one headline") as never);
+    expect(await ToolOrchestratorService.executeTool("mcp__lazy-agent-service__get_finnhub_news", {}, ctx))
+      .toBe("## Recent News\n- one headline");
+
+    const long = Array.from({ length: 400 }, (_, i) => `- headline ${i}: ${"x".repeat(40)}`).join("\n");
+    dispatchTool.mockResolvedValueOnce(bridge(long) as never);
+    const cut = await ToolOrchestratorService.executeTool("mcp__lazy-agent-service__get_finnhub_news", {}, ctx);
+    expect(typeof cut).toBe("string");
+    expect((cut as string).length).toBeLessThanOrEqual(8000);
+    expect(cut as string).toContain("cut to fit the model's per-result limit");
+
+    const refusal = { error: "PERMISSION_DENIED", message: "no signed context", is_error: true };
+    dispatchTool.mockResolvedValueOnce(refusal as never);
+    expect(await ToolOrchestratorService.executeTool("mcp__lazy-agent-service__get_finnhub_news", {}, ctx)).toEqual(refusal);
+  });
+
   it("dispatches a trading call through ToolDispatch with the bare name and the caller's identity", async () => {
     const args = { ticker: "COF", _lazy_trading_context: "signed" };
     await ToolOrchestratorService.executeTool("mcp__lazy-agent-service__get_market_data", args,
