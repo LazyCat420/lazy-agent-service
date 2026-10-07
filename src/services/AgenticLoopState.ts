@@ -77,7 +77,7 @@ export default class AgenticLoopState {
   // Set by harnesses before finalization to indicate how the
   // conversation ended. Used by afterResponse hooks (e.g. AWM) to
   // gate actions that should only run on successful completions.
-  conversationOutcome: "completed" | "exhausted" | "error" | "aborted";
+  conversationOutcome: "completed" | "exhausted" | "error" | "aborted" | "stuck";
 
   // ── Branch tracking (TreeOfThought) ─────────────────────
   branchesExplored: number;

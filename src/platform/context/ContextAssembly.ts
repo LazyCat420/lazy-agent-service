@@ -1,8 +1,11 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { ContextBudget } from "./ContextBudget.ts";
 import type { ContextReceipt, LayerBudgetSummary } from "../contracts/manifest.ts";
 import type { DurableMemoryRecord } from "../memory/LifecycleMemory.ts";
 import { LifecycleMemoryEngine } from "../memory/LifecycleMemory.ts";
+import { SkillRegistry } from "../skills/SkillRegistry.ts";
 
 export interface AssemblyOptions {
   agentRole: string;
@@ -20,6 +23,14 @@ export interface AssemblyOptions {
   userTask: string;
   currentState?: string;
   recentToolOutputs?: string[];
+  /** Bodies of path-scoped rules matched for the current tool-call paths. */
+  pathScopedRules?: string[];
+  /** Contents of always-on memory markdown files. Auto-loaded when omitted. */
+  alwaysOnMemories?: string[];
+  /** Skill name/description pairs for on-demand loading. Auto-discovered when omitted. */
+  skills?: Array<{ name: string; description: string }>;
+  /** Repository root for auto-loading rules/memory/skills (default: cwd). */
+  repoRoot?: string;
   budgetConfig?: { totalMaxChars?: number };
 }
 
@@ -43,6 +54,34 @@ export class ContextAssembly {
 
   private static hash(text: string): string {
     return crypto.createHash("sha256").update(text).digest("hex");
+  }
+
+  /**
+   * Load every markdown file under `<root>/memory/*.md` as always-on
+   * context (order: alphabetical by filename for determinism).
+   */
+  private static loadAlwaysOnMemories(repoRoot: string): string[] {
+    const memoryDir = path.join(repoRoot, "memory");
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(memoryDir);
+    } catch {
+      return [];
+    }
+    return entries
+      .filter((entry) => entry.endsWith(".md") && !entry.startsWith("README"))
+      .sort()
+      .map((entry) => {
+        try {
+          const content = fs
+            .readFileSync(path.join(memoryDir, entry), "utf8")
+            .trim();
+          return content.length > 0 ? content : null;
+        } catch {
+          return null;
+        }
+      })
+      .filter((content): content is string => content !== null);
   }
 
   /**
@@ -82,6 +121,27 @@ export class ContextAssembly {
     if (options.approvedProcedures && options.approvedProcedures.length > 0) {
       projectComponents.push(`# Approved Procedures\n${options.approvedProcedures.join("\n")}`);
     }
+
+    // ── Always-on memory (rules < memory < skills ordering) ────
+    const repoRoot = options.repoRoot || process.cwd();
+    const memories =
+      options.alwaysOnMemories ??
+      ContextAssembly.loadAlwaysOnMemories(repoRoot);
+    if (memories.length > 0) {
+      projectComponents.push(`# Always-On Memory\n${memories.join("\n\n")}`);
+    }
+
+    // ── Skill descriptions (on-demand bodies via skill_read) ──
+    const skills =
+      options.skills ??
+      new SkillRegistry(path.join(repoRoot, "skills")).describeAll();
+    if (skills.length > 0) {
+      const skillLines = skills.map(
+        (s) => `- **${s.name}**: ${s.description} (load with \`skill_read\`)`,
+      );
+      projectComponents.push(`# Available Skills\n${skillLines.join("\n")}`);
+    }
+
     projectComponents.push(`# Active Tool Schemas (${sortedTools.length})\n${toolDocLines.join("\n")}`);
     if (options.repoMapSummary) {
       projectComponents.push(`# Repository Map (${options.repoCommitSha || "HEAD"})\n${options.repoMapSummary}`);
@@ -155,6 +215,11 @@ export class ContextAssembly {
     tailComponents.push(`# Task Instruction\n${options.userTask.trim()}`);
     if (options.currentState) {
       tailComponents.push(`# Current Execution State\n${options.currentState.trim()}`);
+    }
+    if (options.pathScopedRules && options.pathScopedRules.length > 0) {
+      tailComponents.push(
+        `# Path-Scoped Rules (apply to the files you are touching)\n${options.pathScopedRules.join("\n\n")}`,
+      );
     }
     if (options.recentToolOutputs && options.recentToolOutputs.length > 0) {
       tailComponents.push(`# Recent Tool Outputs\n${options.recentToolOutputs.join("\n\n")}`);

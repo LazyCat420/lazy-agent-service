@@ -56,6 +56,8 @@ export interface RunBudget {
 export interface RuntimeOverrides {
   model?: string;
   sampling_temperature?: number;
+  /** Optional reasoning effort passthrough (validated against the profile's reasoning_effort policy). */
+  reasoning_effort?: string;
   budget?: RunBudget;
   tools?: any[];
   [key: string]: unknown;

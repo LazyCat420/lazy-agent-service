@@ -565,6 +565,9 @@ export default class BaseAgenticHarness {
       attributes: {
         model: resolvedModel,
         provider: providerName,
+        ...(typeof passOptions.reasoningEffort === "string" && {
+          reasoning_effort: passOptions.reasoningEffort,
+        }),
       },
     });
     this._activeModelSpan = modelSpan;

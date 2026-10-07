@@ -12,7 +12,12 @@ export interface ModelConstraints {
   allowed_models: string[];
   allowed_providers: string[];
   temperature_range?: [number, number];
+  /** Optional reasoning effort passthrough ("low" | "medium" | "high", ...). Providers without support ignore it. */
+  reasoning_effort?: string;
 }
+
+/** Reasoning effort levels accepted across OpenAI/Anthropic/vLLM providers. */
+const REASONING_EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export interface ToolPolicy {
   mode: "STRICT_WHITELIST" | "DENYLIST";
@@ -118,6 +123,13 @@ export class ProfileRegistry {
     }
 
     if (data.model_constraints.max_output_tokens !== undefined && (!Number.isInteger(data.model_constraints.max_output_tokens) || data.model_constraints.max_output_tokens < 0)) throw new Error("Invalid per-call output limit");
+
+    if (data.model_constraints.reasoning_effort !== undefined) {
+      if (typeof data.model_constraints.reasoning_effort !== "string") throw new Error("Invalid reasoning_effort: must be a string");
+      if (!REASONING_EFFORT_LEVELS.includes(data.model_constraints.reasoning_effort)) {
+        throw new Error(`Invalid reasoning_effort '${data.model_constraints.reasoning_effort}': must be one of ${REASONING_EFFORT_LEVELS.join(", ")}`);
+      }
+    }
 
     if (data.model_constraints.provider_by_model) {
       for (const [model, provider] of Object.entries(data.model_constraints.provider_by_model)) {
@@ -316,6 +328,12 @@ export class ProfileRegistry {
     const range = profile.model_constraints.temperature_range;
     if (temperature !== undefined && range && (temperature < range[0] || temperature > range[1])) throw new Error("Temperature outside profile limits");
     if (overrides.provider && !profile.model_constraints.allowed_providers.includes(String(overrides.provider))) throw new Error("Requested provider is outside profile policy");
+
+    if (overrides.reasoning_effort !== undefined) {
+      if (typeof overrides.reasoning_effort !== "string" || !REASONING_EFFORT_LEVELS.includes(overrides.reasoning_effort)) {
+        throw new Error(`Invalid reasoning_effort override '${String(overrides.reasoning_effort)}': must be one of ${REASONING_EFFORT_LEVELS.join(", ")}`);
+      }
+    }
 
     if (overrides.model && !profile.model_constraints.allowed_models.includes(overrides.model)) {
       const liveCheck = DynamicModelResolver.isModelAllowedForProfile(

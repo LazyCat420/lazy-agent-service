@@ -43,6 +43,8 @@ import { handleCodexPlanningResponse } from "./lifecycle/CodexPlanningDetector.t
 import { maybeInjectSystemReminder, cleanupReminderCache } from "./lifecycle/SystemReminderInjector.ts";
 import { checkCostBudget } from "./lifecycle/CostBudgetEnforcer.ts";
 import { createSandboxCheckpoint, restoreSandboxCheckpoint } from "./lifecycle/SandboxExecutor.ts";
+import { StuckDetector, normalizeContent, isErrorResult, type StuckPattern } from "../../platform/verify/StuckDetector.ts";
+import { compactToolResultsForPressure, isContextWindowError } from "../AgenticLoopService.ts";
 
 import PlanningModeService from "../PlanningModeService.ts";
 import PromptLocaleService from "../PromptLocaleService.ts";
@@ -202,6 +204,42 @@ export default class ReActHarness extends BaseAgenticHarness {
     let lastToolCallSignature: string | null = null;
     let repeatedToolCallCount = 0;
 
+    // Stuck detection (OpenHands five patterns) over the append-only
+    // observation history. First detection injects a change-approach
+    // system observation; a second consecutive detection ends the run.
+    const stuckDetector = new StuckDetector();
+
+    /**
+     * Handle a detected stuck pattern: warn on the first consecutive
+     * detection, terminate the run with outcome "stuck" on the second.
+     * Returns true when the run should terminate.
+     */
+    const handleStuckPattern = (pattern: StuckPattern): boolean => {
+      if (stuckDetector.getStreak() >= 2) {
+        logger.warn(
+          `[ReActHarness] Stuck pattern "${pattern.pattern}" persisted across consecutive detections — ` +
+            `ending run with status "stuck" on iteration ${state.iterations}.`,
+        );
+        emit({
+          type: SERVER_SENT_EVENT_TYPES.STATUS,
+          message: "stuck_terminated",
+          iteration: state.iterations,
+          pattern: pattern.pattern,
+        });
+        state.conversationOutcome = "stuck";
+        return true;
+      }
+      logger.warn(
+        `[ReActHarness] Stuck pattern "${pattern.pattern}" detected on iteration ${state.iterations} — injecting change-approach observation.`,
+      );
+      currentMessages.push({
+        role: "system",
+        _isSystemWarning: true,
+        content: `[Loop guard] You are repeating pattern ${pattern.pattern}: ${pattern.description} You are repeating this pattern; change approach — use a different tool, different arguments, or conclude with the information you already have.`,
+      });
+      return false;
+    };
+
     // ── Initialize lifecycle hooks ──────────────────────────
     const { hooks, approvalEngine } = createStandardHooks({
       workspaceRoot: workspaceRoot || undefined,
@@ -351,15 +389,69 @@ export default class ReActHarness extends BaseAgenticHarness {
 
         this.registerTrackerRequest(passRequestId);
 
-        // ── Stream LLM response ────────────────────────────────
-        const stream = this.createProviderStream(currentMessages, passOptions);
+        // ── Stream LLM response — with one context-overflow retry ──
+        // A context-window/overflow failure triggers exactly ONE retry
+        // after forced compaction of older tool results, instead of
+        // failing the whole run.
+        let stream: ReturnType<InstanceType<typeof BaseAgenticHarness>["createProviderStream"]> = null;
+        let overflowRetried = false;
+        while (true) {
+          try {
+            stream = this.createProviderStream(currentMessages, passOptions);
+          } catch (setupError: unknown) {
+            if (!overflowRetried && isContextWindowError(setupError)) {
+              overflowRetried = true;
+              logger.warn(
+                `[ReActHarness] Context-window overflow creating stream on iteration ${state.iterations} — compacting older tool results and retrying once.`,
+              );
+              emit({
+                type: SERVER_SENT_EVENT_TYPES.STATUS,
+                message: "context_overflow_retry",
+                iteration: state.iterations,
+              });
+              currentMessages = compactToolResultsForPressure(currentMessages, { force: true });
+              continue;
+            }
+            throw setupError;
+          }
 
-        // ── Context exhaustion pre-flight ──────────────────────
-        // When context pressure clamps the output budget below the minimum
-        // viable threshold, createProviderStream returns null instead of a
-        // stream (it already emitted a context_exhausted status event).
-        // Break to the exhaustion recovery path below the loop instead of
-        // sending a doomed request.
+          // ── Context exhaustion pre-flight ──────────────────────
+          // When context pressure clamps the output budget below the minimum
+          // viable threshold, createProviderStream returns null instead of a
+          // stream (it already emitted a context_exhausted status event).
+          // Break to the exhaustion recovery path below the loop instead of
+          // sending a doomed request.
+          if (stream === null) break;
+
+          const textBefore = pass.streamedText.length;
+          const thinkingBefore = pass.streamedThinking.length;
+          try {
+            await this.consumeStream(stream, pass, allowedToolNames);
+            break;
+          } catch (streamError: unknown) {
+            // Only retry when the failure happened before any output was
+            // consumed — a mid-generation overflow cannot be safely replayed.
+            const consumedOutput =
+              pass.streamedText.length > textBefore ||
+              pass.streamedThinking.length > thinkingBefore ||
+              pass.pendingToolCalls.length > 0;
+            if (!overflowRetried && !consumedOutput && isContextWindowError(streamError)) {
+              overflowRetried = true;
+              logger.warn(
+                `[ReActHarness] Context-window overflow on iteration ${state.iterations} — compacting older tool results and retrying once.`,
+              );
+              emit({
+                type: SERVER_SENT_EVENT_TYPES.STATUS,
+                message: "context_overflow_retry",
+                iteration: state.iterations,
+              });
+              currentMessages = compactToolResultsForPressure(currentMessages, { force: true });
+              continue;
+            }
+            throw streamError;
+          }
+        }
+
         if (stream === null) {
           logger.warn(
             `[ReActHarness] Context exhaustion guard fired on iteration ${state.iterations} — ` +
@@ -686,6 +778,31 @@ export default class ReActHarness extends BaseAgenticHarness {
 
           this.checkAndApplyToolSetChanges(currentMessages);
 
+          // ── Stuck detection (OpenHands five patterns) ────────
+          // Record one event per observation, then inspect the history.
+          for (const result of results) {
+            stuckDetector.record({
+              toolName: result.name,
+              normalizedContent: normalizeContent(
+                typeof result.result === "string"
+                  ? result.result
+                  : JSON.stringify(result.result) ?? "",
+              ),
+              isError: isErrorResult(result.result),
+              isModelMonologue: false,
+            });
+          }
+          const stuckPattern = stuckDetector.detect();
+          if (stuckPattern && handleStuckPattern(stuckPattern)) {
+            this.logIteration(pass, currentMessages);
+            break;
+          }
+
+          // ── Compaction pressure — >60% of ContextBudget.totalMaxChars ──
+          // Older tool results (beyond the last 3 turns) collapse into
+          // one-line summaries to keep the assembled context bounded.
+          currentMessages = compactToolResultsForPressure(currentMessages);
+
           this.logIteration(pass, currentMessages);
           continue;
         }
@@ -697,6 +814,19 @@ export default class ReActHarness extends BaseAgenticHarness {
         // Inject a continuation prompt asking it to respond concisely.
         if (pass.streamedText) {
           if (state.planModeActive) {
+            // Text-only turn without action — record as model monologue
+            // so the stuck detector can catch monologue loops.
+            stuckDetector.record({
+              toolName: "",
+              normalizedContent: normalizeContent(pass.streamedText),
+              isError: false,
+              isModelMonologue: true,
+            });
+            const monologueStuck = stuckDetector.detect();
+            if (monologueStuck && handleStuckPattern(monologueStuck)) {
+              this.logIteration(pass, currentMessages);
+              break;
+            }
             currentMessages.push({
               role: "assistant",
               content: pass.streamedText,
@@ -836,13 +966,19 @@ export default class ReActHarness extends BaseAgenticHarness {
       if (
         !hasCleanTextBreak &&
         state.streamedToolCalls.length > 0 &&
+        state.conversationOutcome !== "stuck" &&
         !signal?.aborted
       ) {
         state.conversationOutcome = "exhausted";
         await runExhaustionRecoveryPass(this, context, state, currentMessages);
       }
 
-      if (context.runtimeToolExecutor && !hasCleanTextBreak && state.conversationOutcome !== "exhausted") {
+      if (
+        context.runtimeToolExecutor &&
+        !hasCleanTextBreak &&
+        state.conversationOutcome !== "exhausted" &&
+        state.conversationOutcome !== "stuck"
+      ) {
         throw Object.assign(new Error("Canonical run ended without a final model turn"), { code: "INCOMPLETE_RUN" });
       }
 

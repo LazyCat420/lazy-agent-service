@@ -26,6 +26,26 @@ import { ContextAssembly } from "../platform/context/ContextAssembly.ts";
 import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
 import { RunEvidenceStore } from "../platform/verify/RunEvidenceStore.ts";
 import { DynamicModelResolver } from "./DynamicModelResolver.ts";
+import AgentHooks from "./AgentHooks.ts";
+import { permissionModeOf, resolvePermission } from "./PermissionModes.ts";
+import { EMPTY_TOOL_OUTPUT_MESSAGE, normalizeEmptyToolContent } from "./ToolResult.ts";
+
+/**
+ * The structured denial an execution returns when a decide hook blocks a tool
+ * call: no execution happened, and the model is told why it saw no result.
+ */
+export function hookDenialObservation(
+  callName: string,
+  verdict: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    success: false,
+    error: "HOOK_DENIED",
+    message: typeof verdict.message === "string"
+      ? verdict.message
+      : `Tool call '${callName}' denied by a decide hook; no execution was performed.`,
+  };
+}
 
 export class RunExecutionEngine {
   private static activeRuns: Map<
@@ -428,6 +448,13 @@ export class RunExecutionEngine {
         maxIterations: maxToolCalls + 1,
         temperature: request.runtime_overrides?.sampling_temperature,
         maxTokens: request.budget?.max_tokens ?? request.budget?.maxTokens ?? profile.budget_limits.max_tokens,
+        // Reasoning effort passthrough: runtime override wins, profile default otherwise.
+        // Providers without support ignore the unknown option (see PLAN_deepseek.md §4).
+        ...(typeof request.runtime_overrides?.reasoning_effort === "string"
+          ? { reasoningEffort: request.runtime_overrides.reasoning_effort }
+          : profile.model_constraints.reasoning_effort
+            ? { reasoningEffort: profile.model_constraints.reasoning_effort }
+            : {}),
       };
 
       const messages = Array.isArray(request.input)
@@ -496,6 +523,9 @@ export class RunExecutionEngine {
         }
       };
       const requestContext = (request.runtime_overrides?.context || {}) as Record<string, string>;
+      const hooks = new AgentHooks();
+      const permissionMode = permissionModeOf(profile);
+      const planApproved = !!(context as any).planApproved || !!((request.runtime_overrides as any)?.planApproved);
       context.runtimeToolExecutor = async (call: any) => {
         abortController.signal.throwIfAborted();
         if (++actualToolCalls > maxToolCalls) {
@@ -509,9 +539,19 @@ export class RunExecutionEngine {
         }
         const validator = toolValidators.get(call.name);
         if (!validator || !validator.safeParse(call.args || {}).success) throw Object.assign(new Error("Tool arguments do not match the admitted schema"), { code: "TOOL_ARGUMENTS_INVALID" });
+        // Decide hooks run before any guard/approval flow and may deny the call
+        // outright: the model receives a structured denial, nothing executes.
+        const hookVerdict = await hooks.run("beforeToolCall", structuredClone(call), context);
+        if (hookVerdict && hookVerdict.isApproved === false) {
+          return hookDenialObservation(call.name, hookVerdict);
+        }
         for (const extension of extensions) await extension.beforeTool?.(structuredClone(call));
         const localPolicy = profile.local_tool_policy?.[call.name];
-        const approvalId = localPolicy && (localPolicy.requires_confirmation || localPolicy.effect === "destructive")
+        const perm = localPolicy
+          ? resolvePermission({ mode: permissionMode, effect: localPolicy.effect, planApproved })
+          : undefined;
+        const modeAutoApproved = permissionMode !== "default" && !!perm && perm.approved && !perm.requiresApproval && !perm.denial;
+        const approvalId = localPolicy && (localPolicy.requires_confirmation || localPolicy.effect === "destructive") && !modeAutoApproved
           ? await RunApprovals.wait(runId, call, request.app_id || "", request.session_id || "", abortController.signal, emitEvent) : undefined;
         const processed = await this.processToolCall(runId, call, {
           approval_id: approvalId,
@@ -520,6 +560,7 @@ export class RunExecutionEngine {
           profile_version: profile.version,
           app_id: request.app_id ?? request.appId ?? requestContext.app_id,
           session_id: request.session_id ?? request.sessionId ?? requestContext.session_id,
+          planApproved,
         });
         if (processed.status !== "admitted_local") emitEvent(processed.event);
         if (processed.status === "denied") throw Object.assign(new Error(processed.error?.message || "Tool denied"), { code: processed.error?.code });
@@ -528,7 +569,8 @@ export class RunExecutionEngine {
           const failed = !!(observation && typeof observation === "object" && (observation as any).is_error);
           emitEvent({ run_id: runId, type: failed ? "tool.failed" : "tool.completed", data: { tool_call_id: processed.event.data.tool_call_id, ...(failed ? { error: { code: "TOOL_EXECUTION_FAILED", message: "Local tool returned a recoverable error", details: observation } } : { result: observation }) } });
           for (const extension of extensions) await extension.afterTool?.(call, observation);
-          return observation;
+          await hooks.run("afterToolCall", call, observation, context);
+          return normalizeEmptyToolContent(observation);
         }
         // Only public web observations enter the optional shadow specialist layer.
         // Its result is retained as telemetry and never modifies policy or model context.
@@ -541,7 +583,8 @@ export class RunExecutionEngine {
           }, abortController.signal);
         }
         for (const extension of extensions) await extension.afterTool?.(call, processed.result);
-        return processed.result;
+        await hooks.run("afterToolCall", call, processed.result, context);
+        return normalizeEmptyToolContent(processed.result);
       };
 
       if (options.maxTokens === 0) throw Object.assign(new Error("Token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
@@ -555,6 +598,12 @@ export class RunExecutionEngine {
 
       for (const extension of extensions) await extension.validate?.(result.messages);
       abortController.signal.throwIfAborted();
+      // The loop exited with a final response — notify lifecycle hooks.
+      await hooks.run("runStop", context, {
+        runId,
+        messages: result.messages || [],
+        toolCalls: actualToolCalls,
+      });
       // 10. Seal Receipts, Evidence, and Usage
       const durationMs = Date.now() - startTime;
       const spans = RunEvidenceStore.getGlobalInstance().getSpans(runId);
@@ -728,6 +777,8 @@ export class RunExecutionEngine {
       signal?: AbortSignal;
       app_id?: string;
       session_id?: string;
+      /** Set when an approved plan exists (plan permission mode). */
+      planApproved?: boolean;
     },
     emitEvent?: (event: RunEvent) => void,
   ): Promise<{
@@ -925,7 +976,21 @@ export class RunExecutionEngine {
 
     const toolPolicy = profile.local_tool_policy?.[toolName];
     const approved = await RunApprovals.permits(runId, context.approval_id, { id: toolCallId, name: toolName, args: toolArgs }, appId, sessionId);
-    if (!toolPolicy || ((toolPolicy.requires_confirmation || toolPolicy.effect === "destructive") && !approved)) {
+    // Permission-mode policy: plan mode blocks writes until a plan is approved,
+    // acceptEdits/bypass auto-approve writes, and the destructive hard floor
+    // always requires the human approval gate in every mode.
+    const perm = resolvePermission({
+      mode: permissionModeOf(profile),
+      effect: toolPolicy?.effect,
+      planApproved: !!context.planApproved,
+      approvalSatisfied: approved,
+    });
+    if (perm.denial) {
+      const event: RunEvent = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error: { ...perm.denial, category: "POLICY", retryable: false } } };
+      emitEvent?.(event);
+      return { status: "denied", event, error: { ...perm.denial, category: "POLICY", retryable: false } };
+    }
+    if (!toolPolicy || (perm.requiresApproval && !perm.approved) || (toolPolicy.requires_confirmation && !approved)) {
       const error: StructuredError = { code: toolPolicy ? "CONFIRMATION_REQUIRED" : "TOOL_POLICY_MISSING", message: "Local tool requires registered effect metadata and satisfied approval policy", category: "POLICY", retryable: false };
       const event: RunEvent = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error } };
       emitEvent?.(event);

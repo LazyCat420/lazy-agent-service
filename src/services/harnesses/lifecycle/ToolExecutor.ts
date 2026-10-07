@@ -6,6 +6,7 @@ import { HarnessInstrumenter } from "../../../platform/trace/HarnessInstrumenter
 import type { SideEffectClass } from "../../../platform/contracts/telemetry.ts";
 
 import type AgenticLoopState from "../../AgenticLoopState.ts";
+import SkillRegistry from "../../../platform/skills/SkillRegistry.ts";
 
 function classifySideEffect(toolName: string): SideEffectClass {
   const name = toolName.toLowerCase();
@@ -91,6 +92,27 @@ export async function executeToolBatch(
       if (context.runtimeToolExecutor) {
         const started = Date.now();
         const result = await context.runtimeToolExecutor(toolCall);
+        await hooks.run("afterToolCall", toolCall, result, context);
+        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+      }
+
+      // ── skill_read internal tool ─────────────────────────────
+      // Serves skill bodies from <repoRoot>/skills/<name>/SKILL.md on
+      // demand; never dispatched to tools-api.
+      if (toolCall.name === "skill_read") {
+        const started = Date.now();
+        const requestedName =
+          typeof toolCall.args?.name === "string" ? toolCall.args.name : "";
+        const body = new SkillRegistry().loadBody(requestedName);
+        const result = {
+          success: body !== null,
+          ...(body !== null
+            ? { name: requestedName, body }
+            : {
+                error: "skill_not_found",
+                message: `No skill named "${requestedName}" is registered. Check the Available Skills section of the system prompt.`,
+              }),
+        };
         await hooks.run("afterToolCall", toolCall, result, context);
         return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
       }

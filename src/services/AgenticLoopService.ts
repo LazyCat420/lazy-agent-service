@@ -14,8 +14,145 @@ import ToolContext from "./ToolContext.ts";
 import logger from "../utils/logger.ts";
 import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
 import { TraceContext } from "../platform/trace/TraceContext.ts";
+import { DEFAULT_CONTEXT_BUDGET } from "../platform/context/ContextBudget.ts";
+import { SkillRegistry } from "../platform/skills/SkillRegistry.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  Loop resilience helpers (compaction pressure + overflow recovery)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export interface CompactionPressureOptions {
+  /** Context budget in characters (default: DEFAULT_CONTEXT_BUDGET.totalMaxChars). */
+  totalMaxChars?: number;
+  /** Fraction of the budget that triggers compaction (default: 0.6). */
+  pressureRatio?: number;
+  /** Compact regardless of the pressure threshold. */
+  force?: boolean;
+  /** Most recent tool turns left untouched (default: 3). */
+  keepLastNTurns?: number;
+}
+
+const COMPACTION_SUMMARY_PREFIX = "[compacted]";
+const DEFAULT_PRESSURE_RATIO = 0.6;
+const DEFAULT_KEEP_LAST_N_TURNS = 3;
+
+/** Rough character size of the message history. */
+function estimateMessagesChars(messages: ConversationMessage[]): number {
+  return JSON.stringify(messages).length;
+}
+
+/** First 120 chars of a tool result, as a one-line summary. */
+function summarizeToolResult(toolName: string, result: unknown): string {
+  const text =
+    typeof result === "string" ? result : JSON.stringify(result) ?? "";
+  const flattened = text.replace(/\s+/g, " ").trim();
+  return `${COMPACTION_SUMMARY_PREFIX} ${toolName} result summary: ${flattened.slice(0, 120)}`;
+}
+
+/**
+ * Replace tool results older than the last N turns with one-line summaries
+ * when the assembled context exceeds the pressure threshold.
+ *
+ * Returns a new array; the input is never mutated.
+ */
+export function compactToolResultsForPressure(
+  messages: ConversationMessage[],
+  options: CompactionPressureOptions = {},
+): ConversationMessage[] {
+  const totalMaxChars = options.totalMaxChars ?? DEFAULT_CONTEXT_BUDGET.totalMaxChars;
+  const pressureRatio = options.pressureRatio ?? DEFAULT_PRESSURE_RATIO;
+  const keepLastNTurns = options.keepLastNTurns ?? DEFAULT_KEEP_LAST_N_TURNS;
+  const threshold = totalMaxChars * pressureRatio;
+
+  if (!options.force && estimateMessagesChars(messages) <= threshold) {
+    return messages;
+  }
+
+  const toolTurnIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].toolCalls && messages[i].toolCalls!.length > 0) {
+      toolTurnIndices.push(i);
+    }
+  }
+
+  const keepFull = new Set(toolTurnIndices.slice(-keepLastNTurns));
+  if (toolTurnIndices.every((index) => keepFull.has(index))) {
+    return messages;
+  }
+
+  return messages.map((message, index) => {
+    if (keepFull.has(index) || !message.toolCalls || message.toolCalls.length === 0) {
+      return message;
+    }
+    return {
+      ...message,
+      toolCalls: message.toolCalls.map((toolCall) => {
+        const prior = toolCall.result;
+        const priorSuccess =
+          typeof prior === "object" &&
+          prior !== null &&
+          "success" in prior &&
+          typeof prior.success === "boolean"
+            ? prior.success
+            : true;
+        return {
+          ...toolCall,
+          result: {
+            success: priorSuccess ?? true,
+            compacted: true,
+            message: summarizeToolResult(toolCall.name, prior),
+          },
+        };
+      }),
+    };
+  });
+}
+
+const CONTEXT_WINDOW_ERROR_SIGNATURES =
+  /context_length_exceeded|context length|context window|maximum context length|prompt is too long|input length exceeds|too many input tokens|request too large|\b413\b/i;
+
+/**
+ * Whether a thrown error represents a context-window overflow (as opposed
+ * to a network, auth, or unknown provider failure).
+ */
+export function isContextWindowError(err: unknown): boolean {
+  if (!err) return false;
+  const code =
+    typeof err === "object" && err !== null
+      ? ((err as { code?: unknown }).code as string | undefined)
+      : undefined;
+  if (typeof code === "string" && CONTEXT_WINDOW_ERROR_SIGNATURES.test(code)) {
+    return true;
+  }
+  const message =
+    typeof err === "string"
+      ? err
+      : err instanceof Error
+        ? err.message
+        : typeof err === "object" && err !== null
+          ? String((err as { message?: unknown }).message ?? "")
+          : "";
+  return CONTEXT_WINDOW_ERROR_SIGNATURES.test(message);
+}
+
+/** Schema for the built-in `skill_read` internal tool. */
+export const SKILL_READ_TOOL_SCHEMA = {
+  name: "skill_read",
+  description:
+    "Load the full markdown body of an available skill by name. Use after checking the Available Skills section of the system prompt.",
+  parameters: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description: "Skill name exactly as listed in Available Skills.",
+      },
+    },
+    required: ["name"],
+  },
+} as const;
 
 /**
  * AgenticLoopService — public façade for agentic loop execution.
@@ -88,6 +225,21 @@ export default class AgenticLoopService {
 
     // If dynamicEnabledTools is not in ToolContext, populate it with the resolved tools
     const toolContextStore = ToolContext.getStore(resolvedAgentConversationId);
+
+    // ── Inject the skill_read internal tool when skills exist ──
+    // Discovered from <repoRoot>/skills/<name>/SKILL.md; bodies load
+    // on demand (handled in harnesses/lifecycle/ToolExecutor.ts).
+    try {
+      if (new SkillRegistry().discover().length > 0) {
+        resolvedTools.finalTools = [
+          ...resolvedTools.finalTools,
+          { ...SKILL_READ_TOOL_SCHEMA },
+        ];
+      }
+    } catch (skillErr: unknown) {
+      logger.debug(`[AgenticLoop] Skill discovery failed: ${skillErr instanceof Error ? skillErr.message : String(skillErr)}`);
+    }
+
     if (!toolContextStore.has("dynamicEnabledTools")) {
       const initialNames =
         resolvedTools.resolvedEnabledTools ||

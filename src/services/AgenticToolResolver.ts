@@ -43,6 +43,8 @@ interface ResolveOptions {
   webSearch?: boolean;
   isSubAgent?: boolean;
   workspaceEnabled?: boolean;
+  /** Reasoning effort passthrough ("low" | "medium" | "high", ...); normalized before reaching the provider. */
+  reasoningEffort?: unknown;
   [key: string]: unknown;
 }
 
@@ -68,6 +70,17 @@ const PRISM_LOCAL_TOOL_NAMES = {
     return false;
   },
 };
+
+/** Reasoning effort levels accepted across OpenAI/Anthropic/vLLM providers. */
+const REASONING_EFFORT_LEVELS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 
 export default class AgenticToolResolver {
   /**
@@ -353,8 +366,33 @@ export default class AgenticToolResolver {
       finalTools = finalTools.filter((tool) => tool.name !== TOOL_NAMES.THINK);
     }
 
+    // ── Reasoning effort passthrough (PLAN_deepseek.md §4) ──────
+    // The value flows from profile/run options through the harness pass
+    // options to the provider call; providers without support ignore the
+    // unknown option. The resolver guarantees they receive either a valid
+    // level or nothing — never a malformed value.
+    if (options.reasoningEffort !== undefined) {
+      const normalizedEffort =
+        AgenticToolResolver.normalizeReasoningEffort(options.reasoningEffort);
+      if (options.reasoningEffort !== normalizedEffort) {
+        logger.warn(
+          `[AgenticToolResolver] Dropping invalid reasoningEffort '${String(options.reasoningEffort)}'`,
+        );
+        options.reasoningEffort = normalizedEffort;
+      }
+    }
+
     logger.info(`[AgenticToolResolver] Final: ${finalTools.length} tools`);
     return { finalTools, resolvedEnabledTools };
+  }
+
+  /**
+   * Normalizes the reasoning_effort passthrough (PLAN_deepseek.md §4):
+   * valid level strings pass through, everything else becomes undefined.
+   */
+  static normalizeReasoningEffort(value: unknown): string | undefined {
+    if (typeof value !== "string") return undefined;
+    return REASONING_EFFORT_LEVELS.has(value) ? value : undefined;
   }
 
   /**

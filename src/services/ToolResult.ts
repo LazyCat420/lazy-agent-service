@@ -1,3 +1,16 @@
+/** SWE-agent pattern: silence is ambiguous to LLMs, so an empty observation is
+ * replaced with an explicit statement that the tool ran but produced nothing. */
+export const EMPTY_TOOL_OUTPUT_MESSAGE =
+  "The tool ran successfully and produced no output.";
+
+/** Replace empty/whitespace-only tool output with an explicit no-output message. */
+export function normalizeEmptyToolContent<T>(result: T): T {
+  if (typeof result === "string" && result.trim() === "") {
+    return EMPTY_TOOL_OUTPUT_MESSAGE as unknown as T;
+  }
+  return result;
+}
+
 /** Shared transport/cache failure classification. Empty successful results stay successful. */
 export function classifyToolResult(result: unknown): {
   success: boolean;

@@ -23,6 +23,9 @@ import SettingsService from "./SettingsService.ts";
 import AgentPersonaRegistry from "./AgentPersonaRegistry.ts";
 import { createAbortController } from "../utils/AbortController.ts";
 import { InternalLoopRunner } from "./InternalLoopRunner.ts";
+import { DelegateTool } from "./DelegateTool.ts";
+import type { DelegateArgs } from "./DelegateTool.ts";
+import { SubagentRegistry } from "./SubagentRegistry.ts";
 import { registerCleanup } from "../utils/CleanupRegistry.ts";
 import { resolveModelForInstances } from "../utils/ModelResolution.ts";
 
@@ -1609,6 +1612,36 @@ export default class OrchestratorService {
       enabledTools: subAgentEnabledTools,
       signal: subAgent.abortController?.signal,
     }).catch(() => undefined);
+
+    // Delegation wiring: expose `delegate` to this sub-agent's loop when the
+    // repo defines subagents and the caller is top-level (a subagent's own
+    // delegate call is refused inside DelegateTool). The profile executor
+    // handles every other admitted tool unchanged.
+    if (admission && childRecursionDepth === 0 && SubagentRegistry.isEnabled()) {
+      SubagentRegistry.warnIfDescriptionsTooLarge();
+      const profileExecutor = admission.runtimeToolExecutor;
+      admission.runtimeTools = {
+        finalTools: [...admission.runtimeTools.finalTools, DelegateTool.schema],
+        resolvedEnabledTools: [...admission.runtimeTools.resolvedEnabledTools, DelegateTool.name],
+      };
+      admission.runtimeToolExecutor = async (call) => {
+        if (call.name === DelegateTool.name) {
+          return DelegateTool.execute((call.args || {}) as Partial<DelegateArgs>, {
+            recursionDepth: childRecursionDepth,
+            providerName: subAgent.providerName,
+            resolvedModel: subAgent.resolvedModel,
+            project: subAgent.project,
+            username: subAgent.username,
+            workspaceRoot: subAgent.worktreePath || parentWorkspaceRoot,
+            traceId: effectiveTraceId,
+            agentConversationId: subAgent.parentAgentConversationId,
+            conversationId: subAgent.parentConversationId,
+            emit: subAgentEmit,
+          });
+        }
+        return profileExecutor(call);
+      };
+    }
 
     try {
       loopResult = await AgenticLoopService.runAgenticLoop({

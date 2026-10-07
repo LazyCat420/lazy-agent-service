@@ -34,6 +34,92 @@ import {
 import type { OrchestratorContext, TeamMember } from "../types/orchestrator.ts";
 
 // ────────────────────────────────────────────────────────────
+// Strict JSON Schema validation
+// ────────────────────────────────────────────────────────────
+
+/**
+ * Validate that a tool's parameters schema is strict JSON Schema: a top-level
+ * object type, every property listed in `required`, and additionalProperties
+ * disabled. Returns a human-readable violation naming the tool, or null when
+ * the schema is strict. Pure — exported for tests.
+ */
+export function validateStrictToolSchema(
+  name: string,
+  parameters: unknown,
+): string | null {
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+    return `${name}: parameters must be a JSON Schema object`;
+  }
+  const schema = parameters as Record<string, unknown>;
+  if (schema.type !== "object") {
+    return `${name}: parameters.type must be "object"`;
+  }
+  if (schema.additionalProperties !== false) {
+    return `${name}: parameters.additionalProperties must be false`;
+  }
+  const properties =
+    schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
+      ? Object.keys(schema.properties)
+      : [];
+  const required = Array.isArray(schema.required)
+    ? schema.required.filter((r): r is string => typeof r === "string")
+    : [];
+  const missing = properties.filter((p) => !required.includes(p));
+  if (missing.length > 0) {
+    return `${name}: all properties must be listed in required (missing: ${missing.join(", ")})`;
+  }
+  const unknownRequired = required.filter((r) => !properties.includes(r));
+  if (unknownRequired.length > 0) {
+    return `${name}: required lists properties that do not exist (${unknownRequired.join(", ")})`;
+  }
+  return null;
+}
+
+/**
+ * Tighten a tool schema toward the strict contract without changing its
+ * meaning: disable additional properties and require exactly the properties
+ * that already exist (optional parameters stay optional — forcing them into
+ * `required` would change the tool's contract). Returns null when the result
+ * is strict, else a violation string. Pure — exported for tests.
+ */
+export function tightenToolSchema(parameters: unknown): string | null {
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+    return "parameters must be a JSON Schema object";
+  }
+  const schema = parameters as Record<string, unknown>;
+  if (schema.type !== "object") {
+    return "parameters.type must be \"object\"";
+  }
+  schema.additionalProperties = false;
+  return validateStrictToolSchema("", schema) === null
+    ? null
+    : "required lists properties that do not exist";
+}
+
+/**
+ * Boot-time gate: schemas are tightened to the strict contract
+ * (additionalProperties:false; required stays as authored) and only dropped
+ * when the shape is unrecoverable — loudly, naming the tool. Dropping a
+ * working tool because its schema predates the strict convention would break
+ * production tool availability.
+ */
+function filterStrictSchemas<T extends { name: string; parameters?: unknown }>(
+  schemas: T[],
+  source: string,
+): T[] {
+  return schemas.filter((schema) => {
+    const violation = tightenToolSchema(schema.parameters);
+    if (violation) {
+      logger.error(
+        `[ToolOrchestrator] Skipping tool with non-strict schema (${source}): ${schema.name}: ${violation}`,
+      );
+      return false;
+    }
+    return true;
+  });
+}
+
+// ────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────
 
@@ -237,7 +323,10 @@ async function fetchSchemas() {
       return;
     }
 
-    const schemas = (await response.json()) as ToolSchemaFull[];
+    const schemas = filterStrictSchemas(
+      (await response.json()) as ToolSchemaFull[],
+      "tools-api",
+    );
 
     if (!Array.isArray(schemas) || schemas.length === 0) {
       logger.warn(
@@ -1717,16 +1806,19 @@ export default class ToolOrchestratorService {
       const catalog = JSON.parse(
         readFileSync(pathResolve(process.cwd(), "tool_schemas.json"), "utf-8"),
       ) as Array<{ name: string; description?: string; parameters?: unknown; domain?: string; owner_app?: string }>;
-      cachedTradingSchemas = catalog
-        .filter((tool) => tool.owner_app === "trading")
-        .map((tool) => ({
+      cachedTradingSchemas = filterStrictSchemas(
+        catalog
+          .filter((tool) => tool.owner_app === "trading")
+          .map((tool) => ({
           name: `${TRADING_MCP_PREFIX}${tool.name}`,
           description: tool.description,
           parameters: tool.parameters,
           domain: tool.domain || "Trading",
           _mcpServer: "lazy-agent-service",
           _mcpOriginalName: tool.name,
-        }));
+        })),
+        "tool_schemas.json (trading)",
+      );
     } catch (error: unknown) {
       logger.error(`[ToolOrchestrator] Failed to load the trading tool catalog: ${getErrorMessage(error)}`);
       cachedTradingSchemas = [];
@@ -1819,28 +1911,31 @@ export default class ToolOrchestratorService {
         "list_widget_types",
         "plan_widget",
       ]);
-      cachedLocalMcpSchemas = catalog
-        .filter(
-          (tool) =>
-            WIDGET_TOOLS.has(tool.name) ||
-            tool.name.startsWith("html_notes_") ||
-            tool.name.startsWith("canvas_") ||
-            // Keyless news search for research agents (e.g. music-player's
-            // CUSTOM_MUSIC_PLAYER): Bing News and Google News RSS, run by
-            // trading-service's tool bridge.
-            tool.name === "lazy_web_search" ||
-            // Cannabis strain research, backed by treesearch-service: strain names,
-            // forum posts, photos and terpene data.
-            tool.name.startsWith("strain_"),
-        )
-        .map((tool) => ({
-          name: `${LOCAL_MCP_PREFIX}${tool.name}`,
-          description: tool.description,
-          parameters: tool.parameters,
-          domain: tool.domain || "HTML Notes",
-          _mcpServer: "lazy-tool-service",
-          _mcpOriginalName: tool.name,
-        }));
+      cachedLocalMcpSchemas = filterStrictSchemas(
+        catalog
+          .filter(
+            (tool) =>
+              WIDGET_TOOLS.has(tool.name) ||
+              tool.name.startsWith("html_notes_") ||
+              tool.name.startsWith("canvas_") ||
+              // Keyless news search for research agents (e.g. music-player's
+              // CUSTOM_MUSIC_PLAYER): Bing News and Google News RSS, run by
+              // trading-service's tool bridge.
+              tool.name === "lazy_web_search" ||
+              // Cannabis strain research, backed by treesearch-service: strain names,
+              // forum posts, photos and terpene data.
+              tool.name.startsWith("strain_"),
+          )
+          .map((tool) => ({
+            name: `${LOCAL_MCP_PREFIX}${tool.name}`,
+            description: tool.description,
+            parameters: tool.parameters,
+            domain: tool.domain || "HTML Notes",
+            _mcpServer: "lazy-tool-service",
+            _mcpOriginalName: tool.name,
+          })),
+        "tool_schemas.json (local MCP)",
+      );
       logger.info(
         `[ToolOrchestrator] Loaded ${cachedLocalMcpSchemas.length} local MCP tool schemas (${LOCAL_MCP_PREFIX}*)`,
       );

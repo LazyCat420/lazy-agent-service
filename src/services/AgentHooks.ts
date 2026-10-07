@@ -13,6 +13,9 @@ import { errorMessage } from "@rodrigo-barraza/utilities-library";
  *                       (toolCall, result, ctx).
  *   afterResponse    — Fires when the loop exits with a final response.
  *                       Listeners receive (ctx, { text, thinking, toolCalls, messages }).
+ *   runStop          — Fires when the run loop exits with the final response
+ *                       (canonical RunExecutionEngine path). Listeners receive
+ *                       (ctx, { runId, messages, toolCalls }).
  *   onError          — Fires on any loop error. Listeners receive (error, ctx).
  *
  * Hook Categories (inspired by Antigravity SDK):
@@ -40,6 +43,7 @@ type HookEvent =
   | "beforeToolCall"
   | "afterToolCall"
   | "afterResponse"
+  | "runStop"
   | "onError";
 
 /**
