@@ -1,0 +1,38 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "runtime-unavailable",
+  "description": "Client connects while runtime is down or degraded; emits structured unavailable error.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "contract_version": "1.2.0",
+    "input": "Attempted request during outage."
+  },
+  "events": [
+    {
+      "id": "evt-unavail-001",
+      "run_id": "run-unavail-01",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T11:09:00.000Z",
+      "data": {
+        "error": {
+          "code": "RUNTIME_UNAVAILABLE",
+          "category": "RUNTIME",
+          "message": "Shared runtime is currently unavailable",
+          "retryable": true
+        }
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-unavail-01",
+    "status": "failed",
+    "messages": [],
+    "error": {
+      "code": "RUNTIME_UNAVAILABLE",
+      "category": "RUNTIME",
+      "message": "Shared runtime is currently unavailable",
+      "retryable": true
+    }
+  }
+}

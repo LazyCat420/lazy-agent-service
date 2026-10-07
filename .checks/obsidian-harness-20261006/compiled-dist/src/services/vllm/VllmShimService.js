@@ -1,0 +1,1046 @@
+import { applyTradingToolProtocol } from "../TradingToolProtocol.js";
+import { extractToolContext, verifyToolContext } from "../TradingToolContext.js";
+import { cutStreamBody, probeFault } from "../ProbeFault.js";
+import { TradingToolStream, bindToolResponse } from "../TradingToolStream.js";
+import { filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.js";
+import logger from "../../logger.js";
+/**
+ * OpenAI-compat translation shim between prism-service and a vLLM endpoint.
+ *
+ * WHY THIS EXISTS (2026-08-03): prism's vLLM provider disables reasoning with
+ * chat_template_kwargs={enable_thinking:false} — the Qwen3 spelling. When Gold
+ * Spark (10.0.0.141) was swapped to deepseek-v4-flash-0731, that key became a
+ * silent no-op: DeepSeek's chat template reads "thinking", not "enable_thinking".
+ * Result: every "thinking-off" call reasoned anyway (measured 1.3k-18k chars per
+ * call), routinely burning the entire output budget and intermittently leaking
+ * the reasoning trace into content (flash_briefings 126/127 shipped corrupted).
+ *
+ * We cannot edit prism (Rod's repo — and upstream fixes are a dead end, this
+ * shim is PERMANENT infrastructure), but prism learns endpoint URLs at boot
+ * from vault-service/projects.json (PROVIDER_VLLM_*_URL) — ours. Pointing
+ * them at this shim lets us mirror the Qwen key onto the DeepSeek key in
+ * flight. Qwen ignores the unknown extra key, so any model swap is harmless.
+ *
+ * Everything else — /v1/models, /metrics, streaming SSE — forwards verbatim.
+ */
+/**
+ * Named upstreams — one route per vLLM box, ALL of them behind the shim so a
+ * model swap on ANY endpoint can never silently strand the thinking flag
+ * again (that is exactly how Gold Spark broke: the swap needed no deploy, so
+ * nothing we owned was in the path). Keys are the /vllm-shim/<name> segment;
+ * values match PROVIDER_VLLM_{1,2,3}_URL in vault-service/projects.json.
+ */
+const UPSTREAMS = {
+    "gold-spark": process.env.VLLM_SHIM_GOLD_SPARK_URL || "http://10.0.0.141:8000",
+    // The vision path. :8899 is NOT a second engine — it is a small Python proxy
+    // (Server: BaseHTTP, where :8000 is uvicorn) sitting in front of the SAME
+    // vLLM instance: both report identical kv_cache_size_tokens (1,136,441) and
+    // num_gpu_blocks (12,727). It accepts image payloads, turns them into text,
+    // and forwards; vllm:mm_cache_queries_total stayed 0.0 across ~20 images, so
+    // vLLM itself never sees a picture.
+    //
+    // It is routed here so vision traffic passes through code we own — it is not
+    // part of prism and nothing else was governing it.
+    "gold-spark-vision": process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL || "http://10.0.0.141:8899",
+    "jetson": process.env.VLLM_SHIM_JETSON_URL || "http://10.0.0.30:8080",
+    "jetson-2": process.env.VLLM_SHIM_JETSON_2_URL || "http://10.0.0.30:8001",
+};
+/**
+ * Upstreams that contend for the SAME GPU share one budget.
+ *
+ * This is the correction the routing above forces: `gold-spark` and
+ * `gold-spark-vision` are two doors onto one engine, so two independent caps of
+ * 4 would admit 8 concurrent generations to a box that runs 6 — reintroducing
+ * the pile-up this cap exists to stop, through the door nobody was watching.
+ *
+ * Upstreams absent from this map are their own group.
+ */
+const CAPACITY_GROUPS = {
+    "gold-spark": "gold-spark",
+    "gold-spark-vision": "gold-spark",
+};
+/**
+ * Headers timeout only — cleared once the upstream responds, so long
+ * generations and SSE streams are never cut off mid-flight. Non-stream vLLM
+ * calls hold headers until generation completes, so this needs the same large
+ * budget PrismProxyService learned to give /agent (multi-minute generations).
+ */
+const UPSTREAM_HEADERS_TIMEOUT_MS = 900_000;
+/**
+ * Per-upstream generation concurrency caps.
+ *
+ * WHY (2026-08-09): Gold Spark collapsed under a trading fan-out — generation
+ * throughput fell 23x in 150 seconds (118.7 -> 5.1 tok/s) with the engine at
+ * `Running: 6, Waiting: 9` and the KV cache at 85.9%. Reconstructed from
+ * prism's ledger, the harness had **16 requests in flight against a box that
+ * runs 6**, and vLLM's own log agrees (6 running + 9 waiting = 15).
+ *
+ * `--max-num-seqs 6` on the server is an ADMISSION ceiling, not a reservation:
+ * if callers never present more than N, the engine never runs more than N. So
+ * the cap can live here, with no vLLM restart — and here is the right place
+ * because this shim carries prism's traffic AND trading-service's. Measured
+ * against vLLM's own request counters, <=7.1% of prompt tokens reach Gold Spark
+ * without passing through prism.
+ *
+ * Past the KV cache's real capacity, extra concurrency does not buy
+ * parallelism — vLLM preempts and re-prefills, which is why prompt throughput
+ * spiked to ~3,700 tok/s while generation fell to 4. Queueing here is strictly
+ * cheaper than thrashing there: waiting costs time, preemption costs the work
+ * already done.
+ *
+ * 0 or unset = unlimited. Override per upstream with
+ * VLLM_SHIM_MAX_CONCURRENT_<NAME>, e.g. VLLM_SHIM_MAX_CONCURRENT_GOLD_SPARK.
+ */
+const DEFAULT_MAX_CONCURRENT = {
+    "gold-spark": 4,
+};
+/**
+ * How long a request may wait for a slot before being shed with 503.
+ *
+ * This bound is NOT optional. Prism's idle watchdog kills a stream that has
+ * received no bytes for 300s — that is the `Provider stream stalled` class in
+ * the failure census. With a cap of 4 and agent calls running 60-200s, a burst
+ * of 16 would leave the last one queued ~800s, and the cap would manufacture
+ * the exact failure it was added to prevent. A 503 is backpressure a caller can
+ * see and retry; a 300s silent stall is not.
+ */
+const QUEUE_TIMEOUT_MS = Number(process.env.VLLM_SHIM_QUEUE_TIMEOUT_MS) > 0
+    ? Number(process.env.VLLM_SHIM_QUEUE_TIMEOUT_MS)
+    : 120_000;
+/** Raised when a request waited past QUEUE_TIMEOUT_MS without getting a slot. */
+export class QueueTimeoutError extends Error {
+}
+/**
+ * FIFO counting semaphore. Deliberately tiny and dependency-free — it sits on
+ * the path every generation takes.
+ *
+ * Exported for unit tests.
+ */
+export class UpstreamSemaphore {
+    limit;
+    active = 0;
+    waiters = [];
+    constructor(limit) {
+        this.limit = limit;
+    }
+    get inFlight() {
+        return this.active;
+    }
+    get queued() {
+        return this.waiters.length;
+    }
+    /**
+     * Resolve to a release function, or reject with QueueTimeoutError.
+     *
+     * The returned releaser is IDEMPOTENT: the caller releases from a `finally`
+     * that can be reached twice on some error paths, and a double decrement
+     * would silently raise the effective cap — a limiter that loosens itself
+     * under load is worse than none.
+     */
+    async acquire(timeoutMs) {
+        const releaser = () => {
+            let released = false;
+            return () => {
+                if (released)
+                    return;
+                released = true;
+                this.release();
+            };
+        };
+        if (this.active < this.limit) {
+            this.active += 1;
+            return releaser();
+        }
+        return new Promise((resolve, reject) => {
+            const entry = {
+                resolve: () => resolve(releaser()),
+                reject,
+                timer: setTimeout(() => {
+                    const i = this.waiters.indexOf(entry);
+                    if (i >= 0)
+                        this.waiters.splice(i, 1);
+                    reject(new QueueTimeoutError(`waited ${timeoutMs}ms for a slot (limit ${this.limit}, ${this.waiters.length} still queued)`));
+                }, timeoutMs),
+            };
+            this.waiters.push(entry);
+        });
+    }
+    release() {
+        const next = this.waiters.shift();
+        if (next) {
+            // Hand the slot straight over rather than decrementing and re-incrementing
+            // — an intermediate 0 would let an unrelated arrival jump the queue.
+            clearTimeout(next.timer);
+            next.resolve();
+            return;
+        }
+        this.active = Math.max(0, this.active - 1);
+    }
+}
+export class VllmShimService {
+    /**
+     * Mirror Qwen's enable_thinking onto DeepSeek's thinking key.
+     * Exported for unit tests. Mutates and returns the body.
+     */
+    static translateChatTemplateKwargs(body) {
+        const ctk = body?.chat_template_kwargs;
+        if (ctk &&
+            typeof ctk === "object" &&
+            !Array.isArray(ctk) &&
+            "enable_thinking" in ctk &&
+            !("thinking" in ctk)) {
+            ctk.thinking = ctk.enable_thinking;
+        }
+        return body;
+    }
+    /**
+     * DeepSeek DSML tool call tags:
+     * Supports both full-width vertical bar (｜) and standard ASCII (|):
+     * <｜tool calls｜> ... <｜tool_call｜> ... <｜end of tool call｜>
+     */
+    static DEEPSEEK_TOOL_CALLS_HEADER_RE = /<[｜|]tool calls[｜|]>/i;
+    static DEEPSEEK_TOOL_CALL_BLOCK_RE = /<[｜|]tool_call[｜|]>([\s\S]*?)<[｜|]end of tool call[｜|]>/gi;
+    /**
+     * Normalizes DeepSeek DSML tool calls embedded in `choices[0].message.content`
+     * into standard OpenAI `tool_calls: [...]` format.
+     *
+     * If `tool_calls` is already present or no DSML tool tags are found, the response
+     * is returned unmodified.
+     */
+    static normalizeToolCalls(response) {
+        if (!response || !Array.isArray(response.choices)) {
+            return response;
+        }
+        let modified = false;
+        const choices = response.choices.map((choice) => {
+            const msg = choice?.message;
+            if (!msg || typeof msg.content !== "string") {
+                return choice;
+            }
+            // If tool_calls already exists and is non-empty, do not overwrite.
+            if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+                return choice;
+            }
+            const content = msg.content;
+            if (!VllmShimService.DEEPSEEK_TOOL_CALLS_HEADER_RE.test(content) && !content.includes("tool_call")) {
+                return choice;
+            }
+            const toolCalls = [];
+            let match;
+            VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.lastIndex = 0;
+            while ((match = VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.exec(content)) !== null) {
+                let rawCall = match[1].trim();
+                // Strip markdown fences if present (e.g. ```json ... ```)
+                if (rawCall.startsWith("```")) {
+                    rawCall = rawCall.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+                }
+                try {
+                    const parsed = JSON.parse(rawCall);
+                    const toolName = parsed.name || parsed.function?.name || parsed.tool_name;
+                    const toolArgs = parsed.arguments ?? parsed.parameters ?? parsed.args ?? {};
+                    if (toolName) {
+                        toolCalls.push({
+                            id: `call_${Math.random().toString(36).slice(2, 11)}`,
+                            type: "function",
+                            function: {
+                                name: String(toolName),
+                                arguments: typeof toolArgs === "string" ? toolArgs : JSON.stringify(toolArgs),
+                            },
+                        });
+                    }
+                }
+                catch (err) {
+                    logger.warn(`[VllmShim] Failed to parse DeepSeek DSML tool call: ${err.message}. Raw: ${rawCall}`);
+                }
+            }
+            if (toolCalls.length === 0) {
+                return choice;
+            }
+            modified = true;
+            // Clean content by removing <｜tool calls｜> and all <｜tool_call｜>...<｜end of tool call｜> blocks
+            let cleanedContent = content
+                .replace(/<[｜|]tool calls[｜|]>/gi, "")
+                .replace(VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE, "")
+                .trim();
+            return {
+                ...choice,
+                message: {
+                    ...msg,
+                    content: cleanedContent.length > 0 ? cleanedContent : null,
+                    tool_calls: toolCalls,
+                },
+            };
+        });
+        return modified ? { ...response, choices } : response;
+    }
+    /**
+     * Repair the degenerate message tails prism's in-loop recovery produces,
+     * and normalize mid-conversation system turns for chat templates that only
+     * honor a leading system message. Exported for unit tests. Pure /
+     * copy-on-write: returns the SAME body object when nothing needs rewriting.
+     *
+     * Why (2026-08-26, cycle-v3-1787786020/KSS): after two tool timeouts,
+     * prism's empty-output recovery appended up to four IDENTICAL
+     * `<empty-output-recovery>` role:"system" messages with no assistant/user
+     * turn between them — a degenerate suffix DeepSeek answered with a lone EOS,
+     * four times (34,048/34,342 input tokens cache-read; outputTokens=1).
+     * Prism demotes non-leading system messages only for models matching
+     * "qwen3.6" (its own TEMP PATCH in vllm.ts), so every other model gets the
+     * raw stack. Prism is read-only upstream; this shim carries ALL prism→vLLM
+     * traffic, so the repair lives here:
+     *
+     *   1. collapse CONSECUTIVE duplicate `<empty-output-recovery>` messages
+     *      into one (identical content, same role);
+     *   2. demote non-leading role:"system" → role:"user" — unconditionally,
+     *      for every model (idempotent where prism already did it).
+     *
+     * Kill switch: VLLM_SHIM_REWRITE_MESSAGES=false restores pass-through.
+     */
+    static rewriteMessages(body) {
+        if ((process.env.VLLM_SHIM_REWRITE_MESSAGES || "true").toLowerCase() === "false")
+            return body;
+        const messages = body?.messages;
+        if (!Array.isArray(messages) || messages.length === 0)
+            return body;
+        let collapsed = 0;
+        let demoted = 0;
+        const rewritten = [];
+        for (const raw of messages) {
+            const msg = raw;
+            const prev = rewritten[rewritten.length - 1];
+            // 1. Collapse a consecutive exact duplicate of an empty-output-recovery
+            //    nudge. Only that tag: it is the one message prism provably stacks,
+            //    and an exact-duplicate constraint keeps this transform inert for
+            //    every legitimate repeated message shape we have not seen.
+            if (prev &&
+                typeof msg?.content === "string" &&
+                msg.content.includes("<empty-output-recovery>") &&
+                prev.role === msg.role &&
+                prev.content === msg.content) {
+                collapsed += 1;
+                continue;
+            }
+            rewritten.push(raw);
+        }
+        const out = rewritten.map((raw, index) => {
+            const msg = raw;
+            if (index !== 0 && msg?.role === "system") {
+                demoted += 1;
+                return { ...raw, role: "user" };
+            }
+            return raw;
+        });
+        if (collapsed === 0 && demoted === 0)
+            return body;
+        logger.warn(`[VllmShim] rewriteMessages: collapsed ${collapsed} duplicate empty-output-recovery message(s), demoted ${demoted} non-leading system message(s) to user (${messages.length} → ${out.length} messages)`);
+        return { ...body, messages: out };
+    }
+    /** Rolling tallies for the thinking-flag arrival report. */
+    static thinkingSeen = { absent: 0, off: 0, on: 0, alreadyMirrored: 0 };
+    static thinkingReportedAt = 0;
+    /**
+     * Count whether a thinking instruction actually reached the shim, and say so
+     * periodically. Diagnostic only — never alters the request.
+     *
+     * `absent` is the interesting bucket: it means the caller's thinking-off
+     * intent was dropped somewhere ABOVE us, so the mirror never fires and the
+     * model reasons by default.
+     */
+    static recordThinkingFlag(body) {
+        const ctk = body?.chat_template_kwargs;
+        if (!ctk || typeof ctk !== "object" || Array.isArray(ctk)) {
+            this.thinkingSeen.absent += 1;
+        }
+        else if ("thinking" in ctk) {
+            this.thinkingSeen.alreadyMirrored += 1;
+        }
+        else if (ctk.enable_thinking === false) {
+            this.thinkingSeen.off += 1;
+        }
+        else if (ctk.enable_thinking === true) {
+            this.thinkingSeen.on += 1;
+        }
+        else {
+            this.thinkingSeen.absent += 1;
+        }
+        const now = Date.now();
+        const total = this.thinkingSeen.absent + this.thinkingSeen.off +
+            this.thinkingSeen.on + this.thinkingSeen.alreadyMirrored;
+        if (total > 0 && now - this.thinkingReportedAt > 300_000) {
+            this.thinkingReportedAt = now;
+            const s = this.thinkingSeen;
+            const level = s.absent > 0 ? "warn" : "info";
+            logger[level](`[VllmShim] thinking flag arrivals (last window, ${total} chat calls): ` +
+                `absent=${s.absent} off=${s.off} on=${s.on} already-mirrored=${s.alreadyMirrored}` +
+                (s.absent > 0
+                    ? " — 'absent' means the caller's thinking-off intent was dropped upstream; the mirror cannot fire and the model reasons by default"
+                    : ""));
+            this.thinkingSeen = { absent: 0, off: 0, on: 0, alreadyMirrored: 0 };
+        }
+    }
+    /**
+     * Character budget for a single embedding input. The embedder behind
+     * jetson-2 (embeddinggemma) has a 2,048-TOKEN window; prism's memory layer
+     * (`memory:embed`, `workflow-query:embed`) sends whole agent prompts at it
+     * and vLLM rejects the call outright — measured 931 failures in the 14 days
+     * to 2026-08-09 (the single largest failure class), which means prism
+     * memory was silently OFF for the trading project the whole time.
+     *
+     * 4,900 chars ≈ 1,200-1,600 tokens depending on content — inside the window
+     * with margin. The value matches trading-service's _EMBED_CHAR_BUDGET
+     * (4,944), derived for this same embedder. A truncated embedding degrades
+     * recall for ONE memory; the rejected call it replaces stored nothing.
+     *
+     * Caveat, deliberate: the clamp applies to /v1/embeddings on EVERY
+     * upstream, so pointing a >2k-window embedder through the shim would get
+     * silently truncated inputs — override the budget via env when that day
+     * comes. Clamping only when over budget keeps the common case untouched.
+     */
+    static EMBED_CHAR_BUDGET = Number(process.env.VLLM_SHIM_EMBED_CHAR_BUDGET) > 0
+        ? Number(process.env.VLLM_SHIM_EMBED_CHAR_BUDGET)
+        : 4_900;
+    /** Rolling tally for the periodic clamp report. */
+    static embedClamped = { calls: 0, clamped: 0, worstChars: 0, rescued: 0 };
+    static embedReportedAt = 0;
+    /**
+     * Rolling tally for the periodic concurrency report. Without this, "the cap
+     * is binding" is an inference from latency rather than an observation — and
+     * a cap that silently sheds is indistinguishable from a healthy one.
+     */
+    static queueStats = { admitted: 0, shed: 0, waitedMs: 0, worstWaitMs: 0, worstDepth: 0 };
+    static queueReportedAt = 0;
+    /** Emit the concurrency picture on the same 5-minute cadence as the clamp report. */
+    static reportQueue() {
+        const now = Date.now();
+        const s = this.queueStats;
+        if (s.admitted === 0 && s.shed === 0)
+            return;
+        if (now - this.queueReportedAt <= 300_000)
+            return;
+        this.queueReportedAt = now;
+        const live = [...this.semaphores.entries()]
+            .map(([name, sem]) => `${name} ${sem.inFlight}/${sem.limit}+${sem.queued}q`)
+            .join(", ");
+        logger.info(`[VllmShim] concurrency: ${s.admitted} admitted (mean wait ` +
+            `${Math.round(s.waitedMs / Math.max(1, s.admitted))}ms, worst ${s.worstWaitMs}ms, ` +
+            `deepest queue ${s.worstDepth}), ${s.shed} shed with 503. Live: ${live || "none"}.`);
+        this.queueStats = { admitted: 0, shed: 0, waitedMs: 0, worstWaitMs: 0, worstDepth: 0 };
+    }
+    /**
+     * vLLM's context-window rejection, with the two numbers needed to rescale:
+     * the model's window and the token count it measured. Live sample
+     * (2026-08-09): "This model's maximum context length is 2048 tokens.
+     * However, you requested 0 output tokens and your prompt contains at least
+     * 2049 input tokens, ..."
+     */
+    static CTX_LEN_RE = /maximum context length is (\d+) tokens.*?(\d+) input tokens/s;
+    /** Retry ceiling for the token-feedback rescale below. */
+    static EMBED_RESCALE_ATTEMPTS = 3;
+    /**
+     * Pick the shrink factor for a context-window rejection. vLLM stops
+     * counting at window+1 and reports "at least N" — so a measured count of
+     * exactly window+1 tells us nothing about how far over the input really is
+     * (live probe 2026-08-09: a 22k-char input and a 4.4k-char input both
+     * reported "at least 2049"). An uninformative report gets an aggressive
+     * 0.6 cut; a real measurement gets a proportional cut with 10% margin.
+     * Exported for unit tests.
+     */
+    static rescaleFactor(windowTokens, measuredTokens) {
+        if (measuredTokens <= windowTokens + 1)
+            return 0.6;
+        return (windowTokens / measuredTokens) * 0.9;
+    }
+    /**
+     * Shrink every string input by `factor`, returning true if anything got
+     * shorter. The char clamp above is a heuristic — chars-per-token varies
+     * with content, and the desk's dense JSON/ticker text runs ~2.4 chars per
+     * token, so a 4,900-char input can still overflow a 2,048-token window.
+     * This is the exact-feedback correction applied when the embedder rejects
+     * the clamped input anyway. Exported for unit tests.
+     */
+    static shrinkEmbeddingInput(body, factor, floorChars = 0) {
+        let changed = false;
+        const shrinkOne = (s) => {
+            if (s.length <= floorChars)
+                return s;
+            const target = Math.floor(s.length * factor);
+            if (target <= 0 || target >= s.length)
+                return s;
+            changed = true;
+            return s.slice(0, target);
+        };
+        if (typeof body.input === "string") {
+            body.input = shrinkOne(body.input);
+        }
+        else if (Array.isArray(body.input)) {
+            body.input = body.input.map((item) => (typeof item === "string" ? shrinkOne(item) : item));
+        }
+        return changed;
+    }
+    /**
+     * Truncate oversized embedding inputs to EMBED_CHAR_BUDGET. Mutates and
+     * returns the body. Exported for unit tests.
+     *
+     * Handles both OpenAI input shapes: a single string, or an array of
+     * strings. Token-id arrays (arrays of numbers) pass through untouched —
+     * truncating those would corrupt them.
+     */
+    static clampEmbeddingInput(body) {
+        const budget = this.EMBED_CHAR_BUDGET;
+        const clampOne = (s) => {
+            this.embedClamped.calls += 1;
+            if (s.length <= budget)
+                return s;
+            this.embedClamped.clamped += 1;
+            this.embedClamped.worstChars = Math.max(this.embedClamped.worstChars, s.length);
+            return s.slice(0, budget);
+        };
+        if (typeof body.input === "string") {
+            body.input = clampOne(body.input);
+        }
+        else if (Array.isArray(body.input)) {
+            body.input = body.input.map((item) => typeof item === "string" ? clampOne(item) : item);
+        }
+        const now = Date.now();
+        if ((this.embedClamped.clamped > 0 || this.embedClamped.rescued > 0) && now - this.embedReportedAt > 300_000) {
+            this.embedReportedAt = now;
+            const s = this.embedClamped;
+            logger.warn(`[VllmShim] embed inputs clamped to ${budget} chars: ${s.clamped}/${s.calls} ` +
+                `inputs over budget (worst ${s.worstChars} chars), ${s.rescued} rescued via ` +
+                `token-feedback rescale — the sender is shipping oversized embedding payloads; ` +
+                `before this clamp those calls failed outright ` +
+                `("maximum context length is 2048 tokens").`);
+            this.embedClamped = { calls: 0, clamped: 0, worstChars: 0, rescued: 0 };
+        }
+        return body;
+    }
+    static activeJetsonUrl = null;
+    static setActiveJetsonUrl(url) {
+        this.activeJetsonUrl = url;
+    }
+    static getActiveJetsonUrl() {
+        if (process.env.VLLM_SHIM_JETSON_URL) {
+            return process.env.VLLM_SHIM_JETSON_URL;
+        }
+        return this.activeJetsonUrl || "http://10.0.0.30:8080";
+    }
+    static getAlternateJetsonUrl(currentUrl) {
+        if (currentUrl.includes(":8080")) {
+            return currentUrl.replace(":8080", ":8000");
+        }
+        if (currentUrl.includes(":8000")) {
+            return currentUrl.replace(":8000", ":8080");
+        }
+        return null;
+    }
+    /**
+     * Resolve /vllm-shim/<name>/<rest> to its upstream. Exported for unit
+     * tests; returns null for unknown upstream names.
+     */
+    static resolveUpstream(originalUrl) {
+        const match = originalUrl.match(/^\/vllm-shim\/([a-z0-9-]+)(\/.*)?$/);
+        if (!match)
+            return null;
+        const upstreamName = match[1];
+        let upstreamUrl = UPSTREAMS[upstreamName];
+        if (upstreamName === "jetson") {
+            upstreamUrl = this.getActiveJetsonUrl();
+        }
+        else if (upstreamName === "gold-spark" && process.env.VLLM_SHIM_GOLD_SPARK_URL) {
+            upstreamUrl = process.env.VLLM_SHIM_GOLD_SPARK_URL;
+        }
+        else if (upstreamName === "gold-spark-vision" && process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL) {
+            upstreamUrl = process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL;
+        }
+        else if (upstreamName === "jetson-2" && process.env.VLLM_SHIM_JETSON_2_URL) {
+            upstreamUrl = process.env.VLLM_SHIM_JETSON_2_URL;
+        }
+        if (!upstreamUrl)
+            return null;
+        return { upstreamUrl, originalPath: match[2] || "/", upstreamName };
+    }
+    /**
+     * Models that only expose extraction/ner or timeseries endpoints, never chat completions.
+     * Filtered from /v1/models so Prism never registers them as LLM providers.
+     */
+    static NON_LLM_MODELS = new Set([
+        "gliner",
+        "market_cnn",
+        "timeseries_rnn",
+    ]);
+    static filterModels(payload) {
+        if (!payload || typeof payload !== "object")
+            return payload;
+        let modified = false;
+        const copy = { ...payload };
+        if (Array.isArray(copy.data)) {
+            const initialLen = copy.data.length;
+            copy.data = copy.data.filter((item) => {
+                const id = item?.id || item?.name;
+                return !(typeof id === "string" && VllmShimService.NON_LLM_MODELS.has(id.toLowerCase()));
+            });
+            if (copy.data.length !== initialLen)
+                modified = true;
+        }
+        if (Array.isArray(copy.models)) {
+            const initialLen = copy.models.length;
+            copy.models = copy.models.filter((item) => {
+                const name = item?.name || item?.model;
+                return !(typeof name === "string" && VllmShimService.NON_LLM_MODELS.has(name.toLowerCase()));
+            });
+            if (copy.models.length !== initialLen)
+                modified = true;
+        }
+        return modified ? copy : payload;
+    }
+    /**
+     * Backends that omit max_model_len (e.g. TensorFold) still expose the real
+     * value on their own /metrics as `tensorfold_health:context_length`. Without
+     * it, downstream capability verification ("context capability unverified")
+     * refuses the endpoint and the router never schedules it. The value is the
+     * upstream's own reported number — nothing is invented here.
+     */
+    static contextLengthCache = new Map();
+    static CONTEXT_LENGTH_TTL_MS = 300_000;
+    static parseContextLength(metricsText) {
+        const m = metricsText.match(/^tensorfold_health:context_length\s+(\d+(?:\.\d+)?)/m);
+        return m ? Math.round(Number(m[1])) : null;
+    }
+    static async upstreamContextLength(upstreamUrl) {
+        const cached = this.contextLengthCache.get(upstreamUrl);
+        if (cached && Date.now() - cached.at < this.CONTEXT_LENGTH_TTL_MS)
+            return cached.value;
+        let value = null;
+        try {
+            const response = await fetch(`${upstreamUrl.replace(/\/$/, "")}/metrics`, {
+                signal: AbortSignal.timeout(3000),
+            });
+            if (response.ok) {
+                value = this.parseContextLength(await response.text());
+            }
+        }
+        catch {
+            value = null;
+        }
+        this.contextLengthCache.set(upstreamUrl, { value, at: Date.now() });
+        return value;
+    }
+    static async enrichModels(payload, upstreamUrl) {
+        if (!payload || typeof payload !== "object")
+            return payload;
+        // Preserve authentic upstream capacities; only fill in the context length
+        // when the upstream reports it on /metrics but omits it here.
+        if (!upstreamUrl)
+            return payload;
+        const list = (payload.data ||
+            payload.models);
+        if (!Array.isArray(list) || list.length === 0)
+            return payload;
+        const missing = list.some((m) => m && typeof m === "object" && !m.max_model_len && !m.context_length);
+        if (!missing)
+            return payload;
+        return this.upstreamContextLength(upstreamUrl).then((ctx) => {
+            if (!ctx)
+                return payload;
+            const patched = { ...payload };
+            for (const key of ["data", "models"]) {
+                if (Array.isArray(patched[key])) {
+                    patched[key] = patched[key].map((m) => m && typeof m === "object" && !m.max_model_len ? { ...m, max_model_len: ctx } : m);
+                }
+            }
+            return patched;
+        });
+    }
+    /** Per-upstream semaphores, created on first use. Exported for tests. */
+    static semaphores = new Map();
+    /** The GPU an upstream contends for. Exported for tests. */
+    static capacityGroup(upstream) {
+        return CAPACITY_GROUPS[upstream] ?? upstream;
+    }
+    /**
+     * Resolved concurrency limit for a capacity GROUP. 0 means ungated.
+     * Read per call rather than cached so an env change plus restart takes
+     * effect without a rebuild.
+     */
+    static limitFor(upstream) {
+        const group = this.capacityGroup(upstream);
+        const envKey = `VLLM_SHIM_MAX_CONCURRENT_${group.toUpperCase().replace(/-/g, "_")}`;
+        const raw = Number(process.env[envKey]);
+        if (Number.isFinite(raw) && raw > 0)
+            return raw;
+        if (process.env[envKey] !== undefined && raw === 0)
+            return 0; // explicit opt-out
+        return DEFAULT_MAX_CONCURRENT[group] ?? 0;
+    }
+    static semaphoreFor(upstream) {
+        const limit = this.limitFor(upstream);
+        if (limit <= 0)
+            return null;
+        // Keyed on the GROUP, so every door onto one GPU draws from one budget.
+        const group = this.capacityGroup(upstream);
+        const existing = this.semaphores.get(group);
+        if (existing && existing.limit === limit)
+            return existing;
+        const fresh = new UpstreamSemaphore(limit);
+        this.semaphores.set(group, fresh);
+        return fresh;
+    }
+    /** Test seam: drop all semaphores so a suite can change the env cleanly. */
+    static resetSemaphores() {
+        this.semaphores.clear();
+    }
+    /** Cache of known active models by upstream name. */
+    static activeModelsByUpstream = new Map();
+    static getActiveModel(upstream) {
+        return this.activeModelsByUpstream.get(upstream);
+    }
+    static setActiveModel(upstream, model) {
+        this.activeModelsByUpstream.set(upstream, model);
+    }
+    static clearActiveModels() {
+        this.activeModelsByUpstream.clear();
+    }
+    /**
+     * Resolves the active generation model from an upstream vLLM instance by querying its /v1/models endpoint.
+     * Filters out non-LLM models (e.g. gliner) and embedding-only models.
+     */
+    static async resolveUpstreamActiveModel(upstreamUrl) {
+        try {
+            const response = await fetch(`${upstreamUrl}/v1/models`, {
+                signal: AbortSignal.timeout(3000),
+            });
+            if (!response.ok)
+                return null;
+            const data = (await response.json());
+            const filtered = this.filterModels(data);
+            const candidates = (filtered.data || filtered.models || [])
+                .map((m) => m?.id || m?.name || "")
+                .filter(Boolean);
+            const genModel = candidates.find((m) => !/embed/i.test(m) && !this.NON_LLM_MODELS.has(m.toLowerCase()));
+            return genModel || null;
+        }
+        catch {
+            return null;
+        }
+    }
+    /**
+     * vLLM rejects non-positive max_tokens with HTTP 400:
+     * "max_tokens must be at least 1, got -1. (parameter=max_tokens, value=-1)".
+     * When max_tokens is <= 0 or not a positive integer, strip it so vLLM defaults
+     * to generating until context/EOS limit.
+     */
+    static sanitizeGenerationParams(body) {
+        if (!body || typeof body !== "object")
+            return body;
+        if ("max_tokens" in body) {
+            const mt = Number(body.max_tokens);
+            if (Number.isFinite(mt) && mt < 1) {
+                delete body.max_tokens;
+            }
+        }
+        return body;
+    }
+    static async handle(req, res) {
+        const resolved = this.resolveUpstream(req.originalUrl);
+        if (!resolved) {
+            return res.status(404).json({
+                error: `vllm-shim: unknown upstream in "${req.originalUrl}" (known: ${Object.keys(UPSTREAMS).join(", ")})`,
+            });
+        }
+        const { upstreamUrl, originalPath, upstreamName } = resolved;
+        const basePath = originalPath.split("?")[0];
+        const targetUrl = `${upstreamUrl}${originalPath}`;
+        let body = req.body;
+        let toolContextToken;
+        if (basePath === "/v1/chat/completions" && req.method === "POST" && body && typeof body === "object") {
+            // The mirror can only translate a flag that ARRIVES. When a caller asks
+            // for thinking-off and the request reaches us with no
+            // chat_template_kwargs at all, there is nothing to mirror and DeepSeek's
+            // template defaults to thinking ON — which is indistinguishable, from
+            // here, from a caller that genuinely wanted thinking. Downstream that
+            // shows up as reasoning eating the whole output allowance and no JSON
+            // artifact (trading-service, 2026-08-05, 22-36% analyst artifact loss).
+            //
+            // So record what actually arrives. Sampled, because this path carries
+            // every V3 agent call and a per-request line would bury the log.
+            this.recordThinkingFlag(body);
+            let boundary;
+            try {
+                const execution = extractToolContext(req.body);
+                toolContextToken = execution.token;
+                const protocol = execution.token ? applyTradingToolProtocol(execution.body, verifyToolContext(execution.token).allowedTools) : null;
+                boundary = filterTradingPayload(protocol?.body || execution.body);
+                if (boundary.receipt && protocol) {
+                    boundary.receipt.tool_protocol_version = 1;
+                    boundary.receipt.reasoning_tools_removed = protocol.removedTools - protocol.deniedTools.length;
+                    boundary.receipt.reasoning_acknowledgements_corrected = protocol.correctedAcknowledgements;
+                    boundary.receipt.unpermitted_tools_removed = protocol.deniedTools;
+                    boundary.receipt.final_turn_directed = protocol.finalTurnDirected;
+                }
+            }
+            catch (error) {
+                res.status(422).json({ error: String(error) });
+                return;
+            }
+            await recordPayload(boundary.receipt);
+            body = this.translateChatTemplateKwargs({ ...boundary.body });
+            // Repair degenerate recovery tails + non-leading system turns before
+            // the chat template sees them (copy-on-write; identity when clean).
+            body = this.rewriteMessages(body);
+            body = this.sanitizeGenerationParams(body);
+            await recordProviderSnapshot(boundary.receipt, body);
+            // The boundary probe's cut stream (see ProbeFault.ts): one delta, then the
+            // connection ends with no finish_reason — what prism must report as it does.
+            const probeCycle = toolContextToken ? verifyToolContext(toolContextToken).cycleId : undefined;
+            if (probeFault(probeCycle) === "cut") {
+                logger.warn(`[VllmShim] probe fault injected: cut stream (cycle ${probeCycle})`);
+                res.status(200);
+                res.setHeader("Content-Type", "text/event-stream");
+                res.setHeader("Cache-Control", "no-cache");
+                res.flushHeaders?.();
+                res.write(cutStreamBody(body.model));
+                return res.end();
+            }
+        }
+        const isEmbedPost = basePath === "/v1/embeddings" && req.method === "POST" && !!body && typeof body === "object";
+        if (isEmbedPost) {
+            body = this.clampEmbeddingInput({ ...req.body });
+        }
+        const upstreamAbortController = new AbortController();
+        const fetchOnce = async (urlToFetch = targetUrl) => {
+            const headersTimeout = setTimeout(() => {
+                logger.error(`[VllmShim] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
+                upstreamAbortController.abort();
+            }, UPSTREAM_HEADERS_TIMEOUT_MS);
+            try {
+                return await fetch(urlToFetch, {
+                    method: req.method,
+                    headers: { "Content-Type": req.headers["content-type"] || "application/json" },
+                    body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(body) : undefined,
+                    signal: upstreamAbortController.signal,
+                });
+            }
+            finally {
+                clearTimeout(headersTimeout);
+            }
+        };
+        // ── Concurrency gate ────────────────────────────────────────────
+        //
+        // Only GENERATION is gated. /v1/models, /health and /metrics stay ungated
+        // deliberately: trading-service polls /metrics every 5s to drive its own
+        // limiter, and queueing that poll behind four generations would feed it
+        // stale queue depths — which is precisely how the blind-limiter bug behaved
+        // (it read waiting=0 while the box sat at 17).
+        const isGated = req.method === "POST" &&
+            (basePath === "/v1/chat/completions" || basePath === "/v1/embeddings");
+        let release = null;
+        if (isGated) {
+            const sem = this.semaphoreFor(upstreamName);
+            if (sem) {
+                const waitStart = Date.now();
+                try {
+                    release = await sem.acquire(QUEUE_TIMEOUT_MS);
+                }
+                catch (e) {
+                    this.queueStats.shed += 1;
+                    logger.warn(`[VllmShim] SHED ${originalPath} on ${upstreamName}: ${e.message}. ` +
+                        `The cap is holding but the queue is longer than it can drain — ` +
+                        `either the box is degraded or the caller's own limiter is too loose.`);
+                    return res
+                        .status(503)
+                        .setHeader("Retry-After", "5")
+                        .json({
+                        error: `vllm-shim: no capacity on ${upstreamName} after ${QUEUE_TIMEOUT_MS}ms ` +
+                            `(limit ${sem.limit}). Retry.`,
+                    });
+                }
+                const waited = Date.now() - waitStart;
+                this.queueStats.admitted += 1;
+                this.queueStats.waitedMs += waited;
+                this.queueStats.worstWaitMs = Math.max(this.queueStats.worstWaitMs, waited);
+                this.queueStats.worstDepth = Math.max(this.queueStats.worstDepth, sem.queued);
+                this.reportQueue();
+            }
+        }
+        try {
+            let response;
+            try {
+                response = await fetchOnce();
+                if ((response.status === 404 || response.status === 502) && upstreamName === "jetson") {
+                    const alternateUrl = VllmShimService.getAlternateJetsonUrl(upstreamUrl);
+                    if (alternateUrl) {
+                        try {
+                            const altResponse = await fetchOnce(`${alternateUrl}${originalPath}`);
+                            if (altResponse.ok) {
+                                VllmShimService.setActiveJetsonUrl(alternateUrl);
+                                response = altResponse;
+                            }
+                        }
+                        catch {
+                            // keep initial response
+                        }
+                    }
+                }
+                if (response.status === 404 && basePath === "/v1/chat/completions") {
+                    try {
+                        const cloned = response.clone();
+                        const errJson = (await cloned.json());
+                        const errMsg = errJson?.error?.message || errJson?.message || "";
+                        if (typeof errMsg === "string" && /model.*not exist|does not exist/i.test(errMsg)) {
+                            const liveModel = await VllmShimService.resolveUpstreamActiveModel(upstreamUrl);
+                            if (liveModel && body && typeof body === "object" && body.model !== liveModel) {
+                                const staleModel = body.model;
+                                logger.warn(`[VllmShim] Upstream "${upstreamName}" rejected model "${staleModel}" (404: model does not exist). Auto-healing to live model "${liveModel}" and retrying.`);
+                                body.model = liveModel;
+                                VllmShimService.setActiveModel(upstreamName, liveModel);
+                                response = await fetchOnce();
+                            }
+                        }
+                    }
+                    catch (healErr) {
+                        logger.warn(`[VllmShim] Failed to auto-heal 404 model on ${upstreamName}: ${healErr?.message || healErr}`);
+                    }
+                }
+            }
+            catch (err) {
+                if (upstreamName === "jetson") {
+                    const alternateUrl = VllmShimService.getAlternateJetsonUrl(upstreamUrl);
+                    if (alternateUrl) {
+                        logger.warn(`[VllmShim] Jetson on ${upstreamUrl} failed (${err?.message || err}), falling back to ${alternateUrl}`);
+                        response = await fetchOnce(`${alternateUrl}${originalPath}`);
+                        VllmShimService.setActiveJetsonUrl(alternateUrl);
+                    }
+                    else {
+                        throw err;
+                    }
+                }
+                else {
+                    throw err;
+                }
+            }
+            // Token-feedback rescale: the char clamp undershoots on token-dense
+            // text (the desk's JSON/ticker prose runs ~2.4 chars per token). When
+            // the embedder measures the overflow for us, resize to fit and retry
+            // instead of forwarding the rejection. Only strings that could
+            // plausibly overflow (longer than the window in chars) are touched.
+            if (isEmbedPost && response.status === 400) {
+                for (let attempt = 1; attempt <= this.EMBED_RESCALE_ATTEMPTS && response.status === 400; attempt++) {
+                    const errText = await response.clone().text();
+                    const m = errText.match(this.CTX_LEN_RE);
+                    if (!m)
+                        break;
+                    const windowTokens = Number(m[1]);
+                    const measuredTokens = Number(m[2]);
+                    if (!(windowTokens > 0) || !(measuredTokens > windowTokens))
+                        break;
+                    const factor = this.rescaleFactor(windowTokens, measuredTokens);
+                    if (!this.shrinkEmbeddingInput(body, factor, windowTokens))
+                        break;
+                    this.embedClamped.rescued += 1;
+                    logger.warn(`[VllmShim] embed input still ${measuredTokens} tokens against a ${windowTokens}-token window ` +
+                        `after the char clamp — rescaled by ${factor.toFixed(2)} and retried (attempt ${attempt}).`);
+                    response = await fetchOnce();
+                }
+            }
+            res.status(response.status);
+            const upstreamContentType = response.headers.get("content-type") || "";
+            res.setHeader("Content-Type", upstreamContentType || "application/json");
+            // SSE (stream:true chat completions) — pump raw bytes through, with
+            // client-disconnect teardown so an abandoned stream doesn't pin the GPU.
+            if (upstreamContentType.includes("text/event-stream")) {
+                res.setHeader("Cache-Control", "no-cache");
+                res.setHeader("Connection", "keep-alive");
+                res.setHeader("X-Accel-Buffering", "no");
+                res.flushHeaders?.();
+                if (response.body) {
+                    const reader = response.body.getReader();
+                    const toolStream = toolContextToken ? new TradingToolStream(toolContextToken) : null;
+                    let clientDisconnected = false;
+                    const handleClientDisconnect = () => {
+                        clientDisconnected = true;
+                        reader.cancel?.().catch(() => { });
+                    };
+                    res.on("close", handleClientDisconnect);
+                    try {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done || clientDisconnected)
+                                break;
+                            res.write(toolStream ? toolStream.push(value) : value);
+                        }
+                        if (toolStream && !clientDisconnected)
+                            res.write(toolStream.finish());
+                    }
+                    finally {
+                        res.off("close", handleClientDisconnect);
+                        reader.cancel?.().catch(() => { });
+                    }
+                }
+                return res.end();
+            }
+            // Non-stream: if application/json and /v1/chat/completions, normalize any
+            // DeepSeek DSML tool calls back into standard OpenAI tool_calls schema.
+            const buf = Buffer.from(await response.arrayBuffer());
+            if (upstreamContentType.includes("application/json") &&
+                basePath === "/v1/models") {
+                try {
+                    const text = buf.toString("utf8");
+                    const parsed = JSON.parse(text);
+                    const filtered = VllmShimService.filterModels(parsed);
+                    const enriched = await VllmShimService.enrichModels(filtered, resolved.upstreamUrl);
+                    const list = (enriched.data || enriched.models || []);
+                    const gen = list.find((m) => {
+                        const id = m?.id || m?.name;
+                        return id && !VllmShimService.NON_LLM_MODELS.has(String(id).toLowerCase()) && !/embed/i.test(String(id));
+                    });
+                    if (gen) {
+                        VllmShimService.setActiveModel(upstreamName, String(gen.id || gen.name));
+                    }
+                    return res.end(JSON.stringify(enriched));
+                }
+                catch {
+                    // Fall through to returning raw buffer
+                }
+            }
+            if (upstreamContentType.includes("application/json") &&
+                originalPath.includes("/chat/completions")) {
+                try {
+                    const text = buf.toString("utf8");
+                    if (text.includes("tool_call") || text.includes("tool calls")) {
+                        const parsed = JSON.parse(text);
+                        const normalized = VllmShimService.normalizeToolCalls(parsed);
+                        return res.end(JSON.stringify(toolContextToken ? bindToolResponse(normalized, toolContextToken) : normalized));
+                    }
+                }
+                catch (error) {
+                    // Never pass through an unbound trading tool call on a binding error.
+                    if (toolContextToken)
+                        throw error;
+                    // Non-trading compatibility: malformed JSON still passes through.
+                }
+            }
+            return res.end(buf);
+        }
+        catch (error) {
+            logger.error(`[VllmShim] Failed to proxy ${originalPath}: ${error.message}`);
+            if (!res.headersSent) {
+                return res.status(502).json({ error: `vllm-shim upstream failure: ${error.message}` });
+            }
+            return res.end();
+        }
+        finally {
+            // AFTER THE BODY DRAINS, never at `await fetchOnce()`.
+            //
+            // Measured 2026-08-09 through this shim: vLLM answers headers in ~20ms
+            // and then holds the GPU for 5-10 SECONDS — 99.7% of a streaming request
+            // happens after the fetch promise resolves. Releasing there would cap
+            // header-fetch concurrency and leave GPU concurrency completely
+            // ungoverned: a limiter that passes every test written against a
+            // non-streaming call and does nothing under the load that caused the
+            // incident. This `finally` covers both exits — the SSE pump's own
+            // `finally` above, and the non-stream `res.end(buf)`.
+            release?.();
+        }
+    }
+}
+//# sourceMappingURL=VllmShimService.js.map

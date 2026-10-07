@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-06",
+  "release_commit": "f583999",
+  "full_suite": {
+    "files": 68,
+    "tests_passed": 930
+  },
+  "container": {
+    "name": "lazy-agent-service",
+    "status": "running",
+    "health": "healthy"
+  },
+  "shared_api": [
+    {
+      "input_type": "query",
+      "dimensions": 768,
+      "norm": 1.0,
+      "seconds": 0.384
+    },
+    {
+      "input_type": "document",
+      "dimensions": 768,
+      "norm": 1.0,
+      "seconds": 0.164
+    },
+    {
+      "input_type": "query",
+      "dimensions": 256,
+      "norm": 1.0,
+      "seconds": 0.143
+    }
+  ],
+  "model": "google/embeddinggemma-2",
+  "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "index_fields": [
+    "semanticEmbedding",
+    "summarySemanticEmbedding"
+  ],
+  "preserved_legacy_fields": [
+    "embedding",
+    "summaryEmbedding"
+  ],
+  "migration": {
+    "status": "running"
+  },
+  "trading_corpus_migrated": false
+}

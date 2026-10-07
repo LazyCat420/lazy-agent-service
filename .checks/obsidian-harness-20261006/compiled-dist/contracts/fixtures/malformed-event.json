@@ -1,0 +1,48 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "malformed-event",
+  "description": "Provider emits malformed chunk; runtime catches and terminates safely with structured error.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "contract_version": "1.2.0",
+    "input": "Input that triggers malformed provider chunk."
+  },
+  "events": [
+    {
+      "id": "evt-mal-001",
+      "run_id": "run-mal-01",
+      "type": "run.started",
+      "timestamp": "2026-09-19T11:08:00.000Z",
+      "data": {
+        "status": "running"
+      }
+    },
+    {
+      "id": "evt-mal-002",
+      "run_id": "run-mal-01",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T11:08:00.400Z",
+      "data": {
+        "error": {
+          "code": "PROVIDER_PARSE_ERROR",
+          "category": "PROVIDER",
+          "message": "Malformed JSON token in model response stream",
+          "retryable": false
+        }
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-mal-01",
+    "status": "failed",
+    "profile_id": "html-notes-researcher-v1",
+    "messages": [],
+    "error": {
+      "code": "PROVIDER_PARSE_ERROR",
+      "category": "PROVIDER",
+      "message": "Malformed JSON token in model response stream",
+      "retryable": false
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "idempotency-race",
+  "description": "Concurrent second request with active idempotency key receives conflict error.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "contract_version": "1.2.0",
+    "idempotency_key": "idem-concurrent-race-key",
+    "input": "Concurrent race query."
+  },
+  "events": [
+    {
+      "id": "evt-race-001",
+      "run_id": "run-race-02",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T11:12:00.010Z",
+      "data": {
+        "error": {
+          "code": "IDEMPOTENCY_CONFLICT",
+          "category": "CLIENT",
+          "message": "Concurrent run active under idempotency key 'idem-concurrent-race-key'",
+          "retryable": true
+        }
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-race-02",
+    "status": "failed",
+    "messages": [],
+    "error": {
+      "code": "IDEMPOTENCY_CONFLICT",
+      "category": "CLIENT",
+      "message": "Concurrent run active under idempotency key 'idem-concurrent-race-key'",
+      "retryable": true
+    }
+  }
+}

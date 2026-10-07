@@ -1,0 +1,151 @@
+{
+  "enter_plan_mode": {
+    "description": "switch into planning mode. while in plan mode, u won't have access 2 any tools — u can only output text. use this 2 produce a structured impl plan b4 executing changes. call exit_plan_mode when ready 2 resume tool exec. use when task is complex & benefits from upfront planning.",
+    "parameters": {
+      "reason": "why ur entering plan mode (shown 2 the user)."
+    }
+  },
+  "exit_plan_mode": {
+    "description": "exit planning mode & resume normal tool exec. call after u've produced ur plan & r ready 2 exec it w/ tools.",
+    "parameters": {
+      "summary": "brief summary of the plan ur about 2 exec."
+    }
+  },
+  "enable_tools": {
+    "description": "REQUIRED after search_tools: activate tools discovered by search_tools so u can call them. u MUST call this after search_tools returns results where isEnabled is false — w/o calling enable_tools 1st, discovered tools CANNOT b used. accepts exact tool names (e.g. \"get_weather\") or domain prefixes (e.g. \"domain:Finance\", \"domainKey:health\") 2 activate an entire domain at once. newly enabled tools become avail on the NEXT iteration — u don't need 2 call them in the same turn.",
+    "parameters": {
+      "tools": "tool names or domain prefixes 2 enable. examples: [\"get_weather\", \"get_weather_forecast\"] or [\"domain:Weather & Environment\"]."
+    }
+  },
+  "disable_tools": {
+    "description": "dynamically disable tools from this convo 2 reduce token usage & tool interference. accepts exact tool names or domain prefixes (e.g. \"domain:Finance\"). core cognitive tools (memory, tasks, planning, orchestration) can't b disabled.",
+    "parameters": {
+      "tools": "tool names or domain prefixes 2 disable. examples: [\"get_weather\"] or [\"domain:Weather & Environment\"]."
+    }
+  },
+  "discover_and_enable_tools": {
+    "description": "search the FULL tool catalog ({{totalToolCount}} tools) AND auto-enable matches in 1 step. combines search_tools & enable_tools — after calling this, discovered tools r immediately avail on the next iteration w/o a separate enable_tools call. use when u know u want 2 use discovered tools right away. covers all domains: {{domainListLowercase}}. accepts same params as search_tools (query, domain, limit).",
+    "parameters": {
+      "query": "search keyword(s) 2 match against tool names & descs. use capability-specific terms 4 best results. examples: {{sampleKeywords}}.",
+      "domain": "filter by tool domain. known domains: {{domainListQuoted}}.",
+      "limit": "max results 2 return (1–50). default: 20."
+    }
+  },
+  "create_skill": {
+    "description": "create a reusable workflow skill. skills r stored prompt templates w/ variable interpolation ({{variable}}) that can b invoked by name. use 2 capture multi-step workflows (refactor→test→commit, analyze→report, etc.) as reusable atomic ops. skills persist across sessions & can b shared across agents.",
+    "parameters": {
+      "name": "unique skill name (e.g. 'refactor_and_test', 'code_review'). used as the skill ID.",
+      "description": "what the skill does — shown when listing skills.",
+      "prompt": "the prompt template 2 exec. use {{variable}} syntax 4 params.",
+      "steps": "optional: ordered list of step descs 4 documentation.",
+      "tools": "optional: specific tools 2 enable. if omitted, all tools r avail.",
+      "maxIterations": "optional: max agentic loop iterations 4 the skill run (1-100). default: 25.",
+      "model": "optional: model override 4 the skill run."
+    }
+  },
+  "execute_skill": {
+    "description": "exec a previously created skill by its ID. the skill's prompt template is interpolated w/ the provided vars & executed as an inline agentic task. use list_skills 2 see avail skills.",
+    "parameters": {
+      "skillId": "the skill ID 2 exec (derived from the skill name).",
+      "variables": "key-value pairs 4 {{variable}} interpolation in the skill's prompt template."
+    }
+  },
+  "list_skills": {
+    "description": "list all avail skills. skills r reusable workflow templates created w/ create_skill.",
+    "parameters": {
+      "project": "optional: filter by proj scope."
+    }
+  },
+  "delete_skill": {
+    "description": "delete a skill by its ID.",
+    "parameters": {
+      "skillId": "the skill ID 2 delete."
+    }
+  },
+  "enter_worktree": {
+    "description": "enter an isolated git worktree 4 the current convo. creates a new branch & redirects all file/git/shell tool calls 2 the worktree dir. use 4 risky refactors, experimental changes, or speculative edits w/o affecting the main branch. ur full convo ctx is preserved. call exit_worktree 2 merge or discard when done.",
+    "parameters": {
+      "reason": "why ur entering an isolated worktree (e.g. 'risky refactor', 'experimental approach')."
+    }
+  },
+  "exit_worktree": {
+    "description": "exit the current isolated worktree & return 2 the main workspace. choose 2 'merge' changes back 2 the main branch or 'discard' them entirely. if merging, changes r committed & merged auto.",
+    "parameters": {
+      "action": "'merge' 2 apply changes 2 main branch, 'discard' 2 throw them away.",
+      "commitMessage": "commit msg 4 the merge (used when action is 'merge'). auto-gen'd if not provided."
+    }
+  },
+  "write_todo": {
+    "description": "write or update a persistent TODO checklist 4 the current proj. maintains a structured list of items w/ completion status. use 2 track multi-step work, record progress, & keep a living checklist that persists across convo turns. ea item has a status: 'pending', 'in_progress', or 'completed'. call w/ the full updated list — it replaces the prev state.",
+    "parameters": {
+      "items": "full list of todo items. replaces the prev list entirely."
+    }
+  },
+  "summarize_conversation": {
+    "description": "produce a compressed summary of the current convo ctx. use when the convo is getting long & u need 2 consolidate ur understanding b4 continuing. the summary u write is stored & can b referenced in future turns 2 recover ctx. this is NOT shown 2 the user — it's ur private working memory.",
+    "parameters": {
+      "summary": "ur compressed summary of the convo so far. include: key decisions made, files modified, current task state, & what remains.",
+      "keyFiles": "optional: list of key file paths relevant 2 the current work.",
+      "openQuestions": "optional: unresolved qs or ambiguities."
+    }
+  },
+  "ask_user": {
+    "description": "ask the user 1 or more qs & wait 4 their responses b4 continuing. use when u need clarification, a decision between options, or explicit confirmation b4 proceeding w/ a potentially impactful action. the agent loop pauses until the user responds. u can batch up 2 4 related qs in a single call 2 reduce round-trips.",
+    "parameters": {
+      "context": "optional: additional ctx shown below the qs.",
+      "questions": "batch of qs 2 ask the user (up 2 4). ea item is a question obj."
+    }
+  },
+  "list_mcp_resources": {
+    "description": "list avail resources from a connected MCP server.",
+    "parameters": {
+      "server_name": "the MCP server name 2 query. if omitted, queries all."
+    }
+  },
+  "read_mcp_resource": {
+    "description": "read a specific resource from a connected MCP server by its URI.",
+    "parameters": {
+      "server_name": "the MCP server name that hosts the resource.",
+      "uri": "the resource URI 2 read."
+    }
+  },
+  "authenticate_mcp_server": {
+    "description": "authenticate w/ a connected MCP server by providing credentials.",
+    "parameters": {
+      "server_name": "the MCP server name 2 authenticate w/.",
+      "token": "bearer token 4 HTTP MCP servers.",
+      "api_key": "API key value.",
+      "api_key_header": "header name 4 the API key (default: 'X-API-Key').",
+      "env": "additional env vars 2 inject."
+    }
+  },
+  "set_timer": {
+    "description": "set a short 1-shot timer 2 pause, wait, or defer exec within this convo. use when u need 2 wait 4 an async process 2 finish, poll a build or deployment, retry after a transient failure, or yield briefly b4 continuing work. the timer fires the provided prompt back into this convo after the specified duration. duration must b between 30 & 599 seconds (under 10 min). this is an agent-internal tool 4 in-convo waits only — do NOT use 4 user-facing reminders, alarms, or scheduled events (use create_cron_job instead).",
+    "parameters": {
+      "prompt": "the instruction or ctx 2 inject back into this convo when the timer fires.",
+      "durationSeconds": "# of seconds 2 wait b4 firing (30–599). must b under 10 min."
+    }
+  },
+  "list_timers": {
+    "description": "list all active 1-shot agent timers in the current convo. shows short-duration waits (30–599 seconds) set by set_timer. 2 view user-facing scheduled reminders, alarms, & recurring events, use list_cron_jobs instead."
+  },
+  "cancel_timer": {
+    "description": "cancel an active 1-shot agent timer in the current convo. 2 delete a scheduled cron job, reminder, or alarm, use delete_cron_job instead.",
+    "parameters": {
+      "timerId": "the unique ID of the timer 2 cancel."
+    }
+  },
+  "search_conversations": {
+    "description": "search past agent convos using a natural lang query. finds prev sessions by semantic similarity 2 the query text. returns convo titles, summaries, dates, & linked memory counts. use when the user references a past session, asks 'remember when we...', or when u need ctx from a prev coding session.",
+    "parameters": {
+      "query": "natural lang search query describing what ur looking 4. example: 'MCP connection debugging', 'the session where we fixed WebSocket drops'.",
+      "limit": "max # of results 2 return. default: 10."
+    }
+  },
+  "describe_tools": {
+    "description": "fetch the full detailed json schemas (incl param structures) 4 one or more tools. call this when u need 2 know what args a specific tool expects b4 u invoke it.",
+    "parameters": {
+      "tool_names": "list of tool names 2 grab detailed schemas 4."
+    }
+  }
+}

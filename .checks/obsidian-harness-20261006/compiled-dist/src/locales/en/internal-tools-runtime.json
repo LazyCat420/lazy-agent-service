@@ -1,0 +1,106 @@
+{
+  "shared": {
+    "noConversation": "No active agent conversation ID in context.",
+    "dynamicToolActivationDisabled": "Dynamic tool activation is disabled in settings. An administrator can enable it in Settings → Agent Defaults.",
+    "invalidToolsArray": "'tools' must be a non-empty array of tool names or domain prefixes.",
+    "searchActionNudgeDisabled": "IMPORTANT: Some discovered tools are NOT currently enabled (isEnabled: false). You MUST call enable_tools with the tool names you need before you can use them. After enabling, the tools become available on your next iteration."
+  },
+
+  "enable_tools": {
+    "noValidTools": "None of the requested entries resolved to valid tool names. Check spelling or use search_tools to discover available tools.",
+    "alreadyEnabled": "All requested tools are already enabled and available — you can call them directly right now.",
+    "activated": "Activated {{count}} tool(s). They will be available on the next iteration."
+  },
+
+  "disable_tools": {
+    "noneInSet": "None of the requested tools were in the active set.",
+    "disabled": "Disabled {{count}} tool(s).",
+    "protectedSuffix": " {{count}} core tool(s) were protected and cannot be disabled."
+  },
+
+  "discover_and_enable_tools": {
+    "noQueryOrDomain": "At least one of 'query' or 'domain' is required.",
+    "noMatches": "No matching tools found.",
+    "foundAndEnabled": "Found {{matchCount}} tool(s) and auto-enabled {{enabledCount}}. They are available on the next iteration — call them directly.",
+    "foundAlreadyEnabled": "Found {{matchCount}} tool(s), all were already enabled — call them directly."
+  },
+
+  "set_timer": {
+    "noConversation": "No active agent session / conversation ID in context.",
+    "noPrompt": "'prompt' is a required string parameter.",
+    "invalidDuration": "'durationSeconds' must be between {{min}} and {{max}} seconds. For longer scheduled reminders or recurring events, use create_cron_job instead."
+  },
+
+  "list_timers": {
+    "noConversation": "No active agent session / conversation ID in context."
+  },
+
+  "cancel_timer": {
+    "noTimerId": "'timerId' is a required string parameter.",
+    "notFound": "No active timer found with ID {{timerId}}.",
+    "success": "Successfully cancelled timer {{timerId}}."
+  },
+
+  "enter_worktree": {
+    "noConversation": "No agent conversation — worktree isolation requires an active conversation",
+    "alreadyInWorktree": "Already in a worktree (branch: {{branch}}). Call exit_worktree first.",
+    "noWorkspace": "No workspace root configured",
+    "success": "Now working in isolated worktree. All file operations are redirected to {{path}}. Call exit_worktree with action 'merge' or 'discard' when done."
+  },
+
+  "exit_worktree": {
+    "notInWorktree": "Not currently in a worktree. Call enter_worktree first.",
+    "mergeFailed": "Merge failed: {{error}}. Worktree preserved at {{path}}. Resolve conflicts and try again, or exit_worktree with action 'discard'.",
+    "merged": "Changes from {{branch}} merged into main branch. Workspace restored.",
+    "discarded": "Worktree {{branch}} discarded. All changes removed. Workspace restored."
+  },
+
+  "search_conversations": {
+    "queryRequired": "query is required",
+    "databaseUnavailable": "Database not available",
+    "noEmbeddings": "No conversations with embeddings found. Conversations are automatically embedded after agent sessions with 6+ messages."
+  },
+
+  "summarize_conversation": {
+    "summaryRequired": "'summary' is required and must be a non-empty string"
+  },
+
+  "ask_user": {
+    "questionsRequired": "The 'questions' array is required and must not be empty",
+    "invalidQuestion": "Each question in the 'questions' array must have a non-empty 'question' string",
+    "duplicateQuestion": "Duplicate question text: \"{{preview}}\"",
+    "duplicateOption": "Duplicate option label \"{{label}}\" in question \"{{question}}\"",
+    "tooManyQuestions": "Maximum 4 questions per call",
+    "noConversation": "No conversation — ask_user_question requires an active conversation",
+    "timedOut": "The user did not respond within 5 minutes."
+  },
+
+  "list_mcp_resources": {
+    "noServers": "No MCP servers connected."
+  },
+
+  "read_mcp_resource": {
+    "missingParams": "'server_name' and 'uri' are required"
+  },
+
+  "authenticate_mcp_server": {
+    "missingServerName": "'server_name' is required",
+    "noCredentials": "At least one of 'token', 'api_key', or 'env' must be provided"
+  },
+
+  "create_skill": {
+    "missingFields": "name and prompt are required"
+  },
+
+  "execute_skill": {
+    "missingSkillId": "skillId is required"
+  },
+
+  "delete_skill": {
+    "missingSkillId": "skillId is required"
+  },
+
+  "write_todo": {
+    "invalidItems": "'items' must be an array of todo objects"
+  }
+}

@@ -1,0 +1,350 @@
+import logger from "../utils/logger.js";
+import SettingsService from "./SettingsService.js";
+import { getInstancesByType } from "../providers/instance-registry.js";
+import { getProvider } from "../providers/index.js";
+import { prismAttributionHeaders } from "../utils/PrismAttribution.js";
+import MongoWrapper from "../wrappers/MongoWrapper.js";
+import { MONGO_DB_NAME } from "../../config.js";
+import { COLLECTIONS } from "../constants.js";
+const CHECK_INTERVAL_MS = 30_000; // Check every 30 seconds
+export function isVllmProvider(provider) {
+    return provider === "vllm" || provider.startsWith("vllm-");
+}
+/**
+ * Embedding models must never be auto-selected for a generation role
+ * (extraction / consolidation / critic / sub-agent). They only expose
+ * `/v1/embeddings`, so a chat-completion call against one 404s.
+ *
+ * Two signals: a name heuristic (`embeddinggemma`, `bge-*-embed`, `e5-embed`,
+ * `text-embedding-*` all contain "embed"), and the exact model configured as
+ * the embedding role in settings. `scoreLargeModel` otherwise scores
+ * "embeddinggemma" at 60 (via its "gemma" substring), so without this filter
+ * the daemon happily heals a generation role onto the embedding instance
+ * whenever the preferred chat model is briefly unloaded.
+ */
+export function isEmbeddingModel(modelName, configuredEmbeddingModel) {
+    if (!modelName)
+        return false;
+    const lower = modelName.toLowerCase();
+    if (/embed/.test(lower))
+        return true;
+    if (configuredEmbeddingModel &&
+        lower === configuredEmbeddingModel.toLowerCase()) {
+        return true;
+    }
+    return false;
+}
+function scoreLargeModel(modelName) {
+    const lower = modelName.toLowerCase();
+    if (lower.includes("qwen3.6") || lower.includes("qwen3"))
+        return 100;
+    if (lower.includes("qwen"))
+        return 80;
+    if (lower.includes("gemma"))
+        return 60;
+    if (lower.includes("minimax"))
+        return 40;
+    return 10;
+}
+function scoreGeneralModel(modelName) {
+    const lower = modelName.toLowerCase();
+    if (lower.includes("minimax"))
+        return 100;
+    if (lower.includes("gemma"))
+        return 80;
+    if (lower.includes("qwen"))
+        return 60;
+    return 10;
+}
+// Real prism, NOT localhost. This container binds 7778 (see src/index.ts) and
+// prism runs on another host, so the previous hardcoded "http://localhost:7777"
+// could never connect: every heal fell through to the direct-DB fallback below.
+// That write bypasses prism's API, so the RUNNING prism process kept serving its
+// cached settings — the DB looked healed while prism still used the stale
+// (embedding-model-on-a-generation-role) values until someone restarted it.
+const PRISM_SETTINGS_URL = process.env.REAL_PRISM_URL || "http://10.0.0.16:7777";
+async function updateSettings(mergedData) {
+    try {
+        const response = await fetch(`${PRISM_SETTINGS_URL}/settings`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                // Prism attributes requests by header only — without these the call is
+                // filed under its catch-all "default"/"anonymous" project.
+                ...prismAttributionHeaders(),
+            },
+            body: JSON.stringify(mergedData),
+        });
+        if (response.ok) {
+            logger.info("[VllmModelSyncService] Successfully updated settings via prism-service PUT /settings");
+            // Also update local cache
+            await SettingsService.update(mergedData);
+            return;
+        }
+        else {
+            const text = await response.text();
+            logger.warn(`[VllmModelSyncService] prism-service PUT /settings returned status ${response.status}: ${text}`);
+        }
+    }
+    catch (error) {
+        logger.warn(`[VllmModelSyncService] Failed to update settings via prism-service, falling back to direct DB update: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // Fallback: direct update
+    await SettingsService.update(mergedData);
+}
+export const VllmModelSyncService = {
+    intervalId: null,
+    async checkAndSync() {
+        try {
+            const instances = getInstancesByType("vllm");
+            const loadedModelsByInstance = new Map();
+            for (const inst of instances) {
+                try {
+                    const provider = getProvider(inst.id);
+                    if (!provider?.listModels)
+                        continue;
+                    const result = await Promise.race([
+                        provider.listModels(),
+                        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 3000)),
+                    ]);
+                    const models = result?.models || result?.data || [];
+                    const modelKeys = models.map((m) => m.key || m.id || "").filter(Boolean);
+                    loadedModelsByInstance.set(inst.id, modelKeys);
+                }
+                catch (error) {
+                    logger.warn(`[VllmModelSyncService] Failed to query models for instance ${inst.id}: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+            // Compile all loaded models
+            const allLoaded = [];
+            for (const [instanceId, models] of loadedModelsByInstance.entries()) {
+                for (const modelName of models) {
+                    allLoaded.push({ instanceId, modelName });
+                }
+            }
+            // If no local instances are online, skip healing to avoid blanking configurations during brief restarts
+            if (allLoaded.length === 0) {
+                return;
+            }
+            const settings = await SettingsService.get();
+            if (!settings) {
+                return;
+            }
+            // Candidates eligible for a *generation* role. Embedding models
+            // (e.g. embeddinggemma on the embedding-only vLLM instance) are
+            // excluded so healing never points a chat role at a `/v1/embeddings`
+            // server, which would 404 every consolidation/extraction call.
+            const configuredEmbeddingModel = settings.memory?.embeddingModel || "";
+            const generationCandidates = allLoaded.filter((c) => !isEmbeddingModel(c.modelName, configuredEmbeddingModel));
+            const dataCopy = JSON.parse(JSON.stringify(settings));
+            let updated = false;
+            const roles = [
+                {
+                    section: "memory",
+                    providerKey: "extractionProvider",
+                    modelKey: "extractionModel",
+                    type: "large",
+                },
+                {
+                    section: "memory",
+                    providerKey: "consolidationProvider",
+                    modelKey: "consolidationModel",
+                    type: "large",
+                },
+                // The critic role is deliberately NOT healed like the others — see the
+                // clearing block below the loop. Prism's CriticGate ignores
+                // agents.criticProvider entirely: the review call always runs on the
+                // CONVERSATION's provider (CriticGate.ts builds it from
+                // context.provider) with the pinned model *name*. With single-model
+                // vLLM hosts, any pinned name 404s on every other host — measured 869
+                // failed reviews in 24h, each burning ~4 stream retries (8-12s)
+                // before "Defaulting to approve". Empty criticModel makes the gate
+                // fall back to context.resolvedModel (the conversation's own model),
+                // which is valid on every host. So the only correct heal for this
+                // role is to clear a vLLM pin, never to set one.
+                {
+                    section: "agents",
+                    providerKey: "subAgentProvider",
+                    modelKey: "subAgentModel",
+                    type: "general",
+                },
+            ];
+            for (const role of roles) {
+                if (!dataCopy[role.section]) {
+                    continue;
+                }
+                const currentProvider = dataCopy[role.section][role.providerKey] || "";
+                const currentModel = dataCopy[role.section][role.modelKey] || "";
+                // Skip healing if this role is currently mapped to a non-vLLM provider (e.g. OpenAI, Anthropic, Google)
+                if (currentProvider && !isVllmProvider(currentProvider)) {
+                    continue;
+                }
+                // A generation role currently pinned to an embedding model is corrupt
+                // (a prior heal mis-selected it). Force re-selection even though the
+                // model is "loaded" on its instance — otherwise the bad value is sticky.
+                const currentIsEmbedding = isEmbeddingModel(currentModel, configuredEmbeddingModel);
+                if (currentIsEmbedding) {
+                    logger.warn(`[VllmModelSyncService] ${role.section}.${role.modelKey} is pinned to embedding model "${currentModel}" — forcing re-heal onto a generation model.`);
+                }
+                const loadedOnCurrent = !currentIsEmbedding &&
+                    currentProvider &&
+                    loadedModelsByInstance.get(currentProvider)?.includes(currentModel);
+                if (loadedOnCurrent) {
+                    continue;
+                }
+                // Check if the current model is loaded on a different vLLM instance.
+                // Skip this shortcut for an embedding-pinned role — matching it would
+                // just re-point the provider at another embedding instance.
+                let foundInstanceId = null;
+                if (!currentIsEmbedding) {
+                    for (const [instanceId, models] of loadedModelsByInstance.entries()) {
+                        if (models.includes(currentModel)) {
+                            foundInstanceId = instanceId;
+                            break;
+                        }
+                    }
+                }
+                if (foundInstanceId) {
+                    logger.info(`[VllmModelSyncService] Auto-healing ${role.section}.${role.providerKey} from "${currentProvider}" to "${foundInstanceId}" to match model "${currentModel}"`);
+                    dataCopy[role.section][role.providerKey] = foundInstanceId;
+                    updated = true;
+                    continue;
+                }
+                // Model not loaded on any instance, pick the best candidate — but
+                // only from generation-capable models. If the only thing online is an
+                // embedding instance, leave the role untouched rather than corrupt it
+                // with a model that can't serve chat completions.
+                if (generationCandidates.length === 0) {
+                    logger.warn(`[VllmModelSyncService] "${currentModel}" for ${role.section}.${role.modelKey} is not loaded and no generation-capable model is online — leaving unchanged.`);
+                    continue;
+                }
+                const scoreFn = role.type === "large" ? scoreLargeModel : scoreGeneralModel;
+                let bestCandidate = generationCandidates[0];
+                let bestScore = scoreFn(bestCandidate.modelName);
+                for (let i = 1; i < generationCandidates.length; i++) {
+                    const score = scoreFn(generationCandidates[i].modelName);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestCandidate = generationCandidates[i];
+                    }
+                }
+                logger.info(`[VllmModelSyncService] Auto-healing ${role.section}.${role.providerKey} and ${role.modelKey} because "${currentModel}" is not loaded on any instance. Selected "${bestCandidate.modelName}" on "${bestCandidate.instanceId}"`);
+                dataCopy[role.section][role.providerKey] = bestCandidate.instanceId;
+                dataCopy[role.section][role.modelKey] = bestCandidate.modelName;
+                updated = true;
+            }
+            // Clear a vLLM-pinned critic model (see the comment in `roles`). A
+            // non-vLLM pin (openai/anthropic) is left alone as an explicit operator
+            // choice, though it suffers the same cross-provider caveat.
+            const agentsSection = dataCopy.agents;
+            if (agentsSection &&
+                (agentsSection.criticModel || "") !== "" &&
+                (!agentsSection.criticProvider ||
+                    isVllmProvider(agentsSection.criticProvider))) {
+                logger.warn(`[VllmModelSyncService] Clearing agents.criticModel "${agentsSection.criticModel}" — prism's CriticGate runs the critic on the conversation's provider, so a pinned vLLM model 404s on every other host. Empty falls back to the conversation's own model.`);
+                agentsSection.criticModel = "";
+                agentsSection.criticProvider = "";
+                updated = true;
+            }
+            if (updated) {
+                await updateSettings(dataCopy);
+            }
+            // Also auto-heal scheduled tasks whose configured vLLM models are stale
+            await this.syncScheduledTasks(loadedModelsByInstance, generationCandidates, configuredEmbeddingModel);
+        }
+        catch (error) {
+            logger.error(`[VllmModelSyncService] Error during check and sync: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    },
+    async syncScheduledTasks(loadedModelsByInstance, generationCandidates, configuredEmbeddingModel) {
+        try {
+            const db = MongoWrapper.getDb(MONGO_DB_NAME);
+            if (!db)
+                return 0;
+            const tasks = await db
+                .collection(COLLECTIONS.SCHEDULED_TASKS)
+                .find({ enabled: true })
+                .toArray();
+            let healedCount = 0;
+            for (const task of tasks) {
+                if (!isVllmProvider(task.provider))
+                    continue;
+                const currentProvider = task.provider;
+                const currentModel = task.model || "";
+                const loadedOnCurrent = loadedModelsByInstance.get(currentProvider) || [];
+                const currentIsEmbedding = isEmbeddingModel(currentModel, configuredEmbeddingModel);
+                if (loadedOnCurrent.includes(currentModel) && !currentIsEmbedding) {
+                    continue;
+                }
+                // Check if currentModel is loaded on another vLLM instance
+                let foundInstanceId = null;
+                if (!currentIsEmbedding && currentModel) {
+                    for (const [instanceId, models] of loadedModelsByInstance.entries()) {
+                        if (models.includes(currentModel)) {
+                            foundInstanceId = instanceId;
+                            break;
+                        }
+                    }
+                }
+                if (foundInstanceId) {
+                    logger.info(`[VllmModelSyncService] Healing scheduled task "${task.name}" (${task.id}) provider from "${currentProvider}" to "${foundInstanceId}" to match model "${currentModel}"`);
+                    await db.collection(COLLECTIONS.SCHEDULED_TASKS).updateOne({ id: task.id }, {
+                        $set: {
+                            provider: foundInstanceId,
+                            updatedAt: new Date().toISOString(),
+                        },
+                    });
+                    healedCount++;
+                    continue;
+                }
+                // Model not loaded on any instance. Prefer candidate on currentProvider, else best global candidate
+                const providerCandidates = loadedOnCurrent.filter((m) => !isEmbeddingModel(m, configuredEmbeddingModel));
+                let targetProvider = currentProvider;
+                let targetModel = "";
+                if (providerCandidates.length > 0) {
+                    targetModel = providerCandidates[0];
+                }
+                else if (generationCandidates.length > 0) {
+                    targetProvider = generationCandidates[0].instanceId;
+                    targetModel = generationCandidates[0].modelName;
+                }
+                else {
+                    continue;
+                }
+                logger.info(`[VllmModelSyncService] Auto-healing scheduled task "${task.name}" (${task.id}) from "${currentProvider}/${currentModel}" to "${targetProvider}/${targetModel}"`);
+                await db.collection(COLLECTIONS.SCHEDULED_TASKS).updateOne({ id: task.id }, {
+                    $set: {
+                        provider: targetProvider,
+                        model: targetModel,
+                        updatedAt: new Date().toISOString(),
+                    },
+                });
+                healedCount++;
+            }
+            return healedCount;
+        }
+        catch (error) {
+            logger.warn(`[VllmModelSyncService] Failed to sync scheduled tasks: ${error instanceof Error ? error.message : String(error)}`);
+            return 0;
+        }
+    },
+    async init() {
+        if (this.intervalId)
+            return;
+        logger.info("[VllmModelSyncService] Initializing background model sync daemon");
+        // Run an initial sync immediately on boot
+        await this.checkAndSync();
+        this.intervalId = setInterval(async () => {
+            await this.checkAndSync();
+        }, CHECK_INTERVAL_MS);
+    },
+    destroy() {
+        if (this.intervalId) {
+            clearInterval(this.intervalId);
+            this.intervalId = null;
+            logger.info("[VllmModelSyncService] Background model sync daemon stopped");
+        }
+    },
+};
+export default VllmModelSyncService;
+//# sourceMappingURL=VllmModelSyncService.js.map

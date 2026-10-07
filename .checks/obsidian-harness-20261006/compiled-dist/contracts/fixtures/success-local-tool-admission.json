@@ -1,0 +1,79 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "success-local-tool-admission",
+  "description": "Runtime authorizes and admits a local application tool call without executing it in runtime.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "profile_version": "1.2.0",
+    "contract_version": "1.2.0",
+    "app_id": "html-notes",
+    "session_id": "session_123",
+    "input": "Add an analytical widget to the canvas."
+  },
+  "events": [
+    {
+      "id": "evt-loc-001",
+      "run_id": "run_123",
+      "type": "run.admitted",
+      "timestamp": "2026-09-19T11:02:00.000Z",
+      "data": {
+        "run_id": "run_123",
+        "status": "admitted"
+      }
+    },
+    {
+      "id": "evt-loc-002",
+      "run_id": "run_123",
+      "type": "run.started",
+      "timestamp": "2026-09-19T11:02:00.020Z",
+      "data": {
+        "status": "running"
+      }
+    },
+    {
+      "id": "evt-loc-003",
+      "run_id": "run_123",
+      "type": "tool.invoked",
+      "timestamp": "2026-09-19T11:02:00.400Z",
+      "data": {
+        "tool_call_id": "tc_123",
+        "tool_name": "html_notes.canvas.upsert_widget",
+        "execution": "local",
+        "effect": "write",
+        "arguments": {
+          "widget_type": "notes_card",
+          "title": "Key Findings"
+        },
+        "authorization_receipt": {
+          "receipt_id": "auth_rec_123",
+          "issued_at": "2026-09-19T11:02:00.400Z",
+          "tool_name": "html_notes.canvas.upsert_widget",
+          "execution": "local",
+          "effect": "write",
+          "signature": "sha256-mock-auth-signature"
+        },
+        "required_scope": {
+          "app_id": "html-notes",
+          "session_id": "session_123"
+        }
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run_123",
+    "status": "waiting_for_tool",
+    "profile_id": "html-notes-researcher-v1",
+    "profile_version": "1.2.0",
+    "messages": [],
+    "usage": {
+      "prompt_tokens": 80,
+      "completion_tokens": 20,
+      "total_tokens": 100,
+      "tool_calls_count": 1,
+      "retry_count": 0,
+      "duration_ms": 400
+    },
+    "evidence_records": []
+  }
+}

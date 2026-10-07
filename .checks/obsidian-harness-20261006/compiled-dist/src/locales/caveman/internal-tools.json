@@ -1,0 +1,151 @@
+{
+  "enter_plan_mode": {
+    "description": "Enter planning mode. No tool — text only. Design approach, then exit_plan_mode.",
+    "parameters": {
+      "reason": "Why entering plan mode."
+    }
+  },
+  "exit_plan_mode": {
+    "description": "Leave planning mode, resume tool access.",
+    "parameters": {
+      "summary": "Brief plan summary."
+    }
+  },
+  "enable_tools": {
+    "description": "REQUIRED after search_tools: activate found tool. Without this, found tool UNAVAILABLE. Accept exact name (e.g. \"get_weather\") or domain prefix (e.g. \"domain:Finance\"). Ready NEXT turn.",
+    "parameters": {
+      "tools": "Tool name or domain prefix to enable."
+    }
+  },
+  "disable_tools": {
+    "description": "Deactivate tool to free context. Accept name or domain prefix. Core tool can't be disabled.",
+    "parameters": {
+      "tools": "Tool name or domain prefix to disable."
+    }
+  },
+  "discover_and_enable_tools": {
+    "description": "Search ALL tool ({{totalToolCount}}) AND enable match in one step. Found tool ready next turn. Covers: {{domainListLowercase}}.",
+    "parameters": {
+      "query": "Search term for tool name/description. e.g. {{sampleKeywords}}.",
+      "domain": "Filter by domain: {{domainListQuoted}}.",
+      "limit": "Max result (1-50). Default: 20."
+    }
+  },
+  "create_skill": {
+    "description": "Create reusable workflow recipe. Skill = saved instruction with {{variable}} placeholder. Capture multi-step workflow as single action. Persists across session.",
+    "parameters": {
+      "name": "Unique skill name. Serves as ID.",
+      "description": "What skill does.",
+      "prompt": "Instruction to execute. Use {{variable}} for placeholder.",
+      "steps": "Optional: ordered step list.",
+      "tools": "Optional: specific tool to enable.",
+      "maxIterations": "Optional: max iteration (1-100). Default: 25.",
+      "model": "Optional: different model."
+    }
+  },
+  "execute_skill": {
+    "description": "Run skill by ID. Instruction populated with variable and executed.",
+    "parameters": {
+      "skillId": "Skill ID.",
+      "variables": "Key-value for {{variable}} placeholder."
+    }
+  },
+  "list_skills": {
+    "description": "List all available skill.",
+    "parameters": {
+      "project": "Optional: filter by project."
+    }
+  },
+  "delete_skill": {
+    "description": "Delete skill by ID.",
+    "parameters": {
+      "skillId": "Skill ID."
+    }
+  },
+  "enter_worktree": {
+    "description": "Enter isolated worktree. Creates branch, redirects tool to separate directory. For risky change or experiment. exit_worktree to merge/discard.",
+    "parameters": {
+      "reason": "Why entering worktree."
+    }
+  },
+  "exit_worktree": {
+    "description": "Leave worktree. 'merge' to keep, 'discard' to drop.",
+    "parameters": {
+      "action": "'merge' or 'discard'.",
+      "commitMessage": "Commit message for merge. Auto-generated if omitted."
+    }
+  },
+  "write_todo": {
+    "description": "Write/update todo list. Track multi-step work with persistent checklist. Call with full updated list — replaces previous.",
+    "parameters": {
+      "items": "Full todo list. Replaces previous."
+    }
+  },
+  "summarize_conversation": {
+    "description": "Compress conversation into summary. Use when conversation long. Stored for future turn.",
+    "parameters": {
+      "summary": "Compressed summary: key decision, file changed, task status, remaining.",
+      "keyFiles": "Optional: important file path.",
+      "openQuestions": "Optional: unanswered question."
+    }
+  },
+  "ask_user": {
+    "description": "Ask user question, wait for response. For clarification or confirmation before major action. Loop pauses until answered. Up to 4 question per call.",
+    "parameters": {
+      "context": "Optional: extra context.",
+      "questions": "Question batch (up to 4)."
+    }
+  },
+  "list_mcp_resources": {
+    "description": "List resource from connected MCP server.",
+    "parameters": {
+      "server_name": "MCP server name. Omit for all."
+    }
+  },
+  "read_mcp_resource": {
+    "description": "Read resource from MCP server by URI.",
+    "parameters": {
+      "server_name": "MCP server.",
+      "uri": "Resource URI."
+    }
+  },
+  "authenticate_mcp_server": {
+    "description": "Provide credential to MCP server.",
+    "parameters": {
+      "server_name": "MCP server.",
+      "token": "Bearer token for HTTP.",
+      "api_key": "API key.",
+      "api_key_header": "Header name (default: 'X-API-Key').",
+      "env": "Additional env variable."
+    }
+  },
+  "set_timer": {
+    "description": "Set wait timer for in-session pause. For async op, build check, retry. Fires prompt back after duration. 30-599s. For reminder/alarm: use create_cron_job.",
+    "parameters": {
+      "prompt": "Instruction fired when timer triggers.",
+      "durationSeconds": "Wait duration (30-599s)."
+    }
+  },
+  "list_timers": {
+    "description": "List active timer. For reminder: list_cron_jobs."
+  },
+  "cancel_timer": {
+    "description": "Cancel active timer. For cron: delete_cron_job.",
+    "parameters": {
+      "timerId": "Timer ID."
+    }
+  },
+  "search_conversations": {
+    "description": "Search past session using natural language. Semantic match returns title, summary, date, memory count. Use for 'remember when...' or prior context.",
+    "parameters": {
+      "query": "Search term. e.g. 'MCP debug', 'WebSocket drop fix'.",
+      "limit": "Max result. Default: 10."
+    }
+  },
+  "describe_tools": {
+    "description": "Get full detail map (JSON schema) for one or many tools. Use when cave-brain need know what arguments tool want before calling tool.",
+    "parameters": {
+      "tool_names": "List of tool names cave-brain want detail maps for."
+    }
+  }
+}

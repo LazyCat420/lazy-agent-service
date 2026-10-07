@@ -1,0 +1,912 @@
+import crypto from "node:crypto";
+import { z } from "zod";
+import { normalizeRunRequest } from "./RunAdmission.js";
+import { RuntimeExtensions } from "./RuntimeExtensions.js";
+import { RunApprovals } from "./RunApprovals.js";
+import { DecisionService } from "../decision-fabric/DecisionService.js";
+import { CanonicalProviderBudget } from "./CanonicalProviderBudget.js";
+import { LocalToolContinuation } from "./LocalToolContinuation.js";
+import AgenticLoopService from "./AgenticLoopService.js";
+import { ProfileRegistry } from "./ProfileRegistry.js";
+import { CapabilityRegistry } from "./CapabilityRegistry.js";
+import { GlobalCapabilityExecutor } from "./GlobalCapabilityExecutor.js";
+import { RunStore } from "./RunStore.js";
+import logger from "../utils/logger.js";
+import { getProvider } from "../providers/index.js";
+import { ContextAssembly } from "../platform/context/ContextAssembly.js";
+import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.js";
+import { RunEvidenceStore } from "../platform/verify/RunEvidenceStore.js";
+import { DynamicModelResolver } from "./DynamicModelResolver.js";
+export class RunExecutionEngine {
+    static activeRuns = new Map();
+    static steerRun(runId, instruction) {
+        const run = this.activeRuns.get(runId);
+        if (!run || run.abortController.signal.aborted || run.steering.length >= 8 || !instruction.trim() || instruction.length > 4096)
+            return false;
+        run.steering.push(instruction);
+        return true;
+    }
+    static async cancelRun(runId) {
+        const active = this.activeRuns.get(runId);
+        if (active) {
+            if (active.deadlineTimer)
+                clearTimeout(active.deadlineTimer);
+            active.abortController.abort();
+            this.activeRuns.delete(runId);
+            try {
+                await RunStore.updateState(runId, "cancelled");
+            }
+            catch {
+                // Ignore if already transitioned
+            }
+            return true;
+        }
+        const run = await RunStore.getRun(runId);
+        if (run &&
+            run.status !== "completed" &&
+            run.status !== "failed" &&
+            run.status !== "cancelled" &&
+            run.status !== "timed_out") {
+            await RunStore.updateState(runId, "cancelled");
+            return true;
+        }
+        return false;
+    }
+    static reset() {
+        for (const active of this.activeRuns.values()) {
+            if (active.deadlineTimer)
+                clearTimeout(active.deadlineTimer);
+            active.abortController.abort();
+        }
+        this.activeRuns.clear();
+        RunStore.clearAll();
+    }
+    static async startRun(runId, request, emitEvent) {
+        try {
+            request = normalizeRunRequest(request);
+        }
+        catch (error) {
+            const err = { code: "INVALID_RUN_REQUEST", message: error.message, retryable: false, category: "CLIENT" };
+            emitEvent({ run_id: runId, type: "run.failed", data: { error: err } });
+            return { run_id: runId, status: "failed", messages: [], error: err };
+        }
+        const key = request.idempotency_key;
+        const identity = request.identity || { project: request.app_id || "default", username: "internal" };
+        const idempotencyKey = key ? JSON.stringify([identity.project, identity.username, request.app_id, request.session_id, key]) : undefined;
+        // 1.5 Contract Version Validation
+        const requestedContractVersion = request.contract_version || request.contractVersion;
+        if (requestedContractVersion) {
+            if (!["1.0.0", "1.1.0", "1.2.0"].includes(requestedContractVersion)) {
+                const versionErr = {
+                    code: "CONTRACT_VERSION_MISMATCH",
+                    message: `Incompatible contract version '${requestedContractVersion}'. Supported major versions: 1.x.x`,
+                    retryable: false,
+                    category: "CLIENT",
+                };
+                emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: versionErr } });
+                return { run_id: runId, id: runId, status: "failed", messages: [], error: versionErr };
+            }
+        }
+        // 2. Profile Lookup & Overrides Validation
+        const profileId = request.profile_id || request.profileId;
+        if (!profileId) {
+            const err = {
+                code: "INVALID_RUN_REQUEST",
+                message: "Missing profile_id in run request",
+                retryable: false,
+                category: "CLIENT",
+            };
+            emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: err } });
+            return { run_id: runId, id: runId, status: "failed", messages: [], error: err };
+        }
+        const profile = await ProfileRegistry.loadProfile(profileId, request.profile_version);
+        if (!profile) {
+            const err = {
+                code: "PROFILE_NOT_FOUND",
+                message: `Profile ${profileId} not found`,
+                retryable: false,
+                category: "CLIENT",
+            };
+            emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: err } });
+            return { run_id: runId, id: runId, status: "failed", messages: [], error: err };
+        }
+        await DynamicModelResolver.queryLiveHosts();
+        try {
+            ProfileRegistry.validateOverrides(profile, request.runtime_overrides);
+        }
+        catch (overrideErr) {
+            const err = {
+                code: "INVALID_RUN_REQUEST",
+                message: overrideErr.message,
+                retryable: false,
+                category: "CLIENT",
+            };
+            emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: err } });
+            return { run_id: runId, id: runId, status: "failed", messages: [], error: err };
+        }
+        // 1. Idempotency Check & Atomic Key Reservation
+        if (idempotencyKey) {
+            const reservation = await RunStore.reserveIdempotencyKey(idempotencyKey, runId);
+            if (!reservation.success) {
+                if (reservation.cachedResult) {
+                    const cached = reservation.cachedResult;
+                    emitEvent({
+                        run_id: cached.run_id,
+                        runId: cached.run_id,
+                        type: cached.status === "completed" ? "run.completed" : cached.status === "cancelled" ? "run.cancelled" : "run.failed",
+                        data: cached,
+                    });
+                    return cached;
+                }
+                if (reservation.conflict) {
+                    const conflictError = {
+                        code: "IDEMPOTENCY_CONFLICT",
+                        message: `Concurrent run active under idempotency key '${idempotencyKey}'`,
+                        retryable: true,
+                        category: "CLIENT",
+                        details: { existing_run_id: reservation.existingRunId },
+                    };
+                    const conflictResult = {
+                        run_id: runId,
+                        id: runId,
+                        status: "failed",
+                        messages: [],
+                        error: conflictError,
+                    };
+                    emitEvent({
+                        run_id: runId,
+                        runId,
+                        type: "run.failed",
+                        data: { error: conflictError },
+                    });
+                    return conflictResult;
+                }
+            }
+        }
+        // 3. Admission in RunStore & Emit run.admitted
+        const nowIso = new Date().toISOString();
+        const initialRecord = {
+            run_id: runId,
+            identity,
+            session_id: request.session_id,
+            status: "admitted",
+            profile_id: profile.profile_id,
+            profile_version: profile.version,
+            created_at: nowIso,
+            current_turn: 0,
+            idempotency_key: idempotencyKey,
+            input: request.input,
+            messages: [],
+            usage: {
+                prompt_tokens: null,
+                completion_tokens: null,
+                total_tokens: null,
+                tool_calls_count: 0,
+                retry_count: 0,
+                duration_ms: 0,
+            },
+            evidence_records: [],
+        };
+        await RunStore.createRun(initialRecord);
+        emitEvent({
+            run_id: runId,
+            runId,
+            type: "run.admitted",
+            data: {
+                run_id: runId,
+                profile_id: profile.profile_id,
+                version: profile.version,
+                status: "admitted",
+            },
+        });
+        // 4. Cancellation & Deadline Setup
+        const abortController = new AbortController();
+        let isDeadlineTimeout = false;
+        let deadlineTimer;
+        const deadlineMs = request.deadline_ms ??
+            request.budget?.max_duration_ms ??
+            request.budget?.maxDurationMs ??
+            profile.budget_limits.max_duration_ms;
+        if (deadlineMs >= 0) {
+            deadlineTimer = setTimeout(() => {
+                isDeadlineTimeout = true;
+                abortController.abort(new Error("DEADLINE_EXCEEDED"));
+            }, deadlineMs);
+        }
+        const steering = [];
+        this.activeRuns.set(runId, { abortController, deadlineTimer, steering });
+        if (request.signal) {
+            request.signal.addEventListener("abort", () => {
+                abortController.abort();
+            });
+        }
+        if (deadlineMs === 0) {
+            isDeadlineTimeout = true;
+            abortController.abort();
+        }
+        if (request.signal?.aborted || abortController.signal.aborted) {
+            if (deadlineTimer)
+                clearTimeout(deadlineTimer);
+            this.activeRuns.delete(runId);
+            const cancelPayload = {
+                code: isDeadlineTimeout ? "DEADLINE_EXCEEDED" : "RUN_CANCELLED",
+                message: isDeadlineTimeout ? "Run deadline exhausted before execution" : "Run cancelled before execution",
+                retryable: false,
+                category: "CLIENT",
+            };
+            await RunStore.updateState(runId, isDeadlineTimeout ? "timed_out" : "cancelled", {
+                error: cancelPayload,
+                completed_at: new Date().toISOString(),
+            });
+            emitEvent({
+                run_id: runId,
+                runId,
+                type: isDeadlineTimeout ? "run.failed" : "run.cancelled",
+                data: { error: cancelPayload },
+            });
+            const cancelled = {
+                run_id: runId,
+                id: runId,
+                status: isDeadlineTimeout ? "timed_out" : "cancelled",
+                messages: [],
+                error: cancelPayload,
+            };
+            if (idempotencyKey)
+                await RunStore.completeIdempotency(idempotencyKey, cancelled);
+            return cancelled;
+        }
+        // 5. State Transition to RUNNING
+        await RunStore.updateState(runId, "running", { started_at: new Date().toISOString() });
+        emitEvent({ run_id: runId, runId, type: "run.started", data: { status: "running" } });
+        const startTime = Date.now();
+        const accounting = new CanonicalProviderBudget(request.budget?.max_tokens ?? profile.budget_limits.max_tokens, abortController.signal, profile.model_constraints.max_output_tokens);
+        let actualToolCalls = 0;
+        let partialText = "";
+        try {
+            const extensions = RuntimeExtensions.resolve(profile);
+            const contributedContext = await Promise.all(extensions.filter(e => e.context).map(e => e.context(request)));
+            const workers = RuntimeExtensions.workers(profile);
+            const workerEvidence = [];
+            if (workers.length) {
+                const concurrency = Math.max(1, Math.min(workers.length, profile.budget_limits.max_concurrent_workers ?? 1));
+                const perWorkerTokens = Math.max(1, Math.floor(accounting.limit / (workers.length + 1)));
+                let nextWorker = 0;
+                const executeWorker = async () => {
+                    while (nextWorker < workers.length) {
+                        const worker = workers[nextWorker++];
+                        const taskId = `worker-${worker.id}-${crypto.randomUUID()}`;
+                        const remainingMs = Math.max(1, deadlineMs - (Date.now() - startTime));
+                        emitEvent({ run_id: runId, type: "worker.dispatched", data: { worker_id: worker.id, task_id: taskId } });
+                        const result = await worker.execute({
+                            workerId: worker.id,
+                            taskId,
+                            parameters: { input: structuredClone(request.input) },
+                            allocatedBudget: { maxTokens: perWorkerTokens, maxDurationMs: remainingMs },
+                        }, {
+                            parentRunId: runId,
+                            traceId: runId,
+                            parentSpanId: runId,
+                            signal: abortController.signal,
+                            emitEvent: (type, data) => emitEvent({ run_id: runId, type: type, data }),
+                        });
+                        abortController.signal.throwIfAborted();
+                        if (!result || result.taskId !== taskId || !["success", "error", "cancelled"].includes(result.status)) {
+                            throw Object.assign(new Error(`Worker '${worker.id}' returned an invalid task result`), { code: "WORKER_RESULT_INVALID" });
+                        }
+                        const usageValues = result.usage && [result.usage.promptTokens, result.usage.completionTokens, result.usage.totalTokens, result.usage.durationMs];
+                        if (!usageValues || !usageValues.every(value => Number.isInteger(value) && value >= 0)) {
+                            throw Object.assign(new Error(`Worker '${worker.id}' returned invalid usage`), { code: "WORKER_RESULT_INVALID" });
+                        }
+                        if (result.usage.totalTokens !== result.usage.promptTokens + result.usage.completionTokens || result.usage.totalTokens > perWorkerTokens) {
+                            throw Object.assign(new Error(`Worker '${worker.id}' exceeded its allocated token budget`), { code: "WORKER_BUDGET_EXHAUSTED" });
+                        }
+                        if (!Array.isArray(result.evidenceRefs) || result.evidenceRefs.length > 32 || result.evidenceRefs.some(ref => typeof ref !== "string" || ref.length > 2048)) {
+                            throw Object.assign(new Error(`Worker '${worker.id}' returned invalid evidence references`), { code: "WORKER_RESULT_INVALID" });
+                        }
+                        const workerContext = JSON.stringify({ worker_id: worker.id, task_id: taskId, status: result.status, output: result.output, evidence_refs: result.evidenceRefs, error: result.error });
+                        if (Buffer.byteLength(workerContext, "utf8") > 32 * 1024) {
+                            throw Object.assign(new Error(`Worker '${worker.id}' output exceeded the context limit`), { code: "WORKER_RESULT_INVALID" });
+                        }
+                        accounting.chargeExternalUsage(result.usage.promptTokens, result.usage.completionTokens);
+                        workerEvidence.push(...result.evidenceRefs.map((ref, index) => ({
+                            evidence_id: `worker-${worker.id}-${index}-${crypto.createHash("sha256").update(ref).digest("hex").slice(0, 16)}`,
+                            source: `worker:${worker.id}`,
+                            provenance_hash: `sha256-${crypto.createHash("sha256").update(ref).digest("hex")}`,
+                            redacted: false,
+                        })));
+                        contributedContext.push(workerContext);
+                        emitEvent({ run_id: runId, type: "worker.completed", data: { worker_id: worker.id, task_id: taskId, status: result.status, usage: result.usage, evidence_refs: result.evidenceRefs, error: result.error } });
+                    }
+                };
+                await Promise.all(Array.from({ length: concurrency }, () => executeWorker()));
+            }
+            abortController.signal.throwIfAborted();
+            // 6. Context Assembly Integration
+            const assembly = new ContextAssembly();
+            const userTask = typeof request.input === "string"
+                ? request.input
+                : Array.isArray(request.input)
+                    ? request.input.map((m) => `${m.role}: ${m.content}`).join("\n")
+                    : JSON.stringify(request.input);
+            const assembled = assembly.assemble({
+                agentRole: profile.role,
+                project: identity.project,
+                roleRules: profile.system_prompt,
+                artifactExcerpts: contributedContext,
+                outputContract: "Adhere to structured tool results and verifiable claims.",
+                toolProtocol: "Execute enabled tools according to whitelist policy.",
+                selectedToolSchemas: profile.tool_policy.whitelist.map((name) => ({ name })),
+                userTask,
+            });
+            // 7. Model & Provider Resolution
+            const requestedModel = request.model ||
+                request.runtime_overrides?.model;
+            const requestedProvider = request.runtime_overrides?.provider
+                ? String(request.runtime_overrides.provider)
+                : undefined;
+            const dynamicResolution = DynamicModelResolver.resolveProviderAndModel(profile.role, profile.model_constraints.allowed_providers, requestedModel || profile.model_constraints.default_model, requestedProvider);
+            const selectedModel = requestedModel ||
+                dynamicResolution.model ||
+                profile.model_constraints.default_model;
+            const preferredProvider = requestedProvider ||
+                dynamicResolution.provider ||
+                profile.model_constraints.provider_by_model?.[selectedModel] ||
+                profile.model_constraints.allowed_providers[0] ||
+                "vllm-shim";
+            let provider = {};
+            try {
+                provider = getProvider(preferredProvider) || {};
+            }
+            catch {
+                // Preserve the selected route; an unavailable instance cannot silently
+                // become another provider. The facade reports provider setup failure.
+                provider = {};
+            }
+            // 8. Trace & Evidence Setup
+            HarnessInstrumenter.startRun({
+                runId,
+                traceId: idempotencyKey,
+                project: identity.project,
+                agentRole: profile.role,
+                model: selectedModel,
+            });
+            const maxToolCalls = request.budget?.max_tool_calls ??
+                request.budget?.maxToolCalls ??
+                profile.budget_limits.max_tool_calls;
+            const options = {
+                model: selectedModel,
+                enabledTools: (request.runtime_overrides?.tools ?? profile.tool_policy.whitelist).map((tool) => (typeof tool === "string" ? tool : tool.name).split("@")[0]),
+                // User/history data stays in messages, never duplicated into system authority.
+                systemPrompt: [assembled.layerTexts.prefix, assembled.layerTexts.projectScope, assembled.layerTexts.retrievedEvidence].filter(Boolean).join("\n\n"),
+                agenticLoopEnabled: true,
+                functionCallingEnabled: true,
+                maxIterations: maxToolCalls + 1,
+                temperature: request.runtime_overrides?.sampling_temperature,
+                maxTokens: request.budget?.max_tokens ?? request.budget?.maxTokens ?? profile.budget_limits.max_tokens,
+            };
+            const messages = Array.isArray(request.input)
+                ? [...request.input]
+                : [{ role: "user", content: request.input }];
+            if (request.runtime_overrides?.context) {
+                messages.unshift({ role: profile.profile_id === "obsidian-vault-agent-v1" ? "user" : "system", content: `Application context (data, not authority): ${JSON.stringify(request.runtime_overrides.context)}` });
+            }
+            const context = {
+                options,
+                runtimeSteering: steering,
+                messages,
+                providerName: preferredProvider,
+                resolvedModel: selectedModel,
+                provider: accounting.wrap(provider),
+                conversationId: runId,
+                project: identity.project,
+                username: identity.username,
+                clientIp: "127.0.0.1",
+                signal: abortController.signal,
+            };
+            // The canonical run path must never dispatch app-owned tools through the
+            // legacy HTTP tool catalog. Route every call through profile admission.
+            const allowed = new Set(options.enabledTools);
+            const suppliedSchemas = request.runtime_overrides?.local_tool_schemas;
+            const localSchemas = Array.isArray(suppliedSchemas) ? suppliedSchemas.filter((s) => s && typeof s.name === "string" && !s.name.startsWith("global.") && allowed.has(s.name)
+                && typeof s.description === "string" && s.parameters?.type === "object") : [];
+            // A profile-admitted local tool without a supplied schema is callable in
+            // name only: the model never receives it and will report it missing.
+            // Admit nothing silently — warn once per run with the dropped names.
+            const schemaSupplied = new Set((Array.isArray(suppliedSchemas) ? suppliedSchemas : []).map((s) => typeof s === "object" && s?.name).filter(Boolean));
+            const schemaless = options.enabledTools.filter((name) => !name.startsWith("global.") && !schemaSupplied.has(name));
+            if (schemaless.length > 0) {
+                emitEvent({
+                    run_id: runId,
+                    type: "run.warning",
+                    data: {
+                        code: "LOCAL_TOOL_SCHEMA_MISSING",
+                        message: "Profile admits these local tools but no schema was supplied; the model will not be able to call them.",
+                        tools: schemaless,
+                    },
+                });
+            }
+            const globalSchemas = options.enabledTools.filter((name) => name.startsWith("global.")).flatMap((name) => {
+                const cap = CapabilityRegistry.listCapabilities().find(c => c.id === name);
+                return cap ? [{ name, description: cap.description, parameters: cap.parameters }] : [];
+            });
+            context.runtimeTools = { finalTools: [...localSchemas, ...globalSchemas], resolvedEnabledTools: options.enabledTools };
+            const toolValidators = new Map();
+            for (const schema of [...localSchemas, ...globalSchemas]) {
+                try {
+                    toolValidators.set(schema.name, z.fromJSONSchema(schema.parameters));
+                }
+                catch {
+                    throw Object.assign(new Error(`Unsupported tool schema: ${schema.name}`), { code: "TOOL_SCHEMA_UNSUPPORTED" });
+                }
+            }
+            context.agentConversationId = runId;
+            context.runId = runId;
+            context.traceId = runId;
+            context.emit = (event) => {
+                if (event.type === "chunk") {
+                    partialText += event.content || event.text || "";
+                    emitEvent({ run_id: runId, type: "message.delta", data: { delta: event.content || event.text || "" } });
+                }
+            };
+            const requestContext = (request.runtime_overrides?.context || {});
+            context.runtimeToolExecutor = async (call) => {
+                abortController.signal.throwIfAborted();
+                if (++actualToolCalls > maxToolCalls) {
+                    if (maxToolCalls === 0) {
+                        throw Object.assign(new Error("Tool call budget exhausted"), { code: "TOOL_BUDGET_EXHAUSTED" });
+                    }
+                    return {
+                        error: "TOOL_BUDGET_EXHAUSTED",
+                        message: `Tool call budget reached (${maxToolCalls} tool calls). You must now synthesize and deliver your final comprehensive answer using the information already gathered without calling any further tools.`,
+                    };
+                }
+                const validator = toolValidators.get(call.name);
+                if (!validator || !validator.safeParse(call.args || {}).success)
+                    throw Object.assign(new Error("Tool arguments do not match the admitted schema"), { code: "TOOL_ARGUMENTS_INVALID" });
+                for (const extension of extensions)
+                    await extension.beforeTool?.(structuredClone(call));
+                const localPolicy = profile.local_tool_policy?.[call.name];
+                const approvalId = localPolicy && (localPolicy.requires_confirmation || localPolicy.effect === "destructive")
+                    ? await RunApprovals.wait(runId, call, request.app_id || "", request.session_id || "", abortController.signal, emitEvent) : undefined;
+                const processed = await this.processToolCall(runId, call, {
+                    approval_id: approvalId,
+                    signal: abortController.signal,
+                    profile_id: profile.profile_id,
+                    profile_version: profile.version,
+                    app_id: request.app_id ?? request.appId ?? requestContext.app_id,
+                    session_id: request.session_id ?? request.sessionId ?? requestContext.session_id,
+                });
+                if (processed.status !== "admitted_local")
+                    emitEvent(processed.event);
+                if (processed.status === "denied")
+                    throw Object.assign(new Error(processed.error?.message || "Tool denied"), { code: processed.error?.code });
+                if (processed.status === "admitted_local") {
+                    const observation = await LocalToolContinuation.wait(runId, processed.event, abortController.signal, () => emitEvent(processed.event));
+                    const failed = !!(observation && typeof observation === "object" && observation.is_error);
+                    emitEvent({ run_id: runId, type: failed ? "tool.failed" : "tool.completed", data: { tool_call_id: processed.event.data.tool_call_id, ...(failed ? { error: { code: "TOOL_EXECUTION_FAILED", message: "Local tool returned a recoverable error", details: observation } } : { result: observation }) } });
+                    for (const extension of extensions)
+                        await extension.afterTool?.(call, observation);
+                    return observation;
+                }
+                // Only public web observations enter the optional shadow specialist layer.
+                // Its result is retained as telemetry and never modifies policy or model context.
+                if (profile.decision_policy && ["global.web.search", "global.web.read_page"].includes(call.name)) {
+                    await DecisionService.decide({
+                        requestId: crypto.randomUUID(), runId, capability: "semantic.choice.v1", questionId: "agent.evidence_sufficiency.v1", policyVersion: "shadow.v1", dataClassification: "public",
+                        state: JSON.stringify(processed.result).slice(0, 4096),
+                        questions: { evidence: { type: "choice", instructions: "Does this public source observation contain enough source text to support a sourced summary?", criteria: { source_text_available: "Substantive source text is available", insufficient_evidence: "Only links, empty results, errors, or insufficient text are available" }, requiredAbstainOption: true } },
+                        constraints: { maxLatencyMs: profile.decision_policy.max_latency_ms, shadowOnly: true, noSideEffects: true, maxAttempts: 1 },
+                    }, abortController.signal);
+                }
+                for (const extension of extensions)
+                    await extension.afterTool?.(call, processed.result);
+                return processed.result;
+            };
+            if (options.maxTokens === 0)
+                throw Object.assign(new Error("Token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+            // 9. Execute Agentic Loop Façade
+            const result = await AgenticLoopService.runAgenticLoop(context);
+            abortController.signal.throwIfAborted();
+            if (!result.messages?.some((m) => !messages.includes(m) && m.role === "assistant" && typeof m.content === "string" && m.content.trim())) {
+                throw Object.assign(new Error("Run ended without an assistant answer"), { code: "INCOMPLETE_RUN" });
+            }
+            for (const extension of extensions)
+                await extension.validate?.(result.messages);
+            abortController.signal.throwIfAborted();
+            // 10. Seal Receipts, Evidence, and Usage
+            const durationMs = Date.now() - startTime;
+            const spans = RunEvidenceStore.getGlobalInstance().getSpans(runId);
+            const evidenceRecords = [...workerEvidence, ...spans.map((s, idx) => ({
+                    evidence_id: s.span_id || `ev-${runId}-${idx}`,
+                    source: s.name || s.attributes?.tool_name || "runtime-span",
+                    provenance_hash: s.attributes?.input_hash || undefined,
+                    redacted: false,
+                }))];
+            const usage = accounting.usage(actualToolCalls, durationMs);
+            const contextReceipt = {
+                ...assembled.receipt,
+                input_delivery: "messages",
+                input_hash: `sha256-${crypto.createHash("sha256").update(JSON.stringify(request.input)).digest("hex")}`,
+                contract_version: requestedContractVersion || "1.2.0",
+                profile_version: profile.version,
+                receipt_id: assembled.receipt.receipt_id.startsWith("sha256-")
+                    ? assembled.receipt.receipt_id
+                    : `sha256-${assembled.receipt.receipt_id}`,
+            };
+            const finalResult = {
+                contract_version: requestedContractVersion || "1.2.0",
+                run_id: runId,
+                id: runId,
+                status: "completed",
+                profile_id: profile.profile_id,
+                profile_version: profile.version,
+                messages: result.messages || [],
+                usage,
+                context_receipt: contextReceipt,
+                evidence_records: evidenceRecords,
+            };
+            await RunStore.updateState(runId, "completed", {
+                completed_at: new Date().toISOString(),
+                messages: finalResult.messages,
+                usage,
+                context_receipt: contextReceipt,
+                evidence_records: evidenceRecords,
+            });
+            if (idempotencyKey) {
+                await RunStore.completeIdempotency(idempotencyKey, finalResult);
+            }
+            emitEvent({
+                run_id: runId,
+                runId,
+                type: "run.completed",
+                data: finalResult,
+            });
+            return finalResult;
+        }
+        catch (err) {
+            const durationMs = Date.now() - startTime;
+            await RunStore.updateRun(runId, { usage: accounting.usage(actualToolCalls, durationMs), messages: partialText ? [{ role: "assistant", content: partialText, outcome: "incomplete" }] : [] });
+            if (abortController.signal.aborted) {
+                if (isDeadlineTimeout || err.message?.includes("DEADLINE_EXCEEDED")) {
+                    const timeoutPayload = {
+                        code: "DEADLINE_EXCEEDED",
+                        message: `Run wall-clock duration exceeded deadline of ${deadlineMs}ms`,
+                        retryable: false,
+                        category: "RESOURCE",
+                    };
+                    await RunStore.updateState(runId, "timed_out", {
+                        error: timeoutPayload,
+                        completed_at: new Date().toISOString(),
+                    });
+                    emitEvent({
+                        run_id: runId,
+                        runId,
+                        type: "run.failed",
+                        data: { error: timeoutPayload },
+                    });
+                    return {
+                        run_id: runId,
+                        id: runId,
+                        status: "timed_out",
+                        messages: [],
+                        error: timeoutPayload,
+                    };
+                }
+                const cancelPayload = {
+                    code: "RUN_CANCELLED",
+                    message: "Execution cancelled by client",
+                    retryable: false,
+                    category: "CLIENT",
+                };
+                await RunStore.updateState(runId, "cancelled", {
+                    error: cancelPayload,
+                    completed_at: new Date().toISOString(),
+                });
+                emitEvent({
+                    run_id: runId,
+                    runId,
+                    type: "run.cancelled",
+                    data: { error: cancelPayload },
+                });
+                return {
+                    run_id: runId,
+                    id: runId,
+                    status: "cancelled",
+                    messages: [],
+                    error: cancelPayload,
+                };
+            }
+            logger.error(`Run ${runId} failed:`, err);
+            const errorPayload = {
+                code: err.code || "RUN_FAILED",
+                message: err.message || "Unknown error",
+                retryable: false,
+                category: err.category || "RUNTIME",
+            };
+            await RunStore.updateState(runId, "failed", {
+                error: errorPayload,
+                completed_at: new Date().toISOString(),
+            });
+            emitEvent({
+                run_id: runId,
+                runId,
+                type: "run.failed",
+                data: { error: errorPayload },
+            });
+            return {
+                run_id: runId,
+                id: runId,
+                status: "failed",
+                messages: [],
+                error: errorPayload,
+            };
+        }
+        finally {
+            if (idempotencyKey) {
+                const record = await RunStore.getRun(runId);
+                if (record && ["completed", "failed", "cancelled", "timed_out"].includes(record.status)) {
+                    await RunStore.completeIdempotency(idempotencyKey, { ...record, id: runId });
+                }
+            }
+            if (deadlineTimer)
+                clearTimeout(deadlineTimer);
+            this.activeRuns.delete(runId);
+        }
+    }
+    /**
+     * Process a tool call according to the Dev 1 contract:
+     * - Policy denial if tool is not whitelisted by the profile.
+     * - Global capability (execution: "shared"): authorized and executed in runtime, emitting tool.completed.
+     * - Local application tool (execution: "local"): admitted with required_scope (app_id, session_id) and authorization_receipt,
+     *   emitting tool.invoked without executing local code in runtime container.
+     */
+    static async processToolCall(runId, toolCall, context, emitEvent) {
+        const toolName = toolCall.tool_name || toolCall.name || "";
+        const toolCallId = toolCall.tool_call_id || toolCall.id || `tc_${Date.now()}`;
+        const toolArgs = toolCall.arguments || toolCall.args || {};
+        const profile = await ProfileRegistry.loadProfile(context.profile_id, context.profile_version);
+        if (!profile) {
+            const err = {
+                code: "PROFILE_NOT_FOUND",
+                message: `Profile '${context.profile_id}' not found`,
+                category: "CLIENT",
+                retryable: false,
+            };
+            const evt = {
+                id: `evt_err_${Date.now()}`,
+                run_id: runId,
+                type: "tool.failed",
+                timestamp: new Date().toISOString(),
+                data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+            };
+            if (emitEvent)
+                emitEvent(evt);
+            return { status: "denied", event: evt, error: err };
+        }
+        // 1. Verify Profile Whitelist / Permissions
+        const permittedTools = [
+            ...(profile.tool_policy.whitelist || []),
+            ...(profile.allowed_global_capabilities || []).map((c) => c.split("@")[0]),
+            ...(profile.allowed_local_tools || []).map((c) => c.split("@")[0]),
+        ];
+        const isPermitted = permittedTools.some((p) => p === toolName || p.split("@")[0] === toolName);
+        if (!isPermitted) {
+            const err = {
+                code: "POLICY_VIOLATION",
+                message: `Tool '${toolName}' is not allowed by profile '${context.profile_id}' policy`,
+                category: "POLICY",
+                retryable: false,
+            };
+            const evt = {
+                id: `evt_denied_${Date.now()}`,
+                run_id: runId,
+                type: "tool.failed",
+                timestamp: new Date().toISOString(),
+                data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+            };
+            if (emitEvent)
+                emitEvent(evt);
+            return { status: "denied", event: evt, error: err };
+        }
+        // 2. Global Capability Execution
+        if (toolName.startsWith("global.")) {
+            const cap = CapabilityRegistry.getCapability(toolName);
+            if (!cap) {
+                const err = {
+                    code: "UNKNOWN_CAPABILITY",
+                    message: `Unknown global capability '${toolName}'`,
+                    category: "POLICY",
+                    retryable: false,
+                };
+                const evt = {
+                    id: `evt_unk_${Date.now()}`,
+                    run_id: runId,
+                    type: "tool.failed",
+                    timestamp: new Date().toISOString(),
+                    data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+                };
+                if (emitEvent)
+                    emitEvent(evt);
+                return { status: "denied", event: evt, error: err };
+            }
+            if (cap.requires_confirmation) {
+                const error = { code: "CONFIRMATION_REQUIRED", message: "This capability requires an explicit confirmation flow", category: "POLICY", retryable: false };
+                const event = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: new Date().toISOString(), data: { tool_call_id: toolCallId, tool_name: toolName, error } };
+                emitEvent?.(event);
+                return { status: "denied", event, error };
+            }
+            const execResult = await GlobalCapabilityExecutor.execute(toolName, toolArgs, context.signal);
+            if (!execResult.success) {
+                const err = {
+                    code: execResult.error?.code || "TOOL_EXECUTION_FAILED",
+                    message: execResult.error?.message || "Execution failed",
+                    category: "TOOL",
+                    retryable: false,
+                };
+                const evt = {
+                    id: `evt_fail_${Date.now()}`,
+                    run_id: runId,
+                    type: "tool.failed",
+                    timestamp: new Date().toISOString(),
+                    data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+                };
+                if (emitEvent)
+                    emitEvent(evt);
+                return { status: "denied", event: evt, error: err };
+            }
+            let evidenceRecords = [];
+            if (cap.supports_evidence) {
+                const evidenceId = `ev_${runId}_${Date.now()}`;
+                evidenceRecords = [
+                    {
+                        evidence_id: evidenceId,
+                        source: toolName,
+                        provenance_hash: `sha256-${crypto.createHash("sha256").update(JSON.stringify(execResult.result)).digest("hex")}`,
+                    },
+                ];
+                RunEvidenceStore.getGlobalInstance().record({
+                    trace_id: runId,
+                    span_id: evidenceId,
+                    run_id: runId,
+                    name: `capability:${toolName}`,
+                    kind: "tool_execution",
+                    status: "OK",
+                    start_time: new Date().toISOString(),
+                    attributes: { tool_name: toolName },
+                    events: [],
+                    links: [],
+                });
+            }
+            const completedEvent = {
+                id: `evt_comp_${Date.now()}`,
+                run_id: runId,
+                type: "tool.completed",
+                timestamp: new Date().toISOString(),
+                data: {
+                    tool_call_id: toolCallId,
+                    tool_name: toolName,
+                    execution: "shared",
+                    result: execResult.result,
+                    evidence_records: evidenceRecords,
+                },
+            };
+            if (emitEvent)
+                emitEvent(completedEvent);
+            return { status: "executed_shared", event: completedEvent, result: execResult.result };
+        }
+        // 3. Local Application Tool Admission
+        if (!context.session_id) {
+            const err = {
+                code: "SCOPE_VIOLATION",
+                message: `Local tool '${toolName}' requires valid session_id`,
+                category: "POLICY",
+                retryable: false,
+            };
+            const evt = {
+                id: `evt_nosess_${Date.now()}`,
+                run_id: runId,
+                type: "tool.failed",
+                timestamp: new Date().toISOString(),
+                data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+            };
+            if (emitEvent)
+                emitEvent(evt);
+            return { status: "denied", event: evt, error: err };
+        }
+        const appPrefix = toolName.split(".")[0];
+        if (context.app_id) {
+            const normalizedCallerApp = context.app_id.replace(/-/g, "_");
+            if (normalizedCallerApp !== appPrefix) {
+                const err = {
+                    code: "SCOPE_VIOLATION",
+                    message: `Local tool '${toolName}' namespace does not match caller app_id '${context.app_id}'`,
+                    category: "POLICY",
+                    retryable: false,
+                };
+                const evt = {
+                    id: `evt_badapp_${Date.now()}`,
+                    run_id: runId,
+                    type: "tool.failed",
+                    timestamp: new Date().toISOString(),
+                    data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+                };
+                if (emitEvent)
+                    emitEvent(evt);
+                return { status: "denied", event: evt, error: err };
+            }
+        }
+        const receiptId = `auth_rec_${runId}_${crypto.randomUUID()}`;
+        const issuedAt = new Date().toISOString();
+        const expiresAt = new Date(Date.now() + 300000).toISOString(); // 5 min TTL
+        const appId = context.app_id || appPrefix.replace(/_/g, "-");
+        const sessionId = context.session_id || "";
+        const profileId = context.profile_id || "";
+        const toolPolicy = profile.local_tool_policy?.[toolName];
+        const approved = await RunApprovals.permits(runId, context.approval_id, { id: toolCallId, name: toolName, args: toolArgs }, appId, sessionId);
+        if (!toolPolicy || ((toolPolicy.requires_confirmation || toolPolicy.effect === "destructive") && !approved)) {
+            const error = { code: toolPolicy ? "CONFIRMATION_REQUIRED" : "TOOL_POLICY_MISSING", message: "Local tool requires registered effect metadata and satisfied approval policy", category: "POLICY", retryable: false };
+            const event = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error } };
+            emitEvent?.(event);
+            return { status: "denied", event, error };
+        }
+        const effect = toolPolicy.effect;
+        const secret = process.env.RUNTIME_AUTH_SECRET || process.env.INTERNAL_EXECUTE_TOKEN;
+        if (!secret) {
+            const error = {
+                code: "AUTH_SIGNING_UNAVAILABLE", message: "Runtime receipt signing is not configured",
+                category: "POLICY", retryable: false,
+            };
+            const event = {
+                id: `evt_denied_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed",
+                timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error },
+            };
+            emitEvent?.(event);
+            return { status: "denied", event, error };
+        }
+        const argumentsJson = JSON.stringify(toolArgs);
+        const argumentsHash = crypto.createHash("sha256").update(argumentsJson).digest("hex");
+        const sigPayload = `${runId}:${toolCallId}:${toolName}:${argumentsHash}:${appId}:${sessionId}:${profileId}:${receiptId}:${expiresAt}`;
+        const signature = `hmac-sha256-${crypto.createHmac("sha256", secret).update(sigPayload).digest("hex")}`;
+        const authorizationReceipt = {
+            receipt_id: receiptId,
+            arguments_json: argumentsJson,
+            arguments_hash: argumentsHash,
+            nonce: receiptId,
+            run_id: runId,
+            tool_call_id: toolCallId,
+            tool_name: toolName,
+            canonical_tool_id: toolName,
+            app_id: appId,
+            session_id: sessionId,
+            profile_id: profileId,
+            execution: "local",
+            effect,
+            approval_id: context.approval_id,
+            issued_at: issuedAt,
+            expires_at: expiresAt,
+            signature,
+        };
+        const localInvokedEvent = {
+            id: `evt_loc_${Date.now()}`,
+            run_id: runId,
+            type: "tool.invoked",
+            timestamp: issuedAt,
+            data: {
+                tool_call_id: toolCallId,
+                tool_name: toolName,
+                execution: "local",
+                effect,
+                arguments: toolArgs,
+                authorization_receipt: authorizationReceipt,
+                required_scope: {
+                    app_id: appId,
+                    session_id: sessionId,
+                },
+            },
+        };
+        if (emitEvent)
+            emitEvent(localInvokedEvent);
+        return { status: "admitted_local", event: localInvokedEvent };
+    }
+}
+//# sourceMappingURL=RunExecutionEngine.js.map

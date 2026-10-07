@@ -1,0 +1,106 @@
+{
+  "shared": {
+    "noConversation": "no active agent convo ID in ctx.",
+    "dynamicToolActivationDisabled": "dynamic tool activation is disabled in settings. an admin can enable it in Settings → Agent Defaults.",
+    "invalidToolsArray": "'tools' must b a non-empty array of tool names or domain prefixes.",
+    "searchActionNudgeDisabled": "IMPORTANT: some discovered tools r NOT currently enabled (isEnabled: false). u MUST call enable_tools w/ the tool names u need b4 u can use them. after enabling, tools become avail on ur next iteration."
+  },
+
+  "enable_tools": {
+    "noValidTools": "none of the requested entries resolved 2 valid tool names. check spelling or use search_tools 2 discover avail tools.",
+    "alreadyEnabled": "all requested tools r already enabled & avail — u can call them directly rn.",
+    "activated": "activated {{count}} tool(s). they'll b avail on the next iteration."
+  },
+
+  "disable_tools": {
+    "noneInSet": "none of the requested tools were in the active set.",
+    "disabled": "disabled {{count}} tool(s).",
+    "protectedSuffix": " {{count}} core tool(s) were protected & can't b disabled."
+  },
+
+  "discover_and_enable_tools": {
+    "noQueryOrDomain": "at least 1 of 'query' or 'domain' is required.",
+    "noMatches": "no matching tools found.",
+    "foundAndEnabled": "found {{matchCount}} tool(s) & auto-enabled {{enabledCount}}. they're avail on the next iteration — call them directly.",
+    "foundAlreadyEnabled": "found {{matchCount}} tool(s), all were already enabled — call them directly."
+  },
+
+  "set_timer": {
+    "noConversation": "no active agent session / convo ID in ctx.",
+    "noPrompt": "'prompt' is a required string param.",
+    "invalidDuration": "'durationSeconds' must b between {{min}} & {{max}} seconds. 4 longer scheduled reminders or recurring events, use create_cron_job instead."
+  },
+
+  "list_timers": {
+    "noConversation": "no active agent session / convo ID in ctx."
+  },
+
+  "cancel_timer": {
+    "noTimerId": "'timerId' is a required string param.",
+    "notFound": "no active timer found w/ ID {{timerId}}.",
+    "success": "successfully cancelled timer {{timerId}}."
+  },
+
+  "enter_worktree": {
+    "noConversation": "no agent convo — worktree isolation requires an active convo",
+    "alreadyInWorktree": "already in a worktree (branch: {{branch}}). call exit_worktree 1st.",
+    "noWorkspace": "no workspace root configured",
+    "success": "now working in isolated worktree. all file ops r redirected 2 {{path}}. call exit_worktree w/ action 'merge' or 'discard' when done."
+  },
+
+  "exit_worktree": {
+    "notInWorktree": "not currently in a worktree. call enter_worktree 1st.",
+    "mergeFailed": "merge failed: {{error}}. worktree preserved at {{path}}. resolve conflicts & try again, or exit_worktree w/ action 'discard'.",
+    "merged": "changes from {{branch}} merged into main branch. workspace restored.",
+    "discarded": "worktree {{branch}} discarded. all changes removed. workspace restored."
+  },
+
+  "search_conversations": {
+    "queryRequired": "query is required",
+    "databaseUnavailable": "DB not avail",
+    "noEmbeddings": "no convos w/ embeddings found. convos r auto-embedded after agent sessions w/ 6+ msgs."
+  },
+
+  "summarize_conversation": {
+    "summaryRequired": "'summary' is required & must b a non-empty string"
+  },
+
+  "ask_user": {
+    "questionsRequired": "the 'questions' array is required & must not b empty",
+    "invalidQuestion": "ea question in the 'questions' array must have a non-empty 'question' string",
+    "duplicateQuestion": "duplicate question text: \"{{preview}}\"",
+    "duplicateOption": "duplicate option label \"{{label}}\" in question \"{{question}}\"",
+    "tooManyQuestions": "max 4 qs per call",
+    "noConversation": "no convo — ask_user_question requires an active convo",
+    "timedOut": "the user did not respond within 5 min."
+  },
+
+  "list_mcp_resources": {
+    "noServers": "no MCP servers connected."
+  },
+
+  "read_mcp_resource": {
+    "missingParams": "'server_name' & 'uri' r required"
+  },
+
+  "authenticate_mcp_server": {
+    "missingServerName": "'server_name' is required",
+    "noCredentials": "at least 1 of 'token', 'api_key', or 'env' must b provided"
+  },
+
+  "create_skill": {
+    "missingFields": "name & prompt r required"
+  },
+
+  "execute_skill": {
+    "missingSkillId": "skillId is required"
+  },
+
+  "delete_skill": {
+    "missingSkillId": "skillId is required"
+  },
+
+  "write_todo": {
+    "invalidItems": "'items' must b an array of todo objs"
+  }
+}

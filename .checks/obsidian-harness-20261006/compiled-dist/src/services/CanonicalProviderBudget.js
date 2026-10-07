@@ -1,0 +1,103 @@
+/** One accounting boundary for every model call, including repair and compaction. */
+export class CanonicalProviderBudget {
+    limit;
+    signal;
+    outputLimit;
+    calls = 0;
+    measuredCalls = 0;
+    inputTokens = 0;
+    outputTokens = 0;
+    chargedTokens = 0;
+    constructor(limit, signal, outputLimit = Infinity) {
+        this.limit = limit;
+        this.signal = signal;
+        this.outputLimit = outputLimit;
+    }
+    chargeExternalUsage(promptTokens, completionTokens) {
+        if (![promptTokens, completionTokens].every(value => Number.isInteger(value) && value >= 0)) {
+            throw Object.assign(new Error("Worker reported invalid token usage"), { code: "WORKER_USAGE_INVALID" });
+        }
+        const total = promptTokens + completionTokens;
+        this.chargedTokens += total;
+        this.inputTokens += promptTokens;
+        this.outputTokens += completionTokens;
+        this.calls += 1;
+        this.measuredCalls += 1;
+        if (this.chargedTokens > this.limit) {
+            throw Object.assign(new Error("Worker usage exceeded the canonical run budget"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+        }
+    }
+    wrap(provider) {
+        const budget = this;
+        return new Proxy(provider, {
+            get(target, key) {
+                const method = Reflect.get(target, key);
+                if (!["generateTextStream", "generateTextStreamLive"].includes(String(key)) || typeof method !== "function")
+                    return typeof method === "function" ? method.bind(target) : method;
+                return async function* (messages, model, options = {}) {
+                    budget.signal.throwIfAborted();
+                    // Conservative reservation is separate from measured usage. Do not invent billing data.
+                    const inputReserve = Buffer.byteLength(JSON.stringify({ messages, tools: options.tools || [] }), "utf8") + 256;
+                    const available = budget.limit - budget.chargedTokens - inputReserve;
+                    if (available <= 0)
+                        throw Object.assign(new Error("Canonical token budget cannot cover the next prompt"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+                    const outputReserve = Math.min(options.maxTokens ?? available, available, budget.outputLimit);
+                    if (outputReserve <= 0)
+                        throw Object.assign(new Error("Canonical output budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+                    const reservation = inputReserve + outputReserve;
+                    budget.chargedTokens += reservation;
+                    budget.calls++;
+                    let emittedBytes = 0;
+                    let streamCompleted = false;
+                    let measuredInput, measuredOutput;
+                    try {
+                        for await (const chunk of method.call(target, messages, model, { ...options, maxTokens: outputReserve, signal: budget.signal })) {
+                            budget.signal.throwIfAborted();
+                            if (chunk?.type === "usage") {
+                                const u = chunk.usage || {};
+                                const input = u.inputTokens ?? u.promptTokens ?? u.prompt_tokens;
+                                const output = u.outputTokens ?? u.completionTokens ?? u.completion_tokens;
+                                if (Number.isFinite(input) && input >= 0)
+                                    measuredInput = input;
+                                if (Number.isFinite(output) && output >= 0)
+                                    measuredOutput = output;
+                            }
+                            if (chunk?.type !== "usage")
+                                emittedBytes += Buffer.byteLength(typeof chunk === "string" ? chunk : JSON.stringify(chunk), "utf8");
+                            yield chunk;
+                        }
+                        streamCompleted = true;
+                    }
+                    finally {
+                        if (measuredInput !== undefined)
+                            budget.inputTokens += measuredInput;
+                        if (measuredOutput !== undefined)
+                            budget.outputTokens += measuredOutput;
+                        if (measuredInput !== undefined && measuredOutput !== undefined) {
+                            budget.measuredCalls++;
+                            budget.chargedTokens += measuredInput + measuredOutput - reservation;
+                        }
+                        else if (streamCompleted) {
+                            // Conservative observed bytes release unused output reservation.
+                            // The public usage total remains unknown, with coverage explicit.
+                            budget.chargedTokens += inputReserve + Math.min(outputReserve, emittedBytes) - reservation;
+                        }
+                    }
+                    if (budget.chargedTokens > budget.limit)
+                        throw Object.assign(new Error("Provider reported usage beyond run budget"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+                };
+            },
+        });
+    }
+    usage(toolCalls, duration) {
+        const complete = this.calls > 0 && this.measuredCalls === this.calls;
+        return {
+            prompt_tokens: complete ? this.inputTokens : null,
+            completion_tokens: complete ? this.outputTokens : null,
+            total_tokens: complete ? this.inputTokens + this.outputTokens : null,
+            tool_calls_count: toolCalls, retry_count: 0, duration_ms: duration,
+            coverage: { model_calls: this.calls, measured_calls: this.measuredCalls, state: complete ? "complete" : this.measuredCalls ? "partial" : "unknown", measured_prompt_tokens: this.inputTokens, measured_completion_tokens: this.outputTokens },
+        };
+    }
+}
+//# sourceMappingURL=CanonicalProviderBudget.js.map

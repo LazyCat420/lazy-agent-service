@@ -1,0 +1,10 @@
+{
+  "catalogFormat": {
+    "inworld": "Available Inworld voices ({{count}}): {{voices}}.",
+    "openai": "Available OpenAI voices: {{voices}}.",
+    "google": "Available Google voices: {{voices}}.",
+    "elevenlabs": "Available ElevenLabs voices: {{voices}}."
+  },
+
+  "inworldTts2Steering": "This provider uses inworld-tts-2 which supports instruction tags — natural language directions in square brackets placed before the text they apply to. Use instruction tags to match delivery to the content: Emotion: [say excitedly], [sound sad], [sound concerned], [sound terrified] Articulation: [say with force], [articulate clearly], [say with deliberate pauses] Intonation: [say with a falling pitch], [say with a rising pitch] Volume: [very quiet], [very loud] Pitch: [say in a low tone], [say in a high pitch] Range: [say playfully], [say with no pitch variation] Speed: [very fast], [very slow] Vocal style: [whisper in a hushed style], [give a nasal quality], [sing joyfully] Non-verbals (inline): [laugh], [sigh], [clear throat], [breathe], [cough], [yawn] For maximum control, combine qualities: [say sadly with deliberate pauses in a low voice and hushed style]. Place the tag at the start of the text it applies to. Capitalize words for emphasis: 'I told you NOT to do that.' Include filler words (uh, um, well) for naturalness. Use contractions. Write numbers in spoken form. Never use markdown, bullet points, emojis, or structured text — write everything as natural spoken sentences."
+}

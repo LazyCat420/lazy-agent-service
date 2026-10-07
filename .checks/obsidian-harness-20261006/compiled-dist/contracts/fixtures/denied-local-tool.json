@@ -1,0 +1,66 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "denied-local-tool",
+  "description": "Agent attempts to call an unwhitelisted or cross-session local tool.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "profile_version": "1.2.0",
+    "contract_version": "1.2.0",
+    "app_id": "html-notes",
+    "session_id": "sess_alpha",
+    "input": "Delete widget in foreign session sess_beta."
+  },
+  "events": [
+    {
+      "id": "evt-dloc-001",
+      "run_id": "run-dloc-01",
+      "type": "run.started",
+      "timestamp": "2026-09-19T11:04:00.000Z",
+      "data": {
+        "status": "running"
+      }
+    },
+    {
+      "id": "evt-dloc-002",
+      "run_id": "run-dloc-01",
+      "type": "tool.failed",
+      "timestamp": "2026-09-19T11:04:00.200Z",
+      "data": {
+        "tool_name": "html_notes.canvas.remove_widget",
+        "error": {
+          "code": "SCOPE_VIOLATION",
+          "category": "POLICY",
+          "message": "Tool invocation lacks valid session scope for 'sess_beta'",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "evt-dloc-003",
+      "run_id": "run-dloc-01",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T11:04:00.250Z",
+      "data": {
+        "error": {
+          "code": "SCOPE_VIOLATION",
+          "category": "POLICY",
+          "message": "Tool invocation lacks valid session scope for 'sess_beta'",
+          "retryable": false
+        }
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-dloc-01",
+    "status": "failed",
+    "profile_id": "html-notes-researcher-v1",
+    "messages": [],
+    "error": {
+      "code": "SCOPE_VIOLATION",
+      "category": "POLICY",
+      "message": "Tool invocation lacks valid session scope for 'sess_beta'",
+      "retryable": false
+    }
+  }
+}

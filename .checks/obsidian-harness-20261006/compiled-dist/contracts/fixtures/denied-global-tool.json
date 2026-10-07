@@ -1,0 +1,64 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "denied-global-tool",
+  "description": "Agent attempts to call a global capability not whitelisted by the profile policy.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "profile_version": "1.2.0",
+    "contract_version": "1.2.0",
+    "input": "Transcribe audio stream."
+  },
+  "events": [
+    {
+      "id": "evt-denied-001",
+      "run_id": "run-denied-01",
+      "type": "run.started",
+      "timestamp": "2026-09-19T11:03:00.000Z",
+      "data": {
+        "status": "running"
+      }
+    },
+    {
+      "id": "evt-denied-002",
+      "run_id": "run-denied-01",
+      "type": "tool.failed",
+      "timestamp": "2026-09-19T11:03:00.250Z",
+      "data": {
+        "tool_name": "global.media.transcribe",
+        "error": {
+          "code": "POLICY_VIOLATION",
+          "category": "POLICY",
+          "message": "Capability 'global.media.transcribe' is not permitted by profile 'html-notes-researcher-v1'",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "evt-denied-003",
+      "run_id": "run-denied-01",
+      "type": "run.failed",
+      "timestamp": "2026-09-19T11:03:00.300Z",
+      "data": {
+        "error": {
+          "code": "POLICY_VIOLATION",
+          "category": "POLICY",
+          "message": "Capability 'global.media.transcribe' is not permitted by profile 'html-notes-researcher-v1'",
+          "retryable": false
+        }
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-denied-01",
+    "status": "failed",
+    "profile_id": "html-notes-researcher-v1",
+    "messages": [],
+    "error": {
+      "code": "POLICY_VIOLATION",
+      "category": "POLICY",
+      "message": "Capability 'global.media.transcribe' is not permitted by profile 'html-notes-researcher-v1'",
+      "retryable": false
+    }
+  }
+}
