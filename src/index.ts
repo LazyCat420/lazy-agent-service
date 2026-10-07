@@ -86,6 +86,7 @@ import executeRouter from "./routes/ExecuteRoutes.ts";
 import runRouter from "./routes/RunRoutes.ts";
 import { createObsidianCompletionRouter } from "./routes/ObsidianCompletionRoutes.ts";
 import contractRouter from "./routes/ContractRoutes.ts";
+import openAIEmbeddingsRouter from "./routes/OpenAIEmbeddingsRoutes.ts";
 import { ProfileRegistry } from "./services/ProfileRegistry.ts";
 
 
@@ -159,6 +160,7 @@ const ENDPOINTS = {
     "/prompts",
     "/webhooks",
     "/v1/runs",
+    "/v1/embeddings",
     "/obsidian-completions",
   ],
   websocket: ["/ws/chat", "/ws/text-to-audio"],
@@ -229,6 +231,7 @@ app.use("/execute", executeRouter);
 app.use("/platform", platformRouter);
 app.use("/v1/runs", runRouter);
 app.use("/v1/contracts", contractRouter);
+app.use("/v1/embeddings", openAIEmbeddingsRouter);
 
 // Platform dashboard — cross-project tool telemetry. Lives here (not in
 // trading-client) because this service owns the tool registry; trading-client

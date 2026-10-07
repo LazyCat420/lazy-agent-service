@@ -187,7 +187,7 @@ async function embedWithRetry(items: { text: string }[], result: PassResult): Pr
 }
 
 interface CorpusState {
-  lastPass?: PassResult & { startedAt: string; finishedAt: string };
+  lastPass?: PassResult & { passes: number; startedAt: string; finishedAt: string };
   lastError?: string;
 }
 
@@ -207,11 +207,24 @@ const EmbeddingCorpusService = {
     try {
       for (const def of CORPORA) {
         if (stopRequested) break;
-        const startedAt = new Date().toISOString();
         try {
-          const pass = await reembedCorpus(def, collectionsFor(def), { shouldStop: () => stopRequested, pauseMs: 25 });
-          state[def.name] = { lastPass: { ...pass, startedAt, finishedAt: new Date().toISOString() } };
-          if (pass.updated || pass.refused) logger.info(`[EmbeddingCorpus] ${def.name}: ${JSON.stringify(pass)}`);
+          // A pass walks down from the newest _id at its start, so docs that
+          // arrive meanwhile sit above its cursor: pass again until one finds
+          // nothing to do (2026-10-06: trading's backfill restored ~25k chunks
+          // during the first pass).
+          const startedAt = new Date().toISOString();
+          const run: PassResult & { passes: number } = { updated: 0, skippedEmpty: 0, changedDuringPass: 0, refused: 0, passes: 0 };
+          for (let updated = -1; updated !== 0 && !stopRequested;) {
+            const pass = await reembedCorpus(def, collectionsFor(def), { shouldStop: () => stopRequested, pauseMs: 25 });
+            run.passes++;
+            run.updated += pass.updated;
+            run.refused += pass.refused;
+            run.changedDuringPass += pass.changedDuringPass;
+            run.skippedEmpty = pass.skippedEmpty; // skipped docs recur on every pass
+            state[def.name] = { lastPass: { ...run, startedAt, finishedAt: new Date().toISOString() } };
+            updated = pass.updated;
+          }
+          if (run.updated || run.refused) logger.info(`[EmbeddingCorpus] ${def.name}: ${JSON.stringify(run)}`);
         } catch (error) {
           state[def.name] = { ...state[def.name], lastError: getErrorMessage(error) };
           logger.warn(`[EmbeddingCorpus] ${def.name} stopped: ${getErrorMessage(error)}`);
