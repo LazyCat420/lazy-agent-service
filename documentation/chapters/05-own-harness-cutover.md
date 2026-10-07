@@ -62,13 +62,34 @@ means pointing its harness URL at our native routes, then proving parity.
 - **Baseline worth beating:** prism's own success rate on the last 300 trading
   agent calls was 197/300.
 
+## Parity, measured (2026-10-07)
+
+Same input, both loops, trading's own client code (trading-service
+`scripts/harness/parity_check.py`; record in trading-client ch.21).
+
+| Boundary-probe contract | prism | ours, before (`c893bc6`) | ours, after (`6098253`) |
+|---|---|---|---|
+| oversized tool result cut to fit | PASS | not exercised (no tool call) | PASS |
+| copied-text gate | PASS | PASS | PASS |
+| forced final turn directed | PASS | not exercised | not exercised — no forced final turn yet (ch.06 item 9) |
+| cut stream fails | PASS (1 s) | FAIL (answered) | PASS (45 s) |
+| hung tool ended by trading's watchdog | PASS | not exercised | PASS |
+| SSE vocabulary | PASS | PASS | PASS |
+
+Real V3 prompts replayed through `base_agent.run_agent` (one sample each, after
+`8f63cba`): junior, fundamental and quant analysts all called trading tools with
+no refusal and produced artifacts on our loop. Before the fixes none could call a
+trading tool. Our loop made more tool calls and used more tokens than prism's on
+the same prompt (junior: 9 calls / 153k tokens against 4 / 74k); repeated,
+box-pinned replays are measuring whether that holds.
+
 ## Plan and status
 
 1. [x] Agent registry reachable from our harness (shared `prism.custom_agents`).
 2. [~] Native `/agent` runs a real trading agent — without its system prompt or
    its trading tools (see *Measured*; fixed under step 5).
 3. [x] Harness log rows match prism's shape (`createdAt`) — landed `d8a3c10`, deployed and verified live.
-4. [ ] **Faithful parity script** — built: trading-service
+4. [x] **Faithful parity script** — built and run 2026-10-07: trading-service
    `scripts/harness/parity_check.py` (`f3804206`). The same input goes to
    `…:5591/prism-proxy` and `…:5591` through trading's own client code, for
    three kinds of work: the boundary probe's contract scenarios; real V3 prompts
@@ -77,7 +98,8 @@ means pointing its harness URL at our native routes, then proving parity.
    only the briefings, news and the consolidator); and the flash briefing's
    `call_prism_agent`. Runs use synthetic `probe-parity-` cycles, and the
    trading bridge now refuses cycle-escaping write tools for any synthetic
-   cycle (`2ebf40ea`). Results: below once measured.
+   cycle (`2ebf40ea`). Results: *Parity, measured* below; the full record is
+   trading-client documentation ch.21.
 5. [ ] Close every gap: the P0 port list in chapter 06 (trading boundary on
    native `/agent`, system prompt, trading tools, DENY-before-full-auto,
    context window, stream resilience, rolling window, result bounding,

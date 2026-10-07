@@ -85,7 +85,7 @@ timeout or idle watchdog on our provider client).
 
 Each is one landed change with a test. Order = risk to the trading cycle.
 
-- [ ] **0. The trading boundary on native `/agent`.** Today it exists only on
+- [x] **0. The trading boundary on native `/agent`.** *Landed `13698be`, live 2026-10-07 06:49 UTC (`8f63cba`): both routes call `prepareTradingAgentRequest`; native `/agent` answers 422 where the boundary refuses. Measured: the shim now records the native arm's payloads and the hung-tool contract holds on our loop.* Today it exists only on
   `/prism-proxy` + `/vllm-shim`: the signed tool context
   (`prepareToolContext`), the learning boundary marker
   (`prepareTradingRequest`), the per-conversation tool whitelist, `unattended`.
@@ -95,14 +95,14 @@ Each is one landed change with a test. Order = risk to the trading cycle.
   `PERMISSION_DENIED`. Chapter 05's "refused an unauthorized tool
   (`lazy_web_search`)" was this, not enforcement: `lazy_web_search` is on the
   junior analyst's whitelist.
-- [ ] **1. System prompt delivery.** *Verified:* `ReActHarness.ts:276`
+- [x] **1. System prompt delivery.** *Landed `18a031f` (live in `8f63cba`): `prependIdentitySystemMessage` in vLLM, LM Studio, Ollama, llama.cpp and OpenAI; a caller's prompt wins over the persona's (`applyAssembledSystemPrompt`). Side effect: every native persona on these providers now gets its identity prompt, which it never had here.* *Verified:* `ReActHarness.ts:276`
   replaces `options.systemPrompt` with the persona's assembled prompt, and
   `providers/vllm.ts` never sends `options.systemPrompt` at all. Trading's cycle
   path sends its prompt only as `systemPrompt` (`inline_system_prompt=False`),
   so a native trading run on vLLM reaches the model with **no system prompt**.
   Prism keeps the caller's prompt and prepends it for vLLM
   (`prependIdentitySystemMessage`).
-- [ ] **2. Trading tools offered and dispatched natively.** The native catalog
+- [x] **2. Trading tools offered and dispatched natively.** *Landed `13698be` (live in `8f63cba`): a trading request gets the trading catalog as `mcp__lazy-agent-service__*`, filtered by its `enabledTools`; calls run through `ToolDispatch`. Measured: the junior, fundamental and quant replays all called trading tools with no refusal and produced artifacts. Still open: a conversation id `/prism-proxy` registered with an empty tool list refuses native calls (only matters while one SDK process uses both routes).* The native catalog
   (`ToolOrchestratorService.getMCPToolSchemas`) serves widget, html_notes,
   canvas, `lazy_web_search` and `strain_*` only, and native calls go through
   `routeLocalTool`, skipping `dispatchTool`'s authorization. Also: the proxy's
@@ -120,14 +120,14 @@ Each is one landed change with a test. Order = risk to the trading cycle.
 - [ ] **4. Context-length discovery + calibrated budget + overflow halving**
   (`ContextLengthDiscovery`, `ContextBudgetTracker`, the 400-retry). Every
   context guard is inert on vLLM without them.
-- [ ] **5. Provider stream resilience** (`utils/ProviderStreamResilience.ts`):
+- [~] **5. Provider stream resilience** *(cut-stream part landed `6098253`, live 07:04 UTC: `parseSSEStream` fails a stream with no finish_reason with prism's 502; the `cut_stream` contract now holds — but in 45 s where prism takes 1 s: we retry after output already reached the consumer)* (`utils/ProviderStreamResilience.ts`):
   retry 408/429/5xx with zero chunks, 300 s idle abort, a cut stream is a
   failure. Our own shim answers saturation with 503 + Retry-After and our loop
   never retries it.
 - [ ] **6. The single-turn rolling window:** recency by model calls, unified
   budgets, verbatim originals, a compaction fallback model, a shrink check, a
   per-conversation breaker.
-- [ ] **7. Tool-result bounding** with prism's 8k semantics, using our cut (no
+- [~] **7. Tool-result bounding** *(trading path landed `1ae5dfe`, live 07:04 UTC: native trading dispatch returns McpAdapter's `modelVisibleText`; the `oversized_result` contract now holds. Still open: non-trading results and the mid-JSON slice in `expandMessagesForFunctionCall`)* with prism's 8k semantics, using our cut (no
   retrieve pointer: trading roles do not hold that tool); stop the mid-JSON slice.
 - [ ] **8. Malformed tool arguments and loop guards:** `MALFORMED_TOOL_CALL_JSON`
   instead of silently running the tool with `{}` (`utils/openai-compat.ts:778`
