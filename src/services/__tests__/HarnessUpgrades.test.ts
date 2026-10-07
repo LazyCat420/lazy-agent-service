@@ -33,11 +33,12 @@ describe("strict tool schema validation", () => {
     expect(validateStrictToolSchema("get_price_history", strict)).toBeNull();
   });
 
-  it("rejects a schema whose properties are not all required, naming the tool", () => {
+  it("allows optional parameters (required stays as authored, not forced all-required)", () => {
+    // DeepSeek server-strict demands every property in `required`; client-side
+    // we do not — the real catalog is full of optional parameters and forcing
+    // them would change each tool's contract.
     const loose = { ...strict, required: ["ticker"] };
-    const violation = validateStrictToolSchema("get_price_history", loose);
-    expect(violation).toContain("get_price_history");
-    expect(violation).toContain("limit");
+    expect(validateStrictToolSchema("get_price_history", loose)).toBeNull();
   });
 
   it("rejects a schema without additionalProperties: false, naming the tool", () => {

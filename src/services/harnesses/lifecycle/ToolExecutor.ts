@@ -8,6 +8,7 @@ import type { SideEffectClass } from "../../../platform/contracts/telemetry.ts";
 import type AgenticLoopState from "../../AgenticLoopState.ts";
 import SkillRegistry from "../../../platform/skills/SkillRegistry.ts";
 
+import { normalizeEmptyToolContent } from "../../ToolResult.ts";
 function classifySideEffect(toolName: string): SideEffectClass {
   const name = toolName.toLowerCase();
   if (
@@ -94,7 +95,7 @@ export async function executeToolBatch(
         const started = Date.now();
         const result = await context.runtimeToolExecutor(toolCall);
         await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+        return { name: toolCall.name, id: toolCall.id, result: normalizeEmptyToolContent(result), durationMs: Date.now() - started };
       }
 
       // ── skill_read internal tool ─────────────────────────────
@@ -247,7 +248,7 @@ export async function executeToolBatch(
         }
       }
 
-      return { name: toolCall.name, id: toolCall.id, result: truncateResultIfNeeded(result, project, toolCall.name), durationMs };
+      return { name: toolCall.name, id: toolCall.id, result: truncateResultIfNeeded(normalizeEmptyToolContent(truncateResultIfNeeded(result, project, toolCall.name)), project, toolCall.name), durationMs };
     }),
   );
 

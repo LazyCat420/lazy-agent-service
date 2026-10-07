@@ -504,13 +504,16 @@ export default class ReActHarness extends BaseAgenticHarness {
                 `identical tool call(s) repeated ${repeatedToolCallCount} times in a row. ` +
                 `Terminating loop. Signature: ${toolCallSignature.slice(0, 300)}`,
             );
+            // An identical repeated tool call is a stuck loop, not budget
+            // exhaustion — outcome must be "stuck" so the recovery path
+            // (ExhaustionRecovery vs stuck finalize) is the right one.
             emit({
               type: SERVER_SENT_EVENT_TYPES.STATUS,
               message: "repetition_limit_reached",
               iteration: state.iterations,
               repeatCount: repeatedToolCallCount,
             });
-            state.conversationOutcome = "exhausted";
+            state.conversationOutcome = "stuck";
             this.logIteration(pass, currentMessages);
             break;
           }

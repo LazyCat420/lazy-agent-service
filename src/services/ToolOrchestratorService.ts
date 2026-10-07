@@ -64,10 +64,11 @@ export function validateStrictToolSchema(
   const required = Array.isArray(schema.required)
     ? schema.required.filter((r): r is string => typeof r === "string")
     : [];
-  const missing = properties.filter((p) => !required.includes(p));
-  if (missing.length > 0) {
-    return `${name}: all properties must be listed in required (missing: ${missing.join(", ")})`;
-  }
+  // NOTE: DeepSeek's server-side strict mode also requires every property to
+  // be listed in `required`. We deliberately do NOT enforce that here: the
+  // real catalog is full of optional parameters, and forcing them into
+  // `required` would change each tool's contract. The hallucination-prevention
+  // property is `additionalProperties: false`; `required` stays as authored.
   const unknownRequired = required.filter((r) => !properties.includes(r));
   if (unknownRequired.length > 0) {
     return `${name}: required lists properties that do not exist (${unknownRequired.join(", ")})`;
@@ -91,9 +92,22 @@ export function tightenToolSchema(parameters: unknown): string | null {
     return "parameters.type must be \"object\"";
   }
   schema.additionalProperties = false;
-  return validateStrictToolSchema("", schema) === null
-    ? null
-    : "required lists properties that do not exist";
+  // Repair `required` that lists properties which do not exist: intersect
+  // with the actual properties instead of failing the tool — dropping a
+  // working tool over a schema typo is worse than a tightened schema.
+  if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+    const props = Object.keys(schema.properties);
+    if (Array.isArray(schema.required)) {
+      schema.required = schema.required.filter(
+        (r: unknown): r is string => typeof r === "string" && props.includes(r),
+      );
+    }
+  } else if (!schema.properties && Array.isArray(schema.required)) {
+    // No properties declared: any `required` is meaningless — drop it rather
+    // than fail the tool ("required lists properties that do not exist").
+    delete schema.required;
+  }
+  return validateStrictToolSchema("", schema) === null ? null : "unrepairable schema";
 }
 
 /**
