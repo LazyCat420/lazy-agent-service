@@ -48,9 +48,11 @@ means pointing its harness URL at our native routes, then proving parity.
   Monitor and audits, prism-client) would have silently skipped harness calls.
   Both insert paths now write `createdAt` equal to `timestamp`, pinned by
   `src/services/__tests__/RequestLoggerPrismParity.test.ts`. That test goes red
-  against the old logger and green against the fix. **Not deployed yet:**
-  deploy when no trading cycle is running, because a restart breaks in-flight
-  cycles that route tools and models through this service.
+  against the old logger and green against the fix. **Deployed and verified
+  live 2026-10-06 22:33 PDT**, between trading cycles: a harness `/chat` call
+  wrote a row with `createdAt` equal to `timestamp`. Deploy this service only
+  when no trading cycle is running, because a restart breaks in-flight cycles
+  that route tools and models through it.
 - **Baseline worth beating:** prism's own success rate on the last 300 trading
   agent calls was 197/300.
 
@@ -58,7 +60,7 @@ means pointing its harness URL at our native routes, then proving parity.
 
 1. [x] Agent registry reachable from our harness (shared `prism.custom_agents`).
 2. [x] Native `/agent` runs a real trading agent with tool enforcement.
-3. [x] Harness log rows match prism's shape (`createdAt`) — landed, deploy pending.
+3. [x] Harness log rows match prism's shape (`createdAt`) — landed `d8a3c10`, deployed and verified live.
 4. [ ] **Faithful parity script** in trading-service: call trading's own
    `call_prism_agent` (it builds the system prompt, tool list and
    `autoApprove`) twice per agent, with `prism_client.url` pointed first at
