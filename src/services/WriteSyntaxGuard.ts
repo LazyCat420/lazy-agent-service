@@ -1,6 +1,29 @@
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import { createRequire } from "module";
+
+// `typescript` is a devDependency and absent from the slim production image.
+// Load it lazily: when available, JS/TS writes get a real syntax check;
+// otherwise we degrade to the JSON path only (never crash the service).
+type TsApi = {
+  transpileModule: (input: string, opts: { fileName: string; reportDiagnostics: boolean }) => {
+    diagnostics?: Array<{ category: number; messageText: string | object }>;
+  };
+  DiagnosticCategory: { Error: number };
+  flattenDiagnosticMessageText: (text: object | string, sep: string) => string;
+};
+
+let cachedTs: TsApi | null | undefined;
+function loadTs(): TsApi | null {
+  if (cachedTs !== undefined) return cachedTs;
+  try {
+    const require_ = createRequire(import.meta.url);
+    cachedTs = require_("typescript") as TsApi;
+  } catch {
+    cachedTs = null;
+  }
+  return cachedTs;
+}
 import logger from "../utils/logger.ts";
 import { effectClass } from "./PermissionModes.ts";
 import { classifyToolResult } from "./ToolResult.ts";
@@ -70,6 +93,8 @@ export function checkSyntax(fileName: string, content: string): string | null {
     }
   }
   if (GUARDED_WRITE_EXTENSIONS[ext]) {
+    const ts = loadTs();
+    if (!ts) return null; // typescript unavailable in this image — skip check
     const result = ts.transpileModule(content, {
       fileName,
       reportDiagnostics: true,
