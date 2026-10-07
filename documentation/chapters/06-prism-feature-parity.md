@@ -129,13 +129,13 @@ Each is one landed change with a test. Order = risk to the trading cycle.
   per-conversation breaker.
 - [~] **7. Tool-result bounding** *(trading path landed `1ae5dfe`, live 07:04 UTC: native trading dispatch returns McpAdapter's `modelVisibleText`; the `oversized_result` contract now holds. Still open: non-trading results and the mid-JSON slice in `expandMessagesForFunctionCall`)* with prism's 8k semantics, using our cut (no
   retrieve pointer: trading roles do not hold that tool); stop the mid-JSON slice.
-- [ ] **8. Malformed tool arguments and loop guards:** `MALFORMED_TOOL_CALL_JSON`
+- [ ] **8. Malformed tool arguments, empty outputs and loop guards** *(measured 2026-10-07: 1 of 6 box-pinned replays on our loop ended as an empty GLM reply after one model call; prism retries empty outputs in-loop)*: `MALFORMED_TOOL_CALL_JSON`
   instead of silently running the tool with `{}` (`utils/openai-compat.ts:778`
   — the source of most "'data' is required and must be an object" failures from
   `emit_structured_output`), empty-output retries, prism's stall/deviation
   detectors (`SemanticStallDetector`, `DeviationRuleEngine`,
   `RepetitionDetector`; ours warns at 3 identical iterations and stops at 5).
-- [ ] **9. Forced final turn parity:** keep the tool block, honour
+- [~] **9. Forced final turn parity:** *(the directive part landed `dfa1c84` + `f4d6e86`, live 07:43 UTC: our iteration-limit notice carries prism's `<iteration-limit>` tag, so the shim directs the turn; `forced_final_turn` holds. Still open: the cache-stable form below)* keep the tool block, honour
   `toolChoice: "none"` in our `vllm.ts` (we always send `auto`), tagged
   notices, a synthetic fallback summary.
 - [ ] **10. Memory-extraction watermark + `X-Vllm-Priority`:** today every

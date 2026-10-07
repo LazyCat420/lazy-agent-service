@@ -67,21 +67,22 @@ means pointing its harness URL at our native routes, then proving parity.
 Same input, both loops, trading's own client code (trading-service
 `scripts/harness/parity_check.py`; record in trading-client ch.21).
 
-| Boundary-probe contract | prism | ours, before (`c893bc6`) | ours, after (`6098253`) |
+| Boundary-probe contract | prism | ours, before (`c893bc6`) | ours, after (`f4d6e86`) |
 |---|---|---|---|
 | oversized tool result cut to fit | PASS | not exercised (no tool call) | PASS |
 | copied-text gate | PASS | PASS | PASS |
-| forced final turn directed | PASS | not exercised | not exercised — no forced final turn yet (ch.06 item 9) |
-| cut stream fails | PASS (1 s) | FAIL (answered) | PASS (45 s) |
+| forced final turn directed | PASS | not exercised | PASS (tagged notice, `dfa1c84`) |
+| cut stream fails | PASS (0–1 s) | FAIL (answered) | PASS (3–45 s) |
 | hung tool ended by trading's watchdog | PASS | not exercised | PASS |
 | SSE vocabulary | PASS | PASS | PASS |
 
-Real V3 prompts replayed through `base_agent.run_agent` (one sample each, after
-`8f63cba`): junior, fundamental and quant analysts all called trading tools with
-no refusal and produced artifacts on our loop. Before the fixes none could call a
-trading tool. Our loop made more tool calls and used more tokens than prism's on
-the same prompt (junior: 9 calls / 153k tokens against 4 / 74k); repeated,
-box-pinned replays are measuring whether that holds.
+**All six contracts hold on our loop as on prism's** (07:50 UTC).
+
+Real V3 prompts replayed through `base_agent.run_agent`, both loops pinned to the
+same box, two replays each: artifacts ours 5/6, prism 6/6. The miss was one empty
+GLM reply after a single model call — prism retries empty outputs in-loop, ours
+does not yet (ch.06 item 8). Tool-call counts swing on both loops; a first
+single-sample "ours makes twice the calls" did not survive the repeat.
 
 ## Plan and status
 
