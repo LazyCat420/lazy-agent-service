@@ -108,6 +108,15 @@ export default class AgenticToolResolver {
       );
     }
 
+    // A trading request gets the trading catalog under prism's names
+    // (mcp__lazy-agent-service__*); the enabledTools filter below picks the
+    // role's subset, exactly as prism filters our MCP catalog. One schema per
+    // tool: the trading name replaces a local-catalog alias of the same tool.
+    if (ToolOrchestratorService.isTradingRequest(_project)) {
+      const merged = ToolOrchestratorService.withTradingCatalog(dynamicTools);
+      dynamicTools.splice(0, dynamicTools.length, ...merged);
+    }
+
     // ── Tool filtering ────────────────────────────────────────────
     let resolvedEnabledTools: string[] | null = options.enabledTools || null;
     let shouldApplyDisabledFilter = false;

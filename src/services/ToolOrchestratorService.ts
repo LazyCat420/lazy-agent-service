@@ -169,6 +169,23 @@ let cachedStaticRoots: string[] = [];
  */
 const LOCAL_MCP_PREFIX = "mcp__lazy-tool-service__";
 
+/** The name prism gives our tools (its MCP registration of this service since
+ * 2026-08-07, see trading-service app/services/mcp_prefix.py). Trading's agents
+ * are offered their tools under it on native /agent too, so the model sees the
+ * same names on either loop. */
+const TRADING_MCP_PREFIX = "mcp__lazy-agent-service__";
+const TRADING_PROJECT = "vllm-trading-bot";
+
+/** Cached trading catalog (owner_app "trading" in tool_schemas.json). */
+let cachedTradingSchemas: Array<{
+  name: string;
+  description?: string;
+  parameters?: unknown;
+  domain?: string;
+  _mcpServer?: string;
+  _mcpOriginalName?: string;
+}> | null = null;
+
 /** Cached MCP-namespaced subset of tool_schemas.json (loaded once) */
 let cachedLocalMcpSchemas: Array<{
   name: string;
@@ -1251,6 +1268,15 @@ export default class ToolOrchestratorService {
       return { error: `Execution of tool "${name}" is not allowed in this agent session.` };
     }
 
+    // A trading agent's tool runs through ToolDispatch, which checks the call
+    // against the signed tool context the vLLM shim attached (role catalog,
+    // cycle, ticker) — the same check prism's MCP calls get. The plain
+    // executeMCPTool path below would run it with a conversation UUID as the
+    // cycle and no authorization.
+    if (ToolOrchestratorService.isTradingToolCall(name, context)) {
+      return ToolOrchestratorService.executeTradingTool(name, args, context);
+    }
+
     // Route orchestrator tools to OrchestratorService (Prism-local)
     if (ORCHESTRATOR_ONLY_TOOLS.includes(name)) {
       return ToolOrchestratorService.executeOrchestratorTool(
@@ -1669,6 +1695,81 @@ export default class ToolOrchestratorService {
       provider: found.provider,
       cached: found.cached,
     };
+  }
+
+  /**
+   * The trading catalog (owner_app "trading" in tool_schemas.json), named the
+   * way prism names it (mcp__lazy-agent-service__<tool>). Offered only on a
+   * trading request (AgenticToolResolver): the request's enabledTools picks
+   * the role's subset there, the shim filters to the signed role catalog, and
+   * ToolDispatch checks every call. No other agent is offered these.
+   */
+  static getTradingToolSchemas(): Array<{
+    name: string;
+    description?: string;
+    parameters?: unknown;
+    domain?: string;
+    _mcpServer?: string;
+    _mcpOriginalName?: string;
+  }> {
+    if (cachedTradingSchemas) return cachedTradingSchemas;
+    try {
+      const catalog = JSON.parse(
+        readFileSync(pathResolve(process.cwd(), "tool_schemas.json"), "utf-8"),
+      ) as Array<{ name: string; description?: string; parameters?: unknown; domain?: string; owner_app?: string }>;
+      cachedTradingSchemas = catalog
+        .filter((tool) => tool.owner_app === "trading")
+        .map((tool) => ({
+          name: `${TRADING_MCP_PREFIX}${tool.name}`,
+          description: tool.description,
+          parameters: tool.parameters,
+          domain: tool.domain || "Trading",
+          _mcpServer: "lazy-agent-service",
+          _mcpOriginalName: tool.name,
+        }));
+    } catch (error: unknown) {
+      logger.error(`[ToolOrchestrator] Failed to load the trading tool catalog: ${getErrorMessage(error)}`);
+      cachedTradingSchemas = [];
+    }
+    return cachedTradingSchemas;
+  }
+
+  /** `tools` plus the trading catalog, one schema per tool: a trading tool's
+   * prism-named schema replaces any alias of it already in the list. */
+  static withTradingCatalog<T extends { name: string }>(tools: T[]): Array<T | { name: string; description?: string; parameters?: unknown; domain?: string }> {
+    const trading = ToolOrchestratorService.getTradingToolSchemas();
+    const names = new Set(trading.map((tool) => tool._mcpOriginalName));
+    const kept = tools.filter((tool) => !names.has(tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "")));
+    return [...kept, ...trading.map(({ _mcpServer, _mcpOriginalName, ...schema }) => schema)];
+  }
+
+  static isTradingRequest(project: string | null | undefined): boolean {
+    return project === TRADING_PROJECT;
+  }
+
+  /** A trading agent calling a tool from the trading catalog, by any spelling. */
+  static isTradingToolCall(name: string, context: ToolExecutionContext = {}): boolean {
+    if (!ToolOrchestratorService.isTradingRequest(context.project)) return false;
+    const bare = name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+    if (bare !== name && !name.startsWith(TRADING_MCP_PREFIX) && !name.startsWith(LOCAL_MCP_PREFIX)) return false;
+    return ToolOrchestratorService.getTradingToolSchemas().some((tool) => tool._mcpOriginalName === bare);
+  }
+
+  static async executeTradingTool(
+    name: string,
+    args: Record<string, unknown> = {},
+    context: ToolExecutionContext = {},
+  ) {
+    const { dispatchTool } = await import("./ToolDispatch.js");
+    try {
+      return await dispatchTool(name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, ""), args, {
+        project: context.project || undefined,
+        agentName: context.agent || undefined,
+        transport: "rest",
+      });
+    } catch (error: unknown) {
+      return { error: getErrorMessage(error), is_error: true };
+    }
   }
 
   /**

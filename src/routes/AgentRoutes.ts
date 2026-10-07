@@ -4,6 +4,7 @@ import AgenticLoopService from "../services/AgenticLoopService.ts";
 import AgentSessionRegistry from "../services/AgentSessionRegistry.ts";
 import LiveFrameService from "../services/LiveFrameService.ts";
 import { handleAgent } from "./ChatRoutes.ts";
+import { prepareTradingAgentRequest } from "../services/TradingAgentRequest.ts";
 import logger from "../utils/logger.ts";
 import { handleSseRequest, handleJsonRequest } from "../utils/SseUtilities.ts";
 
@@ -197,7 +198,7 @@ router.post(
   "/",
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     // Force agentic mode — the entire point of this endpoint
-    const params = {
+    let params = {
       ...req.body,
       functionCallingEnabled: true,
       agenticLoopEnabled: true,
@@ -211,6 +212,15 @@ router.post(
       //   2. body.workspaceRoot (for server-to-server / API callers)
       workspaceRoot: req.workspaceRoot || req.body.workspaceRoot || null,
     };
+    // The same trading boundary /prism-proxy applies (signed tool context,
+    // learning marker, unattended) — see TradingAgentRequest.ts. A no-op for
+    // every other project.
+    try {
+      params = prepareTradingAgentRequest(params);
+    } catch (error) {
+      res.status(422).json({ error: String(error) });
+      return;
+    }
 
     const acceptsSse = req.headers.accept?.includes("text/event-stream");
     const streamQuery = req.query.stream;

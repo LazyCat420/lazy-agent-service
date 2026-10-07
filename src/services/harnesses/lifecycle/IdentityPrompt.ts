@@ -11,7 +11,7 @@
  * already did. The assembled prompt is still recorded in conversationMeta.
  */
 export function applyAssembledSystemPrompt(
-  options: { systemPrompt?: string },
+  options: Record<string, unknown>,
   assembledPrompt: string,
 ): void {
   if (!options.systemPrompt) {
