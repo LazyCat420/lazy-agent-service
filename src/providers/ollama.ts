@@ -6,7 +6,7 @@ import {
   StreamChunk,
 } from "../types/provider.ts";
 import { ProviderError } from "../utils/errors.ts";
-import { STREAMING_DISPATCHER } from "../utils/openai-compat.ts";
+import { STREAMING_DISPATCHER, prependIdentitySystemMessage } from "../utils/openai-compat.ts";
 import logger from "../utils/logger.ts";
 
 import { TYPES, getDefaultModels } from "../config.ts";
@@ -93,7 +93,9 @@ export function createOllamaProvider(
         `generateText model=${model} baseUrl=${baseUrl}`,
       );
       try {
-        const preparedMessages = prepareOllamaMessages(messages);
+        const preparedMessages = prepareOllamaMessages(
+          prependIdentitySystemMessage(messages, options.systemPrompt),
+        );
 
         const requestBody = {
           model,
@@ -186,7 +188,9 @@ export function createOllamaProvider(
           );
         }
 
-        const preparedMessages = prepareOllamaMessages(messages);
+        const preparedMessages = prepareOllamaMessages(
+          prependIdentitySystemMessage(messages, options.systemPrompt),
+        );
 
         const requestBody = {
           model,

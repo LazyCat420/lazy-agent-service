@@ -16,6 +16,7 @@ import {
 import {
   convertToolsToOpenAI,
   normalizeUsage,
+  prependIdentitySystemMessage,
 } from "../utils/openai-compat.ts";
 import type { TokenUsage } from "../types/admin.ts";
 import {
@@ -719,11 +720,14 @@ const openaiProvider = {
     options: ProviderOptions = {},
   ) {
     logger.provider("OpenAI", `generateText model=${model}`);
+    // OpenAI takes the identity prompt in-band: put it first (see
+    // prependIdentitySystemMessage).
+    const effectiveMessages = prependIdentitySystemMessage(messages, options.systemPrompt);
     try {
       if (useResponsesAPI(model)) {
-        return await this._generateTextResponses(messages, model, options);
+        return await this._generateTextResponses(effectiveMessages, model, options);
       }
-      return await this._generateTextChatCompletions(messages, model, options);
+      return await this._generateTextChatCompletions(effectiveMessages, model, options);
     } catch (error: unknown) {
       toProviderError(error);
     }
@@ -1074,11 +1078,12 @@ const openaiProvider = {
     options: ProviderOptions = {},
   ) {
     logger.provider("OpenAI", `generateTextStream model=${model}`);
+    const effectiveMessages = prependIdentitySystemMessage(messages, options.systemPrompt);
     try {
       if (useResponsesAPI(model)) {
-        yield* this._streamResponses(messages, model, options);
+        yield* this._streamResponses(effectiveMessages, model, options);
       } else {
-        yield* this._streamChatCompletions(messages, model, options);
+        yield* this._streamChatCompletions(effectiveMessages, model, options);
       }
     } catch (error: unknown) {
       if (

@@ -45,6 +45,7 @@ import {
   MEDIA_STRATEGIES,
   type PreparedMessage,
   type OpenAICompletionResponse,
+  prependIdentitySystemMessage,
 } from "../utils/openai-compat.ts";
 import { ORCHESTRATOR_ONLY_TOOLS } from "../services/OrchestratorPrompt.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
@@ -458,7 +459,7 @@ export function createLmStudioProvider(
           throw new DOMException("The user aborted a request.", "AbortError");
         }
 
-        const prepared = prepareOpenAICompatMessages(messages, {
+        const prepared = prepareOpenAICompatMessages(prependIdentitySystemMessage(messages, options.systemPrompt), {
           mediaStrategy: MEDIA_STRATEGIES.IMAGES_ONLY,
         });
         const payload: Record<string, unknown> = {
@@ -973,7 +974,7 @@ export function createLmStudioProvider(
           yield { type: "status", message: "Extracting video frames…" };
           await expandVideoToFrames(messages);
         }
-        const prepared = prepareOpenAICompatMessages(messages, {
+        const prepared = prepareOpenAICompatMessages(prependIdentitySystemMessage(messages, options.systemPrompt), {
           mediaStrategy: MEDIA_STRATEGIES.IMAGES_ONLY,
         });
         // ── Determine tool-calling strategy ──────────────────────

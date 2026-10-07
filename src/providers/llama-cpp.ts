@@ -48,6 +48,7 @@ import {
   fetchOpenAICompat,
   MEDIA_STRATEGIES,
   type OpenAICompletionResponse,
+  prependIdentitySystemMessage,
 } from "../utils/openai-compat.ts";
 import type { TokenUsage } from "../types/admin.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
@@ -200,7 +201,7 @@ export function createLlamaCppProvider(
         // Expand video attachments to image frames (ffmpeg) before message prep
         await expandVideoToFrames(messages);
 
-        const prepared = prepareOpenAICompatMessages(messages, {
+        const prepared = prepareOpenAICompatMessages(prependIdentitySystemMessage(messages, options.systemPrompt), {
           mediaStrategy: MEDIA_STRATEGIES.TEXT_FALLBACK,
         });
 
@@ -292,7 +293,7 @@ export function createLlamaCppProvider(
         // Expand video attachments to image frames (ffmpeg) before message prep
         await expandVideoToFrames(messages);
 
-        const prepared = prepareOpenAICompatMessages(messages, {
+        const prepared = prepareOpenAICompatMessages(prependIdentitySystemMessage(messages, options.systemPrompt), {
           mediaStrategy: MEDIA_STRATEGIES.TEXT_FALLBACK,
         });
 

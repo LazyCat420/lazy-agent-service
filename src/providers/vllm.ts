@@ -21,6 +21,7 @@ import {
   rewriteNonLeadingSystemMessages,
   MEDIA_STRATEGIES,
   type OpenAICompletionResponse,
+  prependIdentitySystemMessage,
 } from "../utils/openai-compat.ts";
 import type { InputMessage } from "../utils/openai-compat.ts";
 
@@ -66,7 +67,7 @@ export function createVllmProvider(
       logger.provider("vLLM", `generateText model=${model} baseUrl=${baseUrl}`);
       try {
         const rewrittenMessages = rewriteNonLeadingSystemMessages(
-          messages as InputMessage[],
+          prependIdentitySystemMessage(messages as InputMessage[], options.systemPrompt),
           model,
         );
         const prepared = prepareOpenAICompatMessages(rewrittenMessages, {
@@ -157,7 +158,7 @@ export function createVllmProvider(
       );
       try {
         const rewrittenMessages = rewriteNonLeadingSystemMessages(
-          messages as InputMessage[],
+          prependIdentitySystemMessage(messages as InputMessage[], options.systemPrompt),
           model,
         );
         const prepared = prepareOpenAICompatMessages(rewrittenMessages, {

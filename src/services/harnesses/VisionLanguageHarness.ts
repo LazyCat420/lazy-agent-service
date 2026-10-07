@@ -41,6 +41,7 @@ import { finalizePassTracker } from "./lifecycle/TrackerFinalizer.ts";
 import { handleCodexPlanningResponse } from "./lifecycle/CodexPlanningDetector.ts";
 
 import PlanningModeService from "../PlanningModeService.ts";
+import { applyAssembledSystemPrompt } from "./lifecycle/IdentityPrompt.ts";
 
 import type {
   ConversationMessage,
@@ -186,7 +187,8 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
               ...(context.conversationMeta || {}),
               systemPrompt: assembledPrompt,
             };
-            options.systemPrompt = assembledPrompt;
+            // A caller's own systemPrompt wins (see IdentityPrompt.ts).
+            applyAssembledSystemPrompt(options, assembledPrompt);
           }
 
           if (

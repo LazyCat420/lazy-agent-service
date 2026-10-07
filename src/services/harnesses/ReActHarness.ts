@@ -46,6 +46,7 @@ import { createSandboxCheckpoint, restoreSandboxCheckpoint } from "./lifecycle/S
 
 import PlanningModeService from "../PlanningModeService.ts";
 import PromptLocaleService from "../PromptLocaleService.ts";
+import { applyAssembledSystemPrompt } from "./lifecycle/IdentityPrompt.ts";
 
 import type {
   ConversationMessage,
@@ -273,7 +274,8 @@ export default class ReActHarness extends BaseAgenticHarness {
             // Feed the identity prompt to providers as a first-class parameter
             // (Google → systemInstruction, Anthropic → payload.system, etc.)
             // so it never needs to exist in the messages array.
-            options.systemPrompt = assembledPrompt;
+            // A caller's own systemPrompt wins (see IdentityPrompt.ts).
+            applyAssembledSystemPrompt(options, assembledPrompt);
           }
 
           if (

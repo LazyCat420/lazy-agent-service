@@ -435,6 +435,30 @@ export async function expandVideoToFrames(
 }
 
 /**
+ * Prepend the identity system prompt (`options.systemPrompt`) as a `system`
+ * message at the start of the array.
+ *
+ * The harness keeps the identity prompt out of the messages array and hands
+ * it to providers as a first-class option (Anthropic → payload.system,
+ * Google → systemInstruction). OpenAI-compatible providers take system
+ * prompts in-band, so they must re-inject it here or the model never sees it.
+ * Until 2026-10-07 none of ours did: every native /agent run on vLLM,
+ * LM Studio, Ollama, llama.cpp or OpenAI reached the model with no system
+ * prompt — trading's cycle agents (which send theirs only as `systemPrompt`)
+ * and every persona's assembled identity alike. Ported from prism's
+ * providers/openai-compat.ts (same name, same behaviour).
+ *
+ * Returns the original array unchanged when no identity prompt is provided.
+ */
+export function prependIdentitySystemMessage<T extends { role: string; content?: string | unknown }>(
+  messages: T[],
+  identityPrompt: string | undefined,
+): T[] {
+  if (!identityPrompt) return messages;
+  return [{ role: "system", content: identityPrompt } as T, ...messages];
+}
+
+/**
  * Convert messages with media to OpenAI-compatible multipart content format.
  * Handles images, tool results, assistant tool calls, and optionally
  * audio/video/PDF based on the media strategy.
