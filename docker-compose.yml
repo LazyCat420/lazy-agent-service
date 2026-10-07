@@ -9,7 +9,9 @@ services:
       - .env
     environment:
       - TZ=America/Los_Angeles
-      - API_SERVER_KEY=sun-trading-secure-api-key-2026
+      # API_SERVER_KEY comes from env_file (.env); do not pin it here — a
+      # hardcoded override published the key and pinned it stale (see the
+      # api-server-key-drift incident).
       - CHART_OUTPUT_DIR=/app/data/charts
       - RUNTIME_STORE_PATH=/app/runtime-data/run_store_durable.json
       # The /platform dashboard reads tool_usage_stats from the TRADING
