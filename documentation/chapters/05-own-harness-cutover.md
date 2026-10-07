@@ -1,7 +1,7 @@
 ---
 part: Plans
 status: in-progress
-updated: 2026-10-06
+updated: 2026-10-07
 review-by: 2026-10-20
 ---
 
@@ -34,10 +34,16 @@ means pointing its harness URL at our native routes, then proving parity.
 
 ## Measured 2026-10-06
 
-- **Native `/agent` works end to end.** A trading Junior Analyst call ran the
-  persona, its tool list, the vLLM shim (Nemotron on the Jetson) and memory
-  injection. It also **refused an unauthorized tool** (`lazy_web_search`), which
-  shows tool enforcement is live.
+- **Native `/agent` runs a trading call, but not a faithful one** (corrected
+  2026-10-07). The 2026-10-06 Junior Analyst call ran the persona, the vLLM shim
+  and memory injection, and refused `lazy_web_search` — which was read as tool
+  enforcement working. It was not: `lazy_web_search` is on the junior's
+  whitelist. The native route never mints the signed trading tool context (only
+  `/prism-proxy` calls `prepareToolContext`), and `ToolDispatch.dispatchTool`
+  refuses every `vllm-trading-bot` call without it. The same run reached the
+  model with **no system prompt**: `ReActHarness` swaps the caller's
+  `systemPrompt` for the persona's and `providers/vllm.ts` never sends
+  `options.systemPrompt`. Both are items 0–1 of the port list in chapter 06.
 - **Replays from `prism.requests` are not faithful.** Prism strips `systemPrompt`,
   `enabledTools` and `autoApprove` from the request copies it stores. Without
   `autoApprove`, `ApprovalGate` waits `APPROVAL_TIMEOUT_MS = 120_000` for a human
@@ -59,16 +65,24 @@ means pointing its harness URL at our native routes, then proving parity.
 ## Plan and status
 
 1. [x] Agent registry reachable from our harness (shared `prism.custom_agents`).
-2. [x] Native `/agent` runs a real trading agent with tool enforcement.
+2. [~] Native `/agent` runs a real trading agent — without its system prompt or
+   its trading tools (see *Measured*; fixed under step 5).
 3. [x] Harness log rows match prism's shape (`createdAt`) — landed `d8a3c10`, deployed and verified live.
-4. [ ] **Faithful parity script** in trading-service: call trading's own
-   `call_prism_agent` (it builds the system prompt, tool list and
-   `autoApprove`) twice per agent, with `prism_client.url` pointed first at
-   `…:5591/prism-proxy` and then at `…:5591`. Compare success, latency, tool
-   sequence and structured-output validity.
-5. [ ] Fix every parity gap found. Known risks: prism force-adds core tools; the
-   thinking flags; the `emit_structured_output` wrapper; the 3-strike repeat
-   abort; the 4096-token output floor.
+4. [ ] **Faithful parity script** — built: trading-service
+   `scripts/harness/parity_check.py` (`f3804206`). The same input goes to
+   `…:5591/prism-proxy` and `…:5591` through trading's own client code, for
+   three kinds of work: the boundary probe's contract scenarios; real V3 prompts
+   that `agent_runner` recorded as `prompt.assembled` traces, replayed through
+   `base_agent.run_agent` (the cycle's code path — `call_prism_agent` serves
+   only the briefings, news and the consolidator); and the flash briefing's
+   `call_prism_agent`. Runs use synthetic `probe-parity-` cycles, and the
+   trading bridge now refuses cycle-escaping write tools for any synthetic
+   cycle (`2ebf40ea`). Results: below once measured.
+5. [ ] Close every gap: the P0 port list in chapter 06 (trading boundary on
+   native `/agent`, system prompt, trading tools, DENY-before-full-auto,
+   context window, stream resilience, rolling window, result bounding,
+   malformed arguments, forced final turn, memory extraction). One item at a
+   time, each with a test, each re-measured with the parity script.
 6. [ ] Flip trading's harness URL (`PRISM_URL`) with a per-agent flag, default off.
    Then one agent → all agents → desk chat → embeddings, watching real cycles.
 7. [ ] Move the other repos the same way, one at a time: trading-client,
