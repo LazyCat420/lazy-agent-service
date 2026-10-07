@@ -207,6 +207,7 @@ export function createVllmProvider(
 
         const reader = response.body!.getReader();
         for await (const chunk of parseSSEStream(reader, {
+          label: "vllm",
           signal: options.signal,
           thinkingEnabled: options.thinkingEnabled,
         })) {

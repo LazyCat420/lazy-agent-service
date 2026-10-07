@@ -4,6 +4,7 @@
 // Shared helpers for providers that use the OpenAI Chat Completions
 // API format: lm-studio, vllm, llama-cpp, and openai itself.
 
+import { ProviderError } from "./errors.ts";
 import { Agent } from "undici";
 import { getDataUrlMimeType } from "./media.ts";
 import { ThinkTagParser, extractThinkTags } from "./ThinkTagParser.ts";
@@ -177,6 +178,8 @@ export interface PreparedMessage {
 
 interface SSEParseOptions {
   signal?: AbortSignal;
+  /** Provider name for errors ("vllm" → "The vllm stream ended …"). */
+  label?: string;
   thinkingEnabled?: boolean;
   onUsage?: (json: OpenAICompletionResponse, usage: TokenUsage) => void;
   onChunkJson?: (json: OpenAICompletionResponse) => void;
@@ -671,6 +674,8 @@ export async function* parseSSEStream(
   const thinkParser = suppressThinking ? null : new ThinkTagParser();
   const pendingToolCalls: Record<number, PendingToolCall> = {};
   let lastFinishReason: string | null = null;
+  // A finish_reason or [DONE] arrived: the reply is complete.
+  let sawTerminalEvent = false;
   // Track partial output for fallback usage estimation on premature termination
   let partialOutputCharacters = 0;
   let partialReasoningCharacters = 0;
@@ -700,7 +705,10 @@ export async function* parseSSEStream(
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith(":")) continue; // skip empty lines / comments
-        if (trimmed === "data: [DONE]") continue;
+        if (trimmed === "data: [DONE]") {
+          sawTerminalEvent = true;
+          continue;
+        }
         if (!trimmed.startsWith("data: ")) continue;
 
         try {
@@ -794,7 +802,10 @@ export async function* parseSSEStream(
 
           // If finish_reason indicates tool calls, yield accumulated tool calls
           const finishReason = json.choices?.[0]?.finish_reason;
-          if (finishReason) lastFinishReason = finishReason;
+          if (finishReason) {
+            lastFinishReason = finishReason;
+            sawTerminalEvent = true;
+          }
           if (finishReason === "tool_calls" || finishReason === "tool") {
             for (const toolCall of Object.values(pendingToolCalls)) {
               let args: Record<string, unknown> = {};
@@ -815,6 +826,21 @@ export async function* parseSSEStream(
           // skip malformed JSON lines
         }
       }
+    }
+
+    // A body that closed without a finish_reason or [DONE] is a cut-off
+    // reply, not a finished one (its pending tool calls are incomplete).
+    // Ported from prism (ProviderStreamResilience.streamEndedEarlyError,
+    // 2026-09-23): 502, an upstream fault, so the harness reports a provider
+    // error instead of booking the partial text as the model's answer. Until
+    // 2026-10-07 ours returned it as the answer (boundary probe cut_stream).
+    if (!sawTerminalEvent && !options.signal?.aborted) {
+      const label = options.label ?? "OpenAI-compatible";
+      throw new ProviderError(
+        label,
+        `The ${label} stream ended before the response completed (no finish_reason)`,
+        502,
+      );
     }
 
     // Flush any remaining buffered content from the think parser
