@@ -1,4 +1,19 @@
+---
+part: Plans
+status: in-progress
+updated: 2026-10-08
+review-by: 2026-10-22
+---
 # Harness roadmap — deferred mechanisms (2026-10-07)
+
+> Classified `in-progress` by the documentation audit of 2026-10-08. The
+> *landed* half is shipped and recorded in
+> [harness-upgrades-2026-10-07.md](harness-upgrades-2026-10-07.md) (`2e9fc09`,
+> modules verified present). **What is left is the seven deferred mechanisms in
+> "Deferred mechanisms" below — none of them is started**; each one is a design
+> note, not work in flight, so a reader picking one up is starting it. The
+> status is `in-progress` because the chapter as a whole is live, not because
+> any single mechanism is underway.
 
 Status: wave 1 + wave 2 landed on `main` and battle-tested (`src/services/harnesses/__tests__/HarnessBattle.test.ts`, 6 scenarios). This chapter tracks what was deliberately deferred in `docs/harness-research/README.md` and the design notes for each, so the next session can pick one up without re-deriving context.
 

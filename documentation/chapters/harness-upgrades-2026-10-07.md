@@ -1,4 +1,19 @@
+---
+part: Features
+status: shipped
+updated: 2026-10-08
+review-by: 2026-11-08
+---
 # Harness upgrades from the agentic-harness research (2026-10-07)
+
+> Classified `shipped` by the documentation audit of 2026-10-08. Evidence
+> checked, not taken from the chapter: `2e9fc09` exists on `main`
+> (*"harness upgrades from the agentic-harness research (checklist 1-10)"*) and
+> all eight modules the table calls new are present in the tree —
+> `ToolResult.ts`, `PermissionModes.ts`, `StuckDetector.ts`, `RuleLoader.ts`,
+> `SkillRegistry.ts`, `PromptedToolCallingHarness.ts`, `SubagentRegistry.ts`,
+> `DelegateTool.ts`. Not `verified`: the 1075/1075 figure is a suite result at
+> landing time, and nothing here confirms the running container serves it.
 
 Source research: [docs/harness-research/](https://github.com/LazyCat420/lazy-agent-service/blob/main/docs/harness-research/README.md) (six harness reports). Implemented in commit `2e9fc09`.
 
