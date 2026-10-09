@@ -15,6 +15,7 @@ import {
   trackToolErrors,
 } from "./lifecycle/PostExecutionEmitter.ts";
 import { runExhaustionRecoveryPass } from "./lifecycle/ExhaustionRecovery.ts";
+import { formatTurnNotice } from "../../platform/questions/TurnMailbox.ts";
 import { injectErrorAsConversationMessage } from "./lifecycle/OutputTruncationRecovery.ts";
 import { manageContextPressure } from "./lifecycle/ContextPressureManager.ts";
 import { finalizePassTracker } from "./lifecycle/TrackerFinalizer.ts";
@@ -258,6 +259,24 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
     try {
       while (state.iterations < resolvedMaxIterations) {
         state.iterations++;
+
+        // ── Turn-input drain boundary (prism harness_next) ──
+        // Mid-turn user updates, question answers, and expiry notices are
+        // surfaced to the model here instead of blocking the loop.
+        try {
+          if (context.turnMailbox?.has(context.runId)) {
+            context.questionRegistry?.sweepExpired();
+            const entries = context.turnMailbox.drain(context.runId);
+            if (entries.length > 0) {
+              currentMessages.push({
+                role: "user",
+                content: formatTurnNotice(entries),
+              });
+            }
+          }
+        } catch (mailboxErr: unknown) {
+          logger.debug(`[Harness] Turn mailbox drain failed (non-blocking): ${mailboxErr instanceof Error ? mailboxErr.message : String(mailboxErr)}`);
+        }
 
         emit({
           type: SERVER_SENT_EVENT_TYPES.STATUS,

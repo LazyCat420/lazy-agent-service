@@ -36,6 +36,18 @@ export async function checkAndWaitForApproval(
     return { isApproved: true, shouldApproveAll: false };
   }
 
+  // Unattended runs (no person at the keyboard — trading cycles, scheduled
+  // tasks): an unanswerable approval ask must never hang the loop. Deny
+  // immediately; the model reads the rejection and adapts (prism's
+  // `unattended` semantics, 2026-09-27 audit §1).
+  if (options.unattended === true) {
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.STATUS,
+      message: `Unattended run: approval for ${needsApproval.map((toolCall) => toolCall.name).join(", ")} denied automatically`,
+    });
+    return { isApproved: false, shouldApproveAll: false };
+  }
+
   // Emit approval_required events for each tool needing approval
   for (const toolCallRequiringApproval of needsApproval) {
     emit({
