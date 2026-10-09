@@ -39,6 +39,41 @@ function truncateResultIfNeeded(result: any, project?: string, toolName?: string
 }
 import type AgentHooks from "../../AgentHooks.ts";
 import { executeTakeNote, NoteStore } from "../../../platform/memory/NoteStore.ts";
+import { retrieveOffloadedContentTool } from "../../../platform/offload/retrieveOffloadedContent.ts";
+import { OffloadPolicy, OFFLOAD_STUB_HEADER } from "../../../platform/offload/OffloadPolicy.ts";
+import { OffloadStore } from "../../../platform/offload/OffloadStore.ts";
+
+/** Process-wide retrieve tool; file-backed store shared via data/offload_store/. */
+const retrieveOffloadedTool = retrieveOffloadedContentTool(new OffloadStore());
+
+/**
+ * Offload oversized tool results (prism pattern): the model sees leading
+ * lines within the 7,600-char budget plus a pointer; the full payload is
+ * retrievable via retrieve_offloaded_content with the returned offload_id.
+ * Idempotent — already-offloaded stubs and small results pass through.
+ */
+async function applyOffloadPolicyToResults(
+  results: ToolResult[],
+  context: AgenticContext,
+): Promise<void> {
+  for (const entry of results) {
+    if (entry.name === "retrieve_offloaded_content") continue;
+    if (typeof entry.result === "string" && entry.result.startsWith(OFFLOAD_STUB_HEADER)) continue;
+    try {
+      const applied = await OffloadPolicy.apply(entry.result, {
+        toolName: entry.name,
+        runId: context.runId,
+      });
+      if (applied.offloaded && applied.offloadId) {
+        entry.result = applied.modelVisible;
+      }
+    } catch (offloadErr: unknown) {
+      logger.debug(
+        `[ToolExecutor] Offload policy skipped for ${entry.name}: ${offloadErr instanceof Error ? offloadErr.message : String(offloadErr)}`,
+      );
+    }
+  }
+}
 import type {
   ToolCall,
   ToolResult,
@@ -133,6 +168,16 @@ export async function executeToolBatch(
           runId,
           new NoteStore({ repoRoot: workspaceRoot || undefined }),
         );
+        await hooks.run("afterToolCall", toolCall, result, context);
+        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+      }
+
+      // ── retrieve_offloaded_content internal tool ─────────────
+      // Serves the full payload of an offloaded tool result; never
+      // dispatched to tools-api.
+      if (toolCall.name === "retrieve_offloaded_content") {
+        const started = Date.now();
+        const result = await retrieveOffloadedTool.execute(toolCall.args ?? {});
         await hooks.run("afterToolCall", toolCall, result, context);
         return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
       }
@@ -252,6 +297,7 @@ export async function executeToolBatch(
     }),
   );
 
+  await applyOffloadPolicyToResults(results, context);
   return results;
 }
 

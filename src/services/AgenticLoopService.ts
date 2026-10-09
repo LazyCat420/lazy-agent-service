@@ -19,6 +19,8 @@ import { SkillRegistry } from "../platform/skills/SkillRegistry.ts";
 import { enforceVerificationContract, type VerificationResult } from "../platform/verify/VerificationContract.ts";
 import { TAKE_NOTE_TOOL_SCHEMA } from "../platform/memory/NoteStore.ts";
 import { applyModelProfile } from "../platform/models/applyModelProfile.ts";
+import { retrieveOffloadedContentTool } from "../platform/offload/retrieveOffloadedContent.ts";
+import { OffloadStore } from "../platform/offload/OffloadStore.ts";
 import { GoalStore, type Goal } from "../platform/goals/GoalStore.ts";
 import { evaluateGoal } from "../platform/goals/GoalGate.ts";
 import type { VerifierResult } from "../platform/verify/DeterministicVerifiers.ts";
@@ -377,6 +379,7 @@ export default class AgenticLoopService {
       const internalTools: Array<{ name: string }> = [];
       if (hasSkills) internalTools.push({ ...SKILL_READ_TOOL_SCHEMA });
       internalTools.push({ ...TAKE_NOTE_TOOL_SCHEMA });
+      internalTools.push({ ...retrieveOffloadedContentTool(new OffloadStore()).definition });
       if (internalTools.length > 0) {
         resolvedTools.finalTools = [...resolvedTools.finalTools, ...internalTools];
       }
