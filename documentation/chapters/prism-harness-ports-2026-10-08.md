@@ -1,8 +1,36 @@
+---
+part: Features
+status: shipped
+updated: 2026-10-09
+---
+
 # Prism harness ports (2026-10-08)
 
 Landed `8e4a7a8..2660324` on `main`. Ports five prism-service harness features into
 lazy-agent-service. Audit and full rationale: `docs/PRISM_HARNESS_AUDIT_2026-10-08.md`.
 Prism itself was not modified (read-only reference).
+
+> **Classified 2026-10-09 (docs review): `shipped`.** The chapter had no front
+> matter, so it was invisible to the staleness review. Ruled from **call sites,
+> not from this chapter's prose** — all five ports exist *and* are reached from
+> the loop: `applyModelProfile`, `TurnMailbox` and `evaluateGoal` are all
+> referenced from `src/services/AgenticLoopService.ts`,
+> `retrieve_offloaded_content` from `src/services/harnesses/lifecycle/ToolExecutor.ts`,
+> `options.unattended` from `src/services/harnesses/lifecycle/ApprovalGate.ts:43`,
+> and `context.questionRegistry?.sweepExpired()` from
+> `src/services/harnesses/PromptedToolCallingHarness.ts:268`. `2660324` is an
+> ancestor of `main` and `docs/PRISM_HARNESS_AUDIT_2026-10-08.md` is present.
+> Not `verified`: nothing was confirmed in a running service this pass. The
+> deferred items in "Not ported" stay live in `06-prism-feature-parity.md`
+> (`in-progress`, `review-by: 2026-10-21`), so this chapter does not need to
+> age.
+>
+> **One thing for whoever next opens ch.06:** its "General capability (P1)"
+> list still names **goals, mid-turn input, model profiles, budget pause** as
+> outstanding. All four are what this chapter landed — `src/platform/goals/`,
+> `src/platform/questions/TurnMailbox`, `src/platform/models/`, and
+> `resolveBudgetAction` in `src/platform/approval/UnattendedPolicy.ts`. That
+> list has not been ticked off since 2026-10-08.
 
 ## 1. Tool-result offloading
 
