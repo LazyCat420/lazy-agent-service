@@ -1,3 +1,9 @@
+---
+part: Features
+status: verified
+updated: 2026-10-09
+---
+
 # 08 — Shared Web Extract & Search Fallback
 
 **Date:** 2026-10-09. Companion to `04-shared-web-search.md` (Exa-only era).
