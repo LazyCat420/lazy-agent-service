@@ -7,6 +7,7 @@ import logger from "../utils/logger.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import { ORCHESTRATOR_ONLY_TOOLS } from "./OrchestratorPrompt.ts";
 import { webSearch } from "./WebSearchService.ts";
+import { webExtract } from "./WebExtractService.ts";
 import { createAbortController } from "../utils/AbortController.ts";
 import {
   DOMAINS,
@@ -1395,6 +1396,14 @@ export default class ToolOrchestratorService {
       return ToolOrchestratorService.executeMCPTool(name, args, context);
     }
 
+    // scrape_url is never sent to tools-service. It now reads through the
+    // shared WebExtractService (scraper-service, engine auto) with the
+    // truncate-and-store budget, so the model gets clean text under a fixed
+    // char limit instead of an unbounded page dump.
+    if (name === "scrape_url") {
+      return ToolOrchestratorService.executeWebExtract(args);
+    }
+
     // search_web is never sent to tools-service. Its search there is
     // DuckDuckGo alone (Brave is unfunded and trading-client clears its key at
     // startup), and DuckDuckGo bot-blocks this network's one public IP, so
@@ -1748,6 +1757,38 @@ export default class ToolOrchestratorService {
   }
 
   /**
+   * `scrape_url`, answered by WebExtractService: one page through
+   * scraper-service (engine auto) under a character budget. `char_limit` is
+   * optional and clamped by the service; a truncated reply names the stored
+   * full-text file and how to read it.
+   */
+  static async executeWebExtract(args: Record<string, unknown> = {}) {
+    const url = typeof args.url === "string" ? args.url.trim() : "";
+    if (!url) {
+      return { error: "'url' is required and must be a non-empty string" };
+    }
+    const charLimit = Number(args.char_limit ?? args.charLimit ?? undefined) || undefined;
+    const extracted = await webExtract(url, charLimit);
+    if (extracted.status !== "ok") {
+      return {
+        url,
+        content: "",
+        success: false,
+        error: `Extraction did not run: ${extracted.error || "no detail"}. Try again later or use another source.`,
+      };
+    }
+    return {
+      url,
+      success: true,
+      content: extracted.content,
+      truncated: extracted.truncated,
+      ...(extracted.storedPath ? { stored_path: extracted.storedPath, read_hint: extracted.readHint } : {}),
+      ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
+      cached: extracted.cached,
+    };
+  }
+
+  /**
    * `search_web`, answered by WebSearchService (Exa, with one cache and one
    * rate limit for the whole network) in the shape tools-service returns:
    * {query, limit, results: [{title, url, snippet, displayUrl}], totalResults,
@@ -1775,7 +1816,9 @@ export default class ToolOrchestratorService {
       return {
         title: result.title,
         url: result.url,
-        snippet: result.snippet,
+        // omp's formatForLLM cap: metadata rows stay compact so ten results
+        // cost a fraction of the context one long snippet would.
+        snippet: result.snippet.length > 240 ? `${result.snippet.slice(0, 240)}…` : result.snippet,
         displayUrl,
         ...(result.published ? { published: result.published } : {}),
       };

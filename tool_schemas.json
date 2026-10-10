@@ -2510,13 +2510,17 @@
   },
   {
     "name": "scrape_url",
-    "description": "Scrape the main text content from a URL. Use this to read articles or SEC filings.",
+    "description": "Read a web page's text content. Use AFTER search_web: pick the 2-3 most promising result URLs and scrape each one rather than guessing from snippets alone. Handles JS-heavy pages (engine auto). Returns clean text under a fixed character budget: if truncated, the middle is stored to a file and the reply names it \u2014 read that file (with line ranges) to continue. Prefer narrower queries or site: searches over scraping many pages.",
     "parameters": {
       "type": "object",
       "properties": {
         "url": {
           "type": "string",
           "description": "The URL to scrape."
+        },
+        "char_limit": {
+          "type": "number",
+          "description": "Optional character budget for the returned text (default 15000, clamped 2000-500000). Raise only for pages you know are dense with needed detail."
         }
       },
       "required": [

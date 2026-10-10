@@ -16,8 +16,9 @@
 //   - Exa calls go out one at a time, at least 1.5 s apart, for the whole network;
 //   - after a 429 nothing is sent for a minute and callers get `rate_limited` at
 //     once instead of piling on.
-// There is no fallback to a scraping engine, on purpose. Callers that want news
-// use news_search (keyed news APIs) instead.
+// Exa is the primary backend. Since 2026-10-09 a failed Exa call (rate
+// limited, busy, down) falls back to scraper-service's self-hosted SearXNG
+// collector, which answers from the LAN and does not share Exa's limits.
 //
 // Services reach it through POST /execute/web_search, which is deliberately
 // not in tool_schemas.json. Agents on this service's harness reach it through
@@ -36,9 +37,11 @@ export interface WebResult {
 
 export type WebSearchStatus = "ok" | "error" | "rate_limited" | "busy";
 
+export type WebSearchProvider = "exa" | "searxng";
+
 export interface WebSearchResult {
   status: WebSearchStatus;
-  provider: "exa";
+  provider: WebSearchProvider;
   cached: boolean;
   results: WebResult[];
   error?: string;
@@ -200,6 +203,46 @@ async function callExa(query: string, limit: number, deps: WebSearchDeps): Promi
   }
 }
 
+/** scraper-service's self-hosted SearXNG collector: keyless, LAN-side, no Exa limits. */
+const SCRAPER_URL = (process.env.SCRAPER_SERVICE_URL || "http://localhost:8001").replace(/\/$/, "");
+const SCRAPER_KEY = (process.env.SCRAPER_API_KEY || "").trim();
+const SEARXNG_TIMEOUT_MS = envNumber("WEB_SEARCH_SEARXNG_TIMEOUT_MS", 20_000);
+
+async function callSearxng(query: string, limit: number, deps: WebSearchDeps): Promise<WebSearchResult> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (SCRAPER_KEY) headers["x-scraper-key"] = SCRAPER_KEY;
+  try {
+    const response = await deps.fetch(`${SCRAPER_URL}/collect`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ source: "searxng", query, limit }),
+      signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      return { status: "error", provider: "searxng", cached: false, results: [], error: `SearXNG fallback HTTP ${response.status}: ${(await response.text()).slice(0, 200)}` };
+    }
+    const body = (await response.json()) as { success?: boolean; items?: Array<Record<string, unknown>>; error?: string | null };
+    if (body.success === false) {
+      return { status: "error", provider: "searxng", cached: false, results: [], error: `SearXNG fallback: ${String(body.error ?? "failed").slice(0, 200)}` };
+    }
+    const results = (body.items ?? [])
+      .filter((item) => /^https?:\/\//i.test(String(item.url ?? "")))
+      .slice(0, limit)
+      .map((item) => ({
+        title: String(item.title ?? item.url),
+        url: String(item.url),
+        snippet: String(item.snippet ?? "").slice(0, SNIPPET_CHARS),
+        published: String(item.publishedDate ?? ""),
+        author: "",
+      }));
+    return { status: "ok", provider: "searxng", cached: false, results };
+  } catch (error) {
+    const name = (error as Error)?.name;
+    const reason = name === "TimeoutError" ? `timed out after ${SEARXNG_TIMEOUT_MS / 1_000} s` : (error as Error)?.message ?? String(error);
+    return { status: "error", provider: "searxng", cached: false, results: [], error: `SearXNG fallback unreachable: ${reason}` };
+  }
+}
+
 /**
  * Search the web through Exa's keyless endpoint, cached and paced for the whole
  * network. Never throws. An `ok` with no results is a real "nothing found";
@@ -222,7 +265,21 @@ export async function webSearch(query: string, limit = 6, deps: WebSearchDeps = 
     stats.cacheHits += 1;
     return finish({ ...(await pending), cached: true }, deps);
   }
-  const work = callExa(trimmed, capped, deps);
+  const work = (async (): Promise<WebSearchResult> => {
+    const exa = await callExa(trimmed, capped, deps);
+    // A failed Exa call is not "the web has nothing": try scraper-service's
+    // SearXNG collector before reporting failure. SearXNG reads `site:` and
+    // most operators natively, so the query passes through unchanged. `busy`
+    // is a local queue condition, not a backend failure — a burst must not
+    // pile onto the fallback too.
+    if (exa.status === "ok" || exa.status === "busy") return exa;
+    const fallback = await callSearxng(trimmed, capped, deps);
+    if (fallback.status === "ok" && fallback.results.length > 0) {
+      logger.warn(`[WebSearch] Exa ${exa.status}; served '${trimmed.slice(0, 80)}' from the SearXNG fallback (${fallback.results.length} results)`);
+      return fallback;
+    }
+    return exa;
+  })();
   inFlight.set(key, work);
   try {
     const result = await work;

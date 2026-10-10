@@ -35,6 +35,7 @@ import { Persona } from "../types.ts";
 const DEEP_RESEARCH_TOOLS = [
   "emit_structured_output",
   "search_web",
+  "scrape_url",
   "read_url",
   "read_web_page",
   "search_news",
@@ -58,7 +59,8 @@ export const DeepResearchPersona: Persona = {
     "divide_and_conquer topology (e.g. one per sub-question/angle) and collect " +
     "them with get_subagent_output — for a narrow topic just research directly; " +
     "(3) gather evidence with search_web / search_news and READ the promising " +
-    "pages with read_url / read_web_page — never answer from memory alone; " +
+    "pages — scrape_url returns clean text under a character budget (if truncated, " +
+    "read the stored full-text file it names) — never answer from memory alone; " +
     "(4) dedup and cross-check across sources, keeping only claims the sources " +
     "support and citing concrete names, figures, and dates; (5) synthesize. " +
     "You have a limited step budget — before it runs out, STOP researching and " +

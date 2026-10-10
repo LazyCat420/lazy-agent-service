@@ -122,38 +122,47 @@ describe("webSearch", () => {
     expect(h.calls.length).toBeLessThanOrEqual(14);
   });
 
-  it("after a 429 sends nothing for a minute, then searches again", async () => {
-    const h = harness([{ status: 429, body: "rate limit" }, {}]);
+  it("after a 429 sends nothing to Exa for a minute, then searches again", async () => {
+    const searxngQuiet = { body: JSON.stringify({ success: true, items: [] }) };
+    const h = harness([{ status: 429, body: "rate limit" }, searxngQuiet, searxngQuiet, {}]);
     expect((await webSearch("first", 6, h.deps)).status).toBe("rate_limited");
     h.clock.t += 30_000;
     const during = await webSearch("second", 6, h.deps);
     expect(during.status).toBe("rate_limited");
     expect(during.error).toMatch(/resume in \d+ s/);
-    expect(h.calls).toHaveLength(1);
+    expect(h.calls.filter(c => c.url.startsWith("https://mcp.exa.ai/"))).toHaveLength(1);
     h.clock.t += 31_000;
     expect((await webSearch("third", 6, h.deps)).status).toBe("ok");
-    expect(h.calls).toHaveLength(2);
+    expect(h.calls.filter(c => c.url.startsWith("https://mcp.exa.ai/"))).toHaveLength(2);
   });
 
   it("treats a rate-limit JSON-RPC error like a 429", async () => {
-    const h = harness([{ body: JSON.stringify({ jsonrpc: "2.0", id: "x", error: { code: -32000, message: "Rate limit exceeded" } }) }]);
+    const h = harness([
+      { body: JSON.stringify({ jsonrpc: "2.0", id: "x", error: { code: -32000, message: "Rate limit exceeded" } }) },
+      { body: JSON.stringify({ success: true, items: [] }) },
+    ]);
     expect((await webSearch("q", 6, h.deps)).status).toBe("rate_limited");
     expect((await webSearch("other", 6, h.deps)).status).toBe("rate_limited");
-    expect(h.calls).toHaveLength(1);
+    expect(h.calls.filter(c => c.url.startsWith("https://mcp.exa.ai/"))).toHaveLength(1);
   });
 
   it("reports errors without caching them", async () => {
-    const h = harness([{ status: 500, body: "boom" }, {}]);
+    const h = harness([{ status: 500, body: "boom" }, { status: 500, body: "fallback down" }, {}]);
     const failed = await webSearch("flaky", 6, h.deps);
     expect(failed).toMatchObject({ status: "error", results: [] });
     expect(failed.error).toContain("HTTP 500");
     expect((await webSearch("flaky", 6, h.deps)).status).toBe("ok");
-    expect(h.calls).toHaveLength(2);
+    expect(h.calls.filter(c => c.url.startsWith("https://mcp.exa.ai/"))).toHaveLength(2);
   });
 
   it("reports an unreachable or slow Exa as an error", async () => {
     const timeout = Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
-    const h = harness([{ throws: timeout }, { throws: new Error("getaddrinfo ENOTFOUND mcp.exa.ai") }]);
+    const h = harness([
+      { throws: timeout },
+      { throws: new Error("getaddrinfo ENOTFOUND mcp.exa.ai") },
+      { throws: new Error("getaddrinfo ENOTFOUND mcp.exa.ai") },
+      {},
+    ]);
     expect((await webSearch("a", 6, h.deps)).error).toMatch(/timed out after 15 s/);
     expect((await webSearch("b", 6, h.deps)).error).toMatch(/ENOTFOUND/);
   });
@@ -170,10 +179,27 @@ describe("webSearch", () => {
     expect(h.calls[0].body.params.arguments.numResults).toBe(10);
   });
 
-  it("never contacts a scraping search engine", async () => {
-    const h = harness([{ status: 500 }, { throws: new Error("down") }, {}]);
-    for (const q of ["a", "b", "c"]) await webSearch(q, 6, h.deps);
-    for (const call of h.calls) expect(call.url.startsWith("https://mcp.exa.ai/")).toBe(true);
+  it("falls back to scraper-service's SearXNG when Exa fails, Exa alone when it succeeds", async () => {
+    const h = harness([
+      { status: 500, body: "boom" },
+      { body: JSON.stringify({ success: true, items: [{ title: "R", url: "https://example.com/r", snippet: "s" }] }) },
+      {},
+    ]);
+    const failed = await webSearch("a", 6, h.deps);
+    expect(failed).toMatchObject({ status: "ok", provider: "searxng", cached: false });
+    expect(h.calls[1].url).toBe("http://localhost:8001/collect");
+    const ok = await webSearch("b", 6, h.deps);
+    expect(ok).toMatchObject({ status: "ok", provider: "exa" });
+    for (const call of h.calls.filter(c => c.url.startsWith("https://mcp.exa.ai/"))) {
+      expect(call.url.startsWith("https://mcp.exa.ai/")).toBe(true);
+    }
+  });
+
+  it("does not pile onto the fallback when the queue is busy", async () => {
+    const h = harness([{}]);
+    const results = await Promise.all(Array.from({ length: 16 }, (_, i) => webSearch(`q ${i}`, 6, h.deps)));
+    expect(results.some(r => r.status === "busy")).toBe(true);
+    expect(h.calls.filter(c => c.url.endsWith("/collect"))).toHaveLength(0);
   });
 });
 
