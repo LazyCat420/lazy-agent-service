@@ -57,12 +57,14 @@ const provider = {
 };
 
 vi.mock("../../src/providers/index.ts", () => ({ getProvider: vi.fn(() => provider) }));
-vi.mock("../../src/services/NewsSearchService.ts", () => ({
-  newsSearch: vi.fn(async (_query: string, _maxResults: number) => {
-    if (script.mode === "failure") throw new Error("fixture search transport failed");
+vi.mock("../../src/services/WebSearchService.ts", () => ({
+  webSearch: vi.fn(async (_query: string, _maxResults: number) => {
+    if (script.mode === "failure") {
+      return { status: "error", provider: "exa", cached: false, results: [], error: "fixture search transport failed" };
+    }
     return script.mode === "empty"
-      ? { source: "fixture", items: [] }
-      : { source: "fixture", items: [{ title: "Fixture news", url: fixtureUrl, snippet: "Fixture result" }] };
+      ? { status: "ok", provider: "exa", cached: false, results: [] }
+      : { status: "ok", provider: "exa", cached: false, results: [{ title: "Fixture news", url: fixtureUrl, snippet: "Fixture result", published: "", author: "" }] };
   }),
 }));
 

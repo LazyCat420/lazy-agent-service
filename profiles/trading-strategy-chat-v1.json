@@ -45,5 +45,17 @@
       "public"
     ],
     "max_latency_ms": 750
+  },
+  "allowed_local_tools": [
+    "trading.research.web_search@1.0",
+    "trading.research.scrape_url@1.0"
+  ],
+  "local_tool_policy": {
+    "trading.research.web_search": {
+      "effect": "read"
+    },
+    "trading.research.scrape_url": {
+      "effect": "read"
+    }
   }
 }

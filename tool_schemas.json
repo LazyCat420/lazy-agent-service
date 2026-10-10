@@ -1099,13 +1099,17 @@
     "concurrency_safe": true,
     "max_result_chars": 20000,
     "tags": [
-      "web"
+      "research",
+      "web-search",
+      "trading"
     ],
-    "domain": "Web",
+    "domain": "Research & Intelligence",
     "labels": [
-      "tool"
+      "research",
+      "web-search",
+      "trading"
     ],
-    "owner_app": "general",
+    "owner_app": "trading",
     "agents": []
   },
   {

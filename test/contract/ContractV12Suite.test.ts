@@ -3,6 +3,7 @@ import ToolOrchestratorService from "../../src/services/ToolOrchestratorService.
 import crypto from "node:crypto";
 import { LocalToolContinuation } from "../../src/services/LocalToolContinuation.ts";
 import * as NewsSearch from "../../src/services/NewsSearchService.ts";
+import * as WebSearchService from "../../src/services/WebSearchService.ts";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
@@ -424,7 +425,15 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
   });
 
   it("test_global_capability_emits_evidence_when_configured", async () => {
-    vi.spyOn(NewsSearch, "newsSearch").mockResolvedValue({ items: [], source: "fixture" } as any);
+    // 2026-10-10: global.web.search now executes through the shared webSearch
+    // (Exa/SearXNG) instead of newsSearch RSS — mock the current backend.
+    vi.spyOn(WebSearchService, "webSearch").mockResolvedValue({
+      status: "ok",
+      provider: "exa",
+      cached: false,
+      query: "semiconductor advancements",
+      results: [{ title: "Fixture", url: "https://fixture.test/a", snippet: "s", published: "", author: "" }],
+    } as unknown as WebSearchService.WebSearchResult);
     const processed = await RunExecutionEngine.processToolCall(
       "run-evidence-test-01",
       {

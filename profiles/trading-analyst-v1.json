@@ -7,16 +7,28 @@
   "system_prompt": "You are a quantitative and fundamental financial analyst. Reason strictly using verified data. Adhere to conservative valuation baselines and cite evidence for every numerical claim.",
   "model_constraints": {
     "default_model": "qwen-coder-32b",
-    "allowed_models": ["qwen-coder-32b", "deepseek-coder-v2-lite"],
-    "allowed_providers": ["vllm-2", "vllm", "vllm-shim", "lmstudio"],
-    "temperature_range": [0.0, 0.4]
+    "allowed_models": [
+      "qwen-coder-32b",
+      "deepseek-coder-v2-lite"
+    ],
+    "allowed_providers": [
+      "vllm-2",
+      "vllm",
+      "vllm-shim",
+      "lmstudio"
+    ],
+    "temperature_range": [
+      0.0,
+      0.4
+    ]
   },
   "tool_policy": {
     "mode": "STRICT_WHITELIST",
     "whitelist": [
-      "mcp__lazy-tool-service__fetch_financial_statement",
-      "mcp__lazy-tool-service__get_price_history",
-      "mcp__lazy-tool-service__calculate_liquidity_ratios"
+      "mcp__lazy-agent-service__web_search",
+      "mcp__lazy-agent-service__fetch_financial_statement",
+      "mcp__lazy-agent-service__get_price_history",
+      "mcp__lazy-agent-service__calculate_liquidity_ratios"
     ],
     "require_signed_capability": true
   },
@@ -28,13 +40,22 @@
     "max_concurrent_workers": 1
   },
   "plugins": {
-    "context_contributors": ["financial-dossier-contributor"],
-    "verifiers": ["arithmetic-audit-verifier", "market-cutoff-verifier"]
+    "context_contributors": [
+      "financial-dossier-contributor"
+    ],
+    "verifiers": [
+      "arithmetic-audit-verifier",
+      "market-cutoff-verifier"
+    ]
   },
   "retention_class": "PERMANENT_RECORD",
   "observability_policy": {
     "telemetry_level": "FULL_SPANS",
-    "redact_keys": ["api_key", "secret", "private_token"],
+    "redact_keys": [
+      "api_key",
+      "secret",
+      "private_token"
+    ],
     "sample_rate": 1.0
   }
 }

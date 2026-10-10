@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/services/NewsSearchService.ts", () => ({
-  newsSearch: vi.fn((_query: string, _limit: number, _country: string | undefined, _category: string | undefined, _debug: unknown, signal?: AbortSignal) =>
-    new Promise((_resolve, reject) => {
-      if (signal?.aborted) reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
-      signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
-    })),
+vi.mock("../../src/services/WebSearchService.ts", () => ({
+  webSearch: vi.fn((_query: string, _limit: number, _deps: unknown, signal?: AbortSignal) => {
+    const { promise, reject } = Promise.withResolvers<never>();
+    if (signal?.aborted) reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+    return promise;
+  }),
 }));
 
 import { GlobalCapabilityExecutor } from "../../src/services/GlobalCapabilityExecutor.ts";

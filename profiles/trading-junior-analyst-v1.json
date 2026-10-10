@@ -9,6 +9,7 @@
   "allowed_local_tools": [
     "trading.market.get_finnhub_news@1.0",
     "trading.research.lazy_web_search@1.0",
+    "trading.research.web_search@1.0",
     "trading.research.scrape_url@1.0",
     "trading.market.get_market_data@1.0",
     "trading.market.get_institutional_holdings@1.0",
@@ -79,6 +80,9 @@
       "effect": "write"
     },
     "trading.market.screener_query": {
+      "effect": "read"
+    },
+    "trading.research.web_search": {
       "effect": "read"
     }
   },

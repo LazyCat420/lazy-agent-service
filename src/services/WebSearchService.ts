@@ -248,12 +248,19 @@ async function callSearxng(query: string, limit: number, deps: WebSearchDeps): P
  * network. Never throws. An `ok` with no results is a real "nothing found";
  * every other status says why there are no results.
  */
-export async function webSearch(query: string, limit = 6, deps: WebSearchDeps = defaultDeps): Promise<WebSearchResult> {
+export async function webSearch(query: string, limit = 6, deps: WebSearchDeps = defaultDeps, signal?: AbortSignal): Promise<WebSearchResult> {
   const trimmed = String(query ?? "").trim();
   const capped = Math.max(1, Math.min(MAX_LIMIT, Math.floor(Number(limit) || 6)));
   if (!trimmed) {
     return finish({ status: "error", provider: "exa", cached: false, results: [], error: "query is required" }, deps);
   }
+  // Cancellation: a caller-aborted signal answers with a structured error
+  // immediately and pre-empts an in-flight backend call. webSearch never throws.
+  const abortedResult = (): WebSearchResult => ({ status: "error", provider: "exa", cached: false, results: [], error: "aborted" });
+  if (signal?.aborted) return finish(abortedResult(), deps);
+  const abortPromise = signal
+    ? new Promise<WebSearchResult>((resolve) => signal.addEventListener("abort", () => resolve(abortedResult()), { once: true }))
+    : null;
   const key = cacheKey(trimmed, capped);
   const hit = cache.get(key);
   if (hit && deps.now() - hit.at < CACHE_TTL_MS) {
@@ -282,7 +289,7 @@ export async function webSearch(query: string, limit = 6, deps: WebSearchDeps = 
   })();
   inFlight.set(key, work);
   try {
-    const result = await work;
+    const result = abortPromise ? await Promise.race([work, abortPromise]) : await work;
     // Only successful answers are cached; a failure must not stick for 30 minutes.
     if (result.status === "ok") {
       if (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value as string);

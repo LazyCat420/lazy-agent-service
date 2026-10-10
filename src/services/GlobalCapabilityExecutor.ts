@@ -1,5 +1,5 @@
 import logger from "../utils/logger.ts";
-import { newsSearch } from "./NewsSearchService.ts";
+import { webSearch, type WebResult } from "./WebSearchService.ts";
 
 export interface ExecutionResult {
   success: boolean;
@@ -295,17 +295,32 @@ export class GlobalCapabilityExecutor {
     const maxResults = Math.min(20, Math.max(1, Number(args.max_results || 5)));
 
     try {
-      const searchRes = await newsSearch(query, maxResults, undefined, undefined, {}, signal);
-      const items = (searchRes?.items || []).slice(0, maxResults);
+      // Consolidated 2026-10-10: this used to call newsSearch (Bing/Google
+      // News RSS only). The shared webSearch (Exa keyless + SearXNG fallback,
+      // one cache and rate limit for the whole network) covers news AND the
+      // general web, so every consumer of this capability gets the better
+      // backend. Result shape is unchanged; `source` carries the provider.
+      const searchRes = await webSearch(query, Math.min(10, maxResults), undefined, signal);
+      const items = (searchRes?.results || []).slice(0, maxResults);
+      if (searchRes?.status !== "ok" && items.length === 0) {
+        return {
+          success: false,
+          error: {
+            code: "WEB_SEARCH_FAILED",
+            message: `Web search did not run (${searchRes?.status || "error"}): ${searchRes?.error || "no detail"}. Try again later.`,
+          },
+        };
+      }
       return {
         success: true,
         result: {
           query,
-          results: items.map((r: any) => ({
+          results: items.map((r: WebResult) => ({
             title: r.title || "Untitled",
             url: r.url || "",
-            snippet: r.snippet || r.description || "",
-            source: r.source || searchRes?.source || "web",
+            snippet: r.snippet || "",
+            ...(r.published ? { published: r.published } : {}),
+            source: searchRes?.provider || "web",
           })),
         },
       };

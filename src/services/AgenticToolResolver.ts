@@ -286,10 +286,23 @@ export default class AgenticToolResolver {
       // list them in availableTools explicitly if it wants team-spawning.
       const shouldBypassOrchestratorTools =
         !options.isSubAgent && isCoreToolsLocked;
+      // Capability-id whitelists ("trading.research.scrape_url@1.0") name the
+      // tool by their ACTION segment. Profile ids never literally equal a
+      // catalog name, so profiles written in capability style (all trading
+      // profiles) resolved to nothing in direct-run paths. Map each non-global
+      // entry's last dot segment to a grantable tool name; exact-name grants
+      // still take precedence. global.* ids are capability contracts, not
+      // tool names — excluded from the mapping.
+      const actionGrants = new Set<string>(
+        resolvedEnabledTools
+          .filter((entry) => entry.includes(".") && !entry.startsWith("global.") && !entry.startsWith("domain:"))
+          .map((entry) => entry.split("@")[0].split(".").pop()!),
+      );
       finalTools = finalTools.filter((tool) => {
         const cleanToolName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
         if (clientDisabledSet?.has(tool.name) || clientDisabledSet?.has(cleanToolName)) return false;
         if (enabledSet.has(tool.name) || enabledSet.has(cleanToolName)) return true;
+        if (actionGrants.has(cleanToolName)) return true;
         if (
           isCoreToolsLocked &&
           (CORE_AGENTIC_TOOLS.has(tool.name) ||
