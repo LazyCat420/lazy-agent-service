@@ -58,6 +58,7 @@
     "@types/express": "5.0.6",
     "@types/node": "25.9.0",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.25.12",
     "eslint": "10.4.0",
     "eslint-config-prettier": "10.1.8",
     "globals": "17.6.0",
