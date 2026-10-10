@@ -53,4 +53,6 @@ EXPOSE 7778
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget --no-verbose --tries=1 -O /dev/null http://127.0.0.1:7778/health || exit 1
 
-CMD ["node", "dist/boot.js"]
+# Tracing loads first so it can patch express, undici and mongodb
+# (src/telemetry/otel.ts; OTEL_TRACING_ENABLED=0 turns it off).
+CMD ["node", "--import", "./dist/src/telemetry/otel.js", "dist/boot.js"]
