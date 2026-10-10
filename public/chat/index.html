@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Chat — lazy-agent-service</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="chat-header">
+    <h1>Agent Chat</h1>
+    <span id="conversation-label" class="conversation-label" title="Conversation id"></span>
+  </header>
+
+  <main id="transcript" class="transcript" aria-live="polite"></main>
+
+  <div id="status-banner" class="status-banner" hidden></div>
+  <div id="activity" class="activity"></div>
+
+  <div id="recovery-banner" class="recovery-banner" hidden>
+    <span>Stream lost. Reconnecting…</span>
+    <button id="reconcile-btn" type="button">Retry now</button>
+  </div>
+
+  <footer class="composer">
+    <textarea id="composer-input" rows="2" placeholder="Send a message… (Enter to send, Shift+Enter for newline)"></textarea>
+    <div class="composer-actions">
+      <label class="toggle"><input type="checkbox" id="toggle-agent" checked /> Agent</label>
+      <label class="toggle"><input type="checkbox" id="toggle-thinking" /> Thinking</label>
+      <input id="input-model" type="text" placeholder="model (optional)" class="model-input" />
+      <button id="btn-send" type="button">Send</button>
+      <button id="btn-stop" type="button" hidden>Stop</button>
+    </div>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

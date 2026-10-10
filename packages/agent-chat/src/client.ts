@@ -121,6 +121,15 @@ export class ChatClientController {
     this.notify();
   }
 
+  /**
+   * Replaces the whole state (e.g. a reconcile/merge result computed by the
+   * UI layer) and notifies subscribers. Intended for recovery flows only.
+   */
+  public replaceState(state: ChatState): void {
+    this.state = state;
+    this.notify();
+  }
+
   public replayCursor(runId: string): string | undefined {
     return this.state.eventCursors[runId];
   }

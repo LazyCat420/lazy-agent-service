@@ -194,6 +194,10 @@ app.use(authMiddleware);
 // REST routes
 app.use("/config", configRouter);
 app.use("/config-local", localConfigRouter);
+// First-party chat UI (static). Registered BEFORE chatRouter: express.static
+// only handles GET/HEAD, so POST /chat (the SSE turn endpoint) falls through
+// to chatRouter while GET /chat serves public/chat/index.html.
+app.use("/chat", express.static("public/chat"));
 app.use("/chat", chatRouter);
 app.use("/agent", agentRouter);
 app.use("/obsidian-completions", createObsidianCompletionRouter());
