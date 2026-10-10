@@ -43,12 +43,12 @@ exit() {
 
 PRE_BUILD() {
   step "Building flat tool_schemas.json from tool_schemas/ split sources"
-  python3 "${SCRIPT_DIR}/../trading-service/scripts/build_tool_schemas.py"
-
-  # build_tool_schemas.py already wrote this repo's copy (SCRIPT_DIR is that
-  # repo), so this used to copy the file onto itself via a ../lazy-agent-service
-  # round-trip — which broke outright once the directory was renamed. Nothing to
-  # copy: the build above is the step.
+  # Our own exporter — the shards in THIS repo are the source of truth. The
+  # former call into trading-service/scripts/build_tool_schemas.py silently
+  # overwrote this repo's schemas (it regenerated scrape_url from trading-
+  # service's stale shard, reverting the prompt/char_limit params on
+  # 2026-10-10). Our exporter also fails on duplicate names across shards.
+  python3 "${SCRIPT_DIR}/scripts/export_tool_schemas.py"
 
   step "Copying projects.json from vault-service"
   cp "${SCRIPT_DIR}/../vault-service/projects.json" "${SCRIPT_DIR}/projects.json"

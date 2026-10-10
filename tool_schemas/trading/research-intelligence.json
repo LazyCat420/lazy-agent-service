@@ -1,42 +1,5 @@
 [
   {
-    "name": "scrape_url",
-    "description": "Scrape the main text content from a URL. Use this to read articles or SEC filings.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "url": {
-          "type": "string",
-          "description": "The URL to scrape."
-        }
-      },
-      "required": [
-        "url"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "Research & Intelligence",
-    "labels": [
-      "research",
-      "scraping",
-      "web-search"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "tournament_pitch",
-      "user_chat",
-      "v3_fundamental_analyst",
-      "v3_junior_analyst",
-      "v3_worker_news"
-    ]
-  },
-  {
     "name": "get_reddit_trending_stocks",
     "description": "Read the latest scheduled Reddit-trending sweep from the last 36 hours. Returns ranked ticker mentions and stored post excerpts with collection time; no sentiment label is inferred. Returns unavailable if the sweep is stale or missing. This does not make live Reddit requests.",
     "parameters": {

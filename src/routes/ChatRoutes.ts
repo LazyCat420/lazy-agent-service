@@ -1196,68 +1196,73 @@ async function handleStreamingText(context: GenerationContext) {
     logger.info(
       `[chat/FC] Iteration ${functionCallIteration}: executing ${pendingCalls.length} tool call(s)`,
     );
-    // Execute all pending tool calls
-    for (const toolCall of pendingCalls) {
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-        id: toolCall.id,
-        name: toolCall.name,
-        args: toolCall.args,
-        status: "calling",
-      });
-      const startTime = Date.now();
-      try {
-        const result = await ToolOrchestratorService.executeTool(
-          toolCall.name as string,
-          toolCall.args as Record<string, unknown>,
-          {
-            project,
-            username,
-            agent: agent || null,
-            requestId,
-            conversationId: conversationId || null,
-            traceId: traceId || null,
-            clientIp: clientIp || null,
-            iteration: functionCallIteration,
-            _providerName: providerName,
-            _resolvedModel: resolvedModel,
-          },
-        );
-        const durationMs = Date.now() - startTime;
-        toolCall.result = result;
-        toolCall.status =
-          result &&
-          typeof result === "object" &&
-          "error" in result &&
-          result.error
-            ? "error"
-            : "done";
-        toolCall.durationMs = durationMs;
+    // Execute all pending tool calls — concurrently (Promise.all preserves
+    // result order by index), matching ToolOrchestratorService.executeToolCalls.
+    // Each call emits its own "calling" event immediately and its result event
+    // on completion, so ordering of the SSE stream stays per-tool truthful.
+    await Promise.all(
+      pendingCalls.map(async (toolCall) => {
         emit({
           type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
           id: toolCall.id,
           name: toolCall.name,
           args: toolCall.args,
-          result,
-          status: toolCall.status,
-          durationMs,
+          status: "calling",
         });
-      } catch (error: unknown) {
-        const durationMs = Date.now() - startTime;
-        toolCall.result = { error: getErrorMessage(error) };
-        toolCall.status = "error";
-        toolCall.durationMs = durationMs;
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-          id: toolCall.id,
-          name: toolCall.name,
-          args: toolCall.args,
-          result: toolCall.result,
-          status: "error",
-          durationMs,
-        });
-      }
-    }
+        const startTime = Date.now();
+        try {
+          const result = await ToolOrchestratorService.executeTool(
+            toolCall.name as string,
+            toolCall.args as Record<string, unknown>,
+            {
+              project,
+              username,
+              agent: agent || null,
+              requestId,
+              conversationId: conversationId || null,
+              traceId: traceId || null,
+              clientIp: clientIp || null,
+              iteration: functionCallIteration,
+              _providerName: providerName,
+              _resolvedModel: resolvedModel,
+            },
+          );
+          const durationMs = Date.now() - startTime;
+          toolCall.result = result;
+          toolCall.status =
+            result &&
+            typeof result === "object" &&
+            "error" in result &&
+            result.error
+              ? "error"
+              : "done";
+          toolCall.durationMs = durationMs;
+          emit({
+            type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+            id: toolCall.id,
+            name: toolCall.name,
+            args: toolCall.args,
+            result,
+            status: toolCall.status,
+            durationMs,
+          });
+        } catch (error: unknown) {
+          const durationMs = Date.now() - startTime;
+          toolCall.result = { error: getErrorMessage(error) };
+          toolCall.status = "error";
+          toolCall.durationMs = durationMs;
+          emit({
+            type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+            id: toolCall.id,
+            name: toolCall.name,
+            args: toolCall.args,
+            result: toolCall.result,
+            status: "error",
+            durationMs,
+          });
+        }
+      }),
+    );
     // Build tool result messages for the provider
     const assistantToolMessage = {
       role: "assistant",

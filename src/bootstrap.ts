@@ -10,8 +10,20 @@ export function bootstrapLocalEnvironment() {
     }
   }
   if (!fs.existsSync(projectsPath)) {
-    console.warn(`[Local-Vault] ⚠️ projects.json not found at ${projectsPath}, using raw process.env`);
-    return;
+    // Fail loudly: a missing projects.json silently degrades provider/instance
+    // resolution to raw process.env and produces WRONG model choices (this
+    // cost an hour of wrong vllm/vllm-2 resolution in a fresh worktree on
+    // 2026-10-10). Set ALLOW_MISSING_PROJECTS_JSON=1 to opt out in tests and
+    // sandboxes that genuinely have no instance registry.
+    if (process.env.ALLOW_MISSING_PROJECTS_JSON === "1") {
+      console.warn(`[Local-Vault] ⚠️ projects.json not found at ${projectsPath}, using raw process.env (ALLOW_MISSING_PROJECTS_JSON=1)`);
+      return;
+    }
+    throw new Error(
+      `[Local-Vault] projects.json not found at ${projectsPath}. ` +
+      `Provider/instance resolution would silently use raw process.env. ` +
+      `Copy it from vault-service or the deploy dir, or set ALLOW_MISSING_PROJECTS_JSON=1.`,
+    );
   }
   try {
     const data = JSON.parse(fs.readFileSync(projectsPath, "utf-8"));

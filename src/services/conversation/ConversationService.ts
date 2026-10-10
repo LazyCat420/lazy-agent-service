@@ -376,6 +376,28 @@ const ConversationService: ConversationServiceInterface = {
       updatedAt,
     };
   },
+
+  /**
+   * Prior conversation history as plain role/content messages — the seed for
+   * run resumes (RunRequestSchema.resume_conversation_id). Returns only the
+   * four contract roles; malformed entries are skipped, never thrown.
+   */
+  async getMessages(conversationId, project, username) {
+    const dbCollection = MongoWrapper.getCollection(MONGO_DB_NAME, DEFAULT_COLLECTION);
+    const doc = await dbCollection.findOne(
+      { id: conversationId, project, username },
+      { projection: { messages: 1 } },
+    );
+    const out: { role: "system" | "user" | "assistant" | "tool"; content: string }[] = [];
+    for (const m of ((doc?.messages as ChatMessage[]) || [])) {
+      const role = m?.role;
+      const content = typeof m?.content === "string" ? m.content : "";
+      if ((role === "system" || role === "user" || role === "assistant" || role === "tool") && content) {
+        out.push({ role, content });
+      }
+    }
+    return out;
+  },
 };
 
 export default ConversationService;

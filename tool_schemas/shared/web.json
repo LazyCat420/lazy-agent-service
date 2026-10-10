@@ -21,6 +21,84 @@
       "required": [
         "url"
       ]
-    }
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 50000,
+    "tags": [
+      "research",
+      "scraping",
+      "web-search"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "research",
+      "scraping",
+      "web-search"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "tournament_pitch",
+      "user_chat",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_worker_news"
+    ]
+  },
+  {
+    "name": "web_search",
+    "description": "Search the web (Exa with SearXNG fallback, cached and rate-limited network-wide). Returns ranked results with title, url, snippet and — when known — published date. Use allowed_domains/blocked_domains to pin or exclude sites (parent-domain suffix matching). Follow up with scrape_url to read a page.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max results, 1-10 (default 5)."
+        },
+        "siteSearch": {
+          "type": "string",
+          "description": "Restrict to one site; becomes a site: prefix."
+        },
+        "allowed_domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Only return results from these domains (suffix match)."
+        },
+        "blocked_domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Exclude results from these domains (suffix match)."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 20000,
+    "tags": [
+      "web"
+    ],
+    "domain": "Web",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "general",
+    "agents": []
   }
 ]

@@ -76,6 +76,8 @@ export interface CreateRunRequest {
   session_id?: string;
   sessionId?: string;
   input: string | Array<{ role: string; content: string }>;
+  /** Hydrate prior history from this stored conversation before `input`. */
+  resume_conversation_id?: string;
   model?: string;
   budget?: RunBudget;
   tools?: any[];

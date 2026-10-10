@@ -161,7 +161,37 @@ router.get("/:runId/events", asyncHandler(async (req: Request, res: Response) =>
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   for (const event of events.slice(index + 1)) res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-  // Snapshot delivery is explicit; clients may poll from the last event while active.
+  // Live tail: if the run is still active, keep polling the store and stream
+  // any events appended after the replayed snapshot, until the run reaches a
+  // terminal state or the client disconnects. Cursor semantics hold — clients
+  // can reconnect with the last id they saw and never miss or duplicate.
+  let lastId = cursor || (events.length ? events[events.length - 1].id : "");
+  if (run.status === "running" && !cursor) {
+    // A client without a cursor that attached mid-run gets the full snapshot
+    // (already written above), then tails from the newest event.
+    lastId = events.length ? events[events.length - 1].id : "";
+  }
+  if (run.status === "running") {
+    await new Promise<void>((resolve) => {
+      const timer = setInterval(async () => {
+        if (res.destroyed || res.writableEnded) { clearInterval(timer); resolve(); return; }
+        try {
+          const fresh = await RunStore.getRun(String(req.params.runId));
+          if (!fresh) { clearInterval(timer); resolve(); return; }
+          const all = fresh.events || [];
+          const startIdx = lastId ? all.findIndex((e) => e.id === lastId) + 1 : 0;
+          for (const event of all.slice(Math.max(startIdx, 0))) {
+            res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+            lastId = event.id;
+          }
+          if (RunStateMachine.isTerminal(fresh.status)) { clearInterval(timer); resolve(); }
+        } catch {
+          clearInterval(timer); resolve();
+        }
+      }, 1000);
+      req.on("close", () => { clearInterval(timer); resolve(); });
+    });
+  }
   res.end();
 }));
 

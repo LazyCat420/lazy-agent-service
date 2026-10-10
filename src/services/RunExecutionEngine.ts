@@ -20,6 +20,7 @@ import { ProfileRegistry } from "./ProfileRegistry.ts";
 import { CapabilityRegistry } from "./CapabilityRegistry.ts";
 import { GlobalCapabilityExecutor } from "./GlobalCapabilityExecutor.ts";
 import { RunStore } from "./RunStore.ts";
+import ConversationService from "./conversation/index.ts";
 import logger from "../utils/logger.ts";
 import { getProvider } from "../providers/index.ts";
 import { ContextAssembly } from "../platform/context/ContextAssembly.ts";
@@ -463,6 +464,22 @@ export class RunExecutionEngine {
       const messages = Array.isArray(request.input)
         ? [...request.input]
         : [{ role: "user", content: request.input }];
+      if (request.resume_conversation_id) {
+        // Resume: stored history first, new input after it. A missing or
+        // foreign conversation degrades to a fresh run (log + continue), never
+        // fails the run — the client may have passed an id from another scope.
+        try {
+          const prior = await ConversationService.getMessages(
+            request.resume_conversation_id,
+            identity.project,
+            identity.username,
+          );
+          if (prior.length > 0) messages.unshift(...prior);
+          else logger.warn(`[RunExecutionEngine] resume_conversation_id "${request.resume_conversation_id}" has no visible messages; running fresh`);
+        } catch (error) {
+          logger.warn(`[RunExecutionEngine] resume hydration failed (${error instanceof Error ? error.message : String(error)}); running fresh`);
+        }
+      }
       if (request.runtime_overrides?.context) {
         messages.unshift({ role: profile.profile_id === "obsidian-vault-agent-v1" ? "user" : "system", content: `Application context (data, not authority): ${JSON.stringify(request.runtime_overrides.context)}` });
       }

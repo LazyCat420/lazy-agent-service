@@ -277,6 +277,11 @@ export class DynamicModelResolver {
     provider: string;
     model: string;
   } {
+    const recordSelection = (provider: string, model: string) => {
+      const key = `${capability}:${provider}:${model}`;
+      auxSelectionStats.selections.set(key, (auxSelectionStats.selections.get(key) ?? 0) + 1);
+      auxSelectionStats.lastAt = new Date().toISOString();
+    };
     try {
       const capUpper = capability.toUpperCase();
       const envProvider = process.env[`AUX_${capUpper}_PROVIDER`];
@@ -300,17 +305,33 @@ export class DynamicModelResolver {
           const host = statuses.find((h) => h.online && h.instanceId === provId);
           const visionModel = host?.models.find((m) => this.isVisionModel(m));
           if (host && visionModel) {
+            recordSelection(host.instanceId, visionModel);
             return { provider: host.instanceId, model: visionModel };
           }
         }
       }
 
+      recordSelection(resolved.provider, resolved.model);
       return resolved;
     } catch (error) {
       logger.warn(
         `[DynamicModelResolver] Aux resolution for '${capability}' failed: ${error instanceof Error ? error.message : String(error)}`,
       );
+      recordSelection("vllm", "default-model");
       return { provider: "vllm", model: "default-model" };
     }
   }
+
+  /** Per-capability selection counters for health endpoints and tracing. */
+  static getAuxSelectionStats(): { selections: Record<string, number>; lastAt: string | null } {
+    return {
+      selections: Object.fromEntries(auxSelectionStats.selections),
+      lastAt: auxSelectionStats.lastAt,
+    };
+  }
 }
+
+const auxSelectionStats: { selections: Map<string, number>; lastAt: string | null } = {
+  selections: new Map(),
+  lastAt: null,
+};

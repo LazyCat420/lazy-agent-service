@@ -38,6 +38,7 @@ import SettingsService from "./SettingsService.ts";
 import { getProvider } from "../providers/index.ts";
 import { getInstancesByType, getInstanceType } from "../providers/instance-registry.ts";
 import { resolveModelForInstances } from "../utils/ModelResolution.ts";
+import { DynamicModelResolver } from "./DynamicModelResolver.ts";
 import type { ChatMessage, GenerateTextResult } from "../types/provider.ts";
 import logger from "../utils/logger.ts";
 
@@ -337,23 +338,45 @@ export async function webExtractAnswered(
   if (extracted.status !== "ok") return { ...base, answer: "", content: `Extraction did not run: ${extracted.error || "no detail"}.` };
   const question = String(prompt ?? "").trim();
   if (!question) return { ...base, answer: extracted.content, content: extracted.content };
+  const qaStart = Date.now();
 
+  // Model resolution for the Q&A pass, in order:
+  //   1. AUX_WEB_PROVIDER/MODEL env (auxiliary chain, tier 1) — explicit override.
+  //   2. Settings → Memory extractionProvider/extractionModel (existing behavior).
+  //   3. resolveAuxModel("web") tiering (light-role → vllm, then online fallback),
+  //      so the pass degrades to "no model" only when nothing is online.
   let resolvedProvider: string | undefined;
   let resolvedModel: string | undefined;
+  const auxEnvProvider = process.env.AUX_WEB_PROVIDER?.trim();
   try {
-    const memorySettings = (await SettingsService.getSection("memory")) as {
-      extractionProvider?: string;
-      extractionModel?: string;
-    };
-    resolvedProvider = memorySettings?.extractionProvider;
-    resolvedModel = memorySettings?.extractionModel;
+    if (auxEnvProvider) {
+      const aux = DynamicModelResolver.resolveAuxModel("web");
+      resolvedProvider = aux.provider;
+      resolvedModel = aux.model;
+    } else {
+      const memorySettings = (await SettingsService.getSection("memory")) as {
+        extractionProvider?: string;
+        extractionModel?: string;
+      };
+      resolvedProvider = memorySettings?.extractionProvider;
+      resolvedModel = memorySettings?.extractionModel;
+    }
   } catch {
-    logger.info("[WebExtract] Settings not configured; skipping Q&A pass.");
-    return { ...base, answer: extracted.content, content: extracted.content };
+    logger.info("[WebExtract] Settings not configured; falling back to aux chain.");
   }
-  if (!resolvedProvider || !resolvedModel) {
-    logger.info("[WebExtract] No extraction model configured; skipping Q&A pass.");
-    return { ...base, answer: extracted.content, content: extracted.content };
+  if (!resolvedProvider || !resolvedModel || resolvedModel === "default-model") {
+    try {
+      const aux = DynamicModelResolver.resolveAuxModel("web");
+      resolvedProvider = aux.provider;
+      resolvedModel = aux.model;
+    } catch {
+      logger.info("[WebExtract] No aux model resolvable; skipping Q&A pass.");
+      return { ...base, answer: extracted.content, content: extracted.content };
+    }
+    if (!resolvedProvider || !resolvedModel || resolvedModel === "default-model") {
+      logger.info("[WebExtract] No Q&A model available; skipping Q&A pass.");
+      return { ...base, answer: extracted.content, content: extracted.content };
+    }
   }
 
   const messages: ChatMessage[] = [
@@ -375,12 +398,28 @@ export async function webExtractAnswered(
     });
     const answer = result?.text?.trim() ?? "";
     if (!answer) throw new Error("empty answer");
+    const latencyMs = Date.now() - qaStart;
+    qaStats.llmAnswered++;
+    qaStats.lastProvider = resolvedProvider;
+    qaStats.lastModel = model;
+    qaStats.lastLatencyMs = latencyMs;
+    logger.info(`[WebExtract] Q&A pass: provider=${resolvedProvider} model=${model} latencyMs=${latencyMs} url=${extracted.url}`);
     return { ...base, answer };
   } catch (error) {
+    qaStats.degraded++;
     logger.warn(`[WebExtract] Q&A pass failed, returning deterministic extract: ${(error as Error)?.message?.slice(0, 200)}`);
     return { ...base, answer: extracted.content, content: extracted.content };
   }
 }
+
+/** Per-process Q&A pass counters, surfaced through webExtractStatus. */
+const qaStats: { llmAnswered: number; degraded: number; lastProvider: string | null; lastModel: string | null; lastLatencyMs: number | null } = {
+  llmAnswered: 0,
+  degraded: 0,
+  lastProvider: null,
+  lastModel: null,
+  lastLatencyMs: null,
+};
 
 /** For health endpoints: what the shared extractor has been doing. */
 export function webExtractStatus(now = Date.now()): Record<string, unknown> {
@@ -391,6 +430,7 @@ export function webExtractStatus(now = Date.now()): Record<string, unknown> {
     cacheTtlMs: CACHE_TTL_MS,
     timeoutMs: TIMEOUT_MS,
     storeDir,
+    qa: { ...qaStats, auxSelections: DynamicModelResolver.getAuxSelectionStats() },
   };
 }
 

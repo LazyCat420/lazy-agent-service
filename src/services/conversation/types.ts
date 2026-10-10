@@ -130,4 +130,9 @@ export interface ConversationServiceInterface {
     project: string,
     username: string,
   ): Promise<TransformedConversationStats | null>;
+  getMessages(
+    conversationId: string,
+    project: string,
+    username: string,
+  ): Promise<{ role: "system" | "user" | "assistant" | "tool"; content: string }[]>;
 }

@@ -8,6 +8,9 @@ export const RunRequestSchema = z.object({
   profile_id: z.string().optional(), profileId: z.string().optional(), profile_version: z.string().optional(), profileVersion: z.string().optional(),
   app_id: z.string().optional(), appId: z.string().optional(), session_id: z.string().optional(), sessionId: z.string().optional(),
   input: z.union([z.string(), z.array(z.object({ role: z.enum(["system", "user", "assistant", "tool"]), content: z.string() }).passthrough())]),
+  // Resume: hydrate prior history from this stored conversation and append the
+  // new `input` after it (see RunExecutionEngine seeding).
+  resume_conversation_id: z.string().optional(),
   model: z.string().optional(), budget: budget.optional(), tools: z.array(tool).optional(), stream: z.boolean().optional(),
   idempotency_key: z.string().optional(), idempotencyKey: z.string().optional(), deadline_ms: limit.optional(),
   runtime_overrides: z.object({ detached_delivery: z.boolean().optional(), model: z.string().optional(), provider: z.string().optional(), sampling_temperature: z.number().optional(), budget: budget.optional(), tools: z.array(tool).optional(), context: z.record(z.string(), z.unknown()).optional(), local_tool_schemas: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.object({ type: z.literal("object") }).passthrough() }).passthrough()).optional() }).strict().optional(),

@@ -204,8 +204,17 @@ describe("webSearch", () => {
 });
 
 describe("the web_search tool surface", () => {
-  it("is not in tool_schemas.json, so agents never see it", () => {
-    const schemas = fs.readFileSync(path.resolve(import.meta.dirname, "../../../tool_schemas.json"), "utf8");
-    expect(schemas).not.toMatch(/"name":\s*"web_search"/);
+  // 2026-10-10: web_search gained an in-repo schema (tool_schemas/shared/web.json)
+  // that advertises allowed_domains/blocked_domains — the remote search_web
+  // schema cannot carry them. Dispatch stays in ToolOrchestratorService.
+  it("is in tool_schemas.json with domain filters advertised", () => {
+    const schemas = JSON.parse(
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../../tool_schemas.json"), "utf8"),
+    ) as Array<{ name: string; parameters?: { properties?: Record<string, unknown> } }>;
+    const webSearch = schemas.find((t) => t.name === "web_search");
+    expect(webSearch).toBeDefined();
+    expect(Object.keys(webSearch!.parameters!.properties!)).toEqual(
+      expect.arrayContaining(["query", "allowed_domains", "blocked_domains"]),
+    );
   });
 });
