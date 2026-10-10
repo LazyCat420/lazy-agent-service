@@ -70,3 +70,28 @@ others or main chat.
 ## Non-goals
 Keyless free-tier ring, browser automation, xAI/OpenAI server-side tools, ChatRoutes
 sequential loop, coordinator worktrees.
+
+## Trading-profile enablement + live verification (2026-10-10, commits 284366b, d8d78e2)
+
+- `web_search` (shared WebSearchService: Exa keyless → SearXNG fallback) enabled for all three trading
+  analyst profiles; `global.web.search` capability rewired from Bing/Google News RSS to the shared
+  backend (result shape unchanged, `source` carries the provider; signal-aware cancellation preserved).
+- Resolver bug fixed: `trading.research.*` capability-id whitelist entries granted ZERO tools in the
+  resolver — action grants now map a whitelist id's last segment to the catalog tool name
+  (AgenticToolResolver). Verified via `resolve-check` for all three profiles.
+- `trading-analyst-v1` whitelist had stale pre-rename `mcp__lazy-tool-service__*` prefixes → renamed.
+- `tool_schemas/shared/web.json` `web_search` owner set to `trading` so it ships in the trading catalog.
+- Run-path fix (d8d78e2): direct API runs (`/v1/runs` without a trading-client shim) supplied no
+  `local_tool_schemas`, so profile-admitted tools were callable in name only
+  (`LOCAL_TOOL_SCHEMA_MISSING`). RunExecutionEngine now admits catalog schemas from `tool_schemas.json`
+  for enabled trading-project tools; the warning now lists only tools still missing.
+- **Live test**: POST `/v1/runs` (project `vllm-trading-bot`, profile `trading-junior-analyst-v1`,
+  model `GLM-5.3-Flash-EXL3-TF` on vllm-2): native tool call to `web_search` executed, status ok,
+  10 results. Note: `nemotron35` (Jetson) emits tool calls as text and is not usable for this path.
+- `web_search` vs `lazy_web_search` are NOT duplicates: web_search = general web index (Exa/SearXNG);
+  lazy_web_search = news-recency (trading-service Bing/Google News RSS), contract-frozen into v3
+  agents/evals. `web_search`/`search_web` already share one handler.
+- ARIA audit: no accessibility-tree/ARIA-snapshot extraction anywhere. scraper-service's Playwright
+  engine uses `innerText` heuristics (article/main/paragraphs); aria-label appears only for close-button
+  selectors. WebExtractService consumes the resulting plain text. ARIA snapshots would be a new
+  capability, not a change to existing extraction.
