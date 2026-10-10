@@ -1,0 +1,11 @@
+[
+  { "type": "hello", "seq": 1, "protocolVersion": 1 },
+  { "type": "chunk", "seq": 2, "content": "Partial answer" },
+  {
+    "type": "error",
+    "seq": 3,
+    "code": "internal",
+    "message": "the harness crashed",
+    "retryable": true
+  }
+]

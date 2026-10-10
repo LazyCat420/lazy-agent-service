@@ -1,0 +1,43 @@
+[
+  { "type": "hello", "seq": 1, "protocolVersion": 1 },
+  { "type": "chunk", "seq": 2, "content": "Hello" },
+  { "type": "thinking", "seq": 3, "content": "reasoning…" },
+  { "type": "chunk", "seq": 4, "content": " world" },
+  {
+    "type": "tool_execution",
+    "seq": 5,
+    "status": "calling",
+    "timestamp": 1000,
+    "toolLabel": "Reading a.ts",
+    "tool": {
+      "id": "call_1",
+      "name": "read_file",
+      "args": { "path": "a.ts" },
+      "responsesItemId": "rs_1"
+    }
+  },
+  {
+    "type": "tool_execution",
+    "seq": 6,
+    "status": "done",
+    "tool": {
+      "id": "call_1",
+      "name": "read_file",
+      "args": { "path": "a.ts" },
+      "responsesItemId": "rs_1",
+      "result": { "text": "export const a = 1;" },
+      "durationMilliseconds": 4200
+    }
+  },
+  {
+    "type": "done",
+    "seq": 7,
+    "provider": "anthropic",
+    "model": "claude",
+    "usage": { "inputTokens": 100, "outputTokens": 20, "totalTokens": 120 },
+    "estimatedCost": 0.01,
+    "totalTime": 5.5,
+    "conversationId": "conv_1",
+    "traceId": "trace_1"
+  }
+]

@@ -1,0 +1,50 @@
+[
+  { "type": "hello", "seq": 1, "protocolVersion": 1 },
+  {
+    "type": "approval_required",
+    "seq": 2,
+    "toolCallId": "call_7",
+    "batchId": "batch_1",
+    "batchSize": 1,
+    "toolCall": { "id": "call_7", "name": "write_file", "args": { "path": "b.ts" } },
+    "tierLabel": "Write"
+  },
+  {
+    "type": "approval_decided",
+    "seq": 3,
+    "toolCallId": "call_7",
+    "batchId": "batch_1",
+    "decision": "allow",
+    "scope": "call",
+    "source": "user"
+  },
+  {
+    "type": "tool_execution",
+    "seq": 4,
+    "status": "calling",
+    "timestamp": 2000,
+    "tool": { "id": "call_7", "name": "write_file", "args": { "path": "b.ts" } }
+  },
+  {
+    "type": "tool_execution",
+    "seq": 5,
+    "status": "done",
+    "tool": {
+      "id": "call_7",
+      "name": "write_file",
+      "args": { "path": "b.ts" },
+      "result": { "ok": true },
+      "durationMilliseconds": 300
+    }
+  },
+  {
+    "type": "done",
+    "seq": 6,
+    "provider": "anthropic",
+    "model": "claude",
+    "usage": null,
+    "estimatedCost": null,
+    "totalTime": 2,
+    "conversationId": "conv_2"
+  }
+]

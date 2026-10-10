@@ -39,6 +39,8 @@ export interface ToolActivityState {
   toolName: string;
   args: Record<string, any>;
   status: 'invoked' | 'executing' | 'completed' | 'failed';
+  /** Human-readable, argument-aware label from the wire (e.g. "Reading config.json"). */
+  label?: string;
   output?: any;
   error?: string;
   startedAt: string;
@@ -84,6 +86,8 @@ export interface ChatState {
   runSequences: Record<string, number>;
   sealedRuns: Record<string, boolean>;
   unknownEvents: RunEvent[];
+  /** Wire events whose `type` the turn transport did not recognize. */
+  unrecognizedEvents: number;
   approvals: Record<string, Record<string, any>>;
   cancellationRequested: boolean;
   steering: { accepted: boolean; delivery?: string } | null;
@@ -105,7 +109,7 @@ export interface ChatState {
 
 export const INITIAL_CHAT_STATE: ChatState = {
   eventCursors: {}, seenEventIds: {}, runSequences: {}, sealedRuns: {},
-  unknownEvents: [], approvals: {}, cancellationRequested: false, steering: null,
+  unknownEvents: [], unrecognizedEvents: 0, approvals: {}, cancellationRequested: false, steering: null,
   draftInput: '',
   transcript: [],
   pendingRun: null,

@@ -13,6 +13,7 @@ import express, { Request, Response, NextFunction } from "express";
 import {
   finalizeTextGeneration,
   getCollectionOpts,
+  sanitizeMessagesForPersistence,
 } from "../services/harnesses/lifecycle/Finalizer.ts";
 import crypto from "crypto";
 import { getProvider } from "../providers/index.ts";
@@ -725,6 +726,44 @@ export async function handleConversation(
       false,
       getCollectionOpts(project),
     );
+    // ── Failure persistence ────────────────────────────────────
+    // The finalizer only runs on success; on a thrown provider error (or an
+    // abort surfaced as an error) the user message and any partial assistant
+    // output would be silently dropped. Persist them so the conversation
+    // stays complete regardless of how generation ended. Never skipped on
+    // signal.aborted — the abort reason is recorded in the assistant error.
+    if (conversationId) {
+      try {
+        const partialAssistantText =
+          ((fullContext as Record<string, unknown>).partialAssistantText as
+            | string
+            | undefined) || "";
+        const failureMessages = sanitizeMessagesForPersistence(
+          [
+            ...(context.userMessage
+              ? [context.userMessage as ConversationMessage]
+              : []),
+            {
+              role: "assistant",
+              content: partialAssistantText,
+              error: getErrorMessage(error),
+            } as ConversationMessage,
+          ],
+        );
+        await appendAndFinalize(
+          conversationId,
+          project,
+          username as string,
+          failureMessages,
+          conversationMeta,
+          getCollectionOpts(project),
+        );
+      } catch (persistError: unknown) {
+        logger.warn(
+          `[chat] Failed to persist error state for ${conversationId}: ${getErrorMessage(persistError)}`,
+        );
+      }
+    }
     const totalSec = (performance.now() - requestStart) / 1000;
     RequestLogger.logChatGeneration({
       requestId,
@@ -1150,21 +1189,28 @@ async function handleStreamingText(context: GenerationContext) {
         });
   const streamState = createStreamState();
   streamState.requestStart = requestStart;
-  for await (const chunk of stream) {
-    // Client disconnected — abort the upstream provider stream
-    if (signal?.aborted) {
-      if (typeof stream.return === "function") stream.return();
-      logger.info(
-        `[chat] Client disconnected, aborting stream for ${providerName} ${resolvedModel}`,
+  try {
+    for await (const chunk of stream) {
+      // Client disconnected — abort the upstream provider stream
+      if (signal?.aborted) {
+        if (typeof stream.return === "function") stream.return();
+        logger.info(
+          `[chat] Client disconnected, aborting stream for ${providerName} ${resolvedModel}`,
+        );
+        break;
+      }
+      await dispatchChunk(
+        chunk,
+        streamState,
+        { emit, project, username },
+        { logPrefix: "chat/stream" },
       );
-      break;
     }
-    await dispatchChunk(
-      chunk,
-      streamState,
-      { emit, project, username },
-      { logPrefix: "chat/stream" },
-    );
+  } catch (streamError: unknown) {
+    // Record partial output so the conversation-level catch path can still
+    // persist the user message and whatever the model produced so far.
+    (context as Record<string, unknown>).partialAssistantText = streamState.text;
+    throw streamError;
   }
   // ── FC tool execution loop ─────────────────────────────────
   // When functionCallingEnabled is set on /chat (not the agentic loop),
@@ -1324,18 +1370,24 @@ async function handleStreamingText(context: GenerationContext) {
         streamState.usage = followUpUsage;
       }
     };
-    for await (const chunk of followUpStream) {
-      if (signal?.aborted) {
-        if (typeof followUpStream.return === "function")
-          followUpStream.return();
-        break;
+    try {
+      for await (const chunk of followUpStream) {
+        if (signal?.aborted) {
+          if (typeof followUpStream.return === "function")
+            followUpStream.return();
+          break;
+        }
+        await dispatchChunk(
+          chunk,
+          streamState,
+          { emit, project, username },
+          { onUsage: usageMerger, logPrefix: "chat/FC" },
+        );
       }
-      await dispatchChunk(
-        chunk,
-        streamState,
-        { emit, project, username },
-        { onUsage: usageMerger, logPrefix: "chat/FC" },
-      );
+    } catch (followUpError: unknown) {
+      (context as Record<string, unknown>).partialAssistantText =
+        streamState.text;
+      throw followUpError;
     }
     // Emit intermediate usage update so the frontend has authoritative
     // per-iteration token counts instead of relying on chunk heuristics
@@ -1570,7 +1622,13 @@ router.post(
     const isSse = streamQuery === "true" || (acceptsSse && streamQuery !== "false" && req.body.stream !== false);
 
     if (isSse) {
-      await handleSseRequest(req, res, params);
+      // persistOnDisconnect mirrors /agent: a dropped TCP connection (e.g.
+      // mobile screen lock) must not abort generation — the handler keeps
+      // running server-side and the final messages still land in the
+      // conversation via the finalizer.
+      await handleSseRequest(req, res, params, handleConversation, {
+        persistOnDisconnect: true,
+      });
     } else {
       await handleJsonRequest(req, res, next, params);
     }

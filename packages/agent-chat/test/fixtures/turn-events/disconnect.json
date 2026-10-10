@@ -1,0 +1,15 @@
+[
+  { "type": "hello", "seq": 1, "protocolVersion": 1 },
+  { "type": "chunk", "seq": 2, "content": "Working on it…" },
+  {
+    "type": "tool_execution",
+    "seq": 3,
+    "status": "calling",
+    "timestamp": 1000,
+    "tool": {
+      "id": "call_9",
+      "name": "run_command",
+      "args": { "cmd": "npm test" }
+    }
+  }
+]

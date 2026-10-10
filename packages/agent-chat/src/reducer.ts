@@ -165,6 +165,7 @@ function applyEvent(state: ChatState, event: RunEvent): ChatState {
         toolName,
         args,
         status: 'executing',
+        label: typeof event.data.label === 'string' ? event.data.label : undefined,
         startedAt: event.timestamp,
       };
 
@@ -223,6 +224,7 @@ function applyEvent(state: ChatState, event: RunEvent): ChatState {
           toolId,
           toolName: existing?.toolName || event.data.tool_name || 'tool',
           args: existing?.args || {},
+          label: existing?.label,
           status: resultFailed ? 'failed' as const : 'completed' as const,
           output: event.data.result ?? event.data.output,
           error: resultError,
@@ -254,6 +256,7 @@ function applyEvent(state: ChatState, event: RunEvent): ChatState {
           toolId,
           toolName: existing?.toolName || event.data.tool_name || 'tool',
           args: existing?.args || {},
+          label: existing?.label,
           status: 'failed' as const,
           error: event.data.error || event.data.message || 'Tool execution failed',
           completedAt: event.timestamp,
