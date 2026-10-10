@@ -18,10 +18,12 @@
  * correct cache is selected based on the locale argument.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type * as ConfigModule from "../../../config.ts";
 
 // ── Mock dependencies before imports ───────────────────────
 
-vi.mock("../../../config.ts", () => ({
+vi.mock("../../../config.ts", async (importOriginal) => ({
+  ...(await importOriginal<Promise<typeof ConfigModule>>()),
   TOOLS_SERVICE_URL: "http://mock-tools-service:9999",
 }));
 

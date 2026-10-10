@@ -1,6 +1,13 @@
 import logger from "../utils/logger.ts";
 import { getInstancesByType } from "../providers/instance-registry.ts";
 import { getProvider } from "../providers/index.ts";
+import { VISION_PATTERNS } from "./local-provider/constants.ts";
+
+/**
+ * Side-task capabilities resolved by {@link DynamicModelResolver.resolveAuxModel},
+ * independent of the main chat chain. Unknown capabilities are a compile error.
+ */
+export type AuxCapability = "web" | "vision" | "compression";
 
 export interface HostModelStatus {
   instanceId: string;
@@ -219,5 +226,91 @@ export class DynamicModelResolver {
       provider: allowedProviders[0] || "vllm-2",
       model: requestedModel || "default-model",
     };
+  }
+
+  /**
+   * Allowed local providers for auxiliary (side-task) resolution. Auxiliary
+   * jobs run on the same local boxes as the main chain, just resolved
+   * independently so a web Q&A failure can never destabilize vision or chat.
+   */
+  private static readonly AUX_ALLOWED_PROVIDERS = ["vllm", "vllm-2"];
+
+  /**
+   * Capability → role mapping for the existing role-tiering logic in
+   * {@link DynamicModelResolver.resolveProviderAndModel}. Web page Q&A and
+   * compression/summarization are light work → Jetson (vllm); vision needs a
+   * vision-capable model (see {@link DynamicModelResolver.findAuxVisionModel}).
+   */
+  private static readonly AUX_CAPABILITY_ROLE: Record<AuxCapability, string> = {
+    web: "summarizer",
+    compression: "summarizer",
+    vision: "vision",
+  };
+
+  /**
+   * True when a lowercased model key looks vision-capable, using the same
+   * VISION_PATTERNS match the local-provider capability detection uses.
+   */
+  private static isVisionModel(modelKey: string): boolean {
+    const nameLower = modelKey.toLowerCase();
+    return VISION_PATTERNS.some((pattern) => nameLower.includes(pattern));
+  }
+
+  /**
+   * Resolve a provider+model for an auxiliary side-task (web page Q&A, image
+   * understanding, compression/summarization) INDEPENDENTLY of the main chat
+   * chain. Resolution order per capability:
+   *   1. Explicit env: AUX_<CAP>_PROVIDER / AUX_<CAP>_MODEL (both optional —
+   *      a provider without a model picks the box's first model; an offline
+   *      env provider falls through to the tiers below).
+   *   2. Existing role tiering: web/compression map to a light role (→ vllm),
+   *      vision maps to a vision-capable model identified via VISION_PATTERNS.
+   *   3. Whatever allowed provider is online (the existing fallback path in
+   *      {@link DynamicModelResolver.resolveProviderAndModel}).
+   * Each capability chain is independent: a failure resolving one capability
+   * never affects the others or main chat resolution (caught + defaulted).
+   *
+   * @param capability - "web" | "vision" | "compression" (compile-time only;
+   *   any other string is rejected by the type system).
+   */
+  public static resolveAuxModel(capability: AuxCapability): {
+    provider: string;
+    model: string;
+  } {
+    try {
+      const capUpper = capability.toUpperCase();
+      const envProvider = process.env[`AUX_${capUpper}_PROVIDER`];
+      const envModel = process.env[`AUX_${capUpper}_MODEL`] || undefined;
+
+      // Tier 2 + 3 (and env tier 1, passed as request hints): the existing
+      // resolver gracefully falls through when a requested provider is
+      // offline or a requested model isn't served.
+      const resolved = this.resolveProviderAndModel(
+        this.AUX_CAPABILITY_ROLE[capability],
+        this.AUX_ALLOWED_PROVIDERS,
+        envModel,
+        envProvider,
+      );
+
+      // Vision tier 2: prefer a vision-capable model on any online host
+      // (env-explicit models from tier 1 already took effect above).
+      if (capability === "vision" && !envModel) {
+        const statuses = this.getCachedLiveHosts();
+        for (const provId of this.AUX_ALLOWED_PROVIDERS) {
+          const host = statuses.find((h) => h.online && h.instanceId === provId);
+          const visionModel = host?.models.find((m) => this.isVisionModel(m));
+          if (host && visionModel) {
+            return { provider: host.instanceId, model: visionModel };
+          }
+        }
+      }
+
+      return resolved;
+    } catch (error) {
+      logger.warn(
+        `[DynamicModelResolver] Aux resolution for '${capability}' failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { provider: "vllm", model: "default-model" };
+    }
   }
 }

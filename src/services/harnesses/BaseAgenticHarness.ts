@@ -52,6 +52,7 @@ import AgenticToolResolver from "../AgenticToolResolver.ts";
 import { ToolDocFormatter } from "../system-prompt/ToolDocFormatter.ts";
 import { getToolPolicyAddendum } from "../personas/utils.ts";
 import PromptLocaleService from "../PromptLocaleService.ts";
+import { normalizeRoleAlternation } from "../RoleAlternation.ts";
 import type AgenticLoopState from "../AgenticLoopState.ts";
 import type AgentHooks from "../AgentHooks.ts";
 import type { ChatMessage, TokenUsage } from "../../types/admin.ts";
@@ -547,8 +548,15 @@ export default class BaseAgenticHarness {
       ? { ...passOptions, maxTokens: clampedMaxTokens }
       : passOptions;
 
+    // ── Role-alternation pre-flight (W3) ─────────────────────
+    // Normalize the internal message array so providers with strict
+    // alternation rules never see malformed history (orphan tool
+    // results, non-leading system messages, duplicate consecutive
+    // roles). Operates on the internal format, before expansion.
+    const normalizedMessages = normalizeRoleAlternation(messages);
+
     const expandedMessages = expandMessagesForFunctionCall(
-      messages as ChatMessage[],
+      normalizedMessages.messages as ChatMessage[],
       {
         filterDeleted: false,
       },

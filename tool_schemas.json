@@ -2521,6 +2521,10 @@
         "char_limit": {
           "type": "number",
           "description": "Optional character budget for the returned text (default 15000, clamped 2000-500000). Raise only for pages you know are dense with needed detail."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Optional question to answer from the page; when set, a cheap model answers from the page content instead of returning raw text"
         }
       },
       "required": [

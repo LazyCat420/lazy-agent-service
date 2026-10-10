@@ -3,6 +3,8 @@
 // WebSearchService: the SearXNG fallback answers when Exa fails.
 import * as fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import ToolOrchestratorService from "../ToolOrchestratorService.ts";
+import * as WebExtractModule from "../WebExtractService.ts";
 import {
   bucketCharLimit,
   truncateAndStore,
@@ -126,5 +128,106 @@ describe("the web_search SearXNG fallback", () => {
     const result = await webSearch("q", 6, h.deps);
     expect(result).toMatchObject({ status: "ok", provider: "exa" });
     expect(h.calls).toHaveLength(1);
+  });
+});
+
+describe("SSRF guard", () => {
+  it.each([
+    "http://example.com/page",
+    "http://localhost:8001/x",
+    "https://localhost/x",
+    "https://printer.local/status",
+    "https://nas/admin",
+    "https://127.0.0.1/x",
+    "https://127.9.9.9/x",
+    "https://10.1.2.3/x",
+    "https://192.168.1.1/x",
+    "https://172.16.0.1/x",
+    "https://172.31.255.255/x",
+    "https://169.254.1.1/x",
+    "https://[::1]/x",
+    "https://[fe80::1]/x",
+    "https://[fc00::1]/x",
+  ])("blocks %s without any network call", async (u) => {
+    const h = harness([]);
+    const result = await webExtract(u, 15_000, h.deps);
+    expect(result).toMatchObject({ status: "error", cached: false });
+    expect(result.error).toContain("blocked");
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it("allows public https hosts", () => {
+    expect(WebExtractModule.isBlockedHost("https://example.com/page")).toBe(false);
+  });
+
+  it("permits private hosts under ALLOW_PRIVATE_URLS=1", async () => {
+    vi.stubEnv("ALLOW_PRIVATE_URLS", "1");
+    const h = harness([{ body: JSON.stringify({ success: true, content: "lan" }) }]);
+    expect(WebExtractModule.isBlockedHost("https://10.0.0.1/x")).toBe(false);
+    expect((await webExtract("https://10.0.0.1/x", 15_000, h.deps)).content).toBe("lan");
+    vi.unstubAllEnvs();
+  });
+
+  it("blocks WEB_BLOCKED_DOMAINS hosts and subdomains before fetching", async () => {
+    vi.stubEnv("WEB_BLOCKED_DOMAINS", "evil.example");
+    const h = harness([]);
+    expect(WebExtractModule.isBlockedHost("https://sub.evil.example/x")).toBe(true);
+    expect((await webExtract("https://sub.evil.example/x", 15_000, h.deps)).error).toContain("WEB_BLOCKED_DOMAINS");
+    expect(h.calls).toHaveLength(0);
+    vi.unstubAllEnvs();
+  });
+
+  it("never caches a blocked result", async () => {
+    vi.stubEnv("WEB_BLOCKED_DOMAINS", "evil.example");
+    await webExtract("https://evil.example/x", 15_000, harness([]).deps);
+    vi.unstubAllEnvs();
+    const h = harness([{ body: JSON.stringify({ success: true, content: "now allowed" }) }]);
+    expect((await webExtract("https://evil.example/x", 15_000, h.deps)).content).toBe("now allowed");
+    expect(h.calls).toHaveLength(1);
+  });
+});
+
+describe("WEB_CACHE_EXEMPT_HOSTS", () => {
+  it("fetches exempt hosts live on every call, never from cache", async () => {
+    vi.stubEnv("WEB_CACHE_EXEMPT_HOSTS", "fresh.example, *.live.example");
+    const h = harness([
+      { body: JSON.stringify({ success: true, content: "first" }) },
+      { body: JSON.stringify({ success: true, content: "second" }) },
+    ]);
+    const first = await webExtract("https://fresh.example/a", 15_000, h.deps);
+    const second = await webExtract("https://fresh.example/a", 15_000, h.deps);
+    expect(first.cached).toBe(false);
+    expect(second).toMatchObject({ cached: false, content: "second" });
+    expect(h.calls).toHaveLength(2);
+    const wild = await webExtract("https://sub.live.example/b", 15_000, h.deps);
+    expect(wild.cached).toBe(false);
+    expect(h.calls).toHaveLength(3);
+    vi.unstubAllEnvs();
+  });
+
+  it("does not exempt unlisted hosts", async () => {
+    vi.stubEnv("WEB_CACHE_EXEMPT_HOSTS", "other.example");
+    const h = harness([{ body: JSON.stringify({ success: true, content: "once" }) }]);
+    await webExtract("https://example.com/c", 15_000, h.deps);
+    expect((await webExtract("https://example.com/c", 15_000, h.deps)).cached).toBe(true);
+    expect(h.calls).toHaveLength(1);
+    vi.unstubAllEnvs();
+  });
+});
+
+describe("scrape_url handler", () => {
+  it("dispatches the answered path when prompt is set and the plain path otherwise", async () => {
+    const plainSpy = vi.spyOn(WebExtractModule, "webExtract").mockResolvedValue({ status: "ok", url: "https://example.com/a", content: "raw text", truncated: false, cached: false });
+    const answeredSpy = vi.spyOn(WebExtractModule, "webExtractAnswered").mockResolvedValue({ url: "https://example.com/a", answer: "42", truncated: false, cached: false });
+
+    const answered = await (ToolOrchestratorService as any).executeWebExtract({ url: "https://example.com/a", prompt: "what is the answer?" });
+    expect(answered).toMatchObject({ url: "https://example.com/a", success: true, answer: "42", truncated: false, cached: false });
+    expect(answeredSpy).toHaveBeenCalledWith("https://example.com/a", "what is the answer?", undefined);
+
+    const plain = await (ToolOrchestratorService as any).executeWebExtract({ url: "https://example.com/a" });
+    expect(plain).toMatchObject({ url: "https://example.com/a", success: true, content: "raw text" });
+    expect(plainSpy).toHaveBeenCalledWith("https://example.com/a", undefined);
+    plainSpy.mockRestore();
+    answeredSpy.mockRestore();
   });
 });

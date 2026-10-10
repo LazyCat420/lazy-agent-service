@@ -23,6 +23,8 @@ import {
   stripImagesFromMessages,
 } from "./CompactionPrompt.ts";
 import type { ChatMessage as AdminChatMessage } from "../../types/admin.ts";
+import MemoryExtractor from "../MemoryExtractor.ts";
+import type { ConversationMessage } from "../harnesses/types.ts";
 import type { ChatMessage, GenerateTextResult } from "../../types/provider.ts";
 import type { EmitFunction } from "../harnesses/types.ts";
 
@@ -76,6 +78,12 @@ interface CompactionOptions {
   agent?: string | null;
   emit?: EmitFunction | null;
   signal?: AbortSignal;
+  /**
+   * Optional injection seam for tests: replaces the default
+   * MemoryExtractor.extractAndStore flush. Receives nothing, returns a
+   * promise that is awaited before summarization.
+   */
+  memoryFlush?: () => Promise<unknown>;
 }
 
 interface MemorySettingsSection {
@@ -197,6 +205,30 @@ export default class CompactionService {
       })
       .join("\n\n");
 
+    // ── Memory flush before compaction (N7) ────────────────────
+    // Summarization drops the pre-boundary history, so any pending
+    // memory extraction must run first or the facts it would capture
+    // are lost. Awaited; failure is logged and compaction continues.
+    try {
+      if (options.memoryFlush) {
+        await options.memoryFlush();
+      } else {
+        await MemoryExtractor.extractAndStore({
+          project: options.project,
+          username: options.username,
+          messages: messages as unknown as ConversationMessage[],
+          traceId: options.traceId || null,
+          agentConversationId: options.agentConversationId || null,
+          agent: options.agent || null,
+          emit: options.emit ?? null,
+        });
+      }
+    } catch (error: unknown) {
+      logger.warn(
+        `[CompactionService] Memory flush before compaction failed (continuing): ${errorMessage(error)}`,
+      );
+    }
+
     // ── Build summarization messages ───────────────────────────
     const summarizationMessages: ChatMessage[] = [
       { role: "system", content: COMPACTION_SYSTEM_PROMPT },
@@ -309,10 +341,30 @@ export default class CompactionService {
     // ── Build compacted message array ─────────────────────────
     // Structure: [system prompt, summary as user message, ...recent tail]
     const systemMessage = messages.find((message) => message.role === "system");
+    const recentTail = extractRecentTail(messages);
+
+    // ── Pair-aware drop filter (N7) ────────────────────────────
+    // The dropped range is everything not kept (system + recent tail).
+    // An assistant toolCalls message and its tool results must be
+    // dropped together: never orphan a tool result whose owning
+    // assistant is summarized away, and never keep an assistant whose
+    // tool result was dropped.
+    const keptFlags = messages.map(
+      (message) => message === systemMessage || recentTail.includes(message),
+    );
+    const pairKeptFlags = enforceToolPairIntegrity(messages, keptFlags);
+    const keptSystem = systemMessage && pairKeptFlags[messages.indexOf(systemMessage)]
+      ? systemMessage
+      : undefined;
+    const keptTail = messages.filter(
+      (message, index) =>
+        pairKeptFlags[index] && message !== systemMessage && message.role !== "system",
+    );
+
     const compactedMessages: AdminChatMessage[] = [];
 
-    if (systemMessage) {
-      compactedMessages.push(systemMessage);
+    if (keptSystem) {
+      compactedMessages.push(keptSystem);
     }
 
     // Insert the summary as a user message with a marker
@@ -323,8 +375,7 @@ export default class CompactionService {
     });
 
     // Append recent tail (last few turns the model is actively reasoning about)
-    const recentTail = extractRecentTail(messages);
-    compactedMessages.push(...recentTail);
+    compactedMessages.push(...keptTail);
 
     const postCompactTokenCount = estimateTotalTokens(compactedMessages);
 
@@ -387,6 +438,82 @@ export default class CompactionService {
   static resetCircuitBreaker(): void {
     this.consecutiveFailures = 0;
   }
+}
+
+// ── Helper: Tool-pair integrity over the drop range ───────────
+
+function owningAssistantIndex(
+  messages: AdminChatMessage[],
+  toolIndex: number,
+): number {
+  for (let i = toolIndex - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant" && messages[i].toolCalls?.length) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Enforce pair-aware dropping over a kept-flags array (N7).
+ *
+ * Given `messages` and a boolean `kept` mask (true = survives
+ * compaction), returns a new mask where tool-call pairs are never
+ * split:
+ *   - a role:"tool" result message survives only if its owning
+ *     assistant-with-toolCalls message also survives and declares a
+ *     matching toolCall id;
+ *   - an assistant-with-toolCalls message is dropped when any of its
+ *     tool results (matched by id) was already marked dropped.
+ *
+ * Tool results stored inline (toolCall.result on the assistant) move
+ * with their assistant automatically — no separate message exists.
+ * Fixpoint iteration handles cascades in either direction.
+ */
+export function enforceToolPairIntegrity(
+  messages: AdminChatMessage[],
+  kept: boolean[],
+): boolean[] {
+  const result = [...kept];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < messages.length; i++) {
+      if (!result[i]) continue;
+      const message = messages[i];
+
+      if (message.role === "tool") {
+        const owner = owningAssistantIndex(messages, i);
+        const callId = message.tool_call_id;
+        const ownerDeclaresCall =
+          owner !== -1 &&
+          (!callId || messages[owner].toolCalls!.some((tc) => tc.id === callId));
+        if (owner === -1 || !result[owner] || !ownerDeclaresCall) {
+          result[i] = false;
+          changed = true;
+        }
+        continue;
+      }
+
+      if (message.role === "assistant" && message.toolCalls?.length) {
+        for (const toolCall of message.toolCalls) {
+          if (!toolCall.id) continue;
+          const resultIndex = messages.findIndex(
+            (candidate, index) =>
+              index > i &&
+              candidate.role === "tool" &&
+              candidate.tool_call_id === toolCall.id,
+          );
+          if (resultIndex !== -1 && !result[resultIndex]) {
+            result[i] = false;
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+  return result;
 }
 
 // ── Helper: Extract recent conversation tail ──────────────────

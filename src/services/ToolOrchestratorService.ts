@@ -7,7 +7,7 @@ import logger from "../utils/logger.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import { ORCHESTRATOR_ONLY_TOOLS } from "./OrchestratorPrompt.ts";
 import { webSearch } from "./WebSearchService.ts";
-import { webExtract } from "./WebExtractService.ts";
+import { webExtract, webExtractAnswered } from "./WebExtractService.ts";
 import { createAbortController } from "../utils/AbortController.ts";
 import {
   DOMAINS,
@@ -1768,6 +1768,34 @@ export default class ToolOrchestratorService {
       return { error: "'url' is required and must be a non-empty string" };
     }
     const charLimit = Number(args.char_limit ?? args.charLimit ?? undefined) || undefined;
+    const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+    if (prompt) {
+      const answered = await webExtractAnswered(url, prompt, charLimit);
+      if (answered.content && answered.answer === answered.content) {
+        // Graceful degradation or extraction failure: deterministic extract only.
+        if (answered.answer.startsWith("Extraction did not run:")) {
+          return { url, content: "", success: false, error: answered.content };
+        }
+        return {
+          url,
+          success: true,
+          content: answered.content,
+          truncated: answered.truncated,
+          ...(answered.stored_file ? { stored_path: answered.stored_file, read_hint: `read_file "${answered.stored_file}" and page with line ranges to reach the omitted middle` } : {}),
+          ...(answered.engine_used ? { engine_used: answered.engine_used } : {}),
+          cached: answered.cached ?? false,
+        };
+      }
+      return {
+        url,
+        success: true,
+        answer: answered.answer,
+        truncated: answered.truncated,
+        ...(answered.stored_file ? { stored_path: answered.stored_file } : {}),
+        ...(answered.engine_used ? { engine_used: answered.engine_used } : {}),
+        cached: answered.cached ?? false,
+      };
+    }
     const extracted = await webExtract(url, charLimit);
     if (extracted.status !== "ok") {
       return {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type * as ConfigModule from "../../../config.ts";
 
 // search_web on this harness: answered by the shared search, never forwarded to
 // tools-service (whose search is DuckDuckGo alone). WebSearchService is mocked
@@ -11,7 +12,10 @@ vi.mock("../WebSearchService.ts", () => ({ webSearch: mocks.webSearch }));
 vi.mock("../prism/PrismProxyService.js", () => ({
   PrismProxyService: { isToolAllowed: mocks.isToolAllowed },
 }));
-vi.mock("../../../config.ts", () => ({ TOOLS_SERVICE_URL: "http://tools-service.invalid" }));
+vi.mock("../../../config.ts", async (importOriginal) => ({
+  ...(await importOriginal<Promise<typeof ConfigModule>>()),
+  TOOLS_SERVICE_URL: "http://tools-service.invalid",
+}));
 vi.mock("../MCPClientService.ts", () => ({
   default: { getConnectedClients: vi.fn(() => []), getAllToolSchemas: vi.fn(() => []), getToolSchemas: vi.fn(() => []) },
 }));
