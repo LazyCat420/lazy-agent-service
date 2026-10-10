@@ -1,3 +1,9 @@
+---
+part: Features
+status: verified
+updated: 2026-10-10
+---
+
 # Web Harness Hardening (2026-10-10)
 
 Implements `docs/harness-research/REPORT_agentic_harness_2026-10-10.md` slices W1–W4.
