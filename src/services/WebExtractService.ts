@@ -258,44 +258,54 @@ export async function webExtract(url: string, charLimit = DEFAULT_CHAR_LIMIT, de
   }
   const exempt = isCacheExemptHost(cleanUrl);
   const requested = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, Math.floor(Number(charLimit) || DEFAULT_CHAR_LIMIT)));
-  const key = `${cleanUrl}|${bucketCharLimit(requested)}`;
+  // One scrape per URL is cached (full text); every caller gets it cut to
+  // its OWN limit, so two callers in one bucket never see each other's cut.
+  const key = cleanUrl;
+  const fromScrape = async (scraped: WebExtractResult & { storedPath?: string }, cachedFlag: boolean): Promise<WebExtractResult> => {
+    const fullText = scraped.content;
+    const { content, truncated } = truncateAndStore(fullText, requested);
+    if (!truncated) return { ...scraped, content, truncated: false, cached: cachedFlag, storedPath: undefined, readHint: undefined };
+    let storedPath = scraped.storedPath;
+    if (!storedPath) {
+      const digest = createHash("sha1").update(cleanUrl).digest("hex").slice(0, 12);
+      storedPath = path.join(storeDir, `${digest}-${deps.now()}.txt`);
+      if (deps.now() - lastSweepAt > 10 * 60 * 1_000) void sweepExtractStore(deps.now());
+      try {
+        await fs.mkdir(storeDir, { recursive: true });
+        await fs.writeFile(storedPath, fullText, "utf-8");
+        scraped.storedPath = storedPath; // shared with later callers of this cache entry
+      } catch (error) {
+        logger.warn(`[WebExtract] could not store full text: ${(error as Error).message}`);
+        return { ...scraped, content: `${fullText.slice(0, Math.floor(requested * 0.75))}\n\n[TRUNCATED] the middle was cut and could not be stored (${(error as Error).message.slice(0, 100)}).`, truncated: true, cached: cachedFlag, storedPath: undefined };
+      }
+    }
+    return { ...scraped, content: content.replace("{STORED_PATH}", storedPath), truncated: true, cached: cachedFlag, storedPath, readHint: `read_file "${storedPath}" and page with line ranges to reach the omitted middle` };
+  };
   if (!exempt) {
     const hit = cache.get(key);
-    if (hit && deps.now() - hit.at < CACHE_TTL_MS) return { ...hit.value, cached: true };
+    if (hit && deps.now() - hit.at < CACHE_TTL_MS) return fromScrape(hit.value, true);
     const pending = inFlight.get(key);
-    if (pending) return { ...(await pending), cached: true };
+    if (pending) {
+      const scraped = await pending;
+      return scraped.status === "ok" ? fromScrape(scraped, true) : { ...scraped, cached: true };
+    }
   }
 
   const work = (async (): Promise<WebExtractResult> => {
     const scraped = await scrapeViaScraperService(cleanUrl, deps);
     if (scraped.status !== "ok") return scraped;
-
-    const fullText = scraped.content.slice(0, STORED_TEXT_CAP);
-    const { content, truncated } = truncateAndStore(fullText, requested);
-    if (!truncated) return { ...scraped, content };
-
-    const digest = createHash("sha1").update(cleanUrl).digest("hex").slice(0, 12);
-    const storedPath = path.join(storeDir, `${digest}-${deps.now()}.txt`);
-    if (deps.now() - lastSweepAt > 10 * 60 * 1_000) void sweepExtractStore(deps.now());
-    try {
-      await fs.mkdir(storeDir, { recursive: true });
-      await fs.writeFile(storedPath, fullText, "utf-8");
-    } catch (error) {
-      logger.warn(`[WebExtract] could not store full text: ${(error as Error).message}`);
-      return { ...scraped, content: `${fullText.slice(0, Math.floor(requested * 0.75))}\n\n[TRUNCATED] the middle was cut and could not be stored (${(error as Error).message.slice(0, 100)}).`, truncated: true };
-    }
-    const content_ = content.replace("{STORED_PATH}", storedPath);
-    return { ...scraped, content: content_, truncated: true, storedPath, readHint: `read_file "${storedPath}" and page with line ranges to reach the omitted middle` };
+    return { ...scraped, content: scraped.content.slice(0, STORED_TEXT_CAP) };
   })();
 
   inFlight.set(key, work);
   try {
-    const result = await work;
-    if (result.status === "ok" && !exempt) {
+    const scraped = await work;
+    if (scraped.status !== "ok") return scraped;
+    if (!exempt) {
       if (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value as string);
-      cache.set(key, { at: deps.now(), value: result });
+      cache.set(key, { at: deps.now(), value: scraped });
     }
-    return result;
+    return await fromScrape(scraped, false);
   } finally {
     inFlight.delete(key);
   }

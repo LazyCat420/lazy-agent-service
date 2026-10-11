@@ -271,3 +271,16 @@ describe("stored extract cleanup (audit D11)", () => {
     nodeFs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("per-caller char limit over one cached scrape (audit bc1049a)", () => {
+  it("two limits in the same bucket each get their own cut from one scrape", async () => {
+    const page = Array.from({ length: 2_000 }, (_, i) => `line ${i} of the page`).join("\n");
+    const h = harness([{ body: JSON.stringify({ success: true, content: page }) }]);
+    const small = await webExtract("https://example.com/long", 3_000, h.deps);
+    const larger = await webExtract("https://example.com/long", 4_800, h.deps);
+    expect(h.calls).toHaveLength(1);
+    expect(larger.cached).toBe(true);
+    expect(small.content.length).toBeLessThan(larger.content.length);
+    expect(larger.content.length).toBeLessThanOrEqual(4_800 + 400);
+  });
+});

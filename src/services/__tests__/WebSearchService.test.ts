@@ -286,3 +286,13 @@ describe("cancellation against the real webSearch (audit D8)", () => {
     expect(signals).toHaveLength(1);
   });
 });
+
+describe("withSiteSearch", () => {
+  it("pushes a single allowed domain into the query", async () => {
+    const { withSiteSearch } = await import("../WebSearchService.ts");
+    expect(withSiteSearch("asyncio", { allowed_domains: ["www.docs.python.org"] })).toBe("site:docs.python.org asyncio");
+    expect(withSiteSearch("asyncio", { allowed_domains: ["a.com", "b.com"] })).toBe("asyncio");
+    expect(withSiteSearch("site:x.org asyncio", { allowed_domains: ["a.com"] })).toBe("site:x.org asyncio");
+    expect(withSiteSearch("asyncio", { siteSearch: "python.org", allowed_domains: ["docs.python.org"] })).toBe("site:python.org asyncio");
+  });
+});

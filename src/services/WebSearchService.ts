@@ -381,9 +381,18 @@ export function filterResultsByDomain<T extends { url: string }>(results: T[], a
   });
 }
 
-/** `site:` prefix for a siteSearch arg, as tools-service did it. */
+/**
+ * `site:` prefix for a siteSearch arg, as tools-service did it. A single
+ * allowed_domains entry is pushed into the query the same way, so the
+ * backend returns results from that domain instead of the post-fetch
+ * filter emptying a generic top-10 (audit e23d775).
+ */
 export function withSiteSearch(query: string, args: Record<string, unknown>): string {
-  const site = typeof args.siteSearch === "string" ? args.siteSearch.trim() : "";
-  return site ? `site:${site} ${query}` : query;
+  const explicit = typeof args.siteSearch === "string" ? args.siteSearch.trim() : "";
+  const allowed = Array.isArray(args.allowed_domains)
+    ? args.allowed_domains.filter((d): d is string => typeof d === "string" && d.trim().length > 0)
+    : [];
+  const site = explicit || (allowed.length === 1 ? allowed[0].trim().toLowerCase().replace(/^www\./, "") : "");
+  return site && !/(^|\s)site:/i.test(query) ? `site:${site} ${query}` : query;
 }
 
