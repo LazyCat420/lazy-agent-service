@@ -1,3 +1,5 @@
+import AutoApprovalEngine, { APPROVAL_TIERS } from "../services/AutoApprovalEngine.ts";
+import { scheduleToolCalls } from "../utils/ToolScheduling.ts";
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import {
   formatCostTag,
@@ -1242,72 +1244,79 @@ async function handleStreamingText(context: GenerationContext) {
     logger.info(
       `[chat/FC] Iteration ${functionCallIteration}: executing ${pendingCalls.length} tool call(s)`,
     );
-    // Execute all pending tool calls — concurrently (Promise.all preserves
-    // result order by index), matching ToolOrchestratorService.executeToolCalls.
-    // Each call emits its own "calling" event immediately and its result event
-    // on completion, so ordering of the SSE stream stays per-tool truthful.
-    await Promise.all(
-      pendingCalls.map(async (toolCall) => {
+    // Each call emits its own "calling" event immediately and its result
+    // event on completion; results land on their own toolCall entry, so the
+    // message order stays the model's order whatever the scheduling.
+    const runToolCall = async (toolCall: (typeof pendingCalls)[number]) => {
+      emit({
+        type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+        id: toolCall.id,
+        name: toolCall.name,
+        args: toolCall.args,
+        status: "calling",
+      });
+      const startTime = Date.now();
+      try {
+        const result = await ToolOrchestratorService.executeTool(
+          toolCall.name as string,
+          toolCall.args as Record<string, unknown>,
+          {
+            project,
+            username,
+            agent: agent || null,
+            requestId,
+            conversationId: conversationId || null,
+            traceId: traceId || null,
+            clientIp: clientIp || null,
+            iteration: functionCallIteration,
+            _providerName: providerName,
+            _resolvedModel: resolvedModel,
+          },
+        );
+        const durationMs = Date.now() - startTime;
+        toolCall.result = result;
+        toolCall.status =
+          result &&
+          typeof result === "object" &&
+          "error" in result &&
+          result.error
+            ? "error"
+            : "done";
+        toolCall.durationMs = durationMs;
         emit({
           type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
           id: toolCall.id,
           name: toolCall.name,
           args: toolCall.args,
-          status: "calling",
+          result,
+          status: toolCall.status,
+          durationMs,
         });
-        const startTime = Date.now();
-        try {
-          const result = await ToolOrchestratorService.executeTool(
-            toolCall.name as string,
-            toolCall.args as Record<string, unknown>,
-            {
-              project,
-              username,
-              agent: agent || null,
-              requestId,
-              conversationId: conversationId || null,
-              traceId: traceId || null,
-              clientIp: clientIp || null,
-              iteration: functionCallIteration,
-              _providerName: providerName,
-              _resolvedModel: resolvedModel,
-            },
-          );
-          const durationMs = Date.now() - startTime;
-          toolCall.result = result;
-          toolCall.status =
-            result &&
-            typeof result === "object" &&
-            "error" in result &&
-            result.error
-              ? "error"
-              : "done";
-          toolCall.durationMs = durationMs;
-          emit({
-            type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-            id: toolCall.id,
-            name: toolCall.name,
-            args: toolCall.args,
-            result,
-            status: toolCall.status,
-            durationMs,
-          });
-        } catch (error: unknown) {
-          const durationMs = Date.now() - startTime;
-          toolCall.result = { error: getErrorMessage(error) };
-          toolCall.status = "error";
-          toolCall.durationMs = durationMs;
-          emit({
-            type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-            id: toolCall.id,
-            name: toolCall.name,
-            args: toolCall.args,
-            result: toolCall.result,
-            status: "error",
-            durationMs,
-          });
-        }
-      }),
+      } catch (error: unknown) {
+        const durationMs = Date.now() - startTime;
+        toolCall.result = { error: getErrorMessage(error) };
+        toolCall.status = "error";
+        toolCall.durationMs = durationMs;
+        emit({
+          type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+          id: toolCall.id,
+          name: toolCall.name,
+          args: toolCall.args,
+          result: toolCall.result,
+          status: "error",
+          durationMs,
+        });
+      }
+    };
+    // Read-only tools (approval tier AUTO) run concurrently, at most
+    // CHAT_TOOL_CONCURRENCY (4) at a time; anything that can write runs
+    // one at a time afterwards, in the order the model asked for them.
+    const tierEngine = new AutoApprovalEngine();
+    await scheduleToolCalls(
+      pendingCalls,
+      runToolCall,
+      (call) => tierEngine.getTier(String(call.name)) === APPROVAL_TIERS.AUTO,
+      Math.max(1, Number(process.env.CHAT_TOOL_CONCURRENCY) || 4),
     );
     // Build tool result messages for the provider
     const assistantToolMessage = {
