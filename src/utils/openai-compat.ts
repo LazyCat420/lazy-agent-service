@@ -500,6 +500,16 @@ export function prepareOpenAICompatMessages(
         content:
           (typeof message.content === "string" ? message.content.trim() : "") ||
           null,
+        // Round-trip the model's reasoning on tool turns: DeepSeek thinking
+        // mode with tools 400s without it, and interleaved-thinking chat
+        // templates (Qwen3, GLM) render it for turns after the last user
+        // message so the chain survives across tool calls. ROUND_TRIP_REASONING=0
+        // disables it for a backend that rejects the field.
+        ...(typeof message.thinking === "string" &&
+        message.thinking.trim() &&
+        process.env.ROUND_TRIP_REASONING !== "0"
+          ? { reasoning_content: message.thinking }
+          : {}),
         tool_calls: message.toolCalls.map(
           (toolCall: ToolCallEntry, i: number) => ({
             id: toolCall.id || `call_${i}`,
