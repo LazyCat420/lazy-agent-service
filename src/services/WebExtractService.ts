@@ -34,6 +34,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { assertPublicUrl, isPrivateAddress } from "../utils/UrlSafety.ts";
 import SettingsService from "./SettingsService.ts";
 import { getProvider } from "../providers/index.ts";
 import { getInstancesByType, getInstanceType } from "../providers/instance-registry.ts";
@@ -61,6 +64,8 @@ export interface WebExtractResult {
 export interface WebExtractDeps {
   fetch: typeof fetch;
   now: () => number;
+  /** DNS resolver for the SSRF pre-check; absent = literal-host checks only (tests). */
+  resolve?: (host: string) => Promise<string[]>;
 }
 
 const envNumber = (name: string, fallback: number): number => {
@@ -83,41 +88,6 @@ const allowPrivateUrls = (): boolean => ["1", "true"].includes((process.env.ALLO
 const blockedDomains = (): string[] => envList("WEB_BLOCKED_DOMAINS");
 const cacheExemptHosts = (): string[] => envList("WEB_CACHE_EXEMPT_HOSTS");
 
-const isIpv6 = (host: string): boolean => host.includes(":");
-const ipv6ToParts = (host: string): bigint | null => {
-  try {
-    const [head, tail] = host.split("::");
-    const headParts = head ? head.split(":").filter(Boolean) : [];
-    const tailParts = tail !== undefined ? tail.split(":").filter(Boolean) : [];
-    if (tail === undefined ? headParts.length !== 8 : headParts.length + tailParts.length > 7) return null;
-    const full = [...headParts, ...Array(8 - headParts.length - tailParts.length).fill("0"), ...tailParts];
-    let value = 0n;
-    for (const part of full) {
-      const n = parseInt(part, 16);
-      if (!Number.isInteger(n) || n < 0 || n > 0xffff || part.length > 4) return null;
-      value = (value << 16n) | BigInt(n);
-    }
-    return value;
-  } catch {
-    return null;
-  }
-};
-const ipv6InRange = (host: string, prefix: string, bits: number): boolean => {
-  const v = ipv6ToParts(host);
-  if (v === null) return false;
-  const shift = 128n - BigInt(bits);
-  return (v >> shift) === (ipv6ToParts(prefix)! >> shift);
-};
-const isPrivateIpv4 = (host: string): boolean => {
-  const parts = host.split(".");
-  if (parts.length !== 4 || !parts.every((p) => /^\d{1,3}$/.test(p))) return false;
-  const [a, b] = parts.map(Number);
-  if (parts.some((p) => Number(p) > 255)) return false;
-  if (a === 127 || a === 10 || a === 192 && b === 168 || a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  return false;
-};
-
 /**
  * True when the URL's host must not be fetched: plain http (non-https),
  * localhost, *.local, single-label LAN names, loopback/private/
@@ -134,14 +104,10 @@ export function isBlockedHost(url: string): boolean {
   }
   if (parsed.protocol !== "https:") return true;
   const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (host === "localhost" || host.endsWith(".local") || !host.includes(".")) return true;
-  if (isIpv6(host)) {
-    if (host === "::1") return true;
-    if (ipv6InRange(host, "fe80::", 10) || ipv6InRange(host, "fc00::", 7)) return true;
-    return false;
-  }
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
-    if (!allowPrivateUrls() && isPrivateIpv4(host)) return true;
+  const literal = isIP(host) !== 0;
+  if (host === "localhost" || host.endsWith(".local") || (!literal && !host.includes("."))) return true;
+  if (literal) {
+    if (!allowPrivateUrls() && isPrivateAddress(host)) return true;
   } else {
     for (const domain of blockedDomains()) {
       if (host === domain || host.endsWith(`.${domain}`)) return true;
@@ -168,6 +134,7 @@ export function isCacheExemptHost(url: string): boolean {
 const defaultDeps: WebExtractDeps = {
   fetch: (...args) => fetch(...args),
   now: () => Date.now(),
+  resolve: async (host) => (await dnsLookup(host, { all: true, verbatim: true })).map((entry) => entry.address),
 };
 
 const storeDir = process.env.WEB_EXTRACT_STORE_DIR || path.join(os.tmpdir(), "lazy-agent-web-extract");
@@ -250,6 +217,16 @@ export async function webExtract(url: string, charLimit = DEFAULT_CHAR_LIMIT, de
       ? "host is on WEB_BLOCKED_DOMAINS"
       : "host is private, loopback, or plain http (SSRF guard; set ALLOW_PRIVATE_URLS=1 to permit)";
     return { status: "error", url: cleanUrl, content: "", truncated: false, cached: false, error: `blocked: ${reason}` };
+  }
+  // A public-looking name can resolve private (127.0.0.1.nip.io): check
+  // every resolved address before handing the URL to scraper-service.
+  // (Redirects the scraper follows are outside this process.)
+  if (deps.resolve) {
+    try {
+      await assertPublicUrl(cleanUrl, { allowHttp: false, resolve: deps.resolve });
+    } catch (error) {
+      return { status: "error", url: cleanUrl, content: "", truncated: false, cached: false, error: `blocked: ${(error as Error).message} (SSRF guard)` };
+    }
   }
   const exempt = isCacheExemptHost(cleanUrl);
   const requested = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, Math.floor(Number(charLimit) || DEFAULT_CHAR_LIMIT)));

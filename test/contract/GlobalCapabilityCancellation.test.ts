@@ -35,10 +35,32 @@ describe("global capability cancellation", () => {
 
     for (const capabilityId of ["global.web.read_page", "global.web.fetch_metadata"]) {
       const controller = new AbortController();
-      const pending = GlobalCapabilityExecutor.execute(capabilityId, { url: "https://fixture.test/page" }, controller.signal);
+      const pending = GlobalCapabilityExecutor.execute(capabilityId, { url: "https://93.184.215.14/page" }, controller.signal);
       controller.abort();
       await expect(pending).resolves.toMatchObject({ success: false, error: { code: "CAPABILITY_CANCELLED" } });
     }
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses private targets and never forwards model headers (audit D6)", async () => {
+    const fetch = vi.fn(async () => new Response("<title>ok</title>", { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    for (const capabilityId of ["global.web.read_page", "global.web.fetch_metadata"]) {
+      for (const url of ["http://127.0.0.1:5591/health", "http://0.0.0.0/", "http://100.64.0.1/", "http://[::ffff:a9fe:a9fe]/"]) {
+        await expect(GlobalCapabilityExecutor.execute(capabilityId, { url })).resolves.toMatchObject({
+          success: false,
+          error: { code: "URL_BLOCKED" },
+        });
+      }
+    }
+    expect(fetch).not.toHaveBeenCalled();
+
+    await GlobalCapabilityExecutor.execute("global.web.read_page", {
+      url: "https://93.184.215.14/page",
+      headers: { Authorization: "Bearer leaked", Host: "internal" },
+    });
+    const sent = (fetch.mock.calls[0] as unknown[])[1] as { headers: Record<string, string> };
+    expect(Object.keys(sent.headers).map((k) => k.toLowerCase())).not.toContain("authorization");
+    expect(Object.keys(sent.headers).map((k) => k.toLowerCase())).not.toContain("host");
   });
 });

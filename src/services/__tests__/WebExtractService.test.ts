@@ -148,11 +148,25 @@ describe("SSRF guard", () => {
     "https://[::1]/x",
     "https://[fe80::1]/x",
     "https://[fc00::1]/x",
+    "https://0.0.0.0/x",
+    "https://100.64.0.1/x",
+    "https://[::ffff:127.0.0.1]/x",
+    "https://[::ffff:a9fe:a9fe]/x",
   ])("blocks %s without any network call", async (u) => {
     const h = harness([]);
     const result = await webExtract(u, 15_000, h.deps);
     expect(result).toMatchObject({ status: "error", cached: false });
     expect(result.error).toContain("blocked");
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it("blocks a public-looking name that resolves private (audit D6)", async () => {
+    const h = harness([]);
+    const result = await webExtract("https://127.0.0.1.nip.io/x", 15_000, {
+      ...h.deps,
+      resolve: async () => ["127.0.0.1"],
+    });
+    expect(result.error).toMatch(/blocked: .*private address 127\.0\.0\.1/);
     expect(h.calls).toHaveLength(0);
   });
 

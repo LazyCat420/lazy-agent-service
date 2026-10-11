@@ -1,4 +1,5 @@
 import logger from "../utils/logger.ts";
+import { safeFetch, UnsafeUrlError, type SafeFetchResult } from "../utils/UrlSafety.ts";
 import { webSearch, type WebResult } from "./WebSearchService.ts";
 
 export interface ExecutionResult {
@@ -355,15 +356,16 @@ export class GlobalCapabilityExecutor {
       const abort = () => controller.abort(signal?.reason);
       if (signal?.aborted) abort();
       else signal?.addEventListener("abort", abort, { once: true });
-      let res: Response;
+      let res: SafeFetchResult;
       try {
+        // Model-supplied headers are NOT forwarded (they could carry
+        // credentials or Host overrides to an internal target).
         const headers: Record<string, string> = {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9",
-          ...(args.headers as Record<string, string> || {}),
         };
-        res = await fetch(url, { signal: controller.signal, headers });
+        res = await safeFetch(url, { signal: controller.signal, headers, maxBytes: 2_000_000 });
       } finally {
         clearTimeout(timer);
         signal?.removeEventListener("abort", abort);
@@ -382,7 +384,7 @@ export class GlobalCapabilityExecutor {
         };
       }
 
-      const html = await res.text();
+      const html = res.text;
       // Simple text strip for bounded markdown
       const stripped = html
         .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
@@ -402,6 +404,9 @@ export class GlobalCapabilityExecutor {
         },
       };
     } catch (err: any) {
+      if (err instanceof UnsafeUrlError || err?.cause instanceof UnsafeUrlError) {
+        return { success: false, error: { code: "URL_BLOCKED", message: `blocked: ${(err.cause ?? err).message} (SSRF guard)` } };
+      }
       if (signal?.aborted || err?.name === "AbortError") {
         return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Page read was cancelled" } };
       }
@@ -524,14 +529,14 @@ export class GlobalCapabilityExecutor {
       const abort = () => controller.abort(signal?.reason);
       if (signal?.aborted) abort();
       else signal?.addEventListener("abort", abort, { once: true });
-      let res: Response;
+      let res: SafeFetchResult;
       try {
-        res = await fetch(url, { signal: controller.signal });
+        res = await safeFetch(url, { signal: controller.signal, maxBytes: 512_000 });
       } finally {
         clearTimeout(timer);
         signal?.removeEventListener("abort", abort);
       }
-      const html = await res.text();
+      const html = res.text;
       const titleMatch = /<title[^>]*>([^<]+)<\/title>/i.exec(html);
       const descMatch = /<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html);
       const ogImgMatch = /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(html);
@@ -546,6 +551,9 @@ export class GlobalCapabilityExecutor {
         },
       };
     } catch (err: any) {
+      if (err instanceof UnsafeUrlError || err?.cause instanceof UnsafeUrlError) {
+        return { success: false, error: { code: "URL_BLOCKED", message: `blocked: ${(err.cause ?? err).message} (SSRF guard)` } };
+      }
       if (signal?.aborted || err?.name === "AbortError") {
         return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Metadata fetch was cancelled" } };
       }
