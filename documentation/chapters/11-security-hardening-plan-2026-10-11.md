@@ -112,7 +112,37 @@ checked by the step that relies on it.
   trading-client ch.32. Deployed to scraper-service; live check: a redirect to
   `169.254.169.254` returns `redirect: 169.254.169.254 is a private address`, public
   pages still fetch. crawl4ai (not in the default auto ladder) is a documented residual.
-- **Item 3 (W3): PLANNED, not started.** Closing it needs the caller rollout in §2
-  (6 repos send the key while the server still does not enforce), then enforcement
-  flipped last. Enforcement is blocked until the Obsidian plugin ships an "Execute key"
-  setting (a manual install), so it is its own focused rollout, not a same-session flip.
+- **Item 3 (W3): ENFORCED, rollout partly done** (2026-10-11).
+  - **Key**: `EXECUTE_API_KEY`, 64 hex chars from `openssl rand -hex 32`. Canonical home:
+    `vault-service/projects.json` → top-level `config` (local copy and the NAS copy at
+    `/volume1/docker/vault-service/projects.json`). Also in `deploy-kit/.env.deploy` and the
+    vault master `vault-service/env/.env`, because trading-client/trading-service/scraper-service
+    deploys copy that file directly. Never in git.
+  - **Enforcement live**: lazy-tool-service redeployed with the key. Measured: no key → 401,
+    wrong key → 401, `x-api-key` → 200 with real Exa results, `Authorization: Bearer` → 200,
+    forged `_lazy_trading_context` without key → `PERMISSION_DENIED` (the gate's context
+    exemption is backed by `dispatchTool` → `authorizeTradingTool` signature verification).
+  - **Callers that send the key** (header only when the env var is set): lazycat-sdk
+    `ba39480` (ToolExecutor + grounded_research), trading-client `98acb888`, bittle-agent
+    `631a7c5`, html-notes `166c380` (+ compose passes `EXECUTE_API_KEY`), treesearch-service
+    `f99795e`, LLMSortObsidian-Plugin (settings field at the top, `dbc14dd`, renamed plugin
+    `1f15ce0`). Each repo's affected tests pass (html-notes 59, sdk 22, bittle 6,
+    trading-client 13, plugin full suite 220).
+  - **Verified live after enforcement**: html-notes `/health/app?fresh=1` → `ok: true, hits: 3`
+    through its own search path; treesearch-service container has the key (header proven
+    with a mock transport).
+  - **Open (not done)**:
+    - trading-client and trading-service containers have **no key yet** (key_len 0): they
+      need a redeploy now that `env/.env` carries it. trading-service's trading-tool calls
+      carry a signed context and are exempt; its unsigned `/execute` calls (if any) 401 until then.
+    - bittle-agent is stopped on the NAS (Exited 2 days); it picks the key up on next deploy.
+    - Obsidian: the user pastes the key into the plugin's first settings field.
+  - **Traps found**:
+    - The vault container served a detached, stale `projects.json` (Oct 7): the host file
+      had been replaced, and a single-file bind mount pins the old inode. `POST /reload`
+      re-read the stale file. Fix: `docker restart vault-service` after replacing the file.
+    - The NAS `projects.json` has entries the local copy lacks (`drift-king-service`, `edge`);
+      a vault-service deploy copies local over NAS and would drop them. Edit both copies.
+  - **Rotate**: `openssl rand -hex 32` → replace the value in `projects.json` config (both
+    copies), `deploy-kit/.env.deploy` and `vault-service/env/.env` → restart vault-service →
+    redeploy the callers → redeploy lazy-tool-service → paste the new key in Obsidian.
