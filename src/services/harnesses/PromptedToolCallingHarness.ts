@@ -460,7 +460,34 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
 
         let results: ToolResult[];
         if (!hasRegisteredCodeInterpreter) {
-          results = await runCodeInterpreterCalls([toolCall]);
+          // The local interpreter passes the same gates as any tool: a
+          // profile-admitted run (/v1/runs) admits only whitelisted
+          // capabilities, and the interpreter is never one of them; other
+          // runs go through the approval gate.
+          context._currentMessages = currentMessages;
+          const approval = context.runtimeToolExecutor
+            ? { isApproved: false, shouldApproveAll: false }
+            : await checkAndWaitForApproval([toolCall], context, approvalEngine);
+          if (approval.isApproved) {
+            if (approval.shouldApproveAll) options.autoApprove = true;
+            results = await runCodeInterpreterCalls([toolCall]);
+          } else {
+            results = [
+              {
+                name: toolCall.name,
+                id: toolCall.id,
+                result: {
+                  success: false,
+                  error: context.runtimeToolExecutor
+                    ? "CODE_INTERPRETER_NOT_ADMITTED"
+                    : "USER_REJECTED",
+                  message: context.runtimeToolExecutor
+                    ? "code_interpreter is not in this run's profile whitelist."
+                    : "Tool execution was manually rejected by the user.",
+                },
+              },
+            ];
+          }
         } else {
           // ── Execute through the same path ReActHarness uses ────
           context._currentMessages = currentMessages;

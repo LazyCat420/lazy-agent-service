@@ -103,10 +103,11 @@ function scriptedProvider(responses: string[], calls: ProviderCall[] = []) {
 function makeContext(
   provider: unknown,
   finalTools: ToolSchema[],
+  { profileAdmitted = true, autoApprove = true }: { profileAdmitted?: boolean; autoApprove?: boolean } = {},
 ): { context: AgenticContext; executed: Array<{ name: string; args: Record<string, unknown> }> } {
   const executed: Array<{ name: string; args: Record<string, unknown> }> = [];
   const context = {
-    options: { maxIterations: 6, maxTokens: 100000, autoApprove: true },
+    options: { maxIterations: 6, maxTokens: 100000, autoApprove },
     messages: [{ role: "user", content: "compute something" }],
     project: "test",
     username: "tester",
@@ -119,10 +120,12 @@ function makeContext(
     signal: null,
     emit: () => {},
     runtimeTools: { finalTools, resolvedEnabledTools: null },
-    runtimeToolExecutor: async (call: { name: string; args: Record<string, unknown> }) => {
-      executed.push({ name: call.name, args: call.args });
-      return { ok: true, via: "registered-tool" };
-    },
+    runtimeToolExecutor: profileAdmitted
+      ? async (call: { name: string; args: Record<string, unknown> }) => {
+          executed.push({ name: call.name, args: call.args });
+          return { ok: true, via: "registered-tool" };
+        }
+      : undefined,
     requestId: "test-req",
     traceId: "test-trace",
   } as unknown as AgenticContext;
@@ -229,6 +232,49 @@ describe("runCodeInterpreter (pure fallback)", () => {
   });
 });
 
+describe("executeJavaScript isolation (audit D3)", () => {
+  it("cannot reach the host process through computed property access", async () => {
+    const result = await executeJavaScript('return typeof globalThis["proc" + "ess"];');
+    expect(result.success).toBe(true);
+    expect(result.returned).toBe("undefined");
+  });
+
+  it("refuses Function-constructor escapes", async () => {
+    const result = await executeJavaScript(
+      'return console.log.constructor("return globalThis")();',
+    );
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/Code generation from strings disallowed/);
+  });
+
+  it("kills a synchronous infinite loop without blocking the host event loop", async () => {
+    let ticks = 0;
+    const ticker = setInterval(() => ticks++, 20);
+    const started = Date.now();
+    const result = await executeJavaScript("while (true) {}", 400);
+    clearInterval(ticker);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("timed out");
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(ticks).toBeGreaterThan(5);
+  });
+
+  it("caps worker memory", async () => {
+    const result = await executeJavaScript(
+      "const a = []; while (true) a.push(new Array(1e6).fill(1));",
+      5_000,
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it("does not expose the service environment", async () => {
+    const result = await executeJavaScript("return Object.keys(globalThis);");
+    expect(result.success).toBe(true);
+    expect(result.returned).not.toContain("process");
+    expect(result.returned).not.toContain("require");
+  });
+});
+
 describe("partitionCodeInterpreterCalls prefers a registered tool", () => {
   it("intercepts only when no code tool is registered", () => {
     const calls = [codeInterpreterCall({ code: "```js\n1```" })];
@@ -259,7 +305,7 @@ describe("PromptedToolCallingHarness code_interpreter escape hatch", () => {
       ],
       calls,
     );
-    const { context, executed } = makeContext(provider, TOOLS);
+    const { context, executed } = makeContext(provider, TOOLS, { profileAdmitted: false });
     const { messages } = await runHarness(context);
 
     // Never dispatched to the executor — handled in-harness.
@@ -282,7 +328,7 @@ describe("PromptedToolCallingHarness code_interpreter escape hatch", () => {
       ],
       calls,
     );
-    const { context, executed } = makeContext(provider, TOOLS);
+    const { context, executed } = makeContext(provider, TOOLS, { profileAdmitted: false });
     const { messages } = await runHarness(context);
 
     expect(executed).toEqual([]);
@@ -300,13 +346,48 @@ describe("PromptedToolCallingHarness code_interpreter escape hatch", () => {
       ],
       calls,
     );
-    const { context, executed } = makeContext(provider, TOOLS);
+    const { context, executed } = makeContext(provider, TOOLS, { profileAdmitted: false });
     const { messages } = await runHarness(context);
 
     expect(executed).toEqual([]);
     const content = String(calls[1].messages.at(-1)?.content ?? "");
     expect(content).toContain("CODE_INTERPRETER_REFUSED");
     expect(content).toContain("forbidden");
+  });
+
+  it("refuses the local interpreter on a profile-admitted run", async () => {
+    const calls: ProviderCall[] = [];
+    const provider = scriptedProvider(
+      [
+        '<tool_call>{"name": "code_interpreter", "arguments": {"code": "```javascript\\nconsole.log(1);\\n```"}}</tool_call>',
+        "ok",
+      ],
+      calls,
+    );
+    const { context, executed } = makeContext(provider, TOOLS);
+    await runHarness(context);
+    expect(executed).toEqual([]);
+    expect(String(calls[1].messages.at(-1)?.content ?? "")).toContain(
+      "CODE_INTERPRETER_NOT_ADMITTED",
+    );
+  });
+
+  it("asks for approval and denies on an unattended run", async () => {
+    const calls: ProviderCall[] = [];
+    const provider = scriptedProvider(
+      [
+        '<tool_call>{"name": "code_interpreter", "arguments": {"code": "```javascript\\nconsole.log(1);\\n```"}}</tool_call>',
+        "ok",
+      ],
+      calls,
+    );
+    const { context } = makeContext(provider, TOOLS, {
+      profileAdmitted: false,
+      autoApprove: false,
+    });
+    (context.options as Record<string, unknown>).unattended = true;
+    await runHarness(context);
+    expect(String(calls[1].messages.at(-1)?.content ?? "")).toContain("USER_REJECTED");
   });
 
   it("dispatches code_interpreter to the registered tool instead", async () => {

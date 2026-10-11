@@ -1,3 +1,5 @@
+import { Worker } from "node:worker_threads";
+
 import logger from "../../utils/logger.ts";
 
 import type { ToolCall, ToolResult, ToolSchema } from "./types.ts";
@@ -8,9 +10,9 @@ import type { ToolCall, ToolResult, ToolSchema } from "./types.ts";
  * When a model emits a tool call named `code_interpreter` and NO sandboxed
  * code-execution tool is registered, the harness evaluates the fenced code
  * block locally instead of failing with an unknown-tool error:
- *   - ```javascript / ```js blocks run via `new Function(code)` with a 5s
- *     timeout (Promise race — the repo's standard deadline pattern) and a
- *     sandboxed console shim that captures output.
+ *   - ```javascript / ```js blocks run in a `worker_threads` Worker (empty
+ *     env, resource limits) inside a host-object-free `vm` context; the 5s
+ *     deadline terminates the worker, so sync loops are killed too.
  *   - ```python blocks return a structured "not available on this runtime"
  *     observation (this runtime has no Python).
  *   - Static guard scans refuse code that touches require/import/process/
@@ -19,10 +21,9 @@ import type { ToolCall, ToolResult, ToolSchema } from "./types.ts";
  * If a real code-execution tool IS registered, callers must dispatch to it
  * instead (see partitionCodeInterpreterCalls).
  *
- * Reference: docs/harness-research/PLAN_hermes.md §4. This is NOT a security
- * sandbox — the guard is a best-effort static scan; `new Function` runs on
- * the host with the harness's own privileges. Synchronous infinite loops
- * cannot be interrupted (the 5s deadline races async completion only).
+ * Reference: docs/harness-research/PLAN_hermes.md §4. Isolation comes from
+ * the worker + vm context, not the static scan (which is only a fast-path
+ * refusal). Interpreter calls still pass the approval gate in the harness.
  */
 
 export const CODE_INTERPRETER_TOOL_NAME = "code_interpreter";
@@ -117,9 +118,68 @@ export function resolveInterpreterCode(
 }
 
 /**
- * Execute a ```javascript block: `new Function(code)` with a sandboxed
- * console shim and a 5s completion deadline (Promise race — the repo's
- * standard deadline pattern, cf. McpAdapter.raceToolDeadline).
+ * Worker body. Runs the snippet in a fresh `vm` context that holds NO host
+ * objects — the console shim is defined inside the context and results leave
+ * it as a JSON string — so `this.constructor.constructor("return process")()`
+ * resolves to the context's own Function and finds no `process`. The worker
+ * itself is spawned with an empty env, resource limits, and is terminated by
+ * the parent on deadline, so a synchronous `while(true){}` cannot block the
+ * service event loop.
+ */
+const WORKER_SOURCE = `
+const { parentPort, workerData } = require("node:worker_threads");
+const vm = require("node:vm");
+const context = vm.createContext(Object.create(null), {
+  codeGeneration: { strings: false, wasm: false },
+});
+const prelude = \`
+  "use strict";
+  const __logs = [];
+  const __fmt = (v) => { if (typeof v === "string") return v; try { const s = JSON.stringify(v); return s === undefined ? String(v) : s; } catch { return String(v); } };
+  const __push = (...a) => { __logs.push(a.map(__fmt).join(" ")); };
+  globalThis.console = Object.freeze({ log: __push, info: __push, warn: __push, error: __push, debug() {}, trace() {} });
+  globalThis.__drain = (value) => { let r; try { r = JSON.stringify(value); } catch { r = undefined; } return JSON.stringify({ logs: __logs, returned: r }); };
+\`;
+const send = (msg) => parentPort.postMessage(msg);
+try {
+  vm.runInContext(prelude, context, { timeout: 1000 });
+  const wrapped = '(function(){\\n"use strict";\\n' + workerData.code + '\\n})()';
+  const value = vm.runInContext(wrapped, context, { timeout: workerData.timeoutMs });
+  const finish = (v) => send({ ok: true, payload: vm.runInContext("__drain", context)(v) });
+  if (value && typeof value.then === "function") {
+    value.then(finish, (e) => send({ ok: false, message: String(e && e.message ? e.message : e), payload: vm.runInContext("__drain", context)(undefined) }));
+  } else {
+    finish(value);
+  }
+} catch (e) {
+  let payload;
+  try { payload = vm.runInContext("__drain", context)(undefined); } catch { payload = undefined; }
+  send({ ok: false, message: String(e && e.message ? e.message : e), payload });
+}
+`;
+
+interface WorkerReply {
+  ok: boolean;
+  message?: string;
+  payload?: string;
+}
+
+function decodePayload(payload: string | undefined): { logs: string[]; returned: unknown } {
+  if (!payload) return { logs: [], returned: undefined };
+  try {
+    const parsed = JSON.parse(payload) as { logs?: unknown; returned?: string };
+    const logs = Array.isArray(parsed.logs) ? parsed.logs.map(String) : [];
+    const returned = typeof parsed.returned === "string" ? JSON.parse(parsed.returned) : undefined;
+    return { logs, returned };
+  } catch {
+    return { logs: [], returned: undefined };
+  }
+}
+
+/**
+ * Execute a ```javascript block in an isolated worker (see WORKER_SOURCE).
+ * The deadline is enforced by `worker.terminate()`, which also kills
+ * synchronous infinite loops.
  */
 export async function executeJavaScript(
   code: string,
@@ -137,52 +197,56 @@ export async function executeJavaScript(
     };
   }
 
-  const logs: string[] = [];
-  const format = (value: unknown): string => {
-    if (typeof value === "string") return value;
-    try {
-      return JSON.stringify(value) ?? String(value);
-    } catch {
-      return String(value);
-    }
-  };
-  const sandboxConsole = {
-    log: (...args: unknown[]) => logs.push(args.map(format).join(" ")),
-    info: (...args: unknown[]) => logs.push(args.map(format).join(" ")),
-    warn: (...args: unknown[]) => logs.push(args.map(format).join(" ")),
-    error: (...args: unknown[]) => logs.push(args.map(format).join(" ")),
-    debug: () => {},
-    trace: () => {},
-  };
-
-  let deadlineReject: ((reason: Error) => void) | undefined;
-  const timer = setTimeout(() => {
-    deadlineReject?.(new Error(`code_interpreter timed out after ${timeoutMs}ms`));
-  }, timeoutMs);
-  const deadline = new Promise<never>((_, reject) => {
-    deadlineReject = reject;
+  const worker = new Worker(WORKER_SOURCE, {
+    eval: true,
+    env: {},
+    argv: [],
+    execArgv: [],
+    stdout: true,
+    stderr: true,
+    workerData: { code, timeoutMs },
+    resourceLimits: {
+      maxOldGenerationSizeMb: 64,
+      maxYoungGenerationSizeMb: 16,
+      codeRangeSizeMb: 16,
+      stackSizeMb: 4,
+    },
   });
-  let returned: unknown;
-  try {
-    // eslint-disable-next-line no-new-func -- escape hatch by design; guard scanned above
-    const fn = new Function("console", `"use strict";\n${code}`);
-    const invocation = Promise.resolve(fn(sandboxConsole));
-    returned = await Promise.race([invocation, deadline]);
-  } catch (executionError) {
-    clearTimeout(timer);
-    const message =
-      executionError instanceof Error
-        ? executionError.message
-        : String(executionError);
-    logger.warn(`[CodeInterpreter] javascript block failed: ${message}`);
-    return {
-      success: false,
-      error: "CODE_INTERPRETER_ERROR",
-      message,
-      output: logs,
+
+  const reply = await new Promise<WorkerReply>((resolve) => {
+    let settled = false;
+    const settle = (value: WorkerReply) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      resolve(value);
     };
+    const timer = setTimeout(
+      () => settle({ ok: false, message: `code_interpreter timed out after ${timeoutMs}ms` }),
+      timeoutMs,
+    );
+    worker.once("message", (msg: WorkerReply) => settle(msg));
+    worker.once("error", (err: Error) => settle({ ok: false, message: err.message }));
+    worker.once("exit", (exitCode) =>
+      // Exit without a message = the event loop drained with the snippet's
+      // promise still pending: it can never settle, so report the deadline.
+      settle({
+        ok: false,
+        message:
+          exitCode === 0
+            ? `code_interpreter timed out after ${timeoutMs}ms (promise never settled)`
+            : `code_interpreter worker exited (code ${exitCode})`,
+      }),
+    );
+  });
+
+  const { logs, returned } = decodePayload(reply.payload);
+  if (!reply.ok) {
+    const message = reply.message ?? "code_interpreter failed";
+    logger.warn(`[CodeInterpreter] javascript block failed: ${message}`);
+    return { success: false, error: "CODE_INTERPRETER_ERROR", message, output: logs };
   }
-  clearTimeout(timer);
   return { success: true, output: logs, returned };
 }
 
