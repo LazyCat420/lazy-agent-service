@@ -67,8 +67,14 @@ const AgentSessionRegistry = {
     return !!session && !session.stopController.signal.aborted;
   },
 
-  /** Remove a session entry after the handler completes. */
-  cleanup(conversationId: string): void {
+  /**
+   * Remove a session entry after the handler completes. With `owner`, only
+   * when the entry is still that handler's (a newer request may own it now).
+   */
+  cleanup(conversationId: string, owner?: AbortController): void {
+    const session = activeSessions.get(conversationId);
+    if (!session) return;
+    if (owner && session.stopController !== owner) return;
     activeSessions.delete(conversationId);
     logger.debug(
       `[AgentSessionRegistry] Cleaned up session ${conversationId} (active=${activeSessions.size})`,

@@ -220,12 +220,14 @@ export async function handleSseRequest(
   const conversationId = (params as Record<string, unknown>).conversationId as string | undefined;
   let stopController: AbortController;
 
-  if (persistOnDisconnect && conversationId) {
-    stopController = AgentSessionRegistry.register(conversationId);
+  // Persisting past a disconnect is only safe when POST /agent/stop can
+  // still reach the run, i.e. it is registered under a conversationId.
+  // Without one nothing could ever stop it, so disconnect = abort.
+  const persists = persistOnDisconnect && !!conversationId;
+  if (persists) {
+    stopController = AgentSessionRegistry.register(conversationId as string);
   } else {
-    stopController = persistOnDisconnect
-      ? createAbortController()
-      : connectionController;
+    stopController = connectionController;
   }
 
   res.on("close", () => {
@@ -236,15 +238,12 @@ export async function handleSseRequest(
       `[SSE] Connection closed after ${durationSeconds}s — ` +
         `writableFinished=${res.writableFinished}, destroyed=${res.destroyed}, ` +
         `socket.destroyed=${req.socket?.destroyed}, ` +
-        `persistOnDisconnect=${persistOnDisconnect}`,
+        `persistOnDisconnect=${persists}`,
     );
     if (!res.writableFinished) {
       connectionController.abort();
 
-      // Legacy behavior: when NOT persisting, also abort the handler
-      if (!persistOnDisconnect && stopController !== connectionController) {
-        stopController.abort();
-      }
+      // Not persisting: stopController IS connectionController, already aborted.
     }
   });
 
@@ -273,8 +272,10 @@ export async function handleSseRequest(
   } finally {
     clearInterval(keepAliveInterval);
     // Cleanup session registry entry
-    if (persistOnDisconnect && conversationId) {
-      AgentSessionRegistry.cleanup(conversationId);
+    if (persists) {
+      // Only our own entry: an overlapping request for the same id may
+      // have replaced it, and its /agent/stop must keep working.
+      AgentSessionRegistry.cleanup(conversationId as string, stopController);
     }
   }
 

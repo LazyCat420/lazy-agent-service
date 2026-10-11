@@ -157,6 +157,35 @@ describe("POST /chat — server-side persistence on client disconnect", () => {
     // no-op placeholder to keep hooks balanced
   });
 
+  it("without a conversationId a disconnect aborts generation — nothing could stop it otherwise (audit D9)", async () => {
+    let observedSignal: AbortSignal | undefined;
+    fakeProvider.generateTextStream.mockImplementation(async function* (
+      _messages: unknown,
+      _model: string,
+      opts: { signal?: AbortSignal },
+    ) {
+      observedSignal = opts?.signal;
+      yield "partial";
+      await new Promise<void>((resolve) => {
+        if (opts?.signal?.aborted) return resolve();
+        opts?.signal?.addEventListener("abort", () => resolve(), { once: true });
+        setTimeout(resolve, 3_000);
+      });
+    });
+    const { server, port } = await listen(createApp());
+    servers.push(server);
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${port}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ provider: "test-provider", model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
+      signal: controller.signal,
+    });
+    await readUntil(response.body!, "partial");
+    controller.abort();
+    await vi.waitFor(() => expect(observedSignal?.aborted).toBe(true), { timeout: 2_000 });
+  });
+
   it("continues generating and persists the final messages after the client disconnects mid-stream", async () => {
     // Provider stream: emit a chunk, wait until the client has disconnected,
     // then finish generation. With persistOnDisconnect the handler signal
