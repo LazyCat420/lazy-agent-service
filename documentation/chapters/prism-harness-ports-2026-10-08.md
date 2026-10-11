@@ -1,7 +1,7 @@
 ---
 part: Features
 status: shipped
-updated: 2026-10-09
+updated: 2026-10-11
 ---
 
 # Prism harness ports (2026-10-08)
@@ -61,6 +61,10 @@ resolution in `runAgenticLoop`.
 
 ## 4. Turn-input mailbox + non-blocking questions
 
+> **Removed 2026-10-11** (commit `dd69148`, chapter "Harness Audit Fixes"): nothing ever
+> posted to the mailbox or registered a question, so it was dead wiring. The text below is
+> history.
+
 `src/platform/questions/` — `TurnMailbox` (per-run FIFO, bounded 50, `formatTurnNotice`
 renders one `<turn-input>` block) opened per run in `runAgenticLoop` and drained at each
 iteration boundary of `PromptedToolCallingHarness`; inputs surface next turn instead of
@@ -70,6 +74,9 @@ expiry that synthesizes a "no answer, proceed with best judgment" notice. Access
 ask_user executor; the registry is ready for tools/routes to adopt.
 
 ## 5. Conversation goal gate
+
+> **Removed 2026-10-11** (commit `dd69148`): no code path created a goal; every loop paid a
+> store read for nothing. The text below is history.
 
 `src/platform/goals/` — `GoalStore` (JSON-file `data/goal_store/`, atomic writes,
 active/paused/achieved/abandoned + budget) and `evaluateGoal` (verdicts: achieved when

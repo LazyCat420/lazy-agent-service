@@ -7,6 +7,10 @@ review-by: 2026-10-25
 
 # Harness Audit + Handoff Plan (2026-10-11)
 
+> **Progress (2026-10-11, same day):** Phase A (items 1–6) and Phase B (items 7–11) are
+> fixed and landed — see the chapter "Harness Audit Fixes + Security Bench". Phases C and D
+> (consumer cutover, evals) are still open.
+
 Mode: Assess → Plan. Nothing in `src/` was changed. This chapter audits every harness commit
 from 2026-10-06 to 2026-10-10 (`main` @ `8bc1f20`), checks each consumer repo's wiring, compares
 the harness with outside agent harnesses, and leaves an ordered plan for the next developer.
