@@ -131,10 +131,30 @@ checked by the step that relies on it.
   - **Verified live after enforcement**: html-notes `/health/app?fresh=1` → `ok: true, hits: 3`
     through its own search path; treesearch-service container has the key (header proven
     with a mock transport).
+  - **trading-client + trading-service keyed — 2026-10-11 23:16 / 23:24 UTC.**
+    - Vault `projects.json` and NAS `env/.env` key fingerprints match.
+    - Both containers were redeployed through deploy-kit, in a cycle gap.
+    - trading-service was rebuilt from `263c1408`; trading-client from
+      `704001ed`.
+    - In-container fingerprint check: `trading-client: OK`,
+      `trading-service: OK`.
+    - **Live from inside trading-client**, through `web_search._execute`:
+      - `news_search` returned 3 items.
+      - `web_search` answered `status: ok` with 3 results.
+      - Both show as 200 in lazy-agent-service's log.
+    - **One full cycle after the deploy**: `cycle-v3-1791761172`, NVDA,
+      `trade: false`, build `263c1408`.
+      - The cycle completed with 0 desks aborted and 33/33 prism calls
+        completed.
+      - It had 0 tool denials.
+    - **401 check** on lazy-agent-service logs, 60 min:
+      - 0 `POST /execute/* 401` since the trading-service deploy.
+      - The only 401 in the window is `lazy_web_search` at 16:12:51 PDT
+        (13-byte body). It came one second after two keyed 200s from the same
+        address, which looks like a deliberate no-key negative test.
+    - The cycle sent no unsigned `/execute` calls from trading-service; its
+      trading tools use the exempt signed context.
   - **Open (not done)**:
-    - trading-client and trading-service containers have **no key yet** (key_len 0): they
-      need a redeploy now that `env/.env` carries it. trading-service's trading-tool calls
-      carry a signed context and are exempt; its unsigned `/execute` calls (if any) 401 until then.
     - bittle-agent is stopped on the NAS (Exited 2 days); it picks the key up on next deploy.
     - Obsidian: the user pastes the key into the plugin's first settings field.
   - **Traps found**:
