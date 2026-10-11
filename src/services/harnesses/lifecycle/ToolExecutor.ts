@@ -41,10 +41,10 @@ import type AgentHooks from "../../AgentHooks.ts";
 import { executeTakeNote, NoteStore } from "../../../platform/memory/NoteStore.ts";
 import { retrieveOffloadedContentTool } from "../../../platform/offload/retrieveOffloadedContent.ts";
 import { OffloadPolicy, OFFLOAD_STUB_HEADER } from "../../../platform/offload/OffloadPolicy.ts";
-import { OffloadStore } from "../../../platform/offload/OffloadStore.ts";
+import { getSharedOffloadStore } from "../../../platform/offload/OffloadStore.ts";
 
 /** Process-wide retrieve tool; file-backed store shared via data/offload_store/. */
-const retrieveOffloadedTool = retrieveOffloadedContentTool(new OffloadStore());
+const retrieveOffloadedTool = retrieveOffloadedContentTool(getSharedOffloadStore());
 
 /**
  * Offload oversized tool results (prism pattern): the model sees leading

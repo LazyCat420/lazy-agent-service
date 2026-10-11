@@ -7,6 +7,7 @@ import {
   OffloadRecordTooLargeError,
   OffloadStore,
   deriveOffloadId,
+  getSharedOffloadStore,
 } from "../../../src/platform/offload/OffloadStore.ts";
 
 const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "offload-store-"));
@@ -43,7 +44,53 @@ describe("OffloadStore", () => {
     const reopened = new OffloadStore({ dir });
     const persisted = await reopened.get(record.offload_id);
     expect(persisted?.full_result).toBe(payload);
-    expect(fs.existsSync(path.join(dir, "offload_store.json"))).toBe(true);
+    expect(fs.existsSync(store.fileFor(record.offload_id))).toBe(true);
+  });
+
+  it("finds an id written by another instance after this one loaded (audit D2)", async () => {
+    const dir = path.join(rootDir, crypto.randomUUID());
+    const writer = new OffloadStore({ dir });
+    const reader = new OffloadStore({ dir });
+    const a = await writer.put({ tool_name: "t", full_result: "A" });
+    expect((await reader.get(a.offload_id))?.full_result).toBe("A");
+    const b = await writer.put({ tool_name: "t", full_result: "B" });
+    expect((await reader.get(b.offload_id))?.full_result).toBe("B");
+  });
+
+  it("writes only the new record's file on put", async () => {
+    const dir = path.join(rootDir, crypto.randomUUID());
+    const store = new OffloadStore({ dir });
+    const a = await store.put({ tool_name: "t", full_result: "A" });
+    const before = fs.statSync(store.fileFor(a.offload_id)).mtimeMs;
+    await new Promise((r) => setTimeout(r, 20));
+    await store.put({ tool_name: "t", full_result: "B" });
+    expect(fs.statSync(store.fileFor(a.offload_id)).mtimeMs).toBe(before);
+    expect(fs.readdirSync(dir).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("survives concurrent puts with no tmp-file collision", async () => {
+    const store = tempStore();
+    const records = await Promise.all(
+      Array.from({ length: 20 }, (_, i) => store.put({ tool_name: "t", full_result: `p${i}` })),
+    );
+    for (const r of records) expect((await store.get(r.offload_id))?.full_result).toBe(r.full_result);
+  });
+
+  it("migrates the legacy single-file store", async () => {
+    const dir = path.join(rootDir, crypto.randomUUID());
+    fs.mkdirSync(dir, { recursive: true });
+    const id = deriveOffloadId("legacy", "old");
+    fs.writeFileSync(
+      path.join(dir, "offload_store.json"),
+      JSON.stringify([{ offload_id: id, tool_name: "legacy", args_summary: "", full_result: "old", created_at: "x", run_id: null }]),
+    );
+    const store = new OffloadStore({ dir });
+    expect((await store.get(id))?.full_result).toBe("old");
+    expect(fs.existsSync(path.join(dir, "offload_store.json"))).toBe(false);
+  });
+
+  it("shares one process-wide store", () => {
+    expect(getSharedOffloadStore()).toBe(getSharedOffloadStore());
   });
 
   it("returns undefined for unknown ids", async () => {

@@ -1,5 +1,6 @@
 import {
   OffloadStore,
+  getSharedOffloadStore,
   type OffloadRecord,
 } from "./OffloadStore.ts";
 
@@ -73,13 +74,8 @@ export interface OffloadDecision {
   offloadId?: string;
 }
 
-let defaultStore: OffloadStore | null = null;
-
-/** The process-wide default store (data/offload_store/), created lazily. */
-function defaultOffloadStore(): OffloadStore {
-  defaultStore ??= new OffloadStore();
-  return defaultStore;
-}
+/** The process-wide store shared with the retrieve tool. */
+const defaultOffloadStore = (): OffloadStore => getSharedOffloadStore();
 
 const pretty = (value: Json) => JSON.stringify(value, null, 2);
 
