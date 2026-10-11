@@ -259,6 +259,29 @@ describe("executeJavaScript isolation (audit D3)", () => {
     expect(ticks).toBeGreaterThan(5);
   });
 
+  it("a returned thenable never receives a worker-realm function (security review 2026-10-11)", async () => {
+    const result = await executeJavaScript(
+      'return { then(ok, bad) { try { const p = ok.constructor("return globalThis[\'pro\' + \'cess\']")(); ok(p ? "ESCAPED:" + typeof p.getBuiltinModule : "no-process"); } catch (e) { ok("blocked:" + e.message); } } };',
+    );
+    expect(JSON.stringify(result)).not.toContain("ESCAPED");
+    expect(result.success).toBe(true);
+    expect(String(result.returned)).toMatch(/^blocked:|^no-process/);
+  });
+
+  it("an overridden Promise.prototype.then cannot capture worker functions either", async () => {
+    const result = await executeJavaScript(
+      'const orig = Promise.prototype.then; Promise.prototype.then = function (ok, bad) { try { const p = ok.constructor("return globalThis[\'pro\' + \'cess\']")(); if (p) return orig.call(this, () => ok("ESCAPED"), bad); } catch {} return orig.call(this, ok, bad); }; return Promise.resolve(1);',
+    );
+    expect(JSON.stringify(result)).not.toContain("ESCAPED");
+  });
+
+  it("the snippet cannot replace the boundary helpers", async () => {
+    const result = await executeJavaScript('globalThis.__settle = () => {}; return 5;');
+    expect(result.success).toBe(false); // assignment to a non-writable global throws in strict mode
+    const ok = await executeJavaScript("return 5;");
+    expect(ok.returned).toBe(5);
+  });
+
   it("caps worker memory", async () => {
     const result = await executeJavaScript(
       "const a = []; while (true) a.push(new Array(1e6).fill(1));",

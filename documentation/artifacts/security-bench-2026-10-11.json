@@ -1,0 +1,529 @@
+{
+  "generated_at": "2026-10-11T20:34:25.165Z",
+  "live": true,
+  "total": 79,
+  "passed": 79,
+  "failed": 0,
+  "sections": {
+    "code_interpreter": {
+      "pass": 21,
+      "total": 21
+    },
+    "ssrf": {
+      "pass": 45,
+      "total": 45
+    },
+    "ssrf-live": {
+      "pass": 4,
+      "total": 4
+    },
+    "execute-key": {
+      "pass": 6,
+      "total": 6
+    },
+    "offload": {
+      "pass": 2,
+      "total": 2
+    },
+    "reasoning": {
+      "pass": 1,
+      "total": 1
+    }
+  },
+  "checks": [
+    {
+      "section": "code_interpreter",
+      "name": "computed process",
+      "pass": true,
+      "detail": "ran; host loop lag max 10 ms",
+      "ms": 55
+    },
+    {
+      "section": "code_interpreter",
+      "name": "this.constructor chain",
+      "pass": true,
+      "detail": "ran; host loop lag max 0 ms",
+      "ms": 43
+    },
+    {
+      "section": "code_interpreter",
+      "name": "console Function ctor",
+      "pass": true,
+      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 0 ms",
+      "ms": 27
+    },
+    {
+      "section": "code_interpreter",
+      "name": "async Function ctor",
+      "pass": true,
+      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 1 ms",
+      "ms": 37
+    },
+    {
+      "section": "code_interpreter",
+      "name": "generator Function ctor",
+      "pass": true,
+      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 0 ms",
+      "ms": 29
+    },
+    {
+      "section": "code_interpreter",
+      "name": "eval import",
+      "pass": true,
+      "detail": "refused/failed: Refused: the submitted code touches a forbidden capability. Only pure ; host loop lag max 0 ms",
+      "ms": 0
+    },
+    {
+      "section": "code_interpreter",
+      "name": "indirect eval",
+      "pass": true,
+      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 0 ms",
+      "ms": 36
+    },
+    {
+      "section": "code_interpreter",
+      "name": "prepareStackTrace callsites",
+      "pass": true,
+      "detail": "ran; host loop lag max 0 ms",
+      "ms": 36
+    },
+    {
+      "section": "code_interpreter",
+      "name": "WebAssembly compile",
+      "pass": true,
+      "detail": "refused/failed: WebAssembly.compile(): Wasm code generation disallowed by embedder; host loop lag max 0 ms",
+      "ms": 35
+    },
+    {
+      "section": "code_interpreter",
+      "name": "globals enumeration",
+      "pass": true,
+      "detail": "ran; host loop lag max 0 ms",
+      "ms": 32
+    },
+    {
+      "section": "code_interpreter",
+      "name": "thenable callback ctor",
+      "pass": true,
+      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 1 ms",
+      "ms": 32
+    },
+    {
+      "section": "code_interpreter",
+      "name": "overridden Promise.then",
+      "pass": true,
+      "detail": "ran; host loop lag max 0 ms",
+      "ms": 27
+    },
+    {
+      "section": "code_interpreter",
+      "name": "swap boundary helper",
+      "pass": true,
+      "detail": "refused/failed: Cannot assign to read only property '__settle' of object '[object Obje; host loop lag max 0 ms",
+      "ms": 28
+    },
+    {
+      "section": "code_interpreter",
+      "name": "sync infinite loop",
+      "pass": true,
+      "detail": "refused/failed: code_interpreter timed out after 1500ms; host loop lag max 2 ms",
+      "ms": 1501
+    },
+    {
+      "section": "code_interpreter",
+      "name": "Atomics.wait block",
+      "pass": true,
+      "detail": "refused/failed: code_interpreter timed out after 1500ms; host loop lag max 3 ms",
+      "ms": 1500
+    },
+    {
+      "section": "code_interpreter",
+      "name": "memory bomb",
+      "pass": true,
+      "detail": "refused/failed: Worker terminated due to reaching memory limit: JS heap out of memory; host loop lag max 1 ms",
+      "ms": 157
+    },
+    {
+      "section": "code_interpreter",
+      "name": "string bomb",
+      "pass": true,
+      "detail": "refused/failed: Invalid string length; host loop lag max 3 ms",
+      "ms": 32
+    },
+    {
+      "section": "code_interpreter",
+      "name": "deep recursion",
+      "pass": true,
+      "detail": "refused/failed: Maximum call stack size exceeded; host loop lag max 0 ms",
+      "ms": 29
+    },
+    {
+      "section": "code_interpreter",
+      "name": "never-settling promise",
+      "pass": true,
+      "detail": "refused/failed: code_interpreter timed out after 1500ms; host loop lag max 3 ms",
+      "ms": 1501
+    },
+    {
+      "section": "code_interpreter",
+      "name": "microtask flood",
+      "pass": true,
+      "detail": "refused/failed: Worker terminated due to reaching memory limit: JS heap out of memory; host loop lag max 1 ms",
+      "ms": 452
+    },
+    {
+      "section": "code_interpreter",
+      "name": "pure computation still works",
+      "pass": true,
+      "detail": "14"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://127.0.0.1:5591/health",
+      "pass": true,
+      "detail": "address 127.0.0.1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://0.0.0.0:5591/",
+      "pass": true,
+      "detail": "address 0.0.0.0 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://0x7f000001/",
+      "pass": true,
+      "detail": "address 127.0.0.1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://2130706433/",
+      "pass": true,
+      "detail": "address 127.0.0.1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://017700000001/",
+      "pass": true,
+      "detail": "address 127.0.0.1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://127.1/",
+      "pass": true,
+      "detail": "address 127.0.0.1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://[::1]/",
+      "pass": true,
+      "detail": "address ::1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://[::ffff:127.0.0.1]/",
+      "pass": true,
+      "detail": "address ::ffff:7f00:1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://[::ffff:7f00:1]/",
+      "pass": true,
+      "detail": "address ::ffff:7f00:1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://[0:0:0:0:0:ffff:7f00:1]/",
+      "pass": true,
+      "detail": "address ::ffff:7f00:1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://[64:ff9b::7f00:1]/",
+      "pass": true,
+      "detail": "address 64:ff9b::7f00:1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://169.254.169.254/latest/meta-data/",
+      "pass": true,
+      "detail": "address 169.254.169.254 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://[fd00::1]/",
+      "pass": true,
+      "detail": "address fd00::1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://[fe80::1]/",
+      "pass": true,
+      "detail": "address fe80::1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://100.64.0.1/",
+      "pass": true,
+      "detail": "address 100.64.0.1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://192.168.1.1/",
+      "pass": true,
+      "detail": "address 192.168.1.1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://10.0.0.16:8001/",
+      "pass": true,
+      "detail": "address 10.0.0.16 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://172.16.0.1/",
+      "pass": true,
+      "detail": "address 172.16.0.1 is private or reserved"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://localhost/",
+      "pass": true,
+      "detail": "host localhost is local"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://foo.localhost/",
+      "pass": true,
+      "detail": "host foo.localhost is local"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://nas.local/",
+      "pass": true,
+      "detail": "host nas.local is local"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://intranet/",
+      "pass": true,
+      "detail": "single-label host intranet is not allowed"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks http://metadata.google.internal/",
+      "pass": true,
+      "detail": "host metadata.google.internal is local"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks https://127.0.0.1.nip.io/",
+      "pass": true,
+      "detail": "127.0.0.1.nip.io resolves to private address 127.0.0.1"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks https://metadata.attacker.example/",
+      "pass": true,
+      "detail": "metadata.attacker.example resolves to private address 169.254.169.254"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks https://mixed.attacker.example/",
+      "pass": true,
+      "detail": "mixed.attacker.example resolves to private address 10.0.0.16"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks https://v6loop.attacker.example/",
+      "pass": true,
+      "detail": "v6loop.attacker.example resolves to private address ::1"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks https://mapped.attacker.example/",
+      "pass": true,
+      "detail": "mapped.attacker.example resolves to private address ::ffff:127.0.0.1"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks https://cgnat.attacker.example/",
+      "pass": true,
+      "detail": "cgnat.attacker.example resolves to private address 100.64.0.7"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks https://zero.attacker.example/",
+      "pass": true,
+      "detail": "zero.attacker.example resolves to private address 0.0.0.0"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks https://nxdomain.attacker.example/",
+      "pass": true,
+      "detail": "could not resolve nxdomain.attacker.example: NXDOMAIN"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks file:///etc/passwd",
+      "pass": true,
+      "detail": "protocol file: is not allowed"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks gopher://127.0.0.1:6379/",
+      "pass": true,
+      "detail": "protocol gopher: is not allowed"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks ftp://public.example.com/",
+      "pass": true,
+      "detail": "protocol ftp: is not allowed"
+    },
+    {
+      "section": "ssrf",
+      "name": "blocks https://user:pw@public.example.com/",
+      "pass": true,
+      "detail": "credentials in URL are not allowed"
+    },
+    {
+      "section": "ssrf",
+      "name": "allows https://public.example.com/a?b=c",
+      "pass": true,
+      "detail": "allowed"
+    },
+    {
+      "section": "ssrf",
+      "name": "allows http://93.184.215.14/",
+      "pass": true,
+      "detail": "allowed"
+    },
+    {
+      "section": "ssrf",
+      "name": "allows https://[2606:4700::1111]/",
+      "pass": true,
+      "detail": "allowed"
+    },
+    {
+      "section": "ssrf",
+      "name": "isBlockedHost https://0x7f000001/",
+      "pass": true,
+      "detail": "literal check"
+    },
+    {
+      "section": "ssrf",
+      "name": "isBlockedHost https://[::ffff:a9fe:a9fe]/",
+      "pass": true,
+      "detail": "literal check"
+    },
+    {
+      "section": "ssrf",
+      "name": "isBlockedHost https://100.64.0.1/",
+      "pass": true,
+      "detail": "literal check"
+    },
+    {
+      "section": "ssrf",
+      "name": "isBlockedHost https://0.0.0.0/",
+      "pass": true,
+      "detail": "literal check"
+    },
+    {
+      "section": "ssrf",
+      "name": "redirect to metadata (mapped v6) refused",
+      "pass": true,
+      "detail": "safeFetch per-hop check"
+    },
+    {
+      "section": "ssrf",
+      "name": "redirect loop bounded",
+      "pass": true,
+      "detail": "maxRedirects 3"
+    },
+    {
+      "section": "ssrf",
+      "name": "response body capped",
+      "pass": true,
+      "detail": "100000 bytes kept"
+    },
+    {
+      "section": "ssrf-live",
+      "name": "real DNS blocks http://127.0.0.1.nip.io:5591/health",
+      "pass": true,
+      "detail": "127.0.0.1.nip.io resolves to private address 127.0.0.1"
+    },
+    {
+      "section": "ssrf-live",
+      "name": "real DNS blocks http://localtest.me/",
+      "pass": true,
+      "detail": "localtest.me resolves to private address ::1"
+    },
+    {
+      "section": "ssrf-live",
+      "name": "real DNS blocks http://169.254.169.254.nip.io/",
+      "pass": true,
+      "detail": "169.254.169.254.nip.io resolves to private address 169.254.169.254"
+    },
+    {
+      "section": "ssrf-live",
+      "name": "real public fetch works",
+      "pass": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "section": "execute-key",
+      "name": "open when EXECUTE_API_KEY unset (back-compat)",
+      "pass": true,
+      "detail": "LAN-open default"
+    },
+    {
+      "section": "execute-key",
+      "name": "no key → 401",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "execute-key",
+      "name": "wrong key → 401",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "execute-key",
+      "name": "wrong length → 401",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "execute-key",
+      "name": "x-api-key accepted",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "execute-key",
+      "name": "Bearer accepted",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "offload",
+      "name": "offload A, retrieve A, offload B, retrieve B",
+      "pass": true,
+      "detail": "two instances, one dir"
+    },
+    {
+      "section": "offload",
+      "name": "path-traversal id refused",
+      "pass": true,
+      "detail": "ids must match tr_<hex24>"
+    },
+    {
+      "section": "reasoning",
+      "name": "tool turn carries reasoning_content",
+      "pass": true,
+      "detail": "DeepSeek thinking-mode contract"
+    }
+  ]
+}

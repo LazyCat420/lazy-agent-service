@@ -119,11 +119,16 @@ export function resolveInterpreterCode(
 
 /**
  * Worker body. Runs the snippet in a fresh `vm` context that holds NO host
- * objects — the console shim is defined inside the context and results leave
- * it as a JSON string — so `this.constructor.constructor("return process")()`
- * resolves to the context's own Function and finds no `process`. The worker
- * itself is spawned with an empty env, resource limits, and is terminated by
- * the parent on deadline, so a synchronous `while(true){}` cannot block the
+ * objects, with string code generation off. The boundary rule: NO
+ * worker-realm function is ever handed to an object the snippet controls
+ * (a worker function's .constructor is the worker's real Function, which
+ * compiles strings and reaches the real process — the classic thenable
+ * escape found in the 2026-10-11 security review). So settling a returned
+ * promise, formatting errors and serializing results all happen inside the
+ * context through closures captured before the snippet runs; the worker only
+ * passes context values back in and reads a JSON string out. The worker is
+ * spawned with an empty env and resource limits and is terminated by the
+ * parent on deadline, so a synchronous `while(true){}` cannot block the
  * service event loop.
  */
 const WORKER_SOURCE = `
@@ -134,27 +139,54 @@ const context = vm.createContext(Object.create(null), {
 });
 const prelude = \`
   "use strict";
-  const __logs = [];
-  const __fmt = (v) => { if (typeof v === "string") return v; try { const s = JSON.stringify(v); return s === undefined ? String(v) : s; } catch { return String(v); } };
-  const __push = (...a) => { __logs.push(a.map(__fmt).join(" ")); };
-  globalThis.console = Object.freeze({ log: __push, info: __push, warn: __push, error: __push, debug() {}, trace() {} });
-  globalThis.__drain = (value) => { let r; try { r = JSON.stringify(value); } catch { r = undefined; } return JSON.stringify({ logs: __logs, returned: r }); };
+  (() => {
+    const stringify = JSON.stringify;
+    const resolve = Promise.resolve.bind(Promise);
+    const then = Promise.prototype.then;
+    const call = Function.prototype.call.bind(then);
+    const logs = [];
+    const fmt = (v) => { if (typeof v === "string") return v; try { const s = stringify(v); return s === undefined ? String(v) : s; } catch { return "[unserializable]"; } };
+    const push = (...a) => { logs.push(a.map(fmt).join(" ")); };
+    const drain = (value) => { let r; try { r = stringify(value); } catch { r = undefined; } return stringify({ logs: logs.slice(), returned: typeof r === "string" ? r : undefined }); };
+    const describe = (e) => { try { const m = e && e.message !== undefined ? e.message : e; return typeof m === "string" ? m : String(m); } catch { return "error"; } };
+    const state = { out: "" };
+    const lock = (name, value) => Object.defineProperty(globalThis, name, { value, writable: false, configurable: false, enumerable: false });
+    lock("console", Object.freeze({ log: push, info: push, warn: push, error: push, debug() {}, trace() {} }));
+    lock("__settle", (v) => {
+      call(resolve(v),
+        (r) => { state.out = stringify({ ok: true, payload: drain(r) }); },
+        (e) => { state.out = stringify({ ok: false, message: describe(e), payload: drain(undefined) }); });
+    });
+    lock("__fail", (e) => stringify({ ok: false, message: describe(e), payload: drain(undefined) }));
+    lock("__poll", () => state.out);
+  })();
 \`;
 const send = (msg) => parentPort.postMessage(msg);
+const parse = (text) => {
+  try {
+    const m = JSON.parse(String(text));
+    return { ok: m.ok === true, message: typeof m.message === "string" ? m.message : undefined, payload: typeof m.payload === "string" ? m.payload : undefined };
+  } catch { return { ok: false, message: "code_interpreter produced an unreadable result" }; }
+};
+vm.runInContext(prelude, context, { timeout: 1000 });
+// Captured before the snippet runs; non-writable, so the snippet cannot swap them.
+const settle = vm.runInContext("__settle", context);
+const fail = vm.runInContext("__fail", context);
+const poll = vm.runInContext("__poll", context);
 try {
-  vm.runInContext(prelude, context, { timeout: 1000 });
   const wrapped = '(function(){\\n"use strict";\\n' + workerData.code + '\\n})()';
   const value = vm.runInContext(wrapped, context, { timeout: workerData.timeoutMs });
-  const finish = (v) => send({ ok: true, payload: vm.runInContext("__drain", context)(v) });
-  if (value && typeof value.then === "function") {
-    value.then(finish, (e) => send({ ok: false, message: String(e && e.message ? e.message : e), payload: vm.runInContext("__drain", context)(undefined) }));
-  } else {
-    finish(value);
-  }
+  settle(value);
+  const check = () => {
+    const out = poll();
+    if (typeof out === "string" && out) send(parse(out));
+    else setTimeout(check, 2);
+  };
+  check();
 } catch (e) {
-  let payload;
-  try { payload = vm.runInContext("__drain", context)(undefined); } catch { payload = undefined; }
-  send({ ok: false, message: String(e && e.message ? e.message : e), payload });
+  let out;
+  try { out = fail(e); } catch { out = undefined; }
+  send(typeof out === "string" ? parse(out) : { ok: false, message: "code_interpreter failed" });
 }
 `;
 
