@@ -95,5 +95,16 @@ checked by the step that relies on it.
 
 ## 3. Status
 
-- Item 1: in progress.
+- **Item 1 (W1): DONE** — commits `340140e` (sandbox + Node 26), `f2701c6` (red-team).
+  - Sandbox: fresh `node` child per snippet, `--permission` (no grants),
+    `--disallow-code-generation-from-strings`, 64 MB heap, empty env, SIGKILL deadline,
+    1 MB output cap, ≤2 concurrent; host-free `vm` context inside; fails closed if the
+    startup probe sees any capability allowed.
+  - Image: `node:26-slim` (22 has no network permission).
+  - **Red-team ablation** (`scripts/benchmarks/sandbox-redteam.mts`): all 4 walls proven —
+    each attack lands with its wall off and is blocked with it on (walls 2–4 inject a real
+    outer-realm Function to simulate a wall-1 bypass). 6/6 PASS.
+  - Live demo against the service function: env read, thenable escape, `/etc/passwd`,
+    network exfil to a local listener, `child_process` spawn all blocked; legit math works.
+  - Validation: `tsc` clean; full suite 119 files / 1,392 tests; security-bench 79/79.
 - Items 2–3: not started.
