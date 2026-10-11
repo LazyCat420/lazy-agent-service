@@ -102,6 +102,34 @@ describe("scoped runtime HTTP routes", () => {
     expect(unknown.status).toBe(409);
   });
 
+  it("live tail after a cursor resume sends each event exactly once (audit D4)", async () => {
+    vi.stubEnv("RUN_TAIL_POLL_MS", "20");
+    const runId = "tail-dedupe";
+    await seedRun(runId, "running");
+    const response = fetch(`${baseUrl}/${runId}/events`, {
+      headers: { authorization: `Bearer ${bearer()}`, "Last-Event-ID": "evt-1" },
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    await RunStore.appendEvent({ id: "evt-3", run_id: runId, type: "message.delta", data: {}, timestamp: new Date().toISOString() });
+    await new Promise((r) => setTimeout(r, 80));
+    await RunStore.mutateRun(runId, () => ({ status: "completed" }));
+    await RunStore.appendEvent({ id: "evt-4", run_id: runId, type: "run.completed", data: {}, timestamp: new Date().toISOString() });
+    const body = await (await response).text();
+    const ids = [...body.matchAll(/^id: (.+)$/gm)].map((m) => m[1]);
+    expect(ids).toEqual(["evt-2", "evt-3", "evt-4"]);
+  });
+
+  it("live tail ends an orphaned running run that stops producing events (audit D4)", async () => {
+    vi.stubEnv("RUN_TAIL_POLL_MS", "20");
+    vi.stubEnv("RUN_TAIL_IDLE_MS", "100");
+    const runId = "tail-orphan";
+    await seedRun(runId, "running");
+    const started = Date.now();
+    const body = await (await fetch(`${baseUrl}/${runId}/events`, { headers: { authorization: `Bearer ${bearer()}` } })).text();
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(body).toContain("event: tail.idle");
+  });
+
   it.each([false, true])("client disconnect preserves only detached delivery (%s)", async detached => {
     let runSignal: AbortSignal | undefined; let finish!: () => void;
     vi.spyOn(RunExecutionEngine, "startRun").mockImplementation(async (id: any, request: any, emit: any) => {

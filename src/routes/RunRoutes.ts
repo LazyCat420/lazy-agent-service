@@ -165,31 +165,49 @@ router.get("/:runId/events", asyncHandler(async (req: Request, res: Response) =>
   // any events appended after the replayed snapshot, until the run reaches a
   // terminal state or the client disconnects. Cursor semantics hold — clients
   // can reconnect with the last id they saw and never miss or duplicate.
-  let lastId = cursor || (events.length ? events[events.length - 1].id : "");
-  if (run.status === "running" && !cursor) {
-    // A client without a cursor that attached mid-run gets the full snapshot
-    // (already written above), then tails from the newest event.
-    lastId = events.length ? events[events.length - 1].id : "";
-  }
+  // The tail resumes after the newest event already written: the replayed
+  // snapshot when there was one, else the client's cursor.
+  let lastId = events.length ? events[events.length - 1].id : cursor;
   if (run.status === "running") {
+    // One poll at a time (a slow store read must not let a second poll
+    // resend the same events), and a run that stops producing events —
+    // orphaned "running" after a crash or restart — ends the tail instead
+    // of being polled forever.
+    const idleLimitMs = Number(process.env.RUN_TAIL_IDLE_MS) || 10 * 60_000;
+    let lastProgressAt = Date.now();
+    let stopped = false;
+    let timer: NodeJS.Timeout | undefined;
     await new Promise<void>((resolve) => {
-      const timer = setInterval(async () => {
-        if (res.destroyed || res.writableEnded) { clearInterval(timer); resolve(); return; }
+      const stop = () => { if (stopped) return; stopped = true; if (timer) clearTimeout(timer); resolve(); };
+      req.on("close", stop);
+      const poll = async () => {
+        if (stopped) return;
+        if (res.destroyed || res.writableEnded) return stop();
         try {
           const fresh = await RunStore.getRun(String(req.params.runId));
-          if (!fresh) { clearInterval(timer); resolve(); return; }
+          if (!fresh) return stop();
           const all = fresh.events || [];
-          const startIdx = lastId ? all.findIndex((e) => e.id === lastId) + 1 : 0;
-          for (const event of all.slice(Math.max(startIdx, 0))) {
+          const position = lastId ? all.findIndex((e) => e.id === lastId) : -1;
+          // An unknown lastId can only mean the store was rewritten: never
+          // re-send the whole history on that basis.
+          const fresher = lastId && position < 0 ? [] : all.slice(position + 1);
+          for (const event of fresher) {
+            if (stopped) return;
             res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
             lastId = event.id;
           }
-          if (RunStateMachine.isTerminal(fresh.status)) { clearInterval(timer); resolve(); }
+          if (fresher.length > 0) lastProgressAt = Date.now();
+          if (RunStateMachine.isTerminal(fresh.status)) return stop();
+          if (Date.now() - lastProgressAt > idleLimitMs) {
+            res.write(`event: tail.idle\ndata: ${JSON.stringify({ run_id: fresh.run_id ?? req.params.runId, idle_ms: idleLimitMs })}\n\n`);
+            return stop();
+          }
         } catch {
-          clearInterval(timer); resolve();
+          return stop();
         }
-      }, 1000);
-      req.on("close", () => { clearInterval(timer); resolve(); });
+        if (!stopped) timer = setTimeout(poll, Number(process.env.RUN_TAIL_POLL_MS) || 1000);
+      };
+      timer = setTimeout(poll, Number(process.env.RUN_TAIL_POLL_MS) || 1000);
     });
   }
   res.end();
