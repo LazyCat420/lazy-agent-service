@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-11T20:34:25.165Z",
+  "generated_at": "2026-10-11T21:25:02.132Z",
   "live": true,
   "total": 79,
   "passed": 79,
@@ -35,22 +35,22 @@
       "section": "code_interpreter",
       "name": "computed process",
       "pass": true,
-      "detail": "ran; host loop lag max 10 ms",
-      "ms": 55
+      "detail": "ran; host loop lag max 13 ms",
+      "ms": 87
     },
     {
       "section": "code_interpreter",
       "name": "this.constructor chain",
       "pass": true,
       "detail": "ran; host loop lag max 0 ms",
-      "ms": 43
+      "ms": 35
     },
     {
       "section": "code_interpreter",
       "name": "console Function ctor",
       "pass": true,
-      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 0 ms",
-      "ms": 27
+      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 1 ms",
+      "ms": 39
     },
     {
       "section": "code_interpreter",
@@ -64,7 +64,7 @@
       "name": "generator Function ctor",
       "pass": true,
       "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 0 ms",
-      "ms": 29
+      "ms": 38
     },
     {
       "section": "code_interpreter",
@@ -77,99 +77,99 @@
       "section": "code_interpreter",
       "name": "indirect eval",
       "pass": true,
-      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 0 ms",
-      "ms": 36
+      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 3 ms",
+      "ms": 37
     },
     {
       "section": "code_interpreter",
       "name": "prepareStackTrace callsites",
       "pass": true,
-      "detail": "ran; host loop lag max 0 ms",
-      "ms": 36
+      "detail": "ran; host loop lag max 1 ms",
+      "ms": 46
     },
     {
       "section": "code_interpreter",
       "name": "WebAssembly compile",
       "pass": true,
       "detail": "refused/failed: WebAssembly.compile(): Wasm code generation disallowed by embedder; host loop lag max 0 ms",
-      "ms": 35
+      "ms": 46
     },
     {
       "section": "code_interpreter",
       "name": "globals enumeration",
       "pass": true,
       "detail": "ran; host loop lag max 0 ms",
-      "ms": 32
+      "ms": 36
     },
     {
       "section": "code_interpreter",
       "name": "thenable callback ctor",
       "pass": true,
-      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 1 ms",
-      "ms": 32
+      "detail": "refused/failed: Code generation from strings disallowed for this context; host loop lag max 0 ms",
+      "ms": 33
     },
     {
       "section": "code_interpreter",
       "name": "overridden Promise.then",
       "pass": true,
       "detail": "ran; host loop lag max 0 ms",
-      "ms": 27
+      "ms": 33
     },
     {
       "section": "code_interpreter",
       "name": "swap boundary helper",
       "pass": true,
-      "detail": "refused/failed: Cannot assign to read only property '__settle' of object '[object Obje; host loop lag max 0 ms",
-      "ms": 28
+      "detail": "refused/failed: Cannot assign to read only property '__settle' of object '[object Obje; host loop lag max 1 ms",
+      "ms": 34
     },
     {
       "section": "code_interpreter",
       "name": "sync infinite loop",
       "pass": true,
-      "detail": "refused/failed: code_interpreter timed out after 1500ms; host loop lag max 2 ms",
-      "ms": 1501
+      "detail": "refused/failed: Script execution timed out after 1500ms; host loop lag max 4 ms",
+      "ms": 1536
     },
     {
       "section": "code_interpreter",
       "name": "Atomics.wait block",
       "pass": true,
-      "detail": "refused/failed: code_interpreter timed out after 1500ms; host loop lag max 3 ms",
-      "ms": 1500
+      "detail": "refused/failed: Script execution timed out after 1500ms; host loop lag max 4 ms",
+      "ms": 1543
     },
     {
       "section": "code_interpreter",
       "name": "memory bomb",
       "pass": true,
-      "detail": "refused/failed: Worker terminated due to reaching memory limit: JS heap out of memory; host loop lag max 1 ms",
-      "ms": 157
+      "detail": "refused/failed: code_interpreter sandbox reached its memory limit; host loop lag max 8 ms",
+      "ms": 2378
     },
     {
       "section": "code_interpreter",
       "name": "string bomb",
       "pass": true,
-      "detail": "refused/failed: Invalid string length; host loop lag max 3 ms",
-      "ms": 32
+      "detail": "refused/failed: Invalid string length; host loop lag max 0 ms",
+      "ms": 53
     },
     {
       "section": "code_interpreter",
       "name": "deep recursion",
       "pass": true,
       "detail": "refused/failed: Maximum call stack size exceeded; host loop lag max 0 ms",
-      "ms": 29
+      "ms": 50
     },
     {
       "section": "code_interpreter",
       "name": "never-settling promise",
       "pass": true,
-      "detail": "refused/failed: code_interpreter timed out after 1500ms; host loop lag max 3 ms",
-      "ms": 1501
+      "detail": "refused/failed: code_interpreter timed out after 2500ms; host loop lag max 4 ms",
+      "ms": 2505
     },
     {
       "section": "code_interpreter",
       "name": "microtask flood",
       "pass": true,
-      "detail": "refused/failed: Worker terminated due to reaching memory limit: JS heap out of memory; host loop lag max 1 ms",
-      "ms": 452
+      "detail": "refused/failed: code_interpreter timed out after 2500ms; host loop lag max 8 ms",
+      "ms": 2503
     },
     {
       "section": "code_interpreter",
