@@ -107,4 +107,12 @@ checked by the step that relies on it.
   - Live demo against the service function: env read, thenable escape, `/etc/passwd`,
     network exfil to a local listener, `child_process` spawn all blocked; legit math works.
   - Validation: `tsc` clean; full suite 119 files / 1,392 tests; security-bench 79/79.
-- Items 2–3: not started.
+- **Item 2 (W2): DONE** — trading-service `263c1408` (scraper redirect re-check: httpx
+  response hook + Playwright document guard; 9 new tests, 201 scraper tests pass),
+  trading-client ch.32. Deployed to scraper-service; live check: a redirect to
+  `169.254.169.254` returns `redirect: 169.254.169.254 is a private address`, public
+  pages still fetch. crawl4ai (not in the default auto ladder) is a documented residual.
+- **Item 3 (W3): PLANNED, not started.** Closing it needs the caller rollout in §2
+  (6 repos send the key while the server still does not enforce), then enforcement
+  flipped last. Enforcement is blocked until the Obsidian plugin ships an "Execute key"
+  setting (a manual install), so it is its own focused rollout, not a same-session flip.
