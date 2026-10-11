@@ -517,7 +517,7 @@ export class RunExecutionEngine {
       // tools' schemas from tool_schemas.json so the model can actually call
       // them; anything still missing keeps the warning.
       let stillMissing = schemaless;
-      if (schemaless.length > 0 && ToolOrchestratorService.isTradingRequest(identity.project)) {
+      if (schemaless.length > 0 && (ToolOrchestratorService.isTradingRequest(identity.project) || request.app_id === "trading")) {
         const catalog = ToolOrchestratorService.getTradingToolSchemas();
         const byBare = new Map(catalog.map((t) => [t._mcpOriginalName, t]));
         const fallback: typeof localSchemas = [];
@@ -525,7 +525,9 @@ export class RunExecutionEngine {
         for (const name of schemaless) {
           const bare = name.replace(/^mcp__[a-zA-Z0-9_-]+__/, "");
           const hit = byBare.get(bare) || byBare.get(name) || byBare.get(bare.split(".").pop() || bare);
-          if (hit) fallback.push({ name: hit.name, description: hit.description, parameters: hit.parameters });
+          // Advertise under the ADMITTED name: the call must match the
+          // profile whitelist and local_tool_policy, which key on it.
+          if (hit) fallback.push({ name, description: hit.description, parameters: hit.parameters });
           else stillMissing.push(name);
         }
         if (fallback.length > 0) localSchemas.push(...fallback);

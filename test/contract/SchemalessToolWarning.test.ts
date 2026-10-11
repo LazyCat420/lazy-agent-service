@@ -10,6 +10,7 @@ import { RunEvidenceStore } from "../../src/platform/verify/RunEvidenceStore.ts"
 import AgenticLoopService from "../../src/services/AgenticLoopService.ts";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 describe("local tool schema missing warning", () => {
@@ -134,4 +135,35 @@ describe("local tool schema missing warning", () => {
 		expect(seenFinalTools).toContain("global.web.search");
 		expect(events.filter((e) => e.type === "run.warning")).toHaveLength(0);
 	});
+
+	it.each(["trading-junior-analyst-v1", "trading-analyst-v1"])(
+		"%s: a direct run's catalog-fallback scrape_url is admitted, not POLICY_VIOLATION (audit D1)",
+		async (profileId) => {
+			vi.stubEnv("RUNTIME_AUTH_SECRET", `auth_${crypto.randomUUID()}`);
+			let advertised: string[] = [];
+			vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (ctx) => {
+				const c = ctx as unknown as {
+					runtimeTools: { finalTools: Array<{ name: string }> };
+					runtimeToolExecutor: (call: { id: string; name: string; args: Record<string, unknown> }) => Promise<unknown>;
+				};
+				advertised = c.runtimeTools.finalTools.map((t) => t.name);
+				const name = advertised.find((n) => n.endsWith("scrape_url"))!;
+				void c.runtimeToolExecutor({ id: "call-1", name, args: { url: "https://example.com" } }).catch(() => {});
+				await new Promise((r) => setTimeout(r, 50));
+				return { messages: [{ role: "assistant", content: "done" }] } as never;
+			});
+			const events: RunEvent[] = [];
+			await RunExecutionEngine.startRun(
+				`run-d1-${profileId}`,
+				{ profile_id: profileId, app_id: "trading", session_id: "cycle-1", input: "read a page" },
+				(evt) => events.push({ ...evt, id: "4", timestamp: new Date().toISOString() } as RunEvent),
+			);
+			vi.unstubAllEnvs();
+			expect(advertised).toContain("trading.research.scrape_url");
+			const failed = events.filter((e) => e.type === "tool.failed").map((e) => (e.data as { error?: { code?: string } }).error?.code);
+			expect(failed).not.toContain("POLICY_VIOLATION");
+			expect(failed).not.toContain("TOOL_POLICY_MISSING");
+			expect(events.some((e) => e.type === "tool.invoked" && (e.data as { tool_name?: string }).tool_name === "trading.research.scrape_url")).toBe(true);
+		},
+	);
 });
