@@ -55,7 +55,10 @@ export class ObsidianCompletionJobs {
     if (existing) {
       if (existing.fingerprint !== fingerprint) throw new Error("Completion id already belongs to another request");
       if (existing.status !== "failed") return existing;
-      // A failed job (service restart, transient model error, client reconnect) is re-run on request.
+      // A user cancel (499) is a decision, not a fault: a resubmit of the same
+      // id (client reconnect/replay) must not restart work the user stopped.
+      if (existing.response?.status === 499) return existing;
+      // Any other failure (service restart, transient model error) is re-run on request.
     }
     if (this.active.size >= 8) throw new Error("Durable completion capacity reached; retry later");
     const job: CompletionJob = { id, fingerprint, status: "running", createdAt: Date.now() };

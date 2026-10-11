@@ -134,5 +134,13 @@ export interface ConversationServiceInterface {
     conversationId: string,
     project: string,
     username: string,
-  ): Promise<{ role: "system" | "user" | "assistant" | "tool"; content: string }[]>;
+  ): Promise<ResumeMessage[]>;
+}
+
+/** A stored message as a run resume replays it: tool turns keep their call/result pairing. */
+export interface ResumeMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  toolCalls?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
+  tool_call_id?: string;
 }

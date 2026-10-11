@@ -100,4 +100,34 @@ describe("Obsidian completion routes", () => {
     expect(saved).toMatchObject({ status: "completed", response: { status: 200, data: { choices: [{ message: { content: "VAULT_CHAT_OK" } }] } } });
     expect(transport).toHaveBeenCalledTimes(2);
   });
+
+  it("does not restart a job the user cancelled when the same id is resubmitted (audit 3e65c57)", async () => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "obsidian-completion-cancel-"));
+    const transport = vi.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+    }));
+    const jobs = new ObsidianCompletionJobs(directory, transport as never);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.project = "test-project"; req.username = "test-user"; next(); });
+    app.use("/obsidian-completions", createObsidianCompletionRouter(jobs));
+    server = await new Promise<http.Server>((resolve) => {
+      const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
+    });
+    const address = server.address() as { port: number };
+    const base = `http://127.0.0.1:${address.port}/obsidian-completions`;
+    const scope = JSON.stringify(["test-project", "test-user"]);
+    const id = crypto.randomUUID();
+    const body = {
+      target: "http://10.0.0.141:8000/v1",
+      payload: { model: "test-model", messages: [{ role: "user", content: "long job" }] },
+    };
+    expect((await fetch(`${base}/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).status).toBe(202);
+    await vi.waitFor(() => expect(transport).toHaveBeenCalledTimes(1));
+    jobs.cancel(scope, id);
+    await vi.waitFor(() => expect(jobs.get(scope, id)?.response?.status).toBe(499));
+    const resubmitted = await fetch(`${base}/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    expect((await resubmitted.json()).status).toBe("failed");
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
 });

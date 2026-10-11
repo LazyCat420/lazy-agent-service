@@ -12,7 +12,10 @@ import type {
   ConversationServiceInterface,
   TransformedConversation,
   TransformedConversationStats,
+  ResumeMessage,
 } from "./types.ts";
+import { normalizeRoleAlternation } from "../RoleAlternation.ts";
+import type { ConversationMessage } from "../harnesses/types.ts";
 import {
   extractFiles,
   computeModalities,
@@ -378,9 +381,12 @@ const ConversationService: ConversationServiceInterface = {
   },
 
   /**
-   * Prior conversation history as plain role/content messages — the seed for
-   * run resumes (RunRequestSchema.resume_conversation_id). Returns only the
-   * four contract roles; malformed entries are skipped, never thrown.
+   * Prior conversation history — the seed for run resumes
+   * (RunRequestSchema.resume_conversation_id). Assistant tool turns keep
+   * their toolCalls, and each call is followed by its result: the stored
+   * tool message when there is one, else the result embedded in the call
+   * (how the harnesses persist it). Malformed entries are skipped, never
+   * thrown; the result is role-alternation normalized.
    */
   async getMessages(conversationId, project, username) {
     const dbCollection = MongoWrapper.getCollection(MONGO_DB_NAME, DEFAULT_COLLECTION);
@@ -388,16 +394,54 @@ const ConversationService: ConversationServiceInterface = {
       { id: conversationId, project, username },
       { projection: { messages: 1 } },
     );
-    const out: { role: "system" | "user" | "assistant" | "tool"; content: string }[] = [];
-    for (const m of ((doc?.messages as ChatMessage[]) || [])) {
-      const role = m?.role;
-      const content = typeof m?.content === "string" ? m.content : "";
-      if ((role === "system" || role === "user" || role === "assistant" || role === "tool") && content) {
-        out.push({ role, content });
-      }
-    }
-    return out;
+    return buildResumeMessages(((doc?.messages as ChatMessage[]) || []));
   },
 };
 
 export default ConversationService;
+
+const stringify = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value ?? null));
+
+/** Stored messages → resume messages with intact call/result pairs (exported for tests). */
+export function buildResumeMessages(stored: ChatMessage[]): ResumeMessage[] {
+  const out: ResumeMessage[] = [];
+  const storedToolResults = new Map<string, string>();
+  for (const m of stored) {
+    const record = m as unknown as Record<string, unknown>;
+    if (m?.role === "tool" && typeof record.tool_call_id === "string") {
+      storedToolResults.set(record.tool_call_id, stringify(m.content));
+    }
+  }
+  for (const m of stored) {
+    const record = m as unknown as Record<string, unknown>;
+    const role = m?.role;
+    const content = typeof m?.content === "string" ? m.content : "";
+    if (role === "tool") continue; // re-emitted right after its call below
+    const calls = Array.isArray(record.toolCalls) ? (record.toolCalls as Array<Record<string, unknown>>) : [];
+    if (role === "assistant" && calls.length > 0) {
+      const pairs = calls
+        .filter((call) => typeof call?.name === "string")
+        .map((call, index) => ({
+          id: typeof call.id === "string" && call.id ? call.id : `resume_${out.length}_${index}`,
+          name: call.name as string,
+          args: (call.args && typeof call.args === "object" ? call.args : {}) as Record<string, unknown>,
+          result: call.result,
+        }));
+      if (pairs.length === 0) {
+        if (content) out.push({ role, content });
+        continue;
+      }
+      out.push({ role, content, toolCalls: pairs.map(({ id, name, args }) => ({ id, name, args })) });
+      for (const pair of pairs) {
+        out.push({
+          role: "tool",
+          tool_call_id: pair.id,
+          content: storedToolResults.get(pair.id) ?? (pair.result === undefined || pair.result === null ? "[result not recorded]" : stringify(pair.result)),
+        });
+      }
+      continue;
+    }
+    if ((role === "system" || role === "user" || role === "assistant") && content) out.push({ role, content });
+  }
+  return normalizeRoleAlternation(out as unknown as ConversationMessage[]).messages as unknown as ResumeMessage[];
+}
