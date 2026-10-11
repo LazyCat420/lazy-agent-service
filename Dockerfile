@@ -3,7 +3,7 @@
 # ============================================================
 
 # ── Stage 1: Node.js TS Builder ──────────────────────────────
-FROM node:22-slim AS node-build
+FROM node:26-slim AS node-build
 
 RUN npm install -g pnpm
 
@@ -23,7 +23,7 @@ RUN pnpm run build
 RUN pnpm prune --prod
 
 # ── Stage 2: Runtime ──────────────────────────────────────────
-FROM node:22-slim
+FROM node:26-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \

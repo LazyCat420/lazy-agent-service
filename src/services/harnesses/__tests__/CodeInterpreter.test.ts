@@ -232,6 +232,34 @@ describe("runCodeInterpreter (pure fallback)", () => {
   });
 });
 
+describe("sandbox process isolation (2026-10-11 hardening)", () => {
+  it("the runtime probe shows every capability denied and an empty env", async () => {
+    const { checkSandbox } = await import("../CodeInterpreter.ts");
+    const check = await checkSandbox();
+    expect(check.available).toBe(true);
+    const caps = check.capabilities as Record<string, unknown>;
+    for (const k of ["fs", "net", "dns", "child_process", "worker", "binding", "codegen"]) {
+      expect(String(caps[k]), k).toMatch(/^denied/);
+    }
+    expect(caps.env).toBe(0);
+  });
+
+  it("fails closed when any capability is not denied", async () => {
+    const { evaluateSandboxProbe } = await import("../CodeInterpreter.ts");
+    const base = { fs: "denied", net: "denied", dns: "denied", child_process: "denied", worker: "denied", binding: "denied", codegen: "denied", env: 0 };
+    expect(evaluateSandboxProbe(base).available).toBe(true);
+    expect(evaluateSandboxProbe({ ...base, net: "ALLOWED" })).toMatchObject({ available: false });
+    expect(evaluateSandboxProbe({ ...base, env: 3 }).reason).toContain("env");
+    expect(evaluateSandboxProbe({ ...base, codegen: undefined }).available).toBe(false);
+  });
+
+  it("each snippet gets a fresh process: state does not leak between calls", async () => {
+    await executeJavaScript("globalThis.carry = 42; return 1;");
+    const second = await executeJavaScript("return typeof globalThis.carry;");
+    expect(second.returned).toBe("undefined");
+  });
+});
+
 describe("executeJavaScript isolation (audit D3)", () => {
   it("cannot reach the host process through computed property access", async () => {
     const result = await executeJavaScript('return typeof globalThis["proc" + "ess"];');
