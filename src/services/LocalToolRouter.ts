@@ -3,7 +3,7 @@ import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { callKey, guardedRun } from "./ToolCallGuard.ts";
 import { newsSearch, newsProviderStatus } from "./NewsSearchService.ts";
-import { webSearch, webSearchStatus } from "./WebSearchService.ts";
+import { filterResultsByDomain, webSearch, webSearchStatus, withSiteSearch } from "./WebSearchService.ts";
 import { CATEGORIES } from "./EditorialHeadlinesService.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 
@@ -31,6 +31,7 @@ export interface LocalToolContext {
   agentName?: string;
   cycleId?: string;
   ticker?: string;
+  signal?: AbortSignal;
 }
 
 // Cache structure for python-bridge tool executions
@@ -447,13 +448,22 @@ export async function routeLocalTool(
     return forwardToHtmlNotes(tName, toolArguments);
   }
 
+  // scrape_url never falls through to the trading-service bridge: every
+  // caller (agents, trading via dispatchTool, POST /execute/scrape_url) gets
+  // the shared extractor — SSRF guard, `prompt` Q&A, truncate-and-store.
+  if (tName === "scrape_url") {
+    const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
+    return ToolOrchestratorService.executeWebExtract(toolArguments);
+  }
+
   // Natively implemented here: one keyless web search (Exa) with one cache and
   // one rate limit for every service on the network, instead of each project
   // scraping DuckDuckGo from an IP the search engines bot-block. Services call
   // POST /execute/web_search. See WebSearchService.
   if (tName === "web_search") {
     const query = String(toolArguments.query ?? toolArguments.q ?? "").trim();
-    const result = await webSearch(query, Number(toolArguments.limit ?? 6) || 6);
+    const found = await webSearch(withSiteSearch(query, toolArguments), Number(toolArguments.limit ?? 6) || 6, undefined, context.signal);
+    const result = { ...found, results: filterResultsByDomain(found.results, toolArguments) };
     return {
       query,
       ...result,

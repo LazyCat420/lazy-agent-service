@@ -288,6 +288,8 @@ export interface WebExtractAnsweredResult {
   content?: string;
   cached?: boolean;
   engine_used?: string;
+  /** Set when the extract itself failed (blocked, unreachable, empty): no answer exists. */
+  error?: string;
 }
 
 /**
@@ -312,7 +314,7 @@ export async function webExtractAnswered(
     ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
     cached: extracted.cached,
   };
-  if (extracted.status !== "ok") return { ...base, answer: "", content: `Extraction did not run: ${extracted.error || "no detail"}.` };
+  if (extracted.status !== "ok") return { ...base, answer: "", error: extracted.error || "no detail" };
   const question = String(prompt ?? "").trim();
   if (!question) return { ...base, answer: extracted.content, content: extracted.content };
   const qaStart = Date.now();

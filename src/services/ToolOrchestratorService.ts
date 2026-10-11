@@ -6,7 +6,7 @@ import AgentPersonaRegistry from "./AgentPersonaRegistry.ts";
 import logger from "../utils/logger.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import { ORCHESTRATOR_ONLY_TOOLS } from "./OrchestratorPrompt.ts";
-import { webSearch } from "./WebSearchService.ts";
+import { filterResultsByDomain, webSearch, withSiteSearch } from "./WebSearchService.ts";
 import { webExtract, webExtractAnswered } from "./WebExtractService.ts";
 import { createAbortController } from "../utils/AbortController.ts";
 import {
@@ -1410,14 +1410,14 @@ export default class ToolOrchestratorService {
     // every call both fails and deepens the block. The shared keyless search
     // answers it instead, under the same name and arguments.
     if (name === TOOL_NAMES.SEARCH_WEB) {
-      return ToolOrchestratorService.executeSharedWebSearch(args);
+      return ToolOrchestratorService.executeSharedWebSearch(args, context.signal ?? undefined);
     }
 
     // `web_search` — same shared search under an in-repo schema that advertises
     // allowed_domains/blocked_domains (search_web's schema is owned by the
     // remote catalog and cannot carry them).
     if (name === "web_search") {
-      return ToolOrchestratorService.executeSharedWebSearch(args);
+      return ToolOrchestratorService.executeSharedWebSearch(args, context.signal ?? undefined);
     }
 
 
@@ -1778,11 +1778,11 @@ export default class ToolOrchestratorService {
     const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
     if (prompt) {
       const answered = await webExtractAnswered(url, prompt, charLimit);
+      if (answered.error) {
+        return { url, content: "", success: false, error: `Extraction did not run: ${answered.error}. Try again later or use another source.` };
+      }
       if (answered.content && answered.answer === answered.content) {
-        // Graceful degradation or extraction failure: deterministic extract only.
-        if (answered.answer.startsWith("Extraction did not run:")) {
-          return { url, content: "", success: false, error: answered.content };
-        }
+        // Graceful degradation (no Q&A model): deterministic extract only.
         return {
           url,
           success: true,
@@ -1833,35 +1833,14 @@ export default class ToolOrchestratorService {
    * rate-limited, the queue full, Exa down) returns `error`, so the model
    * reads a failure instead of "the web has nothing on this".
    */
-  static async executeSharedWebSearch(args: Record<string, unknown> = {}) {
+  static async executeSharedWebSearch(args: Record<string, unknown> = {}, signal?: AbortSignal) {
     const query = typeof args.query === "string" ? args.query.trim() : "";
     if (!query) {
       return { error: "'query' is required and must be a non-empty string" };
     }
-    const site = typeof args.siteSearch === "string" ? args.siteSearch.trim() : "";
     const limit = Math.max(1, Math.min(10, Math.floor(Number(args.limit) || 5)));
-    // Claude Code-style domain filters: allow-list wins first, then block-list.
-    // Match on hostname or parent-domain suffix (example.com covers api.example.com).
-    const parseList = (v: unknown): string[] =>
-      Array.isArray(v) ? v.filter((d): d is string => typeof d === "string" && d.trim().length > 0).map((d) => d.trim().toLowerCase().replace(/^www\./, "")) : [];
-    const allowedDomains = parseList(args.allowed_domains);
-    const blockedDomains = parseList(args.blocked_domains);
-    const domainAllows = (resultUrl: string): boolean => {
-      if (allowedDomains.length === 0 && blockedDomains.length === 0) return true;
-      let hostname = "";
-      try {
-        hostname = new URL(resultUrl).hostname.replace(/^www\./, "").toLowerCase();
-      } catch {
-        return allowedDomains.length === 0; // unparseable URL: keep unless an allow-list demands known hosts
-      }
-      const matches = (domain: string) => hostname === domain || hostname.endsWith(`.${domain}`);
-      if (allowedDomains.length > 0 && !allowedDomains.some(matches)) return false;
-      if (blockedDomains.some(matches)) return false;
-      return true;
-    };
-    const found = await webSearch(site ? `site:${site} ${query}` : query, limit);
-    const results = found.results
-      .filter((result) => domainAllows(result.url))
+    const found = await webSearch(withSiteSearch(query, args), limit, undefined, signal);
+    const results = filterResultsByDomain(found.results, args)
       .map((result) => {
       let displayUrl = "";
       try {

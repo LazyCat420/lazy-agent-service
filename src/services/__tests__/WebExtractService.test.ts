@@ -230,6 +230,13 @@ describe("WEB_CACHE_EXEMPT_HOSTS", () => {
 });
 
 describe("scrape_url handler", () => {
+  it("reports a failed extract with a prompt as success:false, not an empty answer (audit D7)", async () => {
+    const out = await (ToolOrchestratorService as any).executeWebExtract({ url: "https://127.0.0.1/x", prompt: "what?" });
+    expect(out.success).toBe(false);
+    expect(out.error).toContain("blocked");
+    expect(out).not.toHaveProperty("answer");
+  });
+
   it("dispatches the answered path when prompt is set and the plain path otherwise", async () => {
     const plainSpy = vi.spyOn(WebExtractModule, "webExtract").mockResolvedValue({ status: "ok", url: "https://example.com/a", content: "raw text", truncated: false, cached: false });
     const answeredSpy = vi.spyOn(WebExtractModule, "webExtractAnswered").mockResolvedValue({ url: "https://example.com/a", answer: "42", truncated: false, cached: false });

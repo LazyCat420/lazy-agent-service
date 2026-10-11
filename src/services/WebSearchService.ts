@@ -323,3 +323,34 @@ export function __resetWebSearchForTests(): void {
   cooldownUntil = 0;
   Object.assign(stats, { calls: 0, cacheHits: 0, rateLimited: 0, lastAt: null, lastStatus: null, lastError: null });
 }
+
+/**
+ * Claude Code-style domain filters for search results: allow-list first,
+ * then block-list, matching the hostname or a parent-domain suffix
+ * (example.com covers api.example.com). Unknown args = no filtering.
+ */
+export function filterResultsByDomain<T extends { url: string }>(results: T[], args: Record<string, unknown>): T[] {
+  const parseList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((d): d is string => typeof d === "string" && d.trim().length > 0).map((d) => d.trim().toLowerCase().replace(/^www\./, "")) : [];
+  const allowed = parseList(args.allowed_domains);
+  const blocked = parseList(args.blocked_domains);
+  if (allowed.length === 0 && blocked.length === 0) return results;
+  return results.filter((result) => {
+    let hostname = "";
+    try {
+      hostname = new URL(result.url).hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      return allowed.length === 0; // unparseable URL: keep unless an allow-list demands known hosts
+    }
+    const matches = (domain: string) => hostname === domain || hostname.endsWith(`.${domain}`);
+    if (allowed.length > 0 && !allowed.some(matches)) return false;
+    return !blocked.some(matches);
+  });
+}
+
+/** `site:` prefix for a siteSearch arg, as tools-service did it. */
+export function withSiteSearch(query: string, args: Record<string, unknown>): string {
+  const site = typeof args.siteSearch === "string" ? args.siteSearch.trim() : "";
+  return site ? `site:${site} ${query}` : query;
+}
+
