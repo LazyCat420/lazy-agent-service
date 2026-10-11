@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { RunStore } from "../src/services/RunStore.ts";
 const directory = mkdtempSync(join(tmpdir(), "runtime-test-"));
 RunStore.setPersistenceFile(join(directory, "runs.json"));
+process.env.PRISM_PROXY_SESSIONS_FILE = join(directory, "prism-proxy-sessions.json");
 const originalFetch = globalThis.fetch;
 vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);

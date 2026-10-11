@@ -186,4 +186,17 @@ describe("enforceToolPairIntegrity", () => {
     expect(result).not.toBeNull();
     expect(result!.summaryText).toBe("summarized conversation");
   });
+
+  it("does not wait forever on a hung memory flush (audit D11)", async () => {
+    vi.stubEnv("COMPACTION_MEMORY_FLUSH_TIMEOUT_MS", "50");
+    const memoryFlush = vi.fn(() => new Promise<void>(() => {}));
+    const started = Date.now();
+    const result = await CompactionService.compactConversation(
+      [msg("user", "turn 1"), msg("assistant", "answer 1"), msg("user", "turn 2"), msg("assistant", "answer 2"), msg("user", "turn 3")],
+      { project: "p", username: "u", memoryFlush },
+    );
+    vi.unstubAllEnvs();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result!.summaryText).toBe("summarized conversation");
+  });
 });

@@ -252,3 +252,22 @@ describe("scrape_url handler", () => {
     answeredSpy.mockRestore();
   });
 });
+
+describe("stored extract cleanup (audit D11)", () => {
+  it("removes stored full texts older than the TTL and keeps fresh ones", async () => {
+    const nodeFs = await import("node:fs");
+    const nodeOs = await import("node:os");
+    const nodePath = await import("node:path");
+    const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), "extract-sweep-"));
+    const old = nodePath.join(dir, "old.txt");
+    const fresh = nodePath.join(dir, "fresh.txt");
+    nodeFs.writeFileSync(old, "x");
+    nodeFs.writeFileSync(fresh, "y");
+    const twoDaysAgo = (Date.now() - 2 * 24 * 60 * 60 * 1_000) / 1_000;
+    nodeFs.utimesSync(old, twoDaysAgo, twoDaysAgo);
+    expect(await WebExtractModule.sweepExtractStore(Date.now(), dir)).toBe(1);
+    expect(nodeFs.existsSync(old)).toBe(false);
+    expect(nodeFs.existsSync(fresh)).toBe(true);
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  });
+});

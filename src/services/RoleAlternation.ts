@@ -61,9 +61,20 @@ export function normalizeRoleAlternation(
   const withoutOrphans: ConversationMessage[] = [];
   for (const message of messages) {
     if (message.role === "tool") {
-      const hasOwner = withoutOrphans.some(
-        (prior) => prior.role === "assistant" && hasToolCalls(prior),
-      );
+      // The owner is the nearest preceding assistant toolCalls turn (only
+      // tool results may sit between them); when the result names its call,
+      // that turn must actually contain that call id.
+      let owner: ConversationMessage | undefined;
+      for (let i = withoutOrphans.length - 1; i >= 0; i--) {
+        const prior = withoutOrphans[i];
+        if (prior.role === "tool") continue;
+        if (prior.role === "assistant" && hasToolCalls(prior)) owner = prior;
+        break;
+      }
+      const callId = typeof message.tool_call_id === "string" ? message.tool_call_id : "";
+      const hasOwner =
+        owner !== undefined &&
+        (!callId || (owner.toolCalls ?? []).some((call) => call.id === callId));
       if (!hasOwner) {
         droppedOrphanToolResults++;
         continue;
@@ -73,7 +84,7 @@ export function normalizeRoleAlternation(
   }
   if (droppedOrphanToolResults > 0) {
     logger.warn(
-      `[RoleAlternation] Dropped ${droppedOrphanToolResults} tool-result message(s) with no preceding assistant toolCalls message.`,
+      `[RoleAlternation] Dropped ${droppedOrphanToolResults} tool-result message(s) with no matching preceding assistant toolCalls turn.`,
     );
   }
 
@@ -127,13 +138,18 @@ export function normalizeRoleAlternation(
       message.role !== "tool" &&
       message.role !== "system" &&
       !hasToolCalls(previous) &&
-      !hasToolCalls(message);
+      !hasToolCalls(message) &&
+      // Structured (array) content cannot be string-joined without loss.
+      (previous.content === undefined || typeof previous.content === "string") &&
+      (message.content === undefined || typeof message.content === "string");
     if (mergeable) {
+      const images = [...(previous.images ?? []), ...(message.images ?? [])];
       merged[merged.length - 1] = {
         ...previous,
         content: [messageContent(previous), messageContent(message)]
           .filter((part) => part.trim().length > 0)
           .join("\n\n"),
+        ...(images.length > 0 ? { images } : {}),
       };
       mergedMessageCount++;
     } else {

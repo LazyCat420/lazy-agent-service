@@ -209,11 +209,14 @@ export default class CompactionService {
     // Summarization drops the pre-boundary history, so any pending
     // memory extraction must run first or the facts it would capture
     // are lost. Awaited; failure is logged and compaction continues.
+    // Bounded: a hung extractor must not stall the compaction (and the
+    // turn waiting on it); past the deadline it finishes in the background.
+    const flushTimeoutMs = Number(process.env.COMPACTION_MEMORY_FLUSH_TIMEOUT_MS) || 30_000;
+    let flushTimer: NodeJS.Timeout | undefined;
     try {
-      if (options.memoryFlush) {
-        await options.memoryFlush();
-      } else {
-        await MemoryExtractor.extractAndStore({
+      const flush = options.memoryFlush
+        ? options.memoryFlush()
+        : MemoryExtractor.extractAndStore({
           project: options.project,
           username: options.username,
           messages: messages as unknown as ConversationMessage[],
@@ -222,11 +225,19 @@ export default class CompactionService {
           agent: options.agent || null,
           emit: options.emit ?? null,
         });
-      }
+      flush.catch(() => {}); // a late rejection after the deadline must not go unhandled
+      await Promise.race([
+        flush,
+        new Promise((_, reject) => {
+          flushTimer = setTimeout(() => reject(new Error(`timed out after ${flushTimeoutMs} ms`)), flushTimeoutMs);
+        }),
+      ]);
     } catch (error: unknown) {
       logger.warn(
         `[CompactionService] Memory flush before compaction failed (continuing): ${errorMessage(error)}`,
       );
+    } finally {
+      clearTimeout(flushTimer);
     }
 
     // ── Build summarization messages ───────────────────────────

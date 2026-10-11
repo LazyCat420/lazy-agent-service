@@ -140,6 +140,34 @@ const defaultDeps: WebExtractDeps = {
 const storeDir = process.env.WEB_EXTRACT_STORE_DIR || path.join(os.tmpdir(), "lazy-agent-web-extract");
 
 const cache = new Map<string, { at: number; value: WebExtractResult }>();
+
+// Stored full texts are read back by the agent within its run; keep them a
+// day (WEB_EXTRACT_STORE_TTL_MS), sweeping at most every 10 minutes.
+const STORE_TTL_MS = envNumber("WEB_EXTRACT_STORE_TTL_MS", 24 * 60 * 60 * 1_000);
+let lastSweepAt = 0;
+export async function sweepExtractStore(now = Date.now(), dir = storeDir): Promise<number> {
+  lastSweepAt = now;
+  let removed = 0;
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    if (!name.endsWith(".txt")) continue;
+    const file = path.join(dir, name);
+    try {
+      if (now - (await fs.stat(file)).mtimeMs > STORE_TTL_MS) {
+        await fs.rm(file, { force: true });
+        removed++;
+      }
+    } catch {
+      // raced with another sweep — fine
+    }
+  }
+  return removed;
+}
 const inFlight = new Map<string, Promise<WebExtractResult>>();
 const MAX_CACHE_ENTRIES = 500;
 
@@ -248,6 +276,7 @@ export async function webExtract(url: string, charLimit = DEFAULT_CHAR_LIMIT, de
 
     const digest = createHash("sha1").update(cleanUrl).digest("hex").slice(0, 12);
     const storedPath = path.join(storeDir, `${digest}-${deps.now()}.txt`);
+    if (deps.now() - lastSweepAt > 10 * 60 * 1_000) void sweepExtractStore(deps.now());
     try {
       await fs.mkdir(storeDir, { recursive: true });
       await fs.writeFile(storedPath, fullText, "utf-8");

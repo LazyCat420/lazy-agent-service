@@ -116,3 +116,43 @@ describe("normalizeRoleAlternation", () => {
     expect(input[0].content).toBe("a");
   });
 });
+
+describe("audit D11 role-alternation fixes", () => {
+  it("drops a tool result whose tool_call_id matches no call in the owning turn", () => {
+    const { messages, droppedOrphanToolResults } = normalizeRoleAlternation([
+      { role: "user", content: "q" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_a", name: "x", args: {} }] },
+      { role: "tool", tool_call_id: "call_a", content: "ok" },
+      { role: "tool", tool_call_id: "call_zzz", content: "stray" },
+    ]);
+    expect(droppedOrphanToolResults).toBe(1);
+    expect(messages.map((m) => m.content)).toEqual(["q", "", "ok"]);
+  });
+
+  it("drops a tool result separated from its call turn by a user message", () => {
+    const { droppedOrphanToolResults } = normalizeRoleAlternation([
+      { role: "assistant", content: "", toolCalls: [{ id: "call_a", name: "x", args: {} }] },
+      { role: "tool", tool_call_id: "call_a", content: "ok" },
+      { role: "user", content: "next" },
+      { role: "tool", tool_call_id: "call_a", content: "late duplicate" },
+    ]);
+    expect(droppedOrphanToolResults).toBe(1);
+  });
+
+  it("keeps both messages' images when merging consecutive user turns", () => {
+    const { messages } = normalizeRoleAlternation([
+      { role: "user", content: "first", images: ["data:a"] },
+      { role: "user", content: "second", images: ["data:b"] },
+    ]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].images).toEqual(["data:a", "data:b"]);
+  });
+
+  it("does not merge (and lose) structured array content", () => {
+    const { messages } = normalizeRoleAlternation([
+      { role: "user", content: "text" },
+      { role: "user", content: [{ type: "text", text: "parts" }] as unknown as string },
+    ]);
+    expect(messages).toHaveLength(2);
+  });
+});

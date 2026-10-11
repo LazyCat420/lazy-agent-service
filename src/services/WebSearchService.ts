@@ -112,7 +112,9 @@ export function parseExaText(text: string): WebResult[] {
       title: field("Title") || url,
       url,
       snippet,
-      published: field("Published"),
+      // Exa writes "N/A" for an unknown date; callers test truthiness, so
+      // an unknown date is "" (like author), never the string "N/A".
+      published: /^n\/?a$/i.test(field("Published").trim()) ? "" : field("Published").trim(),
       author: author === "N/A" ? "" : author,
     });
   }

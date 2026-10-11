@@ -1,6 +1,7 @@
 import { TOOL_CONTEXT_ARG, verifyToolContext } from "../services/TradingToolContext.ts";
 import { classifyToolResult } from "../services/ToolResult.ts";
 import { Router, Request, Response, RequestHandler } from "express";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import CONFIG from "../../config.ts";
@@ -201,6 +202,26 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
   }
 };
 
-router.post("/:toolName", handleExecuteRoute);
+/**
+ * Optional shared key for POST /execute/*. Unset (default) keeps the route
+ * LAN-open as before; set EXECUTE_API_KEY and every caller must send it as
+ * `x-api-key` or `Authorization: Bearer`. A signed trading tool context is
+ * accepted in place of the key (it is already authenticated).
+ */
+export const requireExecuteKey: RequestHandler = (request, response, next) => {
+  const expected = (process.env.EXECUTE_API_KEY || "").trim();
+  if (!expected) return next();
+  const body = (request.body || {}) as Record<string, unknown>;
+  const args = (body.arguments && typeof body.arguments === "object" ? body.arguments : body) as Record<string, unknown>;
+  if (Object.hasOwn(args, TOOL_CONTEXT_ARG)) return next();
+  const header = String(request.headers["x-api-key"] || "").trim() ||
+    String(request.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+  const a = Buffer.from(header);
+  const b = Buffer.from(expected);
+  if (a.length === b.length && crypto.timingSafeEqual(a, b)) return next();
+  response.status(401).json({ success: false, error: "UNAUTHORIZED", message: "POST /execute requires EXECUTE_API_KEY" });
+};
+
+router.post("/:toolName", requireExecuteKey, handleExecuteRoute);
 
 export default router;

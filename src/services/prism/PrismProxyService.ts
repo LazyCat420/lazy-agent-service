@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { prepareTradingAgentRequest } from "../TradingAgentRequest.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
@@ -38,23 +40,82 @@ interface SessionToolRegistration {
 
 export class PrismProxyService {
   // Map conversationId -> allowed tool names (+ registration timestamp for TTL eviction).
-  // NOTE: in-memory only. Registrations are intentionally NOT persisted:
-  // isToolAllowed is a synchronous hot-path check (ExecuteRoutes calls it
-  // inline on every tool execution) and this service is designed to keep the
-  // proxy path dependency-free. A restart therefore fails OPEN for in-flight
-  // cycles — see the distinct warning in isToolAllowed.
+  // Persisted to PRISM_PROXY_SESSIONS_FILE (default data/prism-proxy-sessions.json):
+  // loaded synchronously once on first use and written asynchronously
+  // (debounced) on register, so isToolAllowed stays a synchronous in-memory
+  // check while a service restart no longer drops in-flight cycles'
+  // whitelists (the old restart fail-open).
   private static sessionAllowedTools = new Map<string, SessionToolRegistration>();
+  private static loadedFromDisk = false;
+  private static persistTimer: NodeJS.Timeout | null = null;
+
+  private static sessionsFile(): string {
+    return process.env.PRISM_PROXY_SESSIONS_FILE || path.resolve("data", "prism-proxy-sessions.json");
+  }
+
+  private static ensureLoaded() {
+    if (this.loadedFromDisk) return;
+    this.loadedFromDisk = true;
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.sessionsFile(), "utf8")) as Array<[string, SessionToolRegistration]>;
+      const now = Date.now();
+      for (const [id, reg] of Array.isArray(raw) ? raw : []) {
+        if (typeof id === "string" && reg && Array.isArray(reg.allowedTools) && now - Number(reg.registeredAt) <= SESSION_TTL_MS) {
+          this.sessionAllowedTools.set(id, { allowedTools: reg.allowedTools.map(String), registeredAt: Number(reg.registeredAt) });
+        }
+      }
+    } catch {
+      // no file yet / corrupt: start empty
+    }
+  }
+
+  private static schedulePersist() {
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      const file = this.sessionsFile();
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.promises
+        .mkdir(path.dirname(file), { recursive: true })
+        .then(() => fs.promises.writeFile(tmp, JSON.stringify([...this.sessionAllowedTools.entries()])))
+        .then(() => fs.promises.rename(tmp, file))
+        .catch((error: Error) => logger.warn(`[PrismProxy] could not persist session whitelists: ${error.message}`));
+    }, 250);
+    this.persistTimer.unref?.();
+  }
+
+  /** Test hook: forget in-memory state so the next call reloads from disk. */
+  public static __resetForTests() {
+    this.sessionAllowedTools.clear();
+    this.warnedUnknownSessions.clear();
+    this.loadedFromDisk = false;
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = null;
+  }
+
+  /** Test hook: write pending registrations now. */
+  public static async __flushForTests() {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    const file = this.sessionsFile();
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(file, JSON.stringify([...this.sessionAllowedTools.entries()]));
+  }
 
   // Sessions we already warned about fail-open treatment (avoid log spam).
   private static warnedUnknownSessions = new Set<string>();
 
   public static registerSession(conversationId: string, allowedTools: string[]) {
     logger.info(`[PrismProxy] Registering allowed tools for conversation ${conversationId}: ${allowedTools.join(", ")}`);
+    this.ensureLoaded();
     this.pruneSessions();
     this.sessionAllowedTools.set(conversationId, {
       allowedTools,
       registeredAt: Date.now()
     });
+    this.schedulePersist();
   }
 
   /** Prune expired registrations and enforce the max-size cap (called on insert). */
@@ -80,17 +141,20 @@ export class PrismProxyService {
     // Normalize tool name for lookup (strip prefix from hallucinated tool name)
     const cleanToolName = toolName.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
 
+    this.ensureLoaded();
     const registration = this.sessionAllowedTools.get(conversationId);
     if (!registration) {
-      // Fail OPEN for unknown sessions: could be a non-trading agent, or a
-      // registration lost to a service restart / TTL eviction. A restart must
-      // not brick in-flight cycles, but make the fail-open visible.
+      // Unknown id = not a prism-proxy session (any /agent conversation and
+      // any /execute caller sending x-request-id reaches here), so its tools
+      // are governed elsewhere. Proxied sessions survive restarts via the
+      // persisted registry; only a >24 h TTL eviction lands here for them.
+      // The authoritative trading gate is the signed tool context.
       if (!this.warnedUnknownSessions.has(conversationId)) {
         if (this.warnedUnknownSessions.size >= 1_000) this.warnedUnknownSessions.clear();
         this.warnedUnknownSessions.add(conversationId);
         logger.warn(
-          `[PrismProxy] FAIL-OPEN: no tool whitelist registered for conversation ${conversationId} ` +
-            `(unregistered session, service restart, or TTL eviction) — allowing "${toolName}" and all further calls for this session`
+          `[PrismProxy] no tool whitelist registered for conversation ${conversationId} ` +
+            `(not a proxied session, or evicted after 24 h) — not restricting "${toolName}" here`
         );
       }
       return true;

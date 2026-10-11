@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   webSearch: vi.fn(),
   isToolAllowed: vi.fn(() => true),
 }));
-vi.mock("../WebSearchService.ts", () => ({ webSearch: mocks.webSearch }));
+vi.mock("../WebSearchService.ts", async (importActual) => {
+  const actual = await importActual<typeof import("../WebSearchService.ts")>();
+  return { webSearch: mocks.webSearch, filterResultsByDomain: actual.filterResultsByDomain, withSiteSearch: actual.withSiteSearch };
+});
 vi.mock("../prism/PrismProxyService.js", () => ({
   PrismProxyService: { isToolAllowed: mocks.isToolAllowed },
 }));
@@ -57,7 +60,7 @@ it("answers search_web from the shared search in tools-service's result shape", 
     { query: "  rust async  ", limit: 3, siteSearch: "docs.rs", dateRestrict: "w1" },
     { conversationId: "c1" },
   );
-  expect(mocks.webSearch).toHaveBeenCalledExactlyOnceWith("site:docs.rs rust async", 3);
+  expect(mocks.webSearch).toHaveBeenCalledExactlyOnceWith("site:docs.rs rust async", 3, undefined, undefined);
   expect(fetchSpy).not.toHaveBeenCalled();
   expect(out).toEqual({
     query: "rust async",
@@ -72,7 +75,7 @@ it("answers search_web from the shared search in tools-service's result shape", 
 it("reports a search that did not run as an error, not as an empty web", async () => {
   mocks.webSearch.mockResolvedValue({ status: "rate_limited", provider: "exa", cached: false, results: [], error: "searches resume in 40 s" });
   const out = await ToolOrchestratorService.executeTool("search_web", { query: "fed decision" }) as Record<string, unknown>;
-  expect(mocks.webSearch).toHaveBeenCalledExactlyOnceWith("fed decision", 5);
+  expect(mocks.webSearch).toHaveBeenCalledExactlyOnceWith("fed decision", 5, undefined, undefined);
   expect(fetchSpy).not.toHaveBeenCalled();
   expect(out).toMatchObject({ query: "fed decision", results: [], status: "rate_limited" });
   expect(String(out.error)).toContain("searches resume in 40 s");
