@@ -35,7 +35,7 @@ export interface WebResult {
   author: string;
 }
 
-export type WebSearchStatus = "ok" | "error" | "rate_limited" | "busy";
+export type WebSearchStatus = "ok" | "error" | "rate_limited" | "busy" | "cancelled";
 
 export type WebSearchProvider = "exa" | "searxng";
 
@@ -77,7 +77,13 @@ const defaultDeps: WebSearchDeps = {
 };
 
 const cache = new Map<string, { at: number; value: WebSearchResult }>();
-const inFlight = new Map<string, Promise<WebSearchResult>>();
+interface InFlightSearch {
+  promise: Promise<WebSearchResult>;
+  controller: AbortController;
+  /** Callers still awaiting this job; the backend is aborted when the last one leaves. */
+  waiters: number;
+}
+const inFlight = new Map<string, InFlightSearch>();
 let nextSlotAt = 0;
 let cooldownUntil = 0;
 const stats = {
@@ -146,7 +152,7 @@ const rateLimited = (deps: WebSearchDeps): WebSearchResult => ({
   error: `Exa's keyless rate limit was hit; searches resume in ${Math.ceil((cooldownUntil - deps.now()) / 1_000)} s`,
 });
 
-async function callExa(query: string, limit: number, deps: WebSearchDeps): Promise<WebSearchResult> {
+async function callExa(query: string, limit: number, deps: WebSearchDeps, signal?: AbortSignal): Promise<WebSearchResult> {
   if (deps.now() < cooldownUntil) return rateLimited(deps);
   if (!(await takeSlot(deps))) {
     return { status: "busy", provider: "exa", cached: false, results: [], error: "too many searches queued; try again shortly" };
@@ -168,7 +174,7 @@ async function callExa(query: string, limit: number, deps: WebSearchDeps): Promi
         method: "tools/call",
         params: { name: "web_search_exa", arguments: { query, numResults: limit } },
       }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
     });
     const body = await response.text();
     if (response.status === 429 || /rate limit/i.test(response.ok ? "" : body)) {
@@ -208,7 +214,7 @@ const SCRAPER_URL = (process.env.SCRAPER_SERVICE_URL || "http://localhost:8001")
 const SCRAPER_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 const SEARXNG_TIMEOUT_MS = envNumber("WEB_SEARCH_SEARXNG_TIMEOUT_MS", 20_000);
 
-async function callSearxng(query: string, limit: number, deps: WebSearchDeps): Promise<WebSearchResult> {
+async function callSearxng(query: string, limit: number, deps: WebSearchDeps, signal?: AbortSignal): Promise<WebSearchResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (SCRAPER_KEY) headers["x-scraper-key"] = SCRAPER_KEY;
   try {
@@ -216,7 +222,7 @@ async function callSearxng(query: string, limit: number, deps: WebSearchDeps): P
       method: "POST",
       headers,
       body: JSON.stringify({ source: "searxng", query, limit }),
-      signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(SEARXNG_TIMEOUT_MS)]) : AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
     });
     if (!response.ok) {
       return { status: "error", provider: "searxng", cached: false, results: [], error: `SearXNG fallback HTTP ${response.status}: ${(await response.text()).slice(0, 200)}` };
@@ -254,50 +260,75 @@ export async function webSearch(query: string, limit = 6, deps: WebSearchDeps = 
   if (!trimmed) {
     return finish({ status: "error", provider: "exa", cached: false, results: [], error: "query is required" }, deps);
   }
-  // Cancellation: a caller-aborted signal answers with a structured error
-  // immediately and pre-empts an in-flight backend call. webSearch never throws.
-  const abortedResult = (): WebSearchResult => ({ status: "error", provider: "exa", cached: false, results: [], error: "aborted" });
-  if (signal?.aborted) return finish(abortedResult(), deps);
-  const abortPromise = signal
-    ? new Promise<WebSearchResult>((resolve) => signal.addEventListener("abort", () => resolve(abortedResult()), { once: true }))
-    : null;
+  // Cancellation: each caller races its own signal and gets status
+  // "cancelled" at once. The backend call is shared by every caller of the
+  // same query, so it is aborted only when the LAST waiting caller leaves;
+  // the in-flight entry stays until the backend settles, so a caller that
+  // leaves early never causes a duplicate Exa call, and a result that
+  // arrives after everyone left is still cached. webSearch never throws.
+  const cancelled = (): WebSearchResult => ({ status: "cancelled", provider: "exa", cached: false, results: [], error: "cancelled by the caller" });
+  if (signal?.aborted) return finish(cancelled(), deps);
   const key = cacheKey(trimmed, capped);
   const hit = cache.get(key);
   if (hit && deps.now() - hit.at < CACHE_TTL_MS) {
     stats.cacheHits += 1;
     return finish({ ...hit.value, cached: true }, deps);
   }
-  const pending = inFlight.get(key);
-  if (pending) {
+  let job = inFlight.get(key);
+  const joined = job !== undefined;
+  if (job) {
     stats.cacheHits += 1;
-    return finish({ ...(await pending), cached: true }, deps);
+  } else {
+    const controller = new AbortController();
+    const created: InFlightSearch = { controller, waiters: 0, promise: Promise.resolve(cancelled()) };
+    created.promise = (async (): Promise<WebSearchResult> => {
+      try {
+        const exa = await callExa(trimmed, capped, deps, controller.signal);
+        if (controller.signal.aborted) return cancelled();
+        // A failed Exa call is not "the web has nothing": try scraper-service's
+        // SearXNG collector before reporting failure. SearXNG reads `site:` and
+        // most operators natively, so the query passes through unchanged. `busy`
+        // is a local queue condition, not a backend failure — a burst must not
+        // pile onto the fallback too.
+        if (exa.status === "ok" || exa.status === "busy") return exa;
+        const fallback = await callSearxng(trimmed, capped, deps, controller.signal);
+        if (controller.signal.aborted) return cancelled();
+        if (fallback.status === "ok" && fallback.results.length > 0) {
+          logger.warn(`[WebSearch] Exa ${exa.status}; served '${trimmed.slice(0, 80)}' from the SearXNG fallback (${fallback.results.length} results)`);
+          return fallback;
+        }
+        return exa;
+      } finally {
+        inFlight.delete(key);
+      }
+    })().then((result) => {
+      // Only successful answers are cached; a failure must not stick for 30 minutes.
+      if (result.status === "ok") {
+        if (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value as string);
+        cache.set(key, { at: deps.now(), value: result });
+      }
+      return result;
+    });
+    inFlight.set(key, created);
+    job = created;
   }
-  const work = (async (): Promise<WebSearchResult> => {
-    const exa = await callExa(trimmed, capped, deps);
-    // A failed Exa call is not "the web has nothing": try scraper-service's
-    // SearXNG collector before reporting failure. SearXNG reads `site:` and
-    // most operators natively, so the query passes through unchanged. `busy`
-    // is a local queue condition, not a backend failure — a burst must not
-    // pile onto the fallback too.
-    if (exa.status === "ok" || exa.status === "busy") return exa;
-    const fallback = await callSearxng(trimmed, capped, deps);
-    if (fallback.status === "ok" && fallback.results.length > 0) {
-      logger.warn(`[WebSearch] Exa ${exa.status}; served '${trimmed.slice(0, 80)}' from the SearXNG fallback (${fallback.results.length} results)`);
-      return fallback;
-    }
-    return exa;
-  })();
-  inFlight.set(key, work);
+  const active = job;
+  active.waiters += 1;
+  let onAbort: (() => void) | undefined;
+  const abortPromise = signal
+    ? new Promise<WebSearchResult>((resolve) => {
+        onAbort = () => resolve(cancelled());
+        signal.addEventListener("abort", onAbort, { once: true });
+      })
+    : null;
   try {
-    const result = abortPromise ? await Promise.race([work, abortPromise]) : await work;
-    // Only successful answers are cached; a failure must not stick for 30 minutes.
-    if (result.status === "ok") {
-      if (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value as string);
-      cache.set(key, { at: deps.now(), value: result });
-    }
-    return finish(result, deps);
+    const result = abortPromise ? await Promise.race([active.promise, abortPromise]) : await active.promise;
+    if (result.status === "cancelled") return finish(result, deps);
+    return finish(joined ? { ...result, cached: true } : result, deps);
   } finally {
-    inFlight.delete(key);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+    active.waiters -= 1;
+    if (active.waiters === 0 && signal?.aborted) active.controller.abort();
   }
 }
 

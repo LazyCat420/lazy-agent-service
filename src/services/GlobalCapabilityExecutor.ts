@@ -303,6 +303,9 @@ export class GlobalCapabilityExecutor {
       // backend. Result shape is unchanged; `source` carries the provider.
       const searchRes = await webSearch(query, Math.min(10, maxResults), undefined, signal);
       const items = (searchRes?.results || []).slice(0, maxResults);
+      if (searchRes?.status === "cancelled") {
+        return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Web search was cancelled" } };
+      }
       if (searchRes?.status !== "ok" && items.length === 0) {
         return {
           success: false,

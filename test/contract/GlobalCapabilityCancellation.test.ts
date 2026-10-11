@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/services/WebSearchService.ts", () => ({
+  // Mirrors the real webSearch contract: never throws; an abort resolves
+  // status "cancelled" (the old mock rejected, which the real function never does).
   webSearch: vi.fn((_query: string, _limit: number, _deps: unknown, signal?: AbortSignal) => {
-    const { promise, reject } = Promise.withResolvers<never>();
-    if (signal?.aborted) reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
-    signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+    const { promise, resolve } = Promise.withResolvers<unknown>();
+    const cancelled = () => resolve({ status: "cancelled", provider: "exa", cached: false, results: [], error: "cancelled by the caller" });
+    if (signal?.aborted) cancelled();
+    signal?.addEventListener("abort", cancelled, { once: true });
     return promise;
   }),
 }));

@@ -218,3 +218,71 @@ describe("the web_search tool surface", () => {
     );
   });
 });
+
+describe("cancellation against the real webSearch (audit D8)", () => {
+  /** A fake Exa that holds every request until released, recording each request's signal. */
+  function gatedDeps() {
+    const signals: AbortSignal[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const deps: WebSearchDeps = {
+      now: () => Date.now(),
+      sleep: async () => {},
+      fetch: (async (_url: string, init: RequestInit) => {
+        signals.push(init.signal as AbortSignal);
+        await Promise.race([
+          gate,
+          new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true })),
+        ]);
+        return new Response(sse(EXA_TEXT), { status: 200 });
+      }) as typeof fetch,
+    };
+    return { deps, signals, release: () => release() };
+  }
+
+  beforeEach(() => __resetWebSearchForTests());
+
+  it("a lone caller's abort reports cancelled and aborts the backend fetch", async () => {
+    const { deps, signals } = gatedDeps();
+    const controller = new AbortController();
+    const pending = webSearch("cancel me", 3, deps, controller.signal);
+    await new Promise((r) => setTimeout(r, 5));
+    controller.abort();
+    await expect(pending).resolves.toMatchObject({ status: "cancelled" });
+    expect(signals).toHaveLength(1);
+    expect(signals[0].aborted).toBe(true);
+  });
+
+  it("one joiner leaving does not cancel the shared call; it completes once and is cached", async () => {
+    const { deps, signals, release } = gatedDeps();
+    const leaver = new AbortController();
+    const a = webSearch("shared query", 3, deps, leaver.signal);
+    const b = webSearch("shared query", 3, deps);
+    await new Promise((r) => setTimeout(r, 5));
+    leaver.abort();
+    await expect(a).resolves.toMatchObject({ status: "cancelled" });
+    expect(signals[0].aborted).toBe(false);
+    // A new caller while the backend is still running joins it — no duplicate Exa call.
+    const c = webSearch("shared query", 3, deps);
+    release();
+    await expect(b).resolves.toMatchObject({ status: "ok" });
+    await expect(c).resolves.toMatchObject({ status: "ok", cached: true });
+    expect(signals).toHaveLength(1);
+    await expect(webSearch("shared query", 3, deps)).resolves.toMatchObject({ status: "ok", cached: true });
+    expect(signals).toHaveLength(1);
+  });
+
+  it("a result that lands after its only caller left is still cached", async () => {
+    const { deps, signals, release } = gatedDeps();
+    const owner = new AbortController();
+    const first = webSearch("late result", 3, deps, owner.signal);
+    const joiner = webSearch("late result", 3, deps);
+    await new Promise((r) => setTimeout(r, 5));
+    owner.abort();
+    await first;
+    release();
+    await joiner;
+    await expect(webSearch("late result", 3, deps)).resolves.toMatchObject({ cached: true });
+    expect(signals).toHaveLength(1);
+  });
+});
