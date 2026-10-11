@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 const script = vi.hoisted(() => ({ mode: "success", calls: 0, messages: [] as any[][] }));
-const fixtureUrl = "https://fixture.test/news";
+// A public IP literal: the SSRF guard resolves hostnames, and .test never resolves.
+const fixtureUrl = "https://93.184.215.14/news";
 const fixturePage = "Fixture page: semiconductor revenue grew 12 percent in the latest quarter.";
 
 const provider = {

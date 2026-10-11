@@ -302,7 +302,9 @@ export default class AgenticToolResolver {
         const cleanToolName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
         if (clientDisabledSet?.has(tool.name) || clientDisabledSet?.has(cleanToolName)) return false;
         if (enabledSet.has(tool.name) || enabledSet.has(cleanToolName)) return true;
-        if (actionGrants.has(cleanToolName)) return true;
+        // An action-segment grant names one of THIS service's tools; it must
+        // not grant a same-named tool on some other MCP server.
+        if (actionGrants.has(cleanToolName) && isOwnServiceTool(tool.name)) return true;
         if (
           isCoreToolsLocked &&
           (CORE_AGENTIC_TOOLS.has(tool.name) ||
@@ -466,4 +468,10 @@ export default class AgenticToolResolver {
 
     return false;
   }
+}
+
+/** Bare names and this service's own MCP namespaces (both spellings) — not other MCP servers' tools. */
+export function isOwnServiceTool(name: string): boolean {
+  const prefix = /^(mcp__[a-zA-Z0-9_-]+__)/.exec(name)?.[1];
+  return !prefix || prefix === "mcp__lazy-agent-service__" || prefix === "mcp__lazy-tool-service__";
 }
