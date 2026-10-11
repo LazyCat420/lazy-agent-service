@@ -21,11 +21,6 @@ import { TAKE_NOTE_TOOL_SCHEMA } from "../platform/memory/NoteStore.ts";
 import { applyModelProfile } from "../platform/models/applyModelProfile.ts";
 import { retrieveOffloadedContentTool } from "../platform/offload/retrieveOffloadedContent.ts";
 import { getSharedOffloadStore } from "../platform/offload/OffloadStore.ts";
-import { GoalStore, type Goal } from "../platform/goals/GoalStore.ts";
-import { evaluateGoal } from "../platform/goals/GoalGate.ts";
-import type { VerifierResult } from "../platform/verify/DeterministicVerifiers.ts";
-import { TurnMailbox, formatTurnNotice } from "../platform/questions/TurnMailbox.ts";
-import { NonBlockingQuestionRegistry } from "../platform/questions/NonBlockingQuestion.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
 
@@ -275,12 +270,6 @@ export const SKILL_READ_TOOL_SCHEMA = {
   },
 } as const;
 
-// ── Turn input mailbox + non-blocking questions (prism harness_next) ──
-// Process-wide: mid-turn inputs and question answers land here and are
-// surfaced to the model at the next drain boundary instead of blocking.
-const sharedTurnMailbox = new TurnMailbox();
-const sharedQuestionRegistry = new NonBlockingQuestionRegistry(sharedTurnMailbox);
-
 /**
  * AgenticLoopService — public façade for agentic loop execution.
  *
@@ -294,16 +283,6 @@ const sharedQuestionRegistry = new NonBlockingQuestionRegistry(sharedTurnMailbox
  * Also exposes approval/question resolution APIs used by AgentRoutes.
  */
 export default class AgenticLoopService {
-  /** Shared turn-input mailbox (mid-turn inputs, question answers). */
-  static get turnMailbox(): TurnMailbox {
-    return sharedTurnMailbox;
-  }
-
-  /** Shared non-blocking question registry (ask_user without blocking). */
-  static get questionRegistry(): NonBlockingQuestionRegistry {
-    return sharedQuestionRegistry;
-  }
-
   /** Run an agentic loop using the specified (or default) harness. */
   static async runAgenticLoop(
     context: AgenticContext,
@@ -344,12 +323,6 @@ export default class AgenticLoopService {
     context.traceId = instrumenter.runManifest.trace_id;
     context.runId = instrumenter.runManifest.run_id;
     (context as any).rootSpan = instrumenter.rootSpan;
-
-    // Open this run's mailbox slot so mid-turn inputs and question answers
-    // have somewhere to land (prism harness_next); closed in the finally.
-    sharedTurnMailbox.open(instrumenter.runManifest.run_id);
-    (context as any).turnMailbox = sharedTurnMailbox;
-    (context as any).questionRegistry = sharedQuestionRegistry;
 
     // Load any persisted tool state from MongoDB (e.g. after server restart or previous turn)
     await ToolContext.ensureLoaded(resolvedAgentConversationId);
@@ -577,54 +550,6 @@ export default class AgenticLoopService {
           );
         }
 
-        // ── Conversation goal gate (prism goals, adapted) ──
-        // Evaluate active goals for this conversation against the run's
-        // verifier outcome; achieved/budget_exhausted update the store,
-        // off_track appends a corrective directive for the next turn.
-        try {
-          const goalConversationId = resolvedAgentConversationId || conversationId;
-          if (goalConversationId) {
-            const goalStore = new GoalStore();
-            const activeGoals: Goal[] = (await goalStore.listByConversation(goalConversationId))
-              .filter((goal) => goal.status === "active");
-            for (const goal of activeGoals) {
-              const verifierResults: VerifierResult[] = [
-                {
-                  passed: outcome.verification.status === "verified",
-                  verifier_name: "verification_contract",
-                  reason:
-                    outcome.verification.status === "verified"
-                      ? undefined
-                      : ("reason" in outcome.verification ? outcome.verification.reason : undefined),
-                  evidence_refs: outcome.verification.evidence.map((ref) =>
-                    typeof ref === "string" ? ref : JSON.stringify(ref),
-                  ),
-                },
-              ];
-              const gate = evaluateGoal(goal, { verifierResults, toolEvents: [] });
-              await goalStore.addBudgetSpend(goal.goal_id, 1);
-              if (gate.verdict === "achieved") {
-                await goalStore.achieve(goal.goal_id);
-                logger.info(`[AgenticLoop] Goal ${goal.goal_id} achieved`);
-              } else if (gate.verdict === "budget_exhausted") {
-                await goalStore.updateStatus(goal.goal_id, "paused");
-                logger.warn(`[AgenticLoop] Goal ${goal.goal_id} budget exhausted — paused`);
-              }
-              if (gate.directive) {
-                outcome.messages = [
-                  ...outcome.messages,
-                  {
-                    role: "system",
-                    content: `<goal-directive goal_id="${goal.goal_id}" verdict="${gate.verdict}">\n${gate.directive}\n</goal-directive>`,
-                  } as ConversationMessage,
-                ];
-              }
-            }
-          }
-        } catch (goalErr: unknown) {
-          logger.debug(`[AgenticLoop] Goal gate skipped: ${goalErr instanceof Error ? goalErr.message : String(goalErr)}`);
-        }
-
         return { ...runResult, messages: outcome.messages, verification: outcome.verification };
       } catch (verifyErr: unknown) {
         logger.debug(
@@ -657,14 +582,6 @@ export default class AgenticLoopService {
       // Clean up in-memory state keyed by conversationId (client-facing)
       pendingApprovals.delete(conversationId);
       pendingQuestions.delete(conversationId);
-
-      // Close this run's mailbox slot; late inputs get no_active_run and the
-      // caller queues them as next-turn input instead of a lost write.
-      try {
-        sharedTurnMailbox.close(instrumenter.runManifest.run_id);
-      } catch {
-        /* mailbox slot already gone */
-      }
 
       // Always clean up per-session tracker entries to prevent memory leaks —
       // sub-agent sessions have their own agentConversationId that must be released.

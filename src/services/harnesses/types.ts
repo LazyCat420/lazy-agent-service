@@ -9,8 +9,6 @@
 // ── Usage & Cost ────────────────────────────────────────────
 
 import type { TokenUsage } from "../RequestLogger.ts";
-import type { TurnMailbox } from "../../platform/questions/TurnMailbox.ts";
-import type { NonBlockingQuestionRegistry } from "../../platform/questions/NonBlockingQuestion.ts";
 
 export interface UsageAccumulator extends TokenUsage {
   inputTokens: number;
@@ -235,10 +233,6 @@ export interface AgenticContext {
   clientIp?: string | null;
   workspaceRoot?: string | null;
   conversationId: string;
-  /** Shared turn-input mailbox for this run (prism harness_next pattern). */
-  turnMailbox?: TurnMailbox;
-  /** Shared non-blocking question registry (ask_user without blocking). */
-  questionRegistry?: NonBlockingQuestionRegistry;
   originalMessages?: ConversationMessage[] | null;
   userMessage?: ConversationMessage | null;
   conversationMeta?: Record<string, unknown> | null;

@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { getProvider } from "../../providers/index.ts";
+import { DynamicModelResolver } from "../DynamicModelResolver.ts";
 import { getInstancesByType, getInstanceType } from "../../providers/instance-registry.ts";
 import { resolveModelForInstances } from "../../utils/ModelResolution.ts";
 import SettingsService from "../SettingsService.ts";
@@ -165,9 +166,22 @@ export default class CompactionService {
       return null;
     }
 
-    if (!compactionProvider || !compactionModel) {
+    if (!compactionProvider || !compactionModel || compactionModel === "default-model") {
+      // No Settings model: use the auxiliary "compression" chain
+      // (AUX_COMPRESSION_PROVIDER/MODEL env, then a light local model) so
+      // compaction still runs instead of the context overflowing.
+      try {
+        const aux = DynamicModelResolver.resolveAuxModel("compression");
+        compactionProvider = aux.provider;
+        compactionModel = aux.model;
+      } catch {
+        compactionProvider = undefined;
+        compactionModel = undefined;
+      }
+    }
+    if (!compactionProvider || !compactionModel || compactionModel === "default-model") {
       logger.info(
-        "[CompactionService] No compaction model configured in Settings → Memory Models. Skipping.",
+        "[CompactionService] No compaction model (Settings → Memory Models or aux compression chain). Skipping.",
       );
       return null;
     }

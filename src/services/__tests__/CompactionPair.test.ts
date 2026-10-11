@@ -199,4 +199,18 @@ describe("enforceToolPairIntegrity", () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(result!.summaryText).toBe("summarized conversation");
   });
+
+  it("falls back to the aux compression chain when Settings names no model (audit a22ac8c)", async () => {
+    const settings = await import("../SettingsService.ts");
+    (settings.default.getSection as ReturnType<typeof vi.fn>).mockResolvedValueOnce({});
+    const { DynamicModelResolver } = await import("../DynamicModelResolver.ts");
+    const aux = vi.spyOn(DynamicModelResolver, "resolveAuxModel").mockReturnValue({ provider: "vllm", model: "light-model" });
+    const result = await CompactionService.compactConversation(
+      [msg("user", "turn 1"), msg("assistant", "answer 1"), msg("user", "turn 2"), msg("assistant", "answer 2"), msg("user", "turn 3")],
+      { project: "p", username: "u", memoryFlush: async () => {} },
+    );
+    expect(aux).toHaveBeenCalledWith("compression");
+    expect(result!.summaryText).toBe("summarized conversation");
+    aux.mockRestore();
+  });
 });
