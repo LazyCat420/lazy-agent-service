@@ -44,6 +44,10 @@ const mcpAdapter = new McpAdapter();
 
 // Install process-level shutdown handlers (SIGTERM, SIGINT → runCleanupFunctions)
 installShutdownHandlers();
+// Flush OpenTelemetry spans (set by src/telemetry/otel.ts when tracing is on).
+registerCleanup(async () => {
+  await (globalThis as { __lazyOtelShutdown?: () => Promise<void> }).__lazyOtelShutdown?.();
+});
 
 // Routes
 import chatRouter from "./routes/ChatRoutes.ts";

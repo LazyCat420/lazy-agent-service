@@ -11,7 +11,8 @@
 //
 // Env:
 //   OTEL_TRACING_ENABLED=0           turns tracing off
-//   OTEL_EXPORTER_OTLP_ENDPOINT      default http://10.0.0.16:4318
+//   OTEL_EXPORTER_OTLP_ENDPOINT      collector base URL (set by docker-compose);
+//                                    unset = tracing off (no host baked in here)
 //   OTEL_SERVICE_NAME                default lazy-agent-service
 // ============================================================
 import { register } from "node:module";
@@ -54,7 +55,11 @@ async function start(): Promise<void> {
     import("@opentelemetry/instrumentation-mongodb"),
   ]);
 
-  const endpoint = (process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://10.0.0.16:4318").replace(/\/+$/, "");
+  const endpoint = (process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "").trim().replace(/\/+$/, "");
+  if (!endpoint) {
+    console.log("[otel] tracing off: OTEL_EXPORTER_OTLP_ENDPOINT is not set");
+    return;
+  }
   const provider = new NodeTracerProvider({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME || "lazy-agent-service",
@@ -64,6 +69,11 @@ async function start(): Promise<void> {
     ],
   });
   provider.register();
+  // Flush buffered spans on shutdown: index.ts registers this with the
+  // CleanupRegistry (SIGTERM/SIGINT), bounded so a dead collector cannot
+  // hold the exit.
+  (globalThis as { __lazyOtelShutdown?: () => Promise<void> }).__lazyOtelShutdown = () =>
+    Promise.race([provider.shutdown(), new Promise<void>((resolve) => setTimeout(resolve, 3_000))]);
 
   registerInstrumentations({
     instrumentations: [
