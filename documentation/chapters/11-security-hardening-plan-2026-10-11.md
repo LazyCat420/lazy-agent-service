@@ -143,6 +143,6 @@ checked by the step that relies on it.
       re-read the stale file. Fix: `docker restart vault-service` after replacing the file.
     - The NAS `projects.json` has entries the local copy lacks (`drift-king-service`, `edge`);
       a vault-service deploy copies local over NAS and would drop them. Edit both copies.
-  - **Rotate**: `openssl rand -hex 32` → replace the value in `projects.json` config (both
+  - **Rotate**: run `scripts/rotate-execute-key.sh` (generates the key, writes all four places, restarts the vault, redeploys callers then lazy-tool-service, verifies 401/200 and each container's key fingerprint, copies the key to the Windows clipboard for Obsidian; never prints it; `--no-deploy` to write only). By hand: `openssl rand -hex 32` → replace the value in `projects.json` config (both
     copies), `deploy-kit/.env.deploy` and `vault-service/env/.env` → restart vault-service →
     redeploy the callers → redeploy lazy-tool-service → paste the new key in Obsidian.
