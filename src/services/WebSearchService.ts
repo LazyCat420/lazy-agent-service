@@ -198,12 +198,28 @@ async function callExa(query: string, limit: number, deps: WebSearchDeps, signal
       }
       return { status: "error", provider: "exa", cached: false, results: [], error: `Exa: ${String(rpcError.message ?? "error").slice(0, 200)}` };
     }
-    const result = message.result as { content?: { type?: string; text?: string }[]; isError?: boolean } | undefined;
+    const result = message.result as {
+      content?: { type?: string; text?: string }[];
+      isError?: boolean;
+      _meta?: Record<string, unknown>;
+    } | undefined;
     const text = (result?.content ?? []).map(part => part?.text ?? "").join("\n---\n");
     if (result?.isError) {
       return { status: "error", provider: "exa", cached: false, results: [], error: `Exa: ${text.slice(0, 200)}` };
     }
-    return { status: "ok", provider: "exa", cached: false, results: parseExaText(text).slice(0, limit) };
+    const results = parseExaText(text).slice(0, limit);
+    // The free tier's limit arrives as a SUCCESSFUL reply: HTTP 200, no
+    // JSON-RPC error, `_meta["ai.exa/rateLimited"]: true` and a "You've hit
+    // Exa's free MCP rate limit" text with no results in it. Read as "ok, 0
+    // results" it skipped the fallback and was cached for 30 minutes, so
+    // html-notes answered "I couldn't find anything" (2026-10-11).
+    if (result?._meta?.["ai.exa/rateLimited"] === true || (!results.length && /rate limit/i.test(text))) {
+      cooldownUntil = deps.now() + COOLDOWN_MS;
+      stats.rateLimited += 1;
+      logger.warn(`[WebSearch] Exa free-tier rate limit (200 + rateLimited); pausing searches for ${COOLDOWN_MS / 1_000} s`);
+      return rateLimited(deps);
+    }
+    return { status: "ok", provider: "exa", cached: false, results };
   } catch (error) {
     const name = (error as Error)?.name;
     const reason = name === "TimeoutError" ? `timed out after ${TIMEOUT_MS / 1_000} s` : (error as Error)?.message ?? String(error);
@@ -253,8 +269,9 @@ async function callSearxng(query: string, limit: number, deps: WebSearchDeps, si
 
 /**
  * Search the web through Exa's keyless endpoint, cached and paced for the whole
- * network. Never throws. An `ok` with no results is a real "nothing found";
- * every other status says why there are no results.
+ * network. Never throws. An `ok` with no results means neither Exa nor the
+ * SearXNG fallback found anything (and is not cached); every other status
+ * says why there are no results.
  */
 export async function webSearch(query: string, limit = 6, deps: WebSearchDeps = defaultDeps, signal?: AbortSignal): Promise<WebSearchResult> {
   const trimmed = String(query ?? "").trim();
@@ -292,7 +309,10 @@ export async function webSearch(query: string, limit = 6, deps: WebSearchDeps = 
         // most operators natively, so the query passes through unchanged. `busy`
         // is a local queue condition, not a backend failure — a burst must not
         // pile onto the fallback too.
-        if (exa.status === "ok" || exa.status === "busy") return exa;
+        // An Exa `ok` with NO results also tries SearXNG: Exa's keyless index
+        // misses fresh news ("russia ukraine energy ceasefire" came back
+        // empty while "latest russia ukraine energy ceasefire" had six).
+        if (exa.status === "busy" || (exa.status === "ok" && exa.results.length > 0)) return exa;
         const fallback = await callSearxng(trimmed, capped, deps, controller.signal);
         if (controller.signal.aborted) return cancelled();
         if (fallback.status === "ok" && fallback.results.length > 0) {
@@ -304,8 +324,10 @@ export async function webSearch(query: string, limit = 6, deps: WebSearchDeps = 
         inFlight.delete(key);
       }
     })().then((result) => {
-      // Only successful answers are cached; a failure must not stick for 30 minutes.
-      if (result.status === "ok") {
+      // Only answers WITH results are cached: a failure — or an empty answer,
+      // which a rate limit or a thin index can produce — must not stick for
+      // 30 minutes.
+      if (result.status === "ok" && result.results.length > 0) {
         if (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value as string);
         cache.set(key, { at: deps.now(), value: result });
       }

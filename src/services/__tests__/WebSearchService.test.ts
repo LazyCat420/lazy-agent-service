@@ -195,6 +195,41 @@ describe("webSearch", () => {
     }
   });
 
+  // Exa's free-tier limit as it arrived on 2026-10-11: HTTP 200, no JSON-RPC
+  // error, a _meta flag and a text with no results in it.
+  const EXA_FREE_LIMIT = `event: message\ndata: ${JSON.stringify({
+    result: {
+      _meta: { "ai.exa/rateLimited": true },
+      content: [{ type: "text", text: "You've hit Exa's free MCP rate limit. To continue using without limits, create your own Exa API key." }],
+    },
+    jsonrpc: "2.0", id: 1,
+  })}\n\n`;
+  const SEARX_HIT = JSON.stringify({ success: true, items: [{ title: "R", url: "https://example.com/r", snippet: "s" }] });
+
+  it("treats Exa's 200 + rateLimited reply as a rate limit: cooldown, fallback, nothing cached", async () => {
+    const h = harness([{ body: EXA_FREE_LIMIT }, { body: SEARX_HIT }]);
+    const first = await webSearch("russia ukraine energy ceasefire", 6, h.deps);
+    expect(first).toMatchObject({ status: "ok", provider: "searxng" });
+    expect(first.results).toHaveLength(1);
+    expect(webSearchStatus().rateLimited).toBe(1);
+    // In the cooldown Exa is not called at all; the fallback still answers.
+    const before = h.calls.filter(c => c.url.startsWith("https://mcp.exa.ai/")).length;
+    await webSearch("another question", 6, h.deps);
+    expect(h.calls.filter(c => c.url.startsWith("https://mcp.exa.ai/")).length).toBe(before);
+  });
+
+  it("does not cache an empty answer, and tries SearXNG when Exa finds nothing", async () => {
+    const empty = sse("");
+    const h = harness([{ body: empty }, { body: JSON.stringify({ success: true, items: [] }) }, { body: empty }, { body: SEARX_HIT }]);
+    const first = await webSearch("q", 6, h.deps);
+    expect(first).toMatchObject({ status: "ok", results: [] });
+    expect(h.calls[1].url).toMatch(/\/collect$/);
+    const second = await webSearch("q", 6, h.deps);
+    expect(second.cached).toBe(false);
+    expect(second).toMatchObject({ status: "ok", provider: "searxng" });
+    expect(second.results).toHaveLength(1);
+  });
+
   it("does not pile onto the fallback when the queue is busy", async () => {
     const h = harness([{}]);
     const results = await Promise.all(Array.from({ length: 16 }, (_, i) => webSearch(`q ${i}`, 6, h.deps)));
