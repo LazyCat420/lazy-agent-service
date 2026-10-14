@@ -71,9 +71,12 @@ export class ObsidianCompletionJobs {
   }
   private async execute(file: string, job: CompletionJob, target: string, payload: Record<string, unknown>) {
     try {
+      // Must exceed the plugin's per-job poll window (maxJobPollMs, default 600s), otherwise
+      // the server kills a generation the client is still waiting on.
+      const timeoutMs = Number(process.env.OBSIDIAN_COMPLETION_TIMEOUT_MS) || 600000;
       const response = await this.transport(`${target}/chat/completions`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, stream: false }), signal: AbortSignal.any([this.controllers.get(file)!.signal, AbortSignal.timeout(180000)]),
+        body: JSON.stringify({ ...payload, stream: false }), signal: AbortSignal.any([this.controllers.get(file)!.signal, AbortSignal.timeout(timeoutMs)]),
       });
       job.response = response.ok ? { status: response.status, data: await response.json() } : { status: response.status, errText: (await response.text()).slice(0, 4000) };
       job.status = response.ok ? "completed" : "failed";
