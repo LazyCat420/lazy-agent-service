@@ -12,10 +12,13 @@ function payload(text = "hello") {
   return { model: "test-model", messages: [{ role: "user", content: text }] };
 }
 
-function response(data: unknown = { choices: [] }): Response {
-  return new Response(JSON.stringify(data), {
+function response(content = "ok"): Response {
+  // The service now requests stream:true first; answer with SSE so a single
+  // transport call completes the job the way a real vLLM stream does.
+  const chunk = { id: "chatcmpl-test", model: "test-model", choices: [{ delta: { content } }] };
+  return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
     status: 200,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "text/event-stream" },
   });
 }
 
@@ -65,13 +68,13 @@ describe("ObsidianCompletionJobs", () => {
       const first = new ObsidianCompletionJobs(temp.directory, vi.fn(() => pending.promise));
       const id = crypto.randomUUID();
       first.submit("desktop", id, target, payload("durable"));
-      pending.resolve(response({ answer: "saved" }));
+      pending.resolve(response("saved"));
       await vi.waitFor(() => expect(first.get("desktop", id)?.status).toBe("completed"));
 
       const second = new ObsidianCompletionJobs(temp.directory, vi.fn());
       expect(second.get("desktop", id)).toMatchObject({
         status: "completed",
-        response: { status: 200, data: { answer: "saved" } },
+        response: { status: 200, data: { choices: [{ message: { content: "saved" } }] } },
       });
     } finally {
       temp.cleanup();

@@ -23,7 +23,10 @@ describe("Obsidian completion routes", () => {
 
   it("reports the contract, persists acceptance, and deduplicates repeated PUTs", async () => {
     directory = fs.mkdtempSync(path.join(os.tmpdir(), "obsidian-completion-routes-"));
-    const transport = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: "VAULT_CHAT_OK" } }] }), { status: 200 }));
+    // A streaming request gets an SSE response; the fallback (non-stream) request gets JSON.
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => String(init?.body).includes('"stream":true')
+      ? new Response("data: {\"id\":\"chatcmpl-1\",\"model\":\"test-model\",\"choices\":[{\"delta\":{\"content\":\"VAULT_CHAT_OK\"}}]}\n\ndata: [DONE]\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } })
+      : new Response(JSON.stringify({ choices: [{ message: { content: "VAULT_CHAT_OK" } }] }), { status: 200 }));
     const jobs = new ObsidianCompletionJobs(directory, transport);
     const app = express();
     app.use(express.json());
@@ -98,7 +101,8 @@ describe("Obsidian completion routes", () => {
     const completed = await fetch(`${base}/${id}`);
     const saved = await completed.json();
     expect(saved).toMatchObject({ status: "completed", response: { status: 200, data: { choices: [{ message: { content: "VAULT_CHAT_OK" } }] } } });
-    expect(transport).toHaveBeenCalledTimes(2);
+    // Two upstream calls on the successful run: the stream attempt (answered non-SSE) plus the non-stream fallback.
+    expect(transport).toHaveBeenCalledTimes(3);
   });
 
   it("does not restart a job the user cancelled when the same id is resubmitted (audit 3e65c57)", async () => {
@@ -129,5 +133,71 @@ describe("Obsidian completion routes", () => {
     const resubmitted = await fetch(`${base}/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     expect((await resubmitted.json()).status).toBe("failed");
     expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it("grows job.partial during a streamed run and completes with the full response", async () => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "obsidian-completion-stream-"));
+    // The test releases each chunk itself, so partial growth is observed without real-time sleeps.
+    const releaseChunk = [Promise.withResolvers<void>(), Promise.withResolvers<void>(), Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const sse = (chunks: string[]) => new Response(new ReadableStream({
+      async start(controller) {
+        for (const [index, chunk] of chunks.entries()) {
+          await releaseChunk[index].promise;
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ id: "chatcmpl-2", model: "test-model", choices: [{ delta: { content: chunk } }] })}\n\n`));
+        }
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => String(init?.body).includes('"stream":true')
+      ? sse(["Once ", "upon ", "a ", "time"])
+      : new Response(JSON.stringify({ choices: [{ message: { content: "fallback" } }] }), { status: 200 }));
+    const jobs = new ObsidianCompletionJobs(directory, transport);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.project = "test-project"; req.username = "test-user"; next(); });
+    app.use("/obsidian-completions", createObsidianCompletionRouter(jobs));
+    server = await new Promise<http.Server>((resolve) => { const instance = app.listen(0, "127.0.0.1", () => resolve(instance)); });
+    const address = server.address() as { port: number };
+    const base = `http://127.0.0.1:${address.port}/obsidian-completions`;
+    const id = crypto.randomUUID();
+    const body = { target: "http://10.0.0.141:8000/v1", payload: { model: "test-model", messages: [{ role: "user", content: "story" }] } };
+    await fetch(`${base}/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const scope = JSON.stringify(["test-project", "test-user"]);
+
+    // partial grows between polls while the stream is open
+    releaseChunk[0].resolve();
+    await vi.waitFor(() => expect(jobs.get(scope, id)?.partial).toBe("Once "));
+    releaseChunk[1].resolve();
+    await vi.waitFor(() => expect(jobs.get(scope, id)?.partial).toBe("Once upon "));
+    releaseChunk[2].resolve();
+    await vi.waitFor(() => expect(jobs.get(scope, id)?.partial).toBe("Once upon a "));
+    releaseChunk[3].resolve();
+
+    await vi.waitFor(() => expect(jobs.get(scope, id)?.status).toBe("completed"));
+    const done = jobs.get(scope, id)!;
+    expect(done.response?.data).toMatchObject({ object: "chat.completion", choices: [{ message: { role: "assistant", content: "Once upon a time" } }] });
+    expect(done.partial).toBeUndefined();
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the non-stream path when the model endpoint returns no SSE", async () => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "obsidian-completion-nostream-"));
+    const transport = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: "buffered reply" } }] }), { status: 200 }));
+    const jobs = new ObsidianCompletionJobs(directory, transport);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.project = "test-project"; req.username = "test-user"; next(); });
+    app.use("/obsidian-completions", createObsidianCompletionRouter(jobs));
+    server = await new Promise<http.Server>((resolve) => { const instance = app.listen(0, "127.0.0.1", () => resolve(instance)); });
+    const address = server.address() as { port: number };
+    const base = `http://127.0.0.1:${address.port}/obsidian-completions`;
+    const id = crypto.randomUUID();
+    const body = { target: "http://10.0.0.141:8000/v1", payload: { model: "test-model", messages: [{ role: "user", content: "hi" }] } };
+    await fetch(`${base}/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await vi.waitFor(() => expect(jobs.get(JSON.stringify(["test-project", "test-user"]), id)?.status).toBe("completed"));
+    const done = jobs.get(JSON.stringify(["test-project", "test-user"]), id)!;
+    expect(done.response?.data).toMatchObject({ choices: [{ message: { content: "buffered reply" } }] });
+    expect(transport).toHaveBeenCalledTimes(2);
   });
 });
