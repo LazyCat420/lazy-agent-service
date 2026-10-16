@@ -5,6 +5,7 @@ import {
   STATUS_MESSAGES,
 } from "@rodrigo-barraza/utilities-library/taxonomy";
 import logger from "../../../utils/logger.ts";
+import ConversationBudgetRegistry from "../../ConversationBudgetRegistry.ts";
 
 import type AgenticLoopState from "../../AgenticLoopState.ts";
 import type { EmitFunction } from "../types.ts";
@@ -35,27 +36,57 @@ export function checkCostBudget(
   resolvedModel: string,
   maxCostDollars: number | undefined,
   emit: EmitFunction,
+  conversationId?: string | null,
 ): boolean {
-  if (!maxCostDollars || maxCostDollars <= 0) return false;
+  // The cap set over HTTP for this conversation (ported from prism-service
+  // routes/ConversationBudgetRoute.ts) tightens the per-request cap; the
+  // lower of the two wins.
+  const conversationBudget = ConversationBudgetRegistry.get(conversationId);
+  const caps = [maxCostDollars, conversationBudget?.maxCostDollars].filter(
+    (cap): cap is number => typeof cap === "number" && cap > 0,
+  );
+  const effectiveCostCap = caps.length > 0 ? Math.min(...caps) : undefined;
+  const maxTotalTokens = conversationBudget?.maxTotalTokens;
+
+  if (maxTotalTokens && maxTotalTokens > 0) {
+    const usedTokens =
+      (state.overallUsage.inputTokens || 0) + (state.overallUsage.outputTokens || 0);
+    if (usedTokens >= maxTotalTokens) {
+      emit({
+        type: SERVER_SENT_EVENT_TYPES.STATUS,
+        message: STATUS_MESSAGES.COST_LIMIT_REACHED,
+        usedTokens,
+        maxTotalTokens,
+        iteration: state.iterations,
+      });
+      logger.warn(
+        `[CostBudgetEnforcer] Token limit exceeded on iteration ${state.iterations}: ` +
+          `${usedTokens} >= ${maxTotalTokens}. Triggering exhaustion recovery.`,
+      );
+      return true;
+    }
+  }
+
+  if (!effectiveCostCap) return false;
 
   const pricing = getPricing(TYPES.TEXT, TYPES.TEXT)[resolvedModel];
   const currentUsage = { ...state.overallUsage, requests: state.iterations };
   const estimatedCost = calculateTextCost(currentUsage, pricing);
 
   if (estimatedCost === null) return false;
-  if (estimatedCost < maxCostDollars) return false;
+  if (estimatedCost < effectiveCostCap) return false;
 
   emit({
     type: SERVER_SENT_EVENT_TYPES.STATUS,
     message: STATUS_MESSAGES.COST_LIMIT_REACHED,
     estimatedCost,
-    maxCostDollars,
+    maxCostDollars: effectiveCostCap,
     iteration: state.iterations,
   });
 
   logger.warn(
     `[CostBudgetEnforcer] Cost limit exceeded on iteration ${state.iterations}: ` +
-      `$${estimatedCost.toFixed(4)} >= $${maxCostDollars.toFixed(4)} budget. Triggering exhaustion recovery.`,
+      `$${estimatedCost.toFixed(4)} >= $${effectiveCostCap.toFixed(4)} budget. Triggering exhaustion recovery.`,
   );
 
   return true;

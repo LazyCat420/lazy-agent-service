@@ -53,6 +53,8 @@ const DEFAULT_TIER_MAP: Record<string, ApprovalTier> = {
   [TOOL_NAMES.SAVE_MEMORY]: APPROVAL_TIERS.AUTO,
 
   // Tier 1 — control flow (no side effects)
+  // ask_user only asks the user; gating it behind an approval would be circular.
+  ask_user: APPROVAL_TIERS.AUTO,
   [TOOL_NAMES.SLEEP]: APPROVAL_TIERS.AUTO,
   [TOOL_NAMES.ENTER_PLAN_MODE]: APPROVAL_TIERS.AUTO,
   [TOOL_NAMES.EXIT_PLAN_MODE]: APPROVAL_TIERS.AUTO,

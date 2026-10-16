@@ -57,6 +57,8 @@ export interface QuestionDefinition {
 }
 
 export interface PendingQuestionEntry {
+  /** Id shown on the `user_question` card; an answer may name it. */
+  questionId?: string;
   resolve: (value: QuestionResolution) => void;
   question?: string;
   questions?: QuestionDefinition[];

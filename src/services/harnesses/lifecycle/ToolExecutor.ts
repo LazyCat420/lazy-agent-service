@@ -38,6 +38,7 @@ function truncateResultIfNeeded(result: any, project?: string, toolName?: string
   return result;
 }
 import type AgentHooks from "../../AgentHooks.ts";
+import { executeAskUser } from "./AskUserTool.ts";
 import { executeTakeNote, NoteStore } from "../../../platform/memory/NoteStore.ts";
 import { retrieveOffloadedContentTool } from "../../../platform/offload/retrieveOffloadedContent.ts";
 import { OffloadPolicy, OFFLOAD_STUB_HEADER } from "../../../platform/offload/OffloadPolicy.ts";
@@ -185,6 +186,20 @@ export async function executeToolBatch(
           runId,
           new NoteStore({ repoRoot: workspaceRoot || undefined }),
         );
+        await hooks.run("afterToolCall", toolCall, result, context);
+        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+      }
+
+      // ── ask_user internal tool ───────────────────────────────
+      // Parks the turn until the user answers over POST /agent/answer.
+      if (toolCall.name === "ask_user") {
+        const started = Date.now();
+        let result: Record<string, unknown>;
+        try {
+          result = await executeAskUser(toolCall.args ?? {}, context);
+        } catch (askError: unknown) {
+          result = { error: askError instanceof Error ? askError.message : String(askError) };
+        }
         await hooks.run("afterToolCall", toolCall, result, context);
         return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
       }
