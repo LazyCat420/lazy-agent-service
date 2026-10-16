@@ -27,6 +27,7 @@ import {
 } from "../constants.ts";
 
 import SettingsService from "./SettingsService.ts";
+import MCPClientService from "./MCPClientService.ts";
 import PromptLocaleService from "./PromptLocaleService.ts";
 import {
   injectVoiceCatalog,
@@ -1747,8 +1748,10 @@ export default class ToolOrchestratorService {
     args: Record<string, unknown> = {},
     context: ToolExecutionContext = {},
   ) {
-    if (!fullName.startsWith(LOCAL_MCP_PREFIX)) {
-      return { error: `MCP server for tool "${fullName}" is not connected. Only ${LOCAL_MCP_PREFIX}* tools are available.` };
+    const remote = MCPClientService.parseMCPToolName(fullName);
+    const isLocal = fullName.startsWith(LOCAL_MCP_PREFIX);
+    if (!isLocal && !(remote && MCPClientService.isConnected(remote.serverName))) {
+      return { error: `MCP server for tool "${fullName}" is not connected. Only ${LOCAL_MCP_PREFIX}* tools and tools of connected MCP servers are available.` };
     }
     const { routeLocalTool } = await import("./LocalToolRouter.js");
     try {
@@ -1977,6 +1980,18 @@ export default class ToolOrchestratorService {
    * agent pool (they are served via /execute and the MCP SSE server).
    */
   static getMCPToolSchemas(): Array<{
+    name: string;
+    description?: string;
+    parameters?: unknown;
+    domain?: string;
+    _mcpServer?: string;
+    _mcpOriginalName?: string;
+  }> {
+    // Tools of servers connected through /mcp-servers join the local catalog.
+    return [...ToolOrchestratorService.getLocalMCPToolSchemas(), ...MCPClientService.getToolSchemas()];
+  }
+
+  private static getLocalMCPToolSchemas(): Array<{
     name: string;
     description?: string;
     parameters?: unknown;
