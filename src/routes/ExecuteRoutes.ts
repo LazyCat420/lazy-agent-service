@@ -92,7 +92,7 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
       success: false,
       execution_ms: durationMs,
       error_message: errorMsg,
-      service_source: "lazy-tool-service"
+      service_source: "lazy-agent-service"
     }).catch(() => {});
 
     response.json({
@@ -136,7 +136,7 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
         success: false,
         execution_ms: durationMs,
         error_message: gatedError.toLowerCase(),
-        service_source: "lazy-tool-service"
+        service_source: "lazy-agent-service"
       }).catch(() => {});
       response.json(result);
       return;
@@ -171,7 +171,7 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
       ...(classification.success
         ? {}
         : { error_message: classification.errorMessage }),
-      service_source: "lazy-tool-service"
+      service_source: "lazy-agent-service"
     }).catch(() => {});
 
     response.json(result);
@@ -188,7 +188,7 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
       success: false,
       execution_ms: durationMs,
       error_message: errorMsg,
-      service_source: "lazy-tool-service"
+      service_source: "lazy-agent-service"
     }).catch(() => {});
 
     try {

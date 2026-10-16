@@ -8,7 +8,7 @@
  * fails the whole pass on a stream that ends early.
  *
  * Every trading tool answers through the Python bridge as an OpenAI tool message —
- * `{role, tool_call_id: "call_lazy_tool_bridge", name, content: "<the result, JSON-escaped>",
+ * `{role, tool_call_id: "call_lazy_agent_bridge", name, content: "<the result, JSON-escaped>",
  * service_source}` — so prism's pretty-printed copy was seven lines with the whole result on ONE of
  * them, and the preview (whole leading lines) showed the four wrapper keys and nothing else. On
  * 2026-09-28 that stub replaced 13 of 13 get_finnhub_news results and 7 of 22 whiteboard_read

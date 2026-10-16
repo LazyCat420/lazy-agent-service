@@ -2,7 +2,7 @@ import { signMcpClient } from "./TradingToolContext.ts";
 // ============================================================
 // PrismRegistrationService
 //
-// This service owns lazy-tool-service's own presence in Prism.
+// This service owns lazy-agent-service's own presence in Prism.
 //
 // Previously trading-service registered us: it wrote straight into Prism's
 // `mcp_servers` Mongo collection on ITS boot, for three scopes — one of which
@@ -348,7 +348,7 @@ export async function registerWithPrism(): Promise<void> {
   // The URL Prism must dial to reach us. This is our EXTERNAL (host-mapped)
   // port, not the in-container bind port — Prism connects from outside.
   const host = process.env.PRISM_ADVERTISE_HOST || process.env.DEFAULT_HOST || "10.0.0.16";
-  const port = process.env.LAZY_TOOL_SERVICE_PORT || "5591";
+  const port = process.env.LAZY_AGENT_SERVICE_PORT || "5591";
   const mcpUrl = process.env.MCP_ADVERTISE_URL || `http://${host}:${port}/mcp/sse`;
 
   logger.info(`[Prism-Reg] Announcing ${MCP_SERVER_NAME} at ${mcpUrl} to ${base}`);

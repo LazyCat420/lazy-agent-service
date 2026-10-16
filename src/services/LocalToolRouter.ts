@@ -15,7 +15,7 @@ import { stripMcpPrefix } from "./McpPrefix.ts";
  *   - POST /execute/:toolName (ExecuteRoutes)
  *   - the MCP SSE server (McpAdapter CallTool)
  *   - the agentic loop (ToolOrchestratorService.executeMCPTool for
- *     mcp__lazy-tool-service__* tool calls)
+ *     mcp__lazy-agent-service__* tool calls)
  *
  * Routing:
  *   news_search                          → implemented HERE (NewsSearchService)

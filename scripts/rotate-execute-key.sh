@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate a new EXECUTE_API_KEY (lazy-tool-service POST /execute/*) and apply it
+# Generate a new EXECUTE_API_KEY (lazy-agent-service POST /execute/*) and apply it
 # everywhere it lives, without ever printing it.
 #
 #   scripts/rotate-execute-key.sh              # rotate + redeploy everything
@@ -10,7 +10,7 @@
 #   2. deploy-kit/.env.deploy                                   (most deploys)
 #   3. NAS vault-service/env/.env                               (trading-* deploys copy it)
 #   4. Obsidian plugin setting — the key is copied to the Windows clipboard; paste it
-#      into LLMSortObsidian-Plugin -> "NAS Lazy Tool Service API Key".
+#      into LLMSortObsidian-Plugin -> "NAS Lazy Agent Service API Key".
 #
 # trading-service: a deploy kills an in-flight cycle. Run this between cycles.
 # Rollout record: documentation/chapters/11-security-hardening-plan-2026-10-11.md (Item 3).
@@ -26,7 +26,7 @@ DOCKER="/usr/local/bin/docker"
 EXECUTE_URL="http://10.0.0.16:5591/execute/web_search"
 # Callers first, the server last (it is the one that starts rejecting the old key).
 CALLERS=(html-notes treesearch-service trading-client trading-service)
-SERVER=lazy-tool-service
+SERVER=lazy-agent-service
 SERVER_CONTAINER=lazy-agent-service
 
 DEPLOY=1

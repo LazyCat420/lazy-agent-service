@@ -21,13 +21,9 @@
  *
  * That asymmetry is the whole migration strategy: acceptance ships first and
  * costs nothing, so the registration rename can never land ahead of the
- * routing that serves it. ~187 references across 11 repos still use the legacy
- * spelling, and several are persona tool lists already registered in prism's
- * Mongo — a flag-day would strand live agents holding names that resolve to
- * nothing mid-conversation.
- *
- * Deleting the legacy entry is the LAST step, valid only once
- * `grep -r "mcp__lazy-tool-service__" ~/github/projects/sun` is empty.
+ * routing that serves it. Consumers in sun were migrated to the canonical
+ * `mcp__lazy-agent-service__` spelling on 2026-10-15; the legacy entry stays
+ * only to accept persisted history/telemetry rows that still carry it.
  *
  * Deliberately dependency-free: it is imported from both sides of the
  * `personas/index -> personas/utils -> ToolOrchestratorService ->
@@ -42,7 +38,7 @@ export const CANONICAL_MCP_PREFIX = "mcp__lazy-agent-service__";
  *
  *  All four are required, not just the two current ones. `PlatformRoutes` and
  *  trading-service's `app/services/mcp_prefix.py` both already accepted
- *  `mcp__lazy-tools__` and the bare `mcp_` trailer while this list carried only
+ *  `mcp__lazy-agent__` and the bare `mcp_` trailer while this list carried only
  *  two — so a call under either legacy spelling was canonicalised for telemetry
  *  and for the Python bridge, but NOT by `stripMcpPrefix`, which is what
  *  `LocalToolRouter` routes on. The name reached the fall-through branch still

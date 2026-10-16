@@ -89,19 +89,19 @@ import fs from "node:fs";
 const isDocker = fs.existsSync("/.dockerenv");
 
 // TWO PORTS, TWO MEANINGS — they are not interchangeable:
-//   LAZY_TOOL_BIND_PORT   (7778) — what this process listens on. Same value
+//   LAZY_AGENT_BIND_PORT   (7778) — what this process listens on. Same value
 //                                  src/index.ts binds; compose maps 5591:7778.
-//   LAZY_TOOL_SERVICE_PORT (5591) — the EXTERNAL host port other services and
+//   LAZY_AGENT_SERVICE_PORT (5591) — the EXTERNAL host port other services and
 //                                  prism dial. Set to 5591 by the vault .env.
 // This used to be one variable defaulting to 7778 here and 5591 in
 // PrismRegistrationService.ts, so with the deployed env set the self-URL below
 // resolved to localhost:5591 — a port nothing listens on inside the container.
-export const LAZY_TOOL_BIND_PORT = Number(process.env.LAZY_TOOL_BIND_PORT || "7778");
-export const LAZY_TOOL_SERVICE_PORT = Number(process.env.LAZY_TOOL_SERVICE_PORT || "5591");
+export const LAZY_AGENT_BIND_PORT = Number(process.env.LAZY_AGENT_BIND_PORT || "7778");
+export const LAZY_AGENT_SERVICE_PORT = Number(process.env.LAZY_AGENT_SERVICE_PORT || "5591");
 
 // Self-referential: always the BIND port, never the external one.
-export const LAZY_TOOL_SERVICE_URL = `http://127.0.0.1:${LAZY_TOOL_BIND_PORT}`;
-export const LAZY_TOOL_SERVICE_API_KEY = process.env.LAZY_TOOL_SERVICE_API_KEY;
+export const LAZY_AGENT_SERVICE_URL = `http://127.0.0.1:${LAZY_AGENT_BIND_PORT}`;
+export const LAZY_AGENT_SERVICE_API_KEY = process.env.LAZY_AGENT_SERVICE_API_KEY;
 export const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || "30000");
 // Slow external-fetch tools need a longer bridge deadline than the 30s
 // default: their own internal retry budgets (e.g. lazy_web_search's 20s+10s
@@ -158,11 +158,11 @@ export const THENEWSAPI_KEY = process.env.THENEWSAPI_KEY;
 export const NEWSAPI_API_KEY = process.env.NEWSAPI_API_KEY;
 
 const CONFIG = {
-  LAZY_TOOL_BIND_PORT,
-  LAZY_TOOL_SERVICE_PORT,
-  LAZY_TOOL_SERVICE_URL,
+  LAZY_AGENT_BIND_PORT,
+  LAZY_AGENT_SERVICE_PORT,
+  LAZY_AGENT_SERVICE_URL,
   MONGODB_URI: MONGO_URI,
-  LAZY_TOOL_SERVICE_API_KEY,
+  LAZY_AGENT_SERVICE_API_KEY,
   EXECUTION_TIMEOUT_MS,
   SLOW_TOOL_TIMEOUT_MS,
   MCP_TOOL_DEADLINE_MS,

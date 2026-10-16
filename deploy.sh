@@ -2,7 +2,7 @@
 # ============================================================
 # Lazy Agent Service — Build & Deploy to Synology NAS
 #
-# Thin wrapper — all logic lives in ../deploy-kit/lib.sh
+# Thin wrapper — all logic lives in ../../deploy-kit/lib.sh
 #
 # Usage:
 #   npm run deploy              # full deploy
@@ -88,4 +88,4 @@ PRE_RESTART() {
   ssh "$DEPLOY_SSH_HOST" "sudo mkdir -p '${DEPLOY_COMPOSE_DIR}/runtime-data' && if [ ! -f '${DEPLOY_COMPOSE_DIR}/runtime-data/run_store_durable.json' ]; then if sudo ${DEPLOY_DOCKER_BIN} exec lazy-agent-service test -f /app/data/run_store_durable.json; then sudo ${DEPLOY_DOCKER_BIN} cp lazy-agent-service:/app/data/run_store_durable.json '${DEPLOY_COMPOSE_DIR}/runtime-data/run_store_durable.json' || exit 1; fi; fi"
 }
 
-source "${SCRIPT_DIR}/../deploy-kit/lib.sh"
+source "${SCRIPT_DIR}/../../deploy-kit/lib.sh"

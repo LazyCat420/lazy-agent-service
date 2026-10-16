@@ -34,7 +34,7 @@ describe("CapabilityRegistry & GlobalCapabilityExecutor Contract Tests", () => {
       "html_notes.notes.create",
       "html_notes.canvas.upsert_widget",
       "trading.orders.submit",
-      "mcp__lazy-tool-service__news_search",
+      "mcp__lazy-agent-service__news_search",
     ];
 
     const validation = CapabilityRegistry.validateProfileCapabilities(validWhitelist);

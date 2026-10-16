@@ -1,7 +1,7 @@
 // ============================================================
 // NewsSearchService — shared, multi-provider news lookup.
 //
-// This is the first tool lazy-tool-service IMPLEMENTS rather than proxies.
+// This is the first tool lazy-agent-service IMPLEMENTS rather than proxies.
 // Everything else in LocalToolRouter forwards to html-notes or trading-service;
 // news is wanted by several consumers, so it lives here instead of being
 // reimplemented per repo.
@@ -154,7 +154,7 @@ async function getJson(
   try {
     const res = await fetch(`${url}?${qs}`, {
       signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; lazy-tool-service)" },
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; lazy-agent-service)" },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
     return (await res.json()) as Record<string, unknown>;

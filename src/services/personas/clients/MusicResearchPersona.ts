@@ -8,7 +8,7 @@ import { Persona } from "../types.ts";
  * tools, or a <think> stream through up to 15 iterations.
  *
  * Tool list mirrors the caller's RESEARCH_TOOLS with one deliberate omission:
- * mcp__lazy-tool-service__lazy_web_search only resolves when the loop runs on
+ * mcp__lazy-agent-service__lazy_web_search only resolves when the loop runs on
  * real prism (:7777); on this gateway it resolves to nothing (the caller's own
  * comment says so), so listing it here would be a phantom tool for the model
  * to fail against.

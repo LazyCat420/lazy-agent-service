@@ -424,7 +424,7 @@ export default class AgenticLoopService {
     // are sent to the provider natively from iteration 1 — the describe_tools
     // lazy-loading dance is for catalog browsing, not for small explicit sets
     // the caller already committed to. "Explicit" means either enabledTools on
-    // the request (e.g. HTML-Notes' mcp__lazy-tool-service__* widget tools) or
+    // the request (e.g. HTML-Notes' mcp__lazy-agent-service__* widget tools) or
     // a persona's non-wildcard availableTools (resolvedEnabledTools) — a
     // tailor-made client persona is exactly as committed as a request list,
     // and without this a persona-only caller regresses into the discovery

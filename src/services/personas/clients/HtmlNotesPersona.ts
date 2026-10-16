@@ -17,40 +17,40 @@ import { Persona } from "../types.ts";
  * card on a dashboard.
  */
 const HTML_NOTES_TOOLS = [
-  "mcp__lazy-tool-service__html_notes_create_note",
-  "mcp__lazy-tool-service__html_notes_update_note",
-  "mcp__lazy-tool-service__html_notes_get_note",
-  "mcp__lazy-tool-service__html_notes_search_notes",
-  "mcp__lazy-tool-service__html_notes_link_notes",
-  "mcp__lazy-tool-service__canvas_read_dom",
-  "mcp__lazy-tool-service__canvas_add_widget",
-  "mcp__lazy-tool-service__canvas_modify_dom",
-  "mcp__lazy-tool-service__html_notes_youtube_search",
-  "mcp__lazy-tool-service__create_widget",
-  "mcp__lazy-tool-service__update_widget",
-  "mcp__lazy-tool-service__validate_widget_html",
-  "mcp__lazy-tool-service__list_widget_types",
-  "mcp__lazy-tool-service__plan_widget",
-  "mcp__lazy-tool-service__html_notes_web_search",
-  "mcp__lazy-tool-service__html_notes_read_page",
-  "mcp__lazy-tool-service__html_notes_stock_history",
-  "mcp__lazy-tool-service__html_notes_sports_scores",
+  "mcp__lazy-agent-service__html_notes_create_note",
+  "mcp__lazy-agent-service__html_notes_update_note",
+  "mcp__lazy-agent-service__html_notes_get_note",
+  "mcp__lazy-agent-service__html_notes_search_notes",
+  "mcp__lazy-agent-service__html_notes_link_notes",
+  "mcp__lazy-agent-service__canvas_read_dom",
+  "mcp__lazy-agent-service__canvas_add_widget",
+  "mcp__lazy-agent-service__canvas_modify_dom",
+  "mcp__lazy-agent-service__html_notes_youtube_search",
+  "mcp__lazy-agent-service__create_widget",
+  "mcp__lazy-agent-service__update_widget",
+  "mcp__lazy-agent-service__validate_widget_html",
+  "mcp__lazy-agent-service__list_widget_types",
+  "mcp__lazy-agent-service__plan_widget",
+  "mcp__lazy-agent-service__html_notes_web_search",
+  "mcp__lazy-agent-service__html_notes_read_page",
+  "mcp__lazy-agent-service__html_notes_stock_history",
+  "mcp__lazy-agent-service__html_notes_sports_scores",
   // Added when this file became the source of truth for the Prism-side agent
   // (PrismRegistrationService). The hand-registered CUSTOM_HTML_NOTES_CANVAS
   // had drifted to 21 tools while this list still said 18 — upserting from
   // here without these would have silently un-scoped news/weather on a live
   // agent. That drift is exactly what generating from one source prevents.
-  "mcp__lazy-tool-service__html_notes_news",
-  "mcp__lazy-tool-service__html_notes_get_weather",
-  "mcp__lazy-tool-service__html_notes_stock_news",
+  "mcp__lazy-agent-service__html_notes_news",
+  "mcp__lazy-agent-service__html_notes_get_weather",
+  "mcp__lazy-agent-service__html_notes_stock_news",
   // App Hub: list the user's own services (portal-service inventory), open one
   // in a new browser tab (approved catalog ids only), hide/pin hub tiles.
-  "mcp__lazy-tool-service__html_notes_list_services",
-  "mcp__lazy-tool-service__html_notes_open_app",
-  "mcp__lazy-tool-service__html_notes_curate_app",
+  "mcp__lazy-agent-service__html_notes_list_services",
+  "mcp__lazy-agent-service__html_notes_open_app",
+  "mcp__lazy-agent-service__html_notes_curate_app",
   // Control plane: run registered actions on the user's other containers.
-  "mcp__lazy-tool-service__html_notes_app_action",
-  "mcp__lazy-tool-service__html_notes_list_actions",
+  "mcp__lazy-agent-service__html_notes_app_action",
+  "mcp__lazy-agent-service__html_notes_list_actions",
 ];
 
 export const HtmlNotesPersona: Persona = {

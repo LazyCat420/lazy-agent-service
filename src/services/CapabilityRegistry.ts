@@ -511,7 +511,7 @@ export class CapabilityRegistry {
    * Validate that all tools whitelisted in a profile are either:
    * 1. A registered global capability (starts with 'global.') with compatible version
    * 2. A valid namespaced application tool (e.g. 'html_notes.notes.create', 'trading.positions.list')
-   * 3. A legacy MCP prefix tool (e.g. 'mcp__lazy-tool-service__news_search')
+   * 3. A legacy MCP prefix tool (e.g. 'mcp__lazy-agent-service__news_search')
    */
   static validateProfileCapabilities(
     whitelist: string[],

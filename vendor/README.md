@@ -30,7 +30,7 @@ mv rodrigo-barraza-utilities-library-*.tgz vendor/
 
 # 4. Regenerate the lockfile and verify a clean build:
 pnpm install --lockfile-only
-docker build -t lazy-tool-service:vendor-check .
+docker build -t lazy-agent-service:vendor-check .
 ```
 
 The tarball MUST be committed to git — it is what the Docker build copies in

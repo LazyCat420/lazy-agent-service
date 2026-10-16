@@ -141,7 +141,7 @@ describe("trading tools on the native loop", () => {
   });
 
   it("gives the model the bridge result's content, fitted to the per-result limit, as prism's MCP path does", async () => {
-    const bridge = (content: string) => ({ role: "tool", tool_call_id: "call_lazy_tool_bridge", name: "get_finnhub_news", content });
+    const bridge = (content: string) => ({ role: "tool", tool_call_id: "call_lazy_agent_bridge", name: "get_finnhub_news", content });
     const ctx = { project: TRADING, agent: "CUSTOM_V3_JUNIOR_ANALYST" };
 
     dispatchTool.mockResolvedValueOnce(bridge("## Recent News\n- one headline") as never);

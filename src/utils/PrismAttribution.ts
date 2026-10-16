@@ -13,7 +13,7 @@
  */
 
 /** Default project filed against prism for traffic originating in this service. */
-export const PRISM_ATTRIBUTION_PROJECT = "lazy-tool-service";
+export const PRISM_ATTRIBUTION_PROJECT = "lazy-agent-service";
 
 /** Default username filed against prism for traffic originating in this service. */
 export const PRISM_ATTRIBUTION_USERNAME = "admin";

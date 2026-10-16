@@ -41,7 +41,7 @@ describe("the bridge result the model reads", () => {
 
   it("drops the tool-message wrapper and its second layer of escaping, keeping a small result as it is", () => {
     const content = JSON.stringify({ total_matches: 1, rows: [{ ticker: "CRH", pe_ratio: 14.58, note: "a \"quoted\" word" }] });
-    const wrapped = { role: "tool", tool_call_id: "call_lazy_tool_bridge", name: "screener_query", content, service_source: "trading-service" };
+    const wrapped = { role: "tool", tool_call_id: "call_lazy_agent_bridge", name: "screener_query", content, service_source: "trading-service" };
     const visible = modelVisibleText(wrapped);
     expect(visible).toMatchObject({ text: content, cut: false });
     expect(visible.text.length).toBeLessThan(JSON.stringify(wrapped).length);

@@ -14,7 +14,7 @@ import { authMiddleware } from "./middleware/AuthMiddleware.ts";
 import { requestLoggerMiddleware } from "./middleware/RequestLoggerMiddleware.ts";
 import { COLLECTIONS, CORS_MAX_AGE_SECONDS } from "./constants.ts";
 import {
-  LAZY_TOOL_BIND_PORT,
+  LAZY_AGENT_BIND_PORT,
   MONGO_URI,
   MONGO_DB_NAME,
   TRADING_MONGO_DB,
@@ -24,10 +24,10 @@ import {
   MINIO_BUCKET_NAME,
 } from "../config.ts";
 // Container-internal bind port; the NAS maps host 5591 → container 7778.
-// NOTE: LAZY_TOOL_SERVICE_PORT is the EXTERNAL port elsewhere in the ecosystem
+// NOTE: LAZY_AGENT_SERVICE_PORT is the EXTERNAL port elsewhere in the ecosystem
 // (the vault .env sets it to 5591) — binding to it broke the compose mapping.
-// LAZY_TOOL_BIND_PORT is the dedicated override; see config.ts for the split.
-const PORT = LAZY_TOOL_BIND_PORT;
+// LAZY_AGENT_BIND_PORT is the dedicated override; see config.ts for the split.
+const PORT = LAZY_AGENT_BIND_PORT;
 import MongoWrapper from "./wrappers/MongoWrapper.ts";
 import MinioWrapper from "./wrappers/MinioWrapper.ts";
 import ChangeStreamService from "./services/ChangeStreamService.ts";
@@ -643,7 +643,7 @@ setupWebSocket(wss);
   }
 
   server.listen(PORT, async () => {
-    logger.success(`lazy-tool-service is running on port ${PORT}`);
+    logger.success(`lazy-agent-service is running on port ${PORT}`);
     logger.info("Available providers:", listProviders().join(", "));
     // Modality colors matching Prism Client's MODALITY_COLORS
     const MODALITY_COLORS: Record<string, number[]> = {

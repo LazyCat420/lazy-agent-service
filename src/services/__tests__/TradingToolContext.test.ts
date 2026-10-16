@@ -18,7 +18,7 @@ it("validates stateless capabilities, rejects tampering/expiry and checks exact 
   expect(() => authorizeTradingTool("whiteboard_read", { [TOOL_CONTEXT_ARG]: signToolContext({ ...context(), cycleId: "" }) })).toThrow("explicit cycle");
 });
 it("extracts trusted harness headings and removes all capability bytes before model generation", () => {
-  const original = { project: "vllm-trading-bot", agent: "CUSTOM_V3_JUNIOR_ANALYST", conversationId: "session-test", enabledTools: ["whiteboard_read", "mcp__lazy-tool-service__whiteboard_read"], systemPrompt: "role", messages: [{ role: "user", content: "## Ticker: TEST\n\n## Cycle: cycle-v3-test-a\n\nevidence" }] };
+  const original = { project: "vllm-trading-bot", agent: "CUSTOM_V3_JUNIOR_ANALYST", conversationId: "session-test", enabledTools: ["whiteboard_read", "mcp__lazy-agent-service__whiteboard_read"], systemPrompt: "role", messages: [{ role: "user", content: "## Ticker: TEST\n\n## Cycle: cycle-v3-test-a\n\nevidence" }] };
   const prepared = prepareToolContext(original);
   const extracted = extractToolContext({ messages: [{ role: "system", content: prepared.systemPrompt }, ...prepared.messages] });
   expect(verifyToolContext(extracted.token)).toMatchObject({ agentName: "v3_junior_analyst", cycleId: "cycle-v3-test-a", ticker: "TEST", allowedTools: ["whiteboard_read"] });

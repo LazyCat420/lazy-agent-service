@@ -10,7 +10,7 @@ tool_schemas/
   treesearch/     # strain_* tools
 ```
 
-The flat `tool_schemas.json` files at the roots of lazy-tool-service,
+The flat `tool_schemas.json` files at the roots of lazy-agent-service,
 trading-service, and trading-client are **build artifacts** — never edit them
 by hand. Regenerate them with:
 

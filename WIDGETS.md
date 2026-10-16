@@ -1,6 +1,6 @@
 # HTML-Notes Widget System
 
-The `lazy-tool-service` manages widget creation, planning, and schema enforcement for the HTML-Notes dashboard.
+The `lazy-agent-service` manages widget creation, planning, and schema enforcement for the HTML-Notes dashboard.
 
 ## Widget Generation Lifecycle
 

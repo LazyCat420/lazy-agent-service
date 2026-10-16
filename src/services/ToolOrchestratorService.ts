@@ -268,7 +268,7 @@ let cachedStaticRoots: string[] = [];
  * spelling, so the new name works the moment the registration moves, and
  * nothing on the wire changes today.
  */
-const LOCAL_MCP_PREFIX = "mcp__lazy-tool-service__";
+const LOCAL_MCP_PREFIX = "mcp__lazy-agent-service__";
 
 /** The name prism gives our tools (its MCP registration of this service since
  * 2026-08-07, see trading-service app/services/mcp_prefix.py). Trading's agents
@@ -1739,7 +1739,7 @@ export default class ToolOrchestratorService {
 
   /**
    * Execute a tool from this service's own local catalog, addressed by its
-   * MCP-namespaced name (mcp__lazy-tool-service__<tool>). No MCP transport
+   * MCP-namespaced name (mcp__lazy-agent-service__<tool>). No MCP transport
    * is involved — the LocalToolRouter routes widget / html_notes / canvas
    * tools to HTML-Notes and everything else to the Python bridge.
    */
@@ -1935,7 +1935,8 @@ export default class ToolOrchestratorService {
   static isTradingToolCall(name: string, context: ToolExecutionContext = {}): boolean {
     if (!ToolOrchestratorService.isTradingRequest(context.project)) return false;
     const bare = name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
-    if (bare !== name && !name.startsWith(TRADING_MCP_PREFIX) && !name.startsWith(LOCAL_MCP_PREFIX)) return false;
+    if (bare !== name && !name.startsWith(TRADING_MCP_PREFIX)
+      && !name.startsWith(LOCAL_MCP_PREFIX) && !name.startsWith("mcp__lazy-tool-service__")) return false;
     return ToolOrchestratorService.getTradingToolSchemas().some((tool) => tool._mcpOriginalName === bare);
   }
 
@@ -1971,7 +1972,7 @@ export default class ToolOrchestratorService {
 
   /**
    * Expose the HTML-Notes-facing subset of the local tool_schemas.json
-   * catalog under the mcp__lazy-tool-service__ namespace, so clients like
+   * catalog under the mcp__lazy-agent-service__ namespace, so clients like
    * HTML-Notes can enable them by their namespaced names on /agent.
    * Scoped to widget/canvas/notes tools — trading tools stay off the
    * agent pool (they are served via /execute and the MCP SSE server).
@@ -2023,7 +2024,7 @@ export default class ToolOrchestratorService {
             description: tool.description,
             parameters: tool.parameters,
             domain: tool.domain || "HTML Notes",
-            _mcpServer: "lazy-tool-service",
+            _mcpServer: "lazy-agent-service",
             _mcpOriginalName: tool.name,
           })),
         "tool_schemas.json (local MCP)",
