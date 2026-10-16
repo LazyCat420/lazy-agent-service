@@ -316,7 +316,9 @@ describe("executeJavaScript isolation (audit D3)", () => {
       5_000,
     );
     expect(result.success).toBe(false);
-  });
+    // The snippet's own 5 s budget equalled vitest's default test timeout, so
+    // under deploy's sharded load the test timed out before the worker did.
+  }, 15_000);
 
   it("does not expose the service environment", async () => {
     const result = await executeJavaScript("return Object.keys(globalThis);");
