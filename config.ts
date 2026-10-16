@@ -180,3 +180,12 @@ const CONFIG = {
   NEWSAPI_API_KEY,
 };
 export default CONFIG;
+
+// ── MCP OAuth ─────────────────────────────────────────────────
+// Public origin of this service: MCP OAuth redirects land on
+// `${LAZY_AGENT_SERVICE_PUBLIC_URL}/mcp/oauth/callback`. Unset, the origin of
+// the request that started the flow is used.
+export const LAZY_AGENT_SERVICE_PUBLIC_URL = process.env.LAZY_AGENT_SERVICE_PUBLIC_URL;
+// 32-byte key (base64 or hex) that encrypts MCP OAuth tokens and client
+// registrations at rest. Without it, OAuth MCP servers can't be connected.
+export const MCP_OAUTH_ENCRYPTION_KEY = process.env.MCP_OAUTH_ENCRYPTION_KEY;

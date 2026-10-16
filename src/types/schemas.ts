@@ -226,6 +226,19 @@ export const DeleteFavoritesQuerySchema = z.object({
   key: z.string().min(1, "key is required"),
 });
 
+const McpOutputCapSchema = z.number().int().positive().max(1_000_000);
+
+/** Owner-editable settings (ported from prism-service types/schemas.ts). */
+const McpServerSettingsSchema = {
+  outputCapTokens: McpOutputCapSchema.nullable().optional(),
+  toolOutputCapTokens: z.record(z.string(), McpOutputCapSchema).optional(),
+  /** OAuth 2.1 (PKCE + dynamic registration) instead of static headers. */
+  auth: z
+    .object({ type: z.literal("oauth"), scope: z.string().max(500).nullable().optional() })
+    .nullable()
+    .optional(),
+};
+
 export const PostMcpServerSchema = z.object({
   name: z.string().min(1, "name is required"),
   displayName: z.string().optional(),
@@ -239,6 +252,7 @@ export const PostMcpServerSchema = z.object({
   url: z.string().optional().default(""),
   headers: z.record(z.string(), z.string()).optional().default({}),
   enabled: z.boolean().optional().default(true),
+  ...McpServerSettingsSchema,
 });
 
 export const PutMcpServerSchema = z.object({
@@ -251,6 +265,23 @@ export const PutMcpServerSchema = z.object({
   url: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean().optional(),
+  ...McpServerSettingsSchema,
+});
+
+/** `POST /mcp-servers/:id/prompts/get` — fill one MCP prompt. */
+export const GetMcpPromptSchema = z.object({
+  name: z.string().min(1),
+  arguments: z.record(z.string(), z.string()).optional().default({}),
+});
+
+/** `POST /mcp-servers/:id/resources/read` — read one MCP resource. */
+export const ReadMcpResourceSchema = z.object({
+  uri: z.string().min(1),
+});
+
+/** `POST /mcp-servers/:id/tools/approve` — no `tools` approves every quarantined tool. */
+export const ApproveMcpToolsSchema = z.object({
+  tools: z.array(z.string().min(1)).min(1).optional(),
 });
 
 export const GetConversationsQuerySchema = z.object({

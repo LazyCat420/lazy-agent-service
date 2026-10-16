@@ -70,6 +70,7 @@ import skillsRouter from "./routes/SkillsRoutes.ts";
 import rulesRouter from "./routes/RulesRoutes.ts";
 import agentMemoriesRouter from "./routes/AgentMemoriesRoutes.ts";
 import mcpServersRouter from "./routes/McpServersRoutes.ts";
+import mcpOAuthRouter from "./routes/McpOAuthRoutes.ts";
 
 import favoritesRouter from "./routes/FavoritesRoutes.ts";
 import conversationRouter from "./routes/ConversationExecutionRoute.ts";
@@ -193,6 +194,8 @@ app.use("/admin", adminRouter);
 
 // Public routes (no auth required)
 app.use("/files", filesRouter);
+// MCP OAuth callback: a browser redirect carries no identity headers (the flow is found by its `state`)
+app.use("/mcp/oauth", mcpOAuthRouter);
 
 // Extract project / username / clientIp from headers for downstream tracking
 app.use(authMiddleware);
