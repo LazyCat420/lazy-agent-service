@@ -5,6 +5,7 @@ import {
   SERVER_SENT_EVENT_TYPES,
   STATUS_MESSAGES,
 } from "@rodrigo-barraza/utilities-library/taxonomy";
+import logger from "../../../utils/logger.ts";
 
 import type BaseAgenticHarness from "../BaseAgenticHarness.ts";
 import type AgenticLoopState from "../../AgenticLoopState.ts";
@@ -64,15 +65,21 @@ export async function runExhaustionRecoveryPass(
     )),
   });
 
-  const { tools: _tools, ...exhaustionOptions } = options;
-
-  const enforcedMessages = harness.enforceContextWindow(currentMessages, 0);
+  // Same tool block as every other request of the turn — only calling is
+  // off (tool_choice "none", ported from prism-service ExhaustionRecovery).
+  // Dropping `tools` here rewrote the front of the prompt, so the summary
+  // pass was a full prompt-cache miss.
+  const enforcedMessages = harness.enforceContextWindow(
+    currentMessages,
+    options.tools?.length || 0,
+  );
   const expandedMessages = expandMessagesForFunctionCall(enforcedMessages, {
     filterDeleted: false,
   });
 
-  const augmentedOptions = {
-    ...exhaustionOptions,
+  const augmentedOptions: Record<string, unknown> = {
+    ...options,
+    toolChoice: "none",
     project: context.project,
     agent: context.agent,
     username: context.username,
@@ -103,7 +110,85 @@ export async function runExhaustionRecoveryPass(
   // so new chunk types added to the base dispatcher are automatically handled.
   await harness.consumeStream(exhaustionStream, exhaustionPass, emptyToolNames);
 
+  // ── Empty recovery fallback (ported from prism-service ExhaustionRecovery) ──
+  // Self-hosted or low-capability models sometimes produce empty output on
+  // the recovery pass. Build a synthetic fallback from the accumulated tool
+  // call results so the parent orchestrator always receives actionable
+  // context instead of "[No output]".
+  const recoveryOutputText = (exhaustionPass.finalStreamedText || "").trim();
+  if (!recoveryOutputText && state.streamedToolCalls?.length > 0) {
+    logger.warn(
+      `[ExhaustionRecovery] Recovery pass produced empty output after ${state.iterations} iterations. ` +
+        `Building synthetic fallback from ${state.streamedToolCalls.length} tool call(s).`,
+    );
+    const syntheticSummary = buildSyntheticFallbackSummary(state, currentMessages);
+    state.finalStreamedText = syntheticSummary;
+    exhaustionPass.streamedText = syntheticSummary;
+    exhaustionPass.finalStreamedText = syntheticSummary;
+  }
+
   harness.logIteration(exhaustionPass, currentMessages);
   harness.emitGenerationProgress();
   ConversationGenerationTracker.complete(exhaustionRequestId);
+}
+
+const MAXIMUM_FALLBACK_TOOL_RESULTS = 10;
+const MAXIMUM_RESULT_EXCERPT_LENGTH = 500;
+
+/**
+ * Build a structured fallback summary from the accumulated tool call history.
+ * Ported from prism-service ExhaustionRecovery.buildSyntheticFallbackSummary.
+ */
+export function buildSyntheticFallbackSummary(
+  state: AgenticLoopState,
+  currentMessages: ConversationMessage[],
+  headline = `[Iteration limit reached after ${state.iterations} iterations — the model did not produce a final summary. ` +
+    `Below is a synthetic summary of tool activity.]`,
+): string {
+  const toolCalls = state.streamedToolCalls;
+  const toolNameCounts = new Map<string, number>();
+  for (const toolCall of toolCalls) {
+    toolNameCounts.set(toolCall.name, (toolNameCounts.get(toolCall.name) || 0) + 1);
+  }
+
+  const sections: string[] = [headline];
+
+  const toolUsageSummary = Array.from(toolNameCounts.entries())
+    .map(([toolName, count]) => `  - ${toolName}: ${count} call(s)`)
+    .join("\n");
+  sections.push(`\nTool usage:\n${toolUsageSummary}`);
+
+  const toolResultMessages = currentMessages.filter(
+    (message) => message.role === "assistant" &&
+      Array.isArray(message.toolCalls) &&
+      message.toolCalls.length > 0,
+  );
+
+  const recentToolResults = toolResultMessages
+    .slice(-MAXIMUM_FALLBACK_TOOL_RESULTS)
+    .flatMap((message) =>
+      (message.toolCalls || []).map((toolCall) => {
+        const resultText =
+          typeof toolCall.result === "string"
+            ? toolCall.result
+            : JSON.stringify(toolCall.result);
+        const truncatedResult =
+          resultText.length > MAXIMUM_RESULT_EXCERPT_LENGTH
+            ? resultText.substring(0, MAXIMUM_RESULT_EXCERPT_LENGTH) + "…"
+            : resultText;
+        const argsText =
+          typeof toolCall.args === "string"
+            ? toolCall.args
+            : JSON.stringify(toolCall.args);
+        return `  - ${toolCall.name}(${String(argsText).substring(0, 200)}): ${truncatedResult}`;
+      }),
+    );
+
+  if (recentToolResults.length > 0) {
+    sections.push(
+      `\nRecent tool results (last ${recentToolResults.length}):\n${recentToolResults.join("\n")}`,
+    );
+  }
+
+  return sections.join("\n");
 }

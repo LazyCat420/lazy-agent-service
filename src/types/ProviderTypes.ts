@@ -89,6 +89,8 @@ export interface ProviderOptions {
   presencePenalty?: number;
   repeatPenalty?: number;
   parallelToolCalls?: boolean;
+  /** prism's forced final turn: "none" keeps the tool block but calls with tool_choice "none". */
+  toolChoice?: string;
   candidateCount?: number;
   responseMimeType?: string;
   store?: boolean;

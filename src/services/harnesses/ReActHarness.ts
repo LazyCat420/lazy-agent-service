@@ -45,6 +45,11 @@ import { checkCostBudget } from "./lifecycle/CostBudgetEnforcer.ts";
 import { createSandboxCheckpoint, restoreSandboxCheckpoint } from "./lifecycle/SandboxExecutor.ts";
 import { StuckDetector, normalizeContent, isErrorResult, type StuckPattern } from "../../platform/verify/StuckDetector.ts";
 import { compactToolResultsForPressure, isContextWindowError } from "../AgenticLoopService.ts";
+import {
+  MAX_EMPTY_OUTPUT_RETRIES,
+  EMPTY_OUTPUT_TEMPERATURE_BUMP,
+  emptyOutputRecoveryNotice,
+} from "../../constants/LoopGuards.ts";
 
 import PlanningModeService from "../PlanningModeService.ts";
 import PromptLocaleService from "../PromptLocaleService.ts";
@@ -197,6 +202,7 @@ export default class ReActHarness extends BaseAgenticHarness {
 
     let currentMessages: ConversationMessage[] = [...context.messages];
     let truncationRecoveryCount = 0;
+    let emptyOutputRetryCount = 0;
     let hasCleanTextBreak = false;
 
     // Repetition/stall tracking — consecutive iterations issuing the exact
@@ -949,9 +955,36 @@ export default class ReActHarness extends BaseAgenticHarness {
           break;
         }
 
-        // Genuinely empty output (not truncation)
+        // Genuinely empty output (not truncation) — retried in-loop, ported
+        // from prism-service ReActHarness: an empty reply must not end the
+        // turn (measured 2026-10-07: one empty GLM reply ended a V3 replay).
+        // Bump the temperature and nudge with a tagged system message; after
+        // MAX_EMPTY_OUTPUT_RETRIES attempts the turn ends as before.
+        emptyOutputRetryCount++;
+        if (emptyOutputRetryCount <= MAX_EMPTY_OUTPUT_RETRIES) {
+          const currentTemperature =
+            typeof context.options.temperature === "number"
+              ? context.options.temperature
+              : 0.7;
+          context.options.temperature = Math.min(
+            currentTemperature + EMPTY_OUTPUT_TEMPERATURE_BUMP,
+            1.5,
+          );
+          logger.warn(
+            `[AgenticLoop] Empty model output on iteration ${state.iterations} — ` +
+              `retry ${emptyOutputRetryCount}/${MAX_EMPTY_OUTPUT_RETRIES} (temperature=${context.options.temperature}).`,
+          );
+          currentMessages.push({
+            role: "system",
+            content: emptyOutputRecoveryNotice(),
+            _isSystemWarning: true,
+          });
+          this.logIteration(pass, currentMessages);
+          continue;
+        }
+
         logger.warn(
-          `[AgenticLoop] Empty model output on iteration ${state.iterations} — ` +
+          `[AgenticLoop] Empty output recovery exhausted on iteration ${state.iterations} — ` +
             `text=${pass.streamedText.length}, thinking=${pass.streamedThinking.length}, ` +
             `toolCalls=${pass.pendingToolCalls.length}. Breaking.`,
         );

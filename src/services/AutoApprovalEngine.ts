@@ -153,12 +153,10 @@ export default class AutoApprovalEngine {
     const tier = this.getTier(toolCall.name);
     const tierLabel = TIER_LABELS[tier] || "write";
 
-    // Full Auto mode: everything runs
-    if (this.fullAuto) {
-      return { isApproved: true, tier, tierLabel, reason: "full_auto" };
-    }
-
-    // ── Policy evaluation (takes precedence over tier system) ──
+    // ── Policy evaluation (takes precedence over tier system AND full auto) ──
+    // ported from prism-service AutoApprovalEngine.explainCall: a DENY policy
+    // is final in every mode — full auto answers only what the policies did
+    // not decide, so `autoApprove` must not short-circuit before they are read.
     if (this.policies.length > 0) {
       const policyResult = PolicyEngine.evaluate(
         this.policies,
@@ -182,6 +180,11 @@ export default class AutoApprovalEngine {
               reason: policyResult.reason,
             };
           case "ASK_USER":
+            // prism: full auto answers a rule's/policy's "ask" with yes —
+            // only a DENY is final under autoApprove.
+            if (this.fullAuto) {
+              return { isApproved: true, tier, tierLabel, reason: "full_auto" };
+            }
             return {
               isApproved: false,
               tier,
@@ -191,6 +194,11 @@ export default class AutoApprovalEngine {
         }
       }
       // No policy matched — fall through to tier system
+    }
+
+    // Full Auto mode: everything the policies did not deny runs
+    if (this.fullAuto) {
+      return { isApproved: true, tier, tierLabel, reason: "full_auto" };
     }
 
     // Tier 1: always auto-approve

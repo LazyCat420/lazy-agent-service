@@ -65,6 +65,18 @@ const CORE_ORCHESTRATOR_TOOLS = new Set<string>(CORE_ORCHESTRATOR_TOOLS_LIST);
 /** Core agentic tools bypass the enabledTools filter (always available to all agents as part of the core cognitive architecture) */
 const CORE_AGENTIC_TOOLS = new Set<string>(CORE_AGENTIC_TOOLS_LIST);
 
+// Decision (ch.06 item 3): these three stay available even for a persona
+// that unlocks core tools (coreToolsLocked: false). prism force-adds the
+// core agentic tools; the SDK's `coreToolsLocked: false` here stripped
+// execute_python, emit_structured_output and think from trading agents —
+// and without emit_structured_output a trading run cannot produce its
+// artifact. An explicit blockedTools entry still wins (checked after).
+const ALWAYS_AVAILABLE_COGNITIVE_TOOLS: Record<string, true> = {
+  [TOOL_NAMES.EXECUTE_PYTHON]: true,
+  [TOOL_NAMES.EMIT_STRUCTURED_OUTPUT]: true,
+  [TOOL_NAMES.THINK]: true,
+};
+
 const PRISM_LOCAL_TOOL_NAMES = {
   has(name: string): boolean {
     return false;
@@ -318,6 +330,7 @@ export default class AgenticToolResolver {
         )
           return true;
         if (PRISM_LOCAL_TOOL_NAMES.has(tool.name)) return true;
+        if (ALWAYS_AVAILABLE_COGNITIVE_TOOLS[cleanToolName]) return true;
         return false;
       });
 
