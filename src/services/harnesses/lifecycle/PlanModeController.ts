@@ -1,5 +1,7 @@
 import PlanningModeService from "../../PlanningModeService.ts";
+import { randomUUID } from "node:crypto";
 import { pendingApprovals } from "../../ApprovalRegistry.ts";
+import { pendingApprovalStore } from "../../PendingApprovalStore.ts";
 import PromptLocaleService from "../../PromptLocaleService.ts";
 import logger from "../../../utils/logger.ts";
 import {
@@ -124,9 +126,35 @@ export async function handleExitPlanMode(
     planApproved = true;
     logger.info("[PlanningMode] Auto-approved plan (autoApprove=true)");
   } else {
-    planApproved = await new Promise<boolean>((resolve) => {
+    // A decision the user posted for this very plan while no turn ran (a
+    // restart killed the turn that proposed it) is taken instead of asking again.
+    const storedPlan = (await pendingApprovalStore.listUndelivered(conversationId, "plan")).find(
+      (record) => record.args.plan === planText,
+    );
+    const takenStored = storedPlan ? await pendingApprovalStore.markDelivered(storedPlan.id) : false;
+    if (!takenStored) {
+      // Record the plan durably before waiting on its card (restart-safe, exactly-once).
+      await pendingApprovalStore.cancelPending(conversationId, "superseded", ["plan"]);
+      const batchId = randomUUID();
+      await pendingApprovalStore.create([
+        {
+          kind: "plan",
+          conversationId,
+          batchId,
+          itemId: `plan-${batchId}`,
+          position: 0,
+          name: TOOL_NAMES.EXIT_PLAN_MODE,
+          args: { plan: planText, steps: planSteps },
+          argsSchema: null,
+        },
+      ]);
+    }
+    planApproved = takenStored
+      ? storedPlan?.decision?.decision === "allow"
+      : await new Promise<boolean>((resolve) => {
       const timeoutId = setTimeout(() => {
         pendingApprovals.delete(conversationId);
+        void pendingApprovalStore.cancelPending(conversationId, "timeout", ["plan"]);
         resolve(false);
       }, PLAN_APPROVAL_TIMEOUT_MS);
 

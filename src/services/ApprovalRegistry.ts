@@ -12,6 +12,10 @@ export interface ApprovalResolution {
   isApproved: boolean;
   shouldApproveAll?: boolean;
   reason?: string;
+  /** The user's own words for a denial — relayed to the model. */
+  denialReason?: string;
+  /** Edited arguments by tool call id (allow only; already schema-validated). */
+  editedArgs?: Record<string, Record<string, unknown>>;
 }
 
 export interface PendingToolCallSummary {
@@ -24,6 +28,8 @@ export interface PendingToolCallSummary {
 export interface PendingToolApprovalEntry {
   resolve: (value: ApprovalResolution) => void;
   type: "tool";
+  /** Durable record id of each call, by position (PendingApprovalStore itemId). */
+  itemIds?: string[];
   tools: string[];
   toolCalls: PendingToolCallSummary[];
 }

@@ -8,7 +8,7 @@ import {
 
 import { createStandardHooks } from "./lifecycle/HookInitializer.ts";
 import { executeToolBatch } from "./lifecycle/ToolExecutor.ts";
-import { checkAndWaitForApproval } from "./lifecycle/ApprovalGate.ts";
+import { checkAndWaitForApproval, rejectionResult } from "./lifecycle/ApprovalGate.ts";
 import {
   emitPostExecutionStatus,
   processToolResultMedia,
@@ -446,7 +446,7 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
           // capabilities, and the interpreter is never one of them; other
           // runs go through the approval gate.
           context._currentMessages = currentMessages;
-          const approval = context.runtimeToolExecutor
+          const approval: { isApproved: boolean; shouldApproveAll: boolean; reason?: string } = context.runtimeToolExecutor
             ? { isApproved: false, shouldApproveAll: false }
             : await checkAndWaitForApproval([toolCall], context, approvalEngine);
           if (approval.isApproved) {
@@ -457,15 +457,13 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
               {
                 name: toolCall.name,
                 id: toolCall.id,
-                result: {
-                  success: false,
-                  error: context.runtimeToolExecutor
-                    ? "CODE_INTERPRETER_NOT_ADMITTED"
-                    : "USER_REJECTED",
-                  message: context.runtimeToolExecutor
-                    ? "code_interpreter is not in this run's profile whitelist."
-                    : "Tool execution was manually rejected by the user.",
-                },
+                result: context.runtimeToolExecutor
+                  ? {
+                      success: false,
+                      error: "CODE_INTERPRETER_NOT_ADMITTED",
+                      message: "code_interpreter is not in this run's profile whitelist.",
+                    }
+                  : rejectionResult(approval.reason),
               },
             ];
           }
@@ -473,7 +471,7 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
           // ── Execute through the same path ReActHarness uses ────
           context._currentMessages = currentMessages;
 
-          const { isApproved, shouldApproveAll } = await checkAndWaitForApproval(
+          const { isApproved, shouldApproveAll, reason: denialReason } = await checkAndWaitForApproval(
             [toolCall],
             context,
             approvalEngine,
@@ -484,11 +482,7 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
               {
                 name: toolCall.name,
                 id: toolCall.id,
-                result: {
-                  success: false,
-                  error: "USER_REJECTED",
-                  message: "Tool execution was manually rejected by the user.",
-                },
+                result: rejectionResult(denialReason),
               },
             ];
           } else {

@@ -18,9 +18,11 @@ import logger from "../utils/logger.ts";
  * 404 — no pending question, or an unknown questionId (the client then
  *       sends the answer as a normal message).
  * 409 — a second answer to a card already answered.
+ * 200 with `delivered: false` — stored, but no live turn took it (restart);
+ *       the next turn that asks the same questions consumes it.
  */
 export function handleQuestionAnswer(routeLabel: string) {
-  return (request: Request, response: Response) => {
+  return async (request: Request, response: Response) => {
     const { conversationId, questionId, answer, answers } = request.body ?? {};
 
     if (typeof conversationId !== "string" || !conversationId) {
@@ -39,7 +41,7 @@ export function handleQuestionAnswer(routeLabel: string) {
       return response.status(400).json({ error: "Missing answer or answers" });
     }
 
-    const outcome = AgenticLoopService.resolveUserQuestion(conversationId, normalizedAnswers, {
+    const outcome = await AgenticLoopService.resolveUserQuestion(conversationId, normalizedAnswers, {
       questionId: questionId || undefined,
     });
 
@@ -66,6 +68,6 @@ export function handleQuestionAnswer(routeLabel: string) {
     logger.info(
       `[${routeLabel}] ${normalizedAnswers.length} answer(s) for conversation ${conversationId}`,
     );
-    return response.json({ ok: true, questionId: outcome.questionId });
+    return response.json({ ok: true, questionId: outcome.questionId, delivered: outcome.delivered });
   };
 }

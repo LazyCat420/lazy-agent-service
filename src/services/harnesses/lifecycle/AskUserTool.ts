@@ -1,4 +1,7 @@
 import { pendingQuestions, type QuestionAnswer, type QuestionDefinition } from "../../ApprovalRegistry.ts";
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { pendingApprovalStore } from "../../PendingApprovalStore.ts";
 import logger from "../../../utils/logger.ts";
 import type { AgenticContext } from "../types.ts";
 
@@ -6,8 +9,10 @@ import type { AgenticContext } from "../types.ts";
  * ask_user — the model asks the user one or more questions mid-turn and the
  * turn parks until POST /agent/answer (or /conversation/answer) answers the
  * card. Ported from prism-service services/tool-definitions/AskUserQuestionTool.ts
- * (blocking path only: no durable PendingDecisionStore, no non-blocking cards).
- * The wait ends with the turn's abort signal.
+ * (blocking path only: no non-blocking cards). The wait ends with the turn's
+ * abort signal. The question is stored (PendingApprovalStore) before the card
+ * is emitted; an answer posted while no turn runs (a restart) is stored, and
+ * the next turn that asks the same questions takes it instead of asking again.
  */
 
 const MAX_QUESTIONS = 4;
@@ -121,11 +126,38 @@ export async function executeAskUser(
     return { error: "No conversation — ask_user requires an active conversation" };
   }
 
+  // An answer the user gave before a restart killed the turn that asked.
+  const stored = (await pendingApprovalStore.listUndelivered(conversationId, "question")).find(
+    (record) => isDeepStrictEqual(record.questions, normalized),
+  );
+  if (stored && (await pendingApprovalStore.markDelivered(stored.id))) {
+    logger.info(`[AskUser] ${stored.itemId} answered before the restart — not asking again`);
+    return {
+      questionId: stored.itemId,
+      questions: normalized.map((entry) => entry.question),
+      answers: stored.answers as QuestionAnswer[],
+    };
+  }
+
   const questionId = `q-${Date.now().toString(36)}-${(questionCounter++).toString(36)}`;
   let settle!: (answers: QuestionAnswer[] | null) => void;
   const answered = new Promise<QuestionAnswer[] | null>((resolve) => {
     settle = resolve;
   });
+  await pendingApprovalStore.cancelPending(conversationId, "superseded", ["question"]);
+  await pendingApprovalStore.create([
+    {
+      kind: "question",
+      conversationId,
+      batchId: randomUUID(),
+      itemId: questionId,
+      position: 0,
+      name: "ask_user",
+      args: { context: typeof args.context === "string" ? args.context : null },
+      argsSchema: null,
+      questions: normalized,
+    },
+  ]);
   pendingQuestions.set(conversationId, {
     questionId,
     questions: normalized,

@@ -34,7 +34,7 @@ import { getErrorMessage } from "../../../utils/ErrorHelpers.ts";
 import RequestLogger from "../../RequestLogger.ts";
 import { createStandardHooks } from "../lifecycle/HookInitializer.ts";
 import { executeToolBatch } from "../lifecycle/ToolExecutor.ts";
-import { checkAndWaitForApproval } from "../lifecycle/ApprovalGate.ts";
+import { checkAndWaitForApproval, rejectionResult } from "../lifecycle/ApprovalGate.ts";
 import {
   emitPostExecutionStatus,
   processToolResultMedia,
@@ -416,7 +416,7 @@ export async function runGraphOfThoughts(
 
       // ── Tool execution from synthesized output ──────────────
       if (synthesizedPass.pendingToolCalls.length > 0) {
-        const { isApproved, shouldApproveAll } =
+        const { isApproved, shouldApproveAll, reason: denialReason } =
           await checkAndWaitForApproval(
             synthesizedPass.pendingToolCalls,
             context,
@@ -429,11 +429,7 @@ export async function runGraphOfThoughts(
           results = synthesizedPass.pendingToolCalls.map((toolCall) => ({
             name: toolCall.name,
             id: toolCall.id,
-            result: {
-              success: false,
-              error: "USER_REJECTED",
-              message: "Tool execution was manually rejected by the user.",
-            },
+            result: rejectionResult(denialReason),
           }));
         } else {
           if (shouldApproveAll) {

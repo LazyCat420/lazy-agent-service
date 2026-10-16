@@ -13,7 +13,8 @@ import logger from "../utils/logger.ts";
  *     conversationId: string,
  *     toolCallId?: string,            // required when several calls are pending (unless scope is batch/conversation)
  *     decision: "allow" | "deny",
- *     reason?: string,                // a denial's reason
+ *     reason?: string,                // a denial's reason, relayed to the model (cut to 500 chars)
+    editedArgs?: object,            // allow with these arguments (validated against the tool schema, 400 if invalid)
  *     scope?: "call" | "batch" | "conversation",   // batch/conversation: also approve what follows in this turn
  *   }
  *
@@ -22,10 +23,12 @@ import logger from "../utils/logger.ts";
  * 400, never a yes.
  *
  * 404 — nothing pending under this conversation, or a toolCallId not pending.
- * 400 — invalid body, or several calls pending and none named.
+ * 400 — invalid body, several calls pending and none named, or editedArgs that
+ *       accompany a deny / fail the tool's schema.
+ * 409 — the call was already decided (or its card is settled).
+ * 200 with `delivered: false` — stored, but no live turn took it (restart).
  *
- * Not ported: editedArgs (no argument re-validation path here → 400) and
- * the durable PendingDecisionStore (a decision only reaches a live turn).
+ * Tool approvals are durable (PendingApprovalStore).
  */
 
 type Decision = "allow" | "deny";
@@ -37,7 +40,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 export function handleApprovalDecision(logPrefix: string) {
-  return (request: Request, response: Response) => {
+  return async (request: Request, response: Response) => {
     const body: unknown = request.body;
     if (!isPlainObject(body)) {
       return response.status(400).json({ error: "Body must be a JSON object" });
@@ -71,8 +74,8 @@ export function handleApprovalDecision(logPrefix: string) {
     if (reason !== undefined && reason !== null && typeof reason !== "string") {
       return response.status(400).json({ error: "reason must be a string" });
     }
-    if (editedArgs !== undefined) {
-      return response.status(400).json({ error: "editedArgs is not supported by this service" });
+    if (editedArgs !== undefined && !isPlainObject(editedArgs)) {
+      return response.status(400).json({ error: "editedArgs must be a JSON object" });
     }
     let resolvedScope: Scope = "call";
     if (scope !== undefined) {
@@ -84,12 +87,24 @@ export function handleApprovalDecision(logPrefix: string) {
       resolvedScope = "batch";
     }
 
-    const outcome = AgenticLoopService.decideApproval(conversationId, {
+    const outcome = await AgenticLoopService.decideApproval(conversationId, {
       isApproved: resolved === "allow",
       ...(toolCallId ? { toolCallId: toolCallId as string } : {}),
       batchWide: resolvedScope !== "call",
       ...(typeof reason === "string" ? { reason } : {}),
+      ...(editedArgs !== undefined ? { editedArgs: editedArgs as Record<string, unknown> } : {}),
     });
+
+    if (outcome.status === "invalid") {
+      return response.status(400).json({ error: outcome.error, conversationId });
+    }
+    if (outcome.status === "already_decided") {
+      return response.status(409).json({
+        error: "This approval was already decided",
+        conversationId,
+        ...(toolCallId ? { toolCallId } : {}),
+      });
+    }
 
     if (outcome.status === "not_found") {
       return response.status(404).json({
@@ -109,7 +124,7 @@ export function handleApprovalDecision(logPrefix: string) {
     }
 
     logger.info(
-      `${logPrefix} ${resolved} ${outcome.decidedToolCallIds.join(", ")} (scope ${resolvedScope}) for conversation ${conversationId}`,
+      `${logPrefix} ${resolved} ${outcome.decidedToolCallIds.join(", ")} (scope ${resolvedScope}${editedArgs !== undefined ? ", edited args" : ""}) for conversation ${conversationId}${outcome.delivered ? "" : " — stored, no live turn"}`,
     );
     return response.json({
       ok: true,
@@ -118,6 +133,7 @@ export function handleApprovalDecision(logPrefix: string) {
       scope: resolvedScope,
       type: outcome.type,
       decidedToolCallIds: outcome.decidedToolCallIds,
+      delivered: outcome.delivered,
     });
   };
 }

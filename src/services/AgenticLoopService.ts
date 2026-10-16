@@ -12,6 +12,9 @@ import {
 import ConversationGenerationTracker from "./ConversationGenerationTracker.ts";
 import ToolContext from "./ToolContext.ts";
 import logger from "../utils/logger.ts";
+import { pendingApprovalStore } from "./PendingApprovalStore.ts";
+import { validateToolArgs } from "../utils/ToolArgsValidator.ts";
+import { PENDING_DECISIONS } from "../constants.ts";
 import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
 import { TraceContext } from "../platform/trace/TraceContext.ts";
 import { DEFAULT_CONTEXT_BUDGET } from "../platform/context/ContextBudget.ts";
@@ -24,9 +27,6 @@ import { retrieveOffloadedContentTool } from "../platform/offload/retrieveOffloa
 import { getSharedOffloadStore } from "../platform/offload/OffloadStore.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
-
-/** Ids of question cards already answered, so a second answer reads 409. */
-const answeredQuestionIds = new Set<string>();
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Loop resilience helpers (compaction pressure + overflow recovery)
@@ -286,6 +286,8 @@ export const SKILL_READ_TOOL_SCHEMA = {
  *
  * Also exposes approval/question resolution APIs used by AgentRoutes.
  */
+const APPROVAL_KINDS = ["tool", "plan"] as const;
+
 export default class AgenticLoopService {
   /** Run an agentic loop using the specified (or default) harness. */
   static async runAgenticLoop(
@@ -587,6 +589,11 @@ export default class AgenticLoopService {
       // Clean up in-memory state keyed by conversationId (client-facing)
       pendingApprovals.delete(conversationId);
       pendingQuestions.delete(conversationId);
+      try {
+        await pendingApprovalStore.cancelPending(conversationId, "turn_ended");
+      } catch (storeError: unknown) {
+        logger.warn(`[Approvals] Could not cancel pending approvals for ${conversationId}: ${storeError}`);
+      }
 
       // Always clean up per-session tracker entries to prevent memory leaks —
       // sub-agent sessions have their own agentConversationId that must be released.
@@ -618,7 +625,14 @@ export default class AgenticLoopService {
     {
       shouldApproveAll = false,
       reason,
-    }: { shouldApproveAll?: boolean; reason?: string } = {},
+      denialReason,
+      editedArgs,
+    }: {
+      shouldApproveAll?: boolean;
+      reason?: string;
+      denialReason?: string;
+      editedArgs?: Record<string, Record<string, unknown>>;
+    } = {},
   ): boolean {
     const entry = pendingApprovals.get(conversationId);
     if (!entry) return false;
@@ -630,50 +644,120 @@ export default class AgenticLoopService {
         isApproved,
         shouldApproveAll,
         reason: reason ?? (isApproved ? "user_approved" : "user_rejected"),
+        ...(denialReason ? { denialReason } : {}),
+        ...(editedArgs ? { editedArgs } : {}),
       });
     }
     return true;
   }
 
   /**
-   * Decide the pending approval with the checks the HTTP route needs:
-   * `not_found` (nothing pending, or `toolCallId` is not among the pending
-   * calls) and `ambiguous` (several calls pending, none named, and the
-   * decision is not batch-wide). ported from prism-service
-   * AgenticLoopService.decideApproval, narrowed to this service's single
-   * pending batch per conversation.
+   * Decide the pending approval with the checks the HTTP route needs.
+   * Tool approvals are durable (PendingApprovalStore): the decision is a
+   * conditional write on the stored record, so it works after a restart
+   * (`delivered: false` — no live turn took it) and a second decision on the
+   * same call is `already_decided`. `invalid` is a bad `editedArgs`.
+   * ported from prism-service AgenticLoopService.decideApproval /
+   * ApprovalRegistry.decide, narrowed to this service's single pending batch
+   * per conversation.
    */
-  static decideApproval(
+  static async decideApproval(
     conversationId: string,
     input: {
       isApproved: boolean;
       toolCallId?: string;
       batchWide?: boolean;
       reason?: string;
+      editedArgs?: Record<string, unknown>;
     },
-  ):
-    | { status: "decided"; type: "tool" | "plan"; decidedToolCallIds: string[] }
+  ): Promise<
+    | { status: "decided"; type: "tool" | "plan"; decidedToolCallIds: string[]; delivered: boolean }
     | { status: "not_found" }
-    | { status: "ambiguous"; pendingToolCallIds: string[] } {
+    | { status: "already_decided" }
+    | { status: "invalid"; error: string }
+    | { status: "ambiguous"; pendingToolCallIds: string[] }
+  > {
     const entry = pendingApprovals.get(conversationId);
-    if (!entry) return { status: "not_found" };
-    const pendingIds = (entry.toolCalls ?? [])
-      .map((call) => call.id)
-      .filter((id): id is string => typeof id === "string");
-    if (input.toolCallId && !pendingIds.includes(input.toolCallId)) {
-      return { status: "not_found" };
+    const pending = await pendingApprovalStore.listPending(conversationId, APPROVAL_KINDS);
+
+    if (pending.length === 0) {
+      if (input.toolCallId) {
+        const settled = await pendingApprovalStore.findByItem(conversationId, input.toolCallId);
+        if (settled) return { status: "already_decided" };
+      }
+      return (await pendingApprovalStore.hasSettled(conversationId, APPROVAL_KINDS))
+        ? { status: "already_decided" }
+        : { status: "not_found" };
     }
-    if (!input.toolCallId && !input.batchWide && pendingIds.length > 1) {
+    const type = pending[0].kind === "plan" ? "plan" : "tool";
+
+    const pendingIds = pending.map((record) => record.itemId);
+    if (input.toolCallId) {
+      const settled = await pendingApprovalStore.findByItem(conversationId, input.toolCallId);
+      if (settled && settled.status !== "pending") return { status: "already_decided" };
+      if (!pendingIds.includes(input.toolCallId)) return { status: "not_found" };
+    } else if (!input.batchWide && pending.length > 1) {
       return { status: "ambiguous", pendingToolCallIds: pendingIds };
     }
-    AgenticLoopService.resolveApproval(conversationId, input.isApproved, {
-      shouldApproveAll: input.batchWide === true && input.isApproved,
-      reason: input.reason,
-    });
+    const target = input.toolCallId
+      ? pending.find((record) => record.itemId === input.toolCallId)
+      : pending.length === 1
+        ? pending[0]
+        : undefined;
+
+    if (input.editedArgs !== undefined) {
+      if (!input.isApproved) {
+        return { status: "invalid", error: "editedArgs can only accompany an allow" };
+      }
+      if (type === "plan") {
+        return { status: "invalid", error: "a plan's arguments cannot be edited" };
+      }
+      if (!target) return { status: "invalid", error: "editedArgs needs a toolCallId" };
+      const validation = validateToolArgs(target.argsSchema, input.editedArgs);
+      if (validation.ok === false) {
+        return { status: "invalid", error: `editedArgs rejected: ${validation.error}` };
+      }
+    }
+
+    const reason = input.isApproved
+      ? undefined
+      : input.reason?.trim().slice(0, PENDING_DECISIONS.MAX_REASON_CHARS) || undefined;
+    const scope = input.batchWide ? "batch" : "call";
+    const delivered = entry?.type === type;
+    // Settle the targeted call first: losing that conditional write means
+    // someone decided it already.
+    const ordered = target ? [target, ...pending.filter((record) => record !== target)] : pending;
+    for (const [index, record] of ordered.entries()) {
+      const isTarget = record === target;
+      const settled = await pendingApprovalStore.settle(record.id, {
+        status: "decided",
+        delivered,
+        decision: {
+          decision: input.isApproved ? "allow" : "deny",
+          scope,
+          source: "user",
+          ...(reason ? { reason } : {}),
+          ...(isTarget && input.editedArgs !== undefined ? { editedArgs: input.editedArgs } : {}),
+        },
+      });
+      if (!settled && index === 0) return { status: "already_decided" };
+    }
+
+    if (delivered) {
+      AgenticLoopService.resolveApproval(conversationId, input.isApproved, {
+        shouldApproveAll: input.batchWide === true && input.isApproved,
+        reason: input.reason,
+        ...(reason ? { denialReason: reason } : {}),
+        ...(target && input.editedArgs !== undefined
+          ? { editedArgs: { [target.itemId]: input.editedArgs } }
+          : {}),
+      });
+    }
     return {
       status: "decided",
-      type: entry.type,
-      decidedToolCallIds: input.toolCallId ? [input.toolCallId] : pendingIds,
+      type,
+      decidedToolCallIds: target ? [target.itemId] : pendingIds,
+      delivered,
     };
   }
 
@@ -713,27 +797,37 @@ export default class AgenticLoopService {
   }
 
   /**
-   * Resolve a pending question for a conversation. With `questionId` only
-   * that card is answered: a different id is `unknown_question`, and an id
-   * answered a moment ago is `already_answered` (a second answer must not
-   * be taken for the next question). ported from prism-service
-   * AgenticLoopService.resolveUserQuestion.
+   * Resolve a pending question for a conversation. Questions are durable
+   * (PendingApprovalStore): the answer is a conditional write on the stored
+   * record, so an answer to a card whose turn died (a restart) is stored and
+   * reported `delivered: false`, and a second answer to the same card is
+   * `already_answered`. With `questionId` only that card is answered: a
+   * different id is `unknown_question`. ported from prism-service
+   * AgenticLoopService.resolveUserQuestion / QuestionRegistry.
    */
-  static resolveUserQuestion(
+  static async resolveUserQuestion(
     conversationId: string,
     answers: QuestionAnswer[],
     { questionId }: { questionId?: string } = {},
-  ):
-    | { resolved: true; questionId: string | undefined; reason?: undefined }
+  ): Promise<
+    | { resolved: true; questionId: string | undefined; delivered: boolean; reason?: undefined }
     | {
         resolved: false;
         reason: "no_pending_question" | "unknown_question" | "already_answered";
         questionId?: string;
-      } {
+      }
+  > {
     const entry = pendingQuestions.get(conversationId);
-    if (!entry) {
-      if (questionId && answeredQuestionIds.has(questionId)) {
-        return { resolved: false, reason: "already_answered", questionId };
+    const pending = await pendingApprovalStore.listPending(conversationId, ["question"]);
+    const target = questionId
+      ? pending.find((record) => record.itemId === questionId)
+      : pending[pending.length - 1];
+    if (!target) {
+      if (questionId) {
+        const settled = await pendingApprovalStore.findByItem(conversationId, questionId);
+        if (settled?.kind === "question") {
+          return { resolved: false, reason: "already_answered", questionId };
+        }
       }
       return {
         resolved: false,
@@ -741,18 +835,17 @@ export default class AgenticLoopService {
         ...(questionId ? { questionId } : {}),
       };
     }
-    if (questionId && entry.questionId && entry.questionId !== questionId) {
+    if (questionId && entry?.questionId && entry.questionId !== questionId) {
       return { resolved: false, reason: "unknown_question", questionId };
     }
-    pendingQuestions.delete(conversationId);
-    if (entry.questionId) {
-      answeredQuestionIds.add(entry.questionId);
-      if (answeredQuestionIds.size > 1000) {
-        answeredQuestionIds.delete(answeredQuestionIds.values().next().value as string);
-      }
+    const delivered = entry !== undefined && entry.questionId === target.itemId;
+    const won = await pendingApprovalStore.settle(target.id, { status: "decided", answers, delivered });
+    if (!won) return { resolved: false, reason: "already_answered", questionId: target.itemId };
+    if (delivered) {
+      pendingQuestions.delete(conversationId);
+      entry.resolve({ answers });
     }
-    entry.resolve({ answers });
-    return { resolved: true, questionId: entry.questionId };
+    return { resolved: true, questionId: target.itemId, delivered };
   }
 
   /** Check if a conversation has a pending question. */
