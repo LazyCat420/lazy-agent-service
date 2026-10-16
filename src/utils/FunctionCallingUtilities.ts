@@ -9,6 +9,7 @@
 
 import type { ChatMessage, ToolCallEntry } from "../types/admin.ts";
 import { TOOL_NAMES } from "@rodrigo-barraza/utilities-library/taxonomy";
+import { fitForPrism } from "../services/ModelVisibleToolResult.ts";
 
 // ── Array keys whose entries get capped during truncation ─────
 const TRUNCATABLE_ARRAY_KEYS = [
@@ -29,14 +30,22 @@ function isTruncatableResult(
 
 /**
  * Truncate a tool result to avoid blowing up the model's context window.
- * Caps arrays at 10 items and the serialized JSON at ~maxChars.
- * The full result is still stored in the DB and shown in the UI;
+ * Caps arrays at 10 items and bounds the serialized JSON at ~maxChars
+ * (prism's per-result semantics, ch.06 item 7). The cut is prism's, not a
+ * byte slice: oversized strings become a line-aligned preview and oversized
+ * JSON is shortened to valid JSON that fits — never `serialized.slice(0,
+ * maxChars) + "…}"`, which shipped invalid JSON to OpenAI-compatible
+ * providers. The full result is still stored in the DB and shown in the UI;
  * this only affects what gets re-sent to the model.
  */
 export function truncateToolResult(
   result: object | string | number | boolean | null | undefined,
   maxChars = 8000,
 ): object | string | number | boolean | null | undefined {
+  if (typeof result === "string") {
+    if (result.length <= maxChars) return result;
+    return fitForPrism(result, maxChars).text;
+  }
   if (!result || typeof result !== "object") return result;
 
   // Also handle top-level arrays (e.g. tides, earthquakes)
@@ -45,7 +54,7 @@ export function truncateToolResult(
     sliced.push({ _truncated: `Showing 10 of ${result.length}` });
     const serialized = JSON.stringify(sliced);
     return serialized.length > maxChars
-      ? serialized.slice(0, maxChars) + "…}"
+      ? fitForPrism(serialized, maxChars).text
       : sliced;
   }
 
@@ -63,7 +72,7 @@ export function truncateToolResult(
 
   const serialized = JSON.stringify(trimmed);
   if (serialized.length <= maxChars) return trimmed;
-  return serialized.slice(0, maxChars) + "…}";
+  return fitForPrism(serialized, maxChars).text;
 }
 
 interface ExpandOptions {
@@ -175,21 +184,27 @@ export function expandMessagesForFunctionCall(
             tool_call_id: toolCall.id,
             content:
               typeof finalResult === "string"
-                ? finalResult
+                ? (finalResult.length > 8000
+                    ? fitForPrism(finalResult).text
+                    : finalResult)
                 : JSON.stringify(truncateToolResult(truncatableResult)),
           };
         });
       return [assistantMessage, ...toolMessages];
     }
 
-    // Pass through tool messages with their required fields
+    // Pass through tool messages with their required fields; a large string
+    // result is bounded like every other tool result (ch.06 item 7).
     if (message.role === "tool") {
+      const content = typeof message.content === "string" && message.content.length > 8000
+        ? fitForPrism(message.content).text
+        : message.content;
       return [
         {
           role: "tool",
           tool_call_id: message.tool_call_id,
           name: message.name,
-          content: message.content,
+          content,
         },
       ];
     }
