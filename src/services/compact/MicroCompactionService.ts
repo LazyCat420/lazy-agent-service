@@ -2,6 +2,7 @@ import logger from "../../utils/logger.ts";
 import { estimateTokens } from "../../utils/CostCalculator.ts";
 import { TOOL_NAMES } from "../ToolTaxonomyConstants.ts";
 import type { ChatMessage, ToolCallEntry } from "../../types/admin.ts";
+import { markDerivedMessage } from "./MessageLineage.ts";
 
 // ────────────────────────────────────────────────────────────
 // MicroCompactionService — In-Memory Tool Result Clearing
@@ -136,10 +137,13 @@ export default class MicroCompactionService {
 
       if (!messageModified) return message;
 
-      return {
-        ...message,
-        toolCalls: compactedToolCalls,
-      };
+      return markDerivedMessage(
+        {
+          ...message,
+          toolCalls: compactedToolCalls,
+        },
+        message,
+      );
     });
 
     if (clearedResultCount > 0) {

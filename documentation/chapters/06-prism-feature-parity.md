@@ -132,15 +132,17 @@ Each is one landed change with a test. Order = risk to the trading cycle.
   retry 408/429/5xx with zero chunks, 300 s idle abort, a cut stream is a
   failure. Our own shim answers saturation with 503 + Retry-After and our loop
   never retries it.
-- [~] **6. The single-turn rolling window:** *(recency by model calls, unified
-  budgets and the per-conversation breaker landed on `wt-harness-a`:
-  `compact/RecencyProtection.ts` — the last 4 model calls / 20k tool-output
-  tokens, not user turns — drives every shrink in `ContextWindowManager`;
-  its budget comes from `ContextBudgets` in the same units as the clamp and
-  compaction trigger; `CompactionService`'s breaker is keyed by
-  agentConversationId. The aux compression fallback model was already wired
-  (`dd69148`). Still open: verbatim originals (TurnTranscript /
-  MessageLineage) and the shrink check.)*
+- [x] **6. The single-turn rolling window.** *(Landed on `wt-harness-a`:
+  recency by model calls — `compact/RecencyProtection.ts`, the last 4 model
+  calls / 20k tool-output tokens, not user turns — drives every shrink in
+  `ContextWindowManager`; its budget comes from `ContextBudgets` in the same
+  units as the clamp and compaction trigger; the per-conversation breaker,
+  the shrink check with a no-shrink cooldown and the compaction fallback
+  model (aux compression chain, `dd69148`) are in `CompactionService`; and
+  verbatim originals are kept — `compact/MessageLineage.ts` registers every
+  shrunk view copy and `harnesses/lifecycle/TurnTranscript.ts` records the
+  turn's messages by their pristine originals before any shrink, so
+  persistence (`collectTurnMessages`) never captures a truncated view.)*
 - [x] **7. Tool-result bounding** *(trading path landed `1ae5dfe`; the rest landed on `wt-harness-a`: `expandMessagesForFunctionCall` bounds every non-trading result — strings and standalone tool messages included — with prism's 8k / 10-items semantics through `fitForPrism`, and the `serialized.slice(0, maxChars) + "…}"` mid-JSON slice is gone: cuts are valid JSON or line-aligned previews. No retrieve pointer, as the chapter prescribes.)*
 - [ ] **8. Malformed tool arguments, empty outputs and loop guards** *(measured 2026-10-07: 1 of 6 box-pinned replays on our loop ended as an empty GLM reply after one model call; prism retries empty outputs in-loop)*: `MALFORMED_TOOL_CALL_JSON`
   instead of silently running the tool with `{}` (`utils/openai-compat.ts:778`

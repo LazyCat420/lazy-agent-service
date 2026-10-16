@@ -2,6 +2,7 @@ import logger from "./logger.ts";
 import { estimateTokens } from "./CostCalculator.ts";
 import type { ChatMessage, ToolCallEntry } from "../types/admin.ts";
 import MicroCompactionService from "../services/compact/MicroCompactionService.ts";
+import { markDerivedMessage } from "../services/compact/MessageLineage.ts";
 import { findRecencyBoundary } from "../services/compact/RecencyProtection.ts";
 import {
   computeContextBudgets,
@@ -172,14 +173,17 @@ function truncateToolResults(messages: ChatMessage[]): ChatMessage[] {
           : JSON.stringify(toolCall.result);
       if (resultString.length <= AGGRESSIVE_TOOL_RESULT_CAP) return toolCall;
 
-      return {
-        ...toolCall,
-        result:
-          resultString.slice(0, AGGRESSIVE_TOOL_RESULT_CAP) +
-          `\n...[truncated ${resultString.length - AGGRESSIVE_TOOL_RESULT_CAP} chars]`,
-      };
+      return markDerivedMessage(
+        {
+          ...toolCall,
+          result:
+            resultString.slice(0, AGGRESSIVE_TOOL_RESULT_CAP) +
+            `\n...[truncated ${resultString.length - AGGRESSIVE_TOOL_RESULT_CAP} chars]`,
+        },
+        toolCall,
+      );
     });
-    return truncated;
+    return markDerivedMessage(truncated, message);
   });
 }
 
@@ -228,15 +232,18 @@ function compressOldAssistantMessages(messages: ChatMessage[]): ChatMessage[] {
         );
       }
 
-      return compressed;
+      return markDerivedMessage(compressed, message);
     }
 
     // Compress standalone tool messages
     if (message.role === "tool") {
-      return {
-        ...message,
-        content: "[tool result truncated for context budget]",
-      };
+      return markDerivedMessage(
+        {
+          ...message,
+          content: "[tool result truncated for context budget]",
+        },
+        message,
+      );
     }
 
     return message;

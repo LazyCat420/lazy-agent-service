@@ -63,6 +63,22 @@ const COMPACT_MAX_OUTPUT_TOKENS = 16_384;
  */
 const MAX_CONSECUTIVE_COMPACT_FAILURES = 3;
 
+/**
+ * Shrink-check cooldown (ported from prism-service COMPACTION.
+ * NO_SHRINK_RETRY_GROWTH_FRACTION): after a summary that failed to shrink
+ * the history, compaction is skipped until the conversation has grown this
+ * fraction past the point that failed.
+ */
+const NO_SHRINK_RETRY_GROWTH_FRACTION = 0.1;
+
+/** Did compaction actually make the conversation smaller? Test seam for the shrink check. */
+export function compactionShrank(
+  preCompactTokenCount: number,
+  postCompactTokenCount: number,
+): boolean {
+  return postCompactTokenCount < preCompactTokenCount;
+}
+
 export interface CompactionResult {
   compactedMessages: AdminChatMessage[];
   summaryText: string;
@@ -135,6 +151,14 @@ export default class CompactionService {
   }
 
   /**
+   * Token counts of the conversation at which the last compaction FAILED
+   * to shrink it (per conversation) — the shrink check's cooldown: retry
+   * only once the history has grown NO_SHRINK_RETRY_GROWTH_FRACTION past
+   * that point, instead of paying for a summary that cannot shrink it.
+   */
+  private static noShrinkAtTokens = new Map<string, number>();
+
+  /**
    * Summarize a conversation using an LLM call.
    *
    * Returns the compacted message array: [system, summary, ...recentTail]
@@ -156,6 +180,21 @@ export default class CompactionService {
     if (consecutiveFailures >= MAX_CONSECUTIVE_COMPACT_FAILURES) {
       logger.warn(
         `[CompactionService] Circuit breaker open for ${breakerKey}: ${consecutiveFailures} consecutive failures. Skipping compaction.`,
+      );
+      return null;
+    }
+
+    // ── Shrink-check cooldown ─────────────────────────────────
+    const preCompactTokenCount = estimateTotalTokens(messages);
+    const noShrinkAtTokens = this.noShrinkAtTokens.get(breakerKey);
+    if (
+      noShrinkAtTokens != null &&
+      preCompactTokenCount <
+        noShrinkAtTokens * (1 + NO_SHRINK_RETRY_GROWTH_FRACTION)
+    ) {
+      logger.info(
+        `[CompactionService] Skipping compaction for ${breakerKey}: the last summary did not shrink a ` +
+          `${noShrinkAtTokens}-token history and it is only ${preCompactTokenCount} tokens now.`,
       );
       return null;
     }
@@ -196,8 +235,6 @@ export default class CompactionService {
       );
       return null;
     }
-
-    const preCompactTokenCount = estimateTotalTokens(messages);
 
     // ── Strip images before summarizing ────────────────────────
     // Claude Code equivalent: stripImagesFromMessages() in compact.ts
@@ -417,6 +454,26 @@ export default class CompactionService {
 
     const postCompactTokenCount = estimateTotalTokens(compactedMessages);
 
+    // ── Shrink check (ported from prism-service) ──────────────
+    // If the "compacted" conversation is not actually smaller (a
+    // tail-heavy history can produce summary-of-summary growth), keep the
+    // original messages. Not a breaker failure — the model worked; the
+    // conversation cools down until its history has grown (see above).
+    if (!compactionShrank(preCompactTokenCount, postCompactTokenCount)) {
+      this.noShrinkAtTokens.set(breakerKey, preCompactTokenCount);
+      logger.warn(
+        `[CompactionService] Compaction did not shrink ${breakerKey} ` +
+          `(${preCompactTokenCount} → ${postCompactTokenCount} tokens). Discarding result; ` +
+          `shrink-guard bail-out (not a breaker failure) — next attempt once the history grows ` +
+          `${Math.round(NO_SHRINK_RETRY_GROWTH_FRACTION * 100)}%.`,
+      );
+      options.emit?.({
+        type: SERVER_SENT_EVENT_TYPES.STATUS,
+        message: STATUS_MESSAGES.COMPACTION_FAILED,
+      });
+      return null;
+    }
+
     // ── Reset circuit breaker on success ──────────────────────
     this.consecutiveFailures.delete(this.breakerKey(options));
 
@@ -475,6 +532,7 @@ export default class CompactionService {
   /** Reset the circuit breaker (for testing or session boundaries). */
   static resetCircuitBreaker(): void {
     this.consecutiveFailures.clear();
+    this.noShrinkAtTokens.clear();
   }
 }
 

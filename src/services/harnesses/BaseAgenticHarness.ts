@@ -64,6 +64,7 @@ import { ToolDocFormatter } from "../system-prompt/ToolDocFormatter.ts";
 import { getToolPolicyAddendum } from "../personas/utils.ts";
 import PromptLocaleService from "../PromptLocaleService.ts";
 import { normalizeRoleAlternation } from "../RoleAlternation.ts";
+import { syncTurnTranscript, collectTurnMessages } from "./lifecycle/TurnTranscript.ts";
 import type AgenticLoopState from "../AgenticLoopState.ts";
 import type AgentHooks from "../AgentHooks.ts";
 import type { ChatMessage, TokenUsage } from "../../types/admin.ts";
@@ -398,6 +399,11 @@ export default class BaseAgenticHarness {
   ): ConversationMessage[] {
     const { modelDefinition, options = {}, emit } = this.context;
     const preEnforceCount = messages.length;
+    // Record the turn's messages by their verbatim originals BEFORE any
+    // layer shrinks the view (ported from prism-service TurnTranscript) —
+    // recency protection now reaches into the current turn, and the
+    // persistence slice would lose what the shrink replaced.
+    syncTurnTranscript(this.context, this.state, messages);
     // The fixed overhead (system prompt + tool schemas) the request carries
     // besides the messages, and the latest reported input — so the truncation
     // budget is measured in the same units as the compaction trigger
@@ -1494,11 +1500,11 @@ export default class BaseAgenticHarness {
     // If the last message of the original context was already persisted (e.g. background timer reminder or scheduled task),
     // we slice from originalMessageCount so we don't append it again. Otherwise, we slice from
     // originalMessageCount - 1 to capture the user's triggering message for this turn.
-    const newTurnMessages = computeNewTurnMessages(
-      context.messages,
+    const newTurnMessages = collectTurnMessages(
+      context,
+      state,
       currentMessages,
-      state.originalMessageCount,
-    );
+    ) as unknown as typeof newTurnMessages;
 
     logger.info(
       `[AgenticLoop] finalize: conversation=${agentConversationId} conversationId=${conversationId} project=${project} ` +
