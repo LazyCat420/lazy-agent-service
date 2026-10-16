@@ -54,6 +54,20 @@ export function getTotalInputTokens(
   );
 }
 
+/**
+ * Copy of `usage` with a pre-summed, cache-inclusive `totalInputTokens`
+ * attached. `inputTokens` is net of cache hits (see normalizeUsage), so
+ * consumers that want the full prompt size (trading `base_agent.run_agent`
+ * reads `totalInputTokens` first) need this field. Applied at the SSE
+ * usage_update and done boundaries, as prism-service does.
+ */
+export function withTotalInputTokens<T extends TokenUsage>(
+  usage: T | null | undefined,
+): (T & { totalInputTokens: number }) | null | undefined {
+  if (!usage) return usage as null | undefined;
+  return { ...usage, totalInputTokens: getTotalInputTokens(usage) };
+}
+
 export function createUsageAccumulator(): Required<
   Omit<TokenUsage, "totalTokens">
 > {

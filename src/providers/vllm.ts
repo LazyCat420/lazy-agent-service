@@ -23,6 +23,7 @@ import {
   MEDIA_STRATEGIES,
   type OpenAICompletionResponse,
   prependIdentitySystemMessage,
+  normalizeUsage,
 } from "../utils/openai-compat.ts";
 import type { InputMessage } from "../utils/openai-compat.ts";
 import { currentRequestPriority } from "../services/RequestPriority.ts";
@@ -142,7 +143,12 @@ export function createVllmProvider(
 
         const result: GenerateTextResult = {
           text,
+          // Keep the whole normalized usage (cacheReadInputTokens,
+          // reasoningOutputTokens) — rebuilding it from two fields dropped
+          // vLLM's prompt_tokens_details.cached_tokens and
+          // completion_tokens_details.reasoning_tokens.
           usage: {
+            ...usage,
             inputTokens: usage.inputTokens || 0,
             outputTokens: usage.outputTokens || 0,
           },
@@ -238,6 +244,7 @@ export function createVllmProvider(
               yield {
                 type: "usage",
                 usage: {
+                  ...chunk.usage,
                   inputTokens: chunk.usage.inputTokens || 0,
                   outputTokens: chunk.usage.outputTokens || 0,
                 },
@@ -298,13 +305,11 @@ export function createVllmProvider(
 
         const data = (await response.json()) as OpenAICompletionResponse;
         const text = data.choices?.[0]?.message?.content || "";
-        const usage: TokenUsage = {
-          inputTokens: data.usage?.prompt_tokens || 0,
-          outputTokens: data.usage?.completion_tokens || 0,
-        };
+        const usage: TokenUsage = normalizeUsage(data.usage);
         return {
           text,
           usage: {
+            ...usage,
             inputTokens: usage.inputTokens || 0,
             outputTokens: usage.outputTokens || 0,
           },

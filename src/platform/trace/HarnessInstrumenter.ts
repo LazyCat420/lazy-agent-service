@@ -3,6 +3,7 @@ import { Span } from "./Span.ts";
 import { TraceContext } from "./TraceContext.ts";
 import { TraceExporter } from "./TraceExporter.ts";
 import { RunEvidenceStore } from "../verify/RunEvidenceStore.ts";
+import { isErrorResult } from "../verify/StuckDetector.ts";
 import type { AgentRunManifest, SpanData, SideEffectClass } from "../contracts/telemetry.ts";
 
 export interface StartRunOptions {
@@ -15,6 +16,33 @@ export interface StartRunOptions {
   agentRole: string;
   environment?: string;
   model: string;
+}
+
+/**
+ * The error a tool reported in its RESULT (it returned instead of throwing),
+ * or null. Covers ToolOrchestratorService's object shapes (`{error}`,
+ * `{is_error:true}`, `{success:false}` — isErrorResult) and trading tool JSON
+ * text such as `{"status":"error","message":...}`, which executeTradingTool
+ * hands back as a string.
+ */
+export function toolResultError(result: unknown): string | null {
+  let value = result;
+  if (typeof value === "string") {
+    const text = value.trimStart();
+    if (!text.startsWith("{")) return null;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (!isErrorResult(record) && record.status !== "error") return null;
+  for (const key of ["message", "error"]) {
+    if (typeof record[key] === "string" && record[key]) return record[key] as string;
+  }
+  return "tool returned an error result";
 }
 
 export class HarnessInstrumenter {
@@ -191,7 +219,16 @@ export class HarnessInstrumenter {
         result_hash: resultHash,
         status_code: 200,
       });
-      span.end("OK");
+      // A failed tool usually RETURNS its error rather than throwing; the
+      // span must still say ERROR or the spans store undercounts failures
+      // (tool-layer audit 2026-10-16 F6).
+      const resultError = toolResultError(result);
+      if (resultError) {
+        span.setAttributes({ error_fingerprint: this.hash(resultError).slice(0, 16) });
+        span.end("ERROR", resultError);
+      } else {
+        span.end("OK");
+      }
       TraceExporter.getGlobalInstance().enqueueSpan(span.toJSON());
       return result;
     } catch (err: unknown) {
