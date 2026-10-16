@@ -68,6 +68,7 @@ import ollamaRouter from "./routes/OllamaRoutes.ts";
 import skillsRouter from "./routes/SkillsRoutes.ts";
 import rulesRouter from "./routes/RulesRoutes.ts";
 import agentMemoriesRouter from "./routes/AgentMemoriesRoutes.ts";
+import mcpServersRouter from "./routes/McpServersRoutes.ts";
 
 import favoritesRouter from "./routes/FavoritesRoutes.ts";
 import conversationRouter from "./routes/ConversationExecutionRoute.ts";
@@ -218,6 +219,7 @@ app.use("/ollama", ollamaRouter);
 app.use("/skills", skillsRouter);
 app.use("/rules", rulesRouter);
 app.use("/agent-memories", agentMemoriesRouter);
+app.use("/mcp-servers", mcpServersRouter);
 app.use("/favorites", favoritesRouter);
 app.use("/conversation", conversationRouter);
 
@@ -679,5 +681,14 @@ setupWebSocket(wss);
     // is no longer registered with or called; the personas live in our own
     // custom_agents collection and the live persona registry.
     await syncClientPersonas();
+
+    // Reconnect every enabled MCP server so its tools are in the catalog
+    // (connections are in-memory; prism does the same on boot).
+    try {
+      const { default: MCPClientService } = await import("./services/MCPClientService.ts");
+      await MCPClientService.connectAllFromDB(MongoWrapper.getDb(MONGO_DB_NAME));
+    } catch (error: unknown) {
+      logger.warn(`MCP auto-connect failed: ${errorMessage(error)}`);
+    }
   });
 })();

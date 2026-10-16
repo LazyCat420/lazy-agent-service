@@ -6,6 +6,7 @@ import { newsSearch, newsProviderStatus } from "./NewsSearchService.ts";
 import { filterResultsByDomain, webSearch, webSearchStatus, withSiteSearch } from "./WebSearchService.ts";
 import { CATEGORIES } from "./EditorialHeadlinesService.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
+import MCPClientService from "./MCPClientService.ts";
 
 /**
  * LocalToolRouter — single source of truth for executing this service's
@@ -296,6 +297,13 @@ export async function routeLocalTool(
   // one place left the others answering "Unknown tool" for it.
   const tName = stripMcpPrefix(toolName);
   const cycleId = context.cycleId || "";
+
+  // A tool of a server connected through /mcp-servers (mcp__<server>__<tool>).
+  // Reserved server names keep this service's own namespaces out of reach.
+  const remote = MCPClientService.parseMCPToolName(toolName);
+  if (remote && MCPClientService.isConnected(remote.serverName)) {
+    return MCPClientService.callTool(remote.serverName, remote.toolName, toolArguments);
+  }
 
   // UNREACHABLE FROM THE AGENT PATH — kept only for direct REST callers.
   //

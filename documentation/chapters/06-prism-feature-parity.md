@@ -169,6 +169,35 @@ orchestration and async tasks, conversation graph / rewind / fork, the typed
 event protocol, goals, plan-mode gate, mid-turn input, budget pause, approval
 previews.
 
+### MCP client — ported (`/mcp-servers`)
+
+- [x] **MCP client + `/mcp-servers` routes** *(branch `wt-mcp-servers`; callers measured on prism: html-notes `GET /mcp-servers` + `POST /:id/connect`, vllm-trading-bot the same.)*
+  `src/services/MCPClientService.ts` (restored from `9113901^`, stdio / SSE /
+  streamable-HTTP via the MCP SDK) and `src/routes/McpServersRoutes.ts`
+  (list / create / update / delete / connect / disconnect), mounted in
+  `src/index.ts` next to the other routes. Added from prism's route: 404 on a
+  malformed id, project+username scoping on every lookup (a server id from
+  another scope is a 404), 409 on a duplicate name. Enabled servers are
+  reconnected on boot (`connectAllFromDB`, after `listen`).
+  - **Catalog:** `ToolOrchestratorService.getMCPToolSchemas()` returns the local
+    `mcp__lazy-agent-service__*` catalog **plus** the tools of connected servers
+    as `mcp__<server>__<tool>`; they disappear on disconnect.
+  - **Dispatch:** `ToolOrchestratorService.executeMCPTool` (the `/agent` loop)
+    and `LocalToolRouter.routeLocalTool` (so `ToolDispatch.dispatchTool`, i.e.
+    `/execute` and the MCP SSE server) send a connected server's tool to
+    `MCPClientService.callTool`. Server names that would shadow this service's
+    own prefixes (`lazy-agent-service`, `lazy-tool-service`, `lazy-tools`) are
+    refused at connect.
+  - **Not ported:** `McpOAuthRoutes` and the `/:id/oauth` endpoints — an OAuth
+    server would hook in at `MCPClientService.connect` (a transport
+    `authProvider` + an `authorizationRequired` reply from `POST /:id/connect`,
+    as prism's `McpOAuth.ts` does) and a router beside `/mcp-servers`; also not
+    ported: prism's tool-fingerprint quarantine / `tools/approve`, `/prompts`,
+    `/resources`, profile scoping (`profileId` / `shared`), output caps,
+    elicitation.
+  - Tests: `src/services/__tests__/McpServersPort.test.ts` (real SDK MCP server
+    over streamable HTTP; only the Mongo collection is an in-memory stand-in).
+
 ## Prism-product features (P2) — not planned
 
 ACP, the benchmark arena, push notifications, profiles, stats pages, the Bender
