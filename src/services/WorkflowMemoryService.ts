@@ -1,6 +1,6 @@
 import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { MONGO_DB_NAME } from "../../config.ts";
-import { COLLECTIONS } from "../constants.ts";
+import { COLLECTIONS, PROMPT_DELIMITERS } from "../constants.ts";
 import EmbeddingService from "./EmbeddingService.ts";
 import { indexedEmbedding, compatibleVector, type IndexedEmbedding } from "./SemanticEmbedding.ts";
 import logger from "../utils/logger.ts";
@@ -360,7 +360,7 @@ const WorkflowMemoryService = {
     );
 
     return (
-      `## Past Successful Workflows\n` +
+      `${PROMPT_DELIMITERS.PAST_WORKFLOWS}\n` +
       `The following are procedures from past sessions that solved similar tasks. ` +
       `Use them as reference — adapt the approach, don't copy blindly.\n\n` +
       workflowBlocks.join("\n\n")

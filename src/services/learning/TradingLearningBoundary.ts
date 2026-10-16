@@ -5,12 +5,30 @@
 import { createHash, randomUUID } from "node:crypto";
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
 import { TRADING_MONGO_DB } from "../../../config.ts";
+import { PROMPT_DELIMITERS } from "../../constants.ts";
 import logger from "../../logger.ts";
 
 const MARKER = "TRADING_LEARNING_BOUNDARY_V2";
 const blockedTags = ["agent-memory", "past-workflows", "project-skills"];
+// Our native assembler emits the same blocks untagged, appended in this order
+// to its injected context message ("[System Context]\n<local time>…", see
+// injectSystemPromptContext). Matching only prism's tags let them all through.
+const nativeBlocks: Array<[tag: string, delimiter: string]> = [
+  ["project-skills", PROMPT_DELIMITERS.PROJECT_SKILLS],
+  ["agent-memory", PROMPT_DELIMITERS.AGENT_MEMORY],
+  ["past-workflows", PROMPT_DELIMITERS.PAST_WORKFLOWS],
+];
 export const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 export const enabled = () => process.env.TRADING_LEARNING_BOUNDARY_ENABLED !== "false";
+/** A trading run carries no harness-learned state (skills, memories, workflows).
+ * Trading versions its own prompts and learning; our native assembler must not
+ * retrieve these for it. Measured 2026-10-16: after the cutover from prism's
+ * loop (whose retrieval always failed: `Unknown provider "jetson-embedding"`),
+ * the native loop put ~12-26k chars of stale memories ("do not redundantly
+ * fetch data already provided", other tickers' figures) in front of every V3
+ * brief and valuation screener_query use fell from 33/37 runs to 1/6. */
+export const excludesLearnedState = (project: string | null | undefined) =>
+  enabled() && project === "vllm-trading-bot";
 
 export function compactQuery(text: string, agent: string): string {
   const ticker = text.match(/^## Ticker:\s*([A-Z][A-Z0-9.-]{0,12})/m)?.[1] || "";
@@ -20,7 +38,7 @@ export function compactQuery(text: string, agent: string): string {
 }
 
 export function prepareTradingRequest(body: Record<string, any>): Record<string, any> {
-  if (!enabled() || body.project !== "vllm-trading-bot") return body;
+  if (!excludesLearnedState(body.project)) return body;
   // /agent must traverse our model shim: upstream cloud routes have no final
   // payload filtering seam that we own. Do not silently admit legacy memory.
   if (typeof body.provider !== "string" || !/^vllm(?:-\d+)?$/.test(body.provider)) {
@@ -65,6 +83,16 @@ export function filterTradingPayload(body: Record<string, any>): { body: Record<
       content = content.replace(pair, (block: string) => { removedChars += block.length; removedTags.push(tag); return ""; });
       if (new RegExp(`<\\/?${tag}(?:\\s|>)`, "i").test(content)) {
         throw new Error(`Malformed upstream learned-context tag: ${tag}`);
+      }
+    }
+    if (content.startsWith(PROMPT_DELIMITERS.SYSTEM_CONTEXT)) {
+      const found = nativeBlocks.map(([tag, delimiter]) => [tag, content.indexOf(`\n\n${delimiter}\n`)] as const)
+        .filter(([, at]) => at >= 0);
+      if (found.length) {
+        const cut = Math.min(...found.map(([, at]) => at));
+        removedChars += content.length - cut;
+        removedTags.push(...found.map(([tag]) => tag));
+        content = content.slice(0, cut);
       }
     }
     content = content.replace(new RegExp(`<${MARKER}>[A-Za-z0-9_-]+</${MARKER}>`, "g"), "");

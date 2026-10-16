@@ -49,6 +49,26 @@ describe("owned trading learning boundary", () => {
   });
 });
 
+// The shape of the 2026-10-16 production payload (cycle-v3-1792183632 AMZN
+// valuation): our own assembler's context message, untagged. Matching prism's
+// tags alone delivered 26k chars of memories and workflows with excluded_tags [].
+it("strips our native assembler's untagged skills, memories and workflows", () => {
+  const prepared = prepareTradingRequest(original());
+  const time = "[System Context]\n- Local Time: Friday, October 16, 2026 at 1:54:57 PM PDT";
+  const context = `${time}\n\n[Project Skills]\n### valuation\nskip tools\n\n[Agent Memory]\n- Do not redundantly fetch data already provided` +
+    `\n\n## Past Successful Workflows\nThe following are procedures from past sessions...\n### Past Workflow (similarity: 84%)`;
+  const result = filterTradingPayload({messages:[{role:"system",content:prepared.systemPrompt},
+    {role:"system",content:context},...prepared.messages]});
+  expect(result.body.messages[1].content).toBe(time);
+  expect(result.body.messages.at(-1)).toEqual(prepared.messages.at(-1));
+  expect(result.receipt?.excluded_tags).toEqual(["project-skills","agent-memory","past-workflows"]);
+  expect(result.receipt?.excluded_chars).toBe(context.length - time.length);
+  const timeOnly = filterTradingPayload({messages:[{role:"system",content:prepared.systemPrompt},
+    {role:"system",content:time},...prepared.messages]});
+  expect(timeOnly.body.messages[1].content).toBe(time);
+  expect(timeOnly.receipt?.excluded_tags).toEqual([]);
+});
+
 it("rejects a missing or altered brief before inference", () => {
   const prepared = prepareTradingRequest(original());
   for (const messages of [[], [{role:"user",content:"Retrieval index: ALLY board of directors"}]]) {

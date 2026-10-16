@@ -24,6 +24,7 @@ import { SkillMemoryScorer } from "./SkillMemoryScorer.ts";
 import { AssemblerContext } from "./types.ts";
 import SomaticStateService from "../somatic/SomaticStateService.ts";
 import WorkflowMemoryService from "../WorkflowMemoryService.ts";
+import { excludesLearnedState } from "../learning/TradingLearningBoundary.ts";
 import { PROMPT_DELIMITERS } from "../../constants.ts";
 import PromptLocaleService from "../PromptLocaleService.ts";
 
@@ -76,6 +77,12 @@ export default class SystemPromptAssembler {
     const agentId = context.agent || AGENT_IDS.CODING;
     const persona = isDirectMode ? null : AgentPersonaRegistry.get(agentId);
     const isSubAgent = !!context.parentAgentConversationId;
+    // Memories and workflows (steps 9-10) are learned state. Sub-agents skip
+    // them, and so does a trading run, which also skips skills (step 8):
+    // trading owns its prompts and learning (TradingLearningBoundary).
+    // ported from prism-service src/services/system-prompt/index.ts (withoutLearnedState)
+    const isTradingRun = excludesLearnedState(context.project);
+    const withoutLearnedState = isSubAgent || isTradingRun;
     // Lean personas (coreToolsLocked: false) asked for exactly their own tool
     // set — don't graft the orchestrator tools onto it, or the orchestrator
     // addendum below fires and re-bloats the prompt they opted out of.
@@ -436,7 +443,7 @@ export default class SystemPromptAssembler {
       .find((message) => message.role === "user");
     const queryText = (lastUserMessage?.content as string) || "";
 
-    const skills = await this.scorer.fetchSkills(
+    const skills = isTradingRun ? [] : await this.scorer.fetchSkills(
       context.project || null,
       context.username || "",
       queryText,
@@ -467,7 +474,7 @@ export default class SystemPromptAssembler {
     const memoryQuery = queryText || context.project || "";
     let memoriesText = "";
 
-    if (memoryQuery && !isSubAgent) {
+    if (memoryQuery && !withoutLearnedState) {
       const agentContextForMemory = context.agentContext || {};
       const memoryGuildId = agentContextForMemory.guildId;
       const memoryUserIds = agentContextForMemory.participantUserIds;
@@ -495,7 +502,7 @@ export default class SystemPromptAssembler {
     // Same rationale as Step 9 — sub-agents don't need cross-conversation
     // procedural workflows. They execute a single task and are destroyed.
     let workflowsText = "";
-    if (memoryQuery && !isSubAgent) {
+    if (memoryQuery && !withoutLearnedState) {
       try {
         const workflows = await WorkflowMemoryService.retrieveRelevantWorkflows(
           agentId,

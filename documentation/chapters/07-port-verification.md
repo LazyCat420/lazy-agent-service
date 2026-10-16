@@ -98,3 +98,30 @@ deployed (trading-service `18582e6c`, lazycat-sdk `ffdc12c`):
 
 Note: lazy-agent's `/chat` docstring says "Default: SSE"; the code defaults to JSON.
 Any other client that relies on the Prism-style default must send the Accept header.
+
+## Post-port finding: harness memories reached trading runs (2026-10-16)
+
+After the cutover, valuation `screener_query` use fell from 33/37 runs to 1/6
+(fundamental and quant whiteboard writes fell with it); 5 of 6 valuation runs
+answered on the first turn with no tool call. The provider payloads
+(`pipeline_trace_events` stage `provider.payload`) show the system prompt,
+tools, `tool_choice` and sampling byte-identical before and after. The one
+difference: our assembler put 12-26k chars of `[Agent Memory]` and
+`## Past Successful Workflows` in front of every V3 brief ("do not redundantly
+fetch data already provided", other tickers' figures). Prism never sent them:
+its memory fetch and workflow retrieval failed on every call
+(`Unknown provider "jetson-embedding"`, 960 + 959 in 72 h; `0 new memories
+injected` for every V3 assembly). `filterTradingPayload` only matched prism's
+`<agent-memory>`-style tags, so it let our untagged blocks through with
+`excluded_tags: []`.
+
+Replay of the six post-cut valuation payloads against Gold Spark (same
+sampling, 4 runs each): first-turn tool call 4/24 with the blocks, 16/24
+without them.
+
+Fix: the assembler skips skills, memories and workflows when
+`excludesLearnedState(project)` (trading, boundary enabled), and the boundary
+filter strips the native untagged blocks from the `[System Context]` message.
+Tests: `system-prompt/__tests__/tradingLearnedState.test.ts`,
+`TradingLearningBoundary.test.ts` ("strips our native assembler's untagged
+skills, memories and workflows").

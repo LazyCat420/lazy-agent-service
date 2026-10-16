@@ -172,6 +172,7 @@ export const PROMPT_DELIMITERS = {
   USER_MESSAGE: "[User Message]",
   PROJECT_SKILLS: "[Project Skills]",
   AGENT_MEMORY: "[Agent Memory]",
+  PAST_WORKFLOWS: "## Past Successful Workflows",
   SOMATIC_STATE_PREFIX: "[Somatic State",
   CONVERSATION_SUMMARY_PREFIX: "[Conversation Summary",
 } as const;
