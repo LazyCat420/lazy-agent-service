@@ -128,10 +128,7 @@ Each is one landed change with a test. Order = risk to the trading cycle.
   `maxTokens` and retries (`utils/ProviderStreamResilience.ts`,
   `reducedMaxTokensForOverflow`).)* Every
   context guard is inert on vLLM without them.
-- [~] **5. Provider stream resilience** *(cut-stream part landed `6098253`, live 07:04 UTC: `parseSSEStream` fails a stream with no finish_reason with prism's 502; the `cut_stream` contract now holds — but in 45 s where prism takes 1 s: we retry after output already reached the consumer)* (`utils/ProviderStreamResilience.ts`):
-  retry 408/429/5xx with zero chunks, 300 s idle abort, a cut stream is a
-  failure. Our own shim answers saturation with 503 + Retry-After and our loop
-  never retries it.
+- [x] **5. Provider stream resilience** *(landed `6098253` + `a27e603` + `36fda45`: `parseSSEStream` fails a stream with no finish_reason with prism's 502, and `streamWithRetries` retries only when zero chunks reached the consumer — a cut stream after output is a terminal failure in <2 s (locked by `StreamRetryTiming.test.ts`, 4.5 s of retries on the reverted source) — and our own shim's 503 + Retry-After saturation shed is now retried (`fetchOpenAICompat` carries `status` + `headers`, prism `providers/openai-compat.ts`) with the Retry-After honoured up to the 60 s cap. 300 s idle abort in `withIdleTimeout`.)* (`utils/ProviderStreamResilience.ts`):
 - [x] **6. The single-turn rolling window.** *(Landed on `wt-harness-a`:
   recency by model calls — `compact/RecencyProtection.ts`, the last 4 model
   calls / 20k tool-output tokens, not user turns — drives every shrink in
