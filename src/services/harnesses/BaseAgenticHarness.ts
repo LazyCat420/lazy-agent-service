@@ -954,6 +954,10 @@ export default class BaseAgenticHarness {
         args: streamChunk.args || {},
         thoughtSignature: streamChunk.thoughtSignature || undefined,
         reasoningItem: streamChunk.reasoningItem || undefined,
+        ...(streamChunk.argsParseError === true && {
+          _argsParseError: true,
+          _rawArgs: typeof streamChunk.rawArgs === "string" ? streamChunk.rawArgs : undefined,
+        }),
         isUnauthorized,
       };
       pass.pendingToolCalls.push(toolCall);

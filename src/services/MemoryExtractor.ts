@@ -30,6 +30,12 @@ import type {
 } from "./harnesses/types.ts";
 import type { ChatMessage, GenerateTextResult } from "../types/provider.ts";
 import type { MessagePayload } from "./RequestLogger.ts";
+import {
+  readWatermark,
+  selectExtractionSpan,
+  writeWatermark,
+} from "./memory/ExtractionWatermark.ts";
+import { runWithRequestPriority } from "./RequestPriority.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -192,8 +198,10 @@ export default class MemoryExtractor {
       const provider = getProvider(targetProviderId);
 
       // Build conversation text (compact format to save tokens)
-      const conversationText = messages
-        .filter((message) => {
+      // ── Watermark diet (ported from prism-service MemoryExtractor + memory/ExtractionWatermark):
+      // read only the messages after the last one already extracted; a span
+      // with no user-authored message makes no extraction call at all.
+      const transcript = messages.filter((message) => {
           if (message.role !== "user" && message.role !== "assistant") {
             return false;
           }
@@ -214,7 +222,29 @@ export default class MemoryExtractor {
             return false;
           }
           return true;
-        })
+        });
+      const watermarkScopeKey =
+        conversationId || agentConversationId || `adhoc:${crypto.randomUUID()}`;
+      const watermark = await readWatermark(watermarkScopeKey);
+      const extractionSpan = selectExtractionSpan(
+        transcript as Array<Record<string, unknown>>,
+        watermark,
+      );
+      if (extractionSpan.span.length === 0) {
+        logger.info(
+          `[MemoryExtractor] Skipping — nothing new after the extraction watermark (${extractionSpan.reason}).`,
+        );
+        return [];
+      }
+      if (!extractionSpan.hasUserAuthored) {
+        logger.info(
+          "[MemoryExtractor] Skipping — new span carries nothing the user wrote.",
+        );
+        return [];
+      }
+      // selectExtractionSpan returns slices of the transcript array itself.
+      const spanMessages = extractionSpan.span as ConversationMessage[];
+      const conversationText = spanMessages
         .map((message) => {
           const content = message.content || "";
           // Truncate very long messages to save tokens
@@ -239,11 +269,13 @@ export default class MemoryExtractor {
       let extractionError: string | null = null;
 
       try {
-        result = await provider.generateText(aiMessages, resolvedModel, {
-          maxTokens: 1000,
-          temperature: 0.1,
-          thinkingEnabled: false,
-        });
+        result = await runWithRequestPriority("background", () =>
+          provider.generateText(aiMessages, resolvedModel, {
+            maxTokens: 1000,
+            temperature: 0.1,
+            thinkingEnabled: false,
+          }),
+        );
       } catch (error: unknown) {
         success = false;
         extractionError = errorMessage(error);
@@ -321,6 +353,13 @@ export default class MemoryExtractor {
           }
         }
       }
+
+      // Extraction succeeded — move the watermark past everything this call
+      // read, so the next run extracts only what is new.
+      await writeWatermark(
+        watermarkScopeKey,
+        transcript as Array<Record<string, unknown>>,
+      );
 
       let memories: unknown = parseJsonFromLargeLanguageModelResponse(
         result!.text,

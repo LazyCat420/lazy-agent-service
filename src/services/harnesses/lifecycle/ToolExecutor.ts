@@ -114,6 +114,23 @@ export async function executeToolBatch(
 
   const results = await Promise.all(
     toolCalls.map(async (toolCall) => {
+      // ported from prism-service lifecycle/ToolExecutor.ts: malformed
+      // tool-call JSON — never execute with silently-empty args. Return a
+      // synthetic error telling the model its own JSON was broken so it can
+      // re-emit the call with complete, valid JSON arguments.
+      if (toolCall._argsParseError) {
+        const result = {
+          success: false,
+          error: "MALFORMED_TOOL_CALL_JSON",
+          message:
+            `The JSON arguments for your "${toolCall.name}" call could not be parsed ` +
+            `(likely truncated or invalid). Re-emit the tool call with complete, valid JSON arguments.` +
+            (toolCall._rawArgs ? `\nUnparseable argument text (excerpt): ${toolCall._rawArgs}` : ""),
+        };
+        await hooks.run("afterToolCall", toolCall, result, context);
+        return { name: toolCall.name, id: toolCall.id, result, durationMs: 0 };
+      }
+
       await hooks.run("beforeToolCall", toolCall, context);
 
       if (toolCall.isUnauthorized) {

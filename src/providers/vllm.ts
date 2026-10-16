@@ -24,6 +24,26 @@ import {
   prependIdentitySystemMessage,
 } from "../utils/openai-compat.ts";
 import type { InputMessage } from "../utils/openai-compat.ts";
+import { currentRequestPriority } from "../services/RequestPriority.ts";
+
+/**
+ * ported from prism-service providers/local-request-features.ts: on an
+ * instance started with --scheduling-policy priority, a background utility
+ * call (memory extraction) carries `X-Vllm-Priority: 10` so interactive
+ * turns are served first. Never sent otherwise — a non-zero priority is an
+ * error on a server without priority scheduling.
+ */
+export const BACKGROUND_PRIORITY = 10;
+
+export function vllmRequestHeaders(): Record<string, string> {
+  if (
+    process.env.PROVIDER_VLLM_PRIORITY_SCHEDULING === "true" &&
+    currentRequestPriority() === "background"
+  ) {
+    return { "X-Vllm-Priority": String(BACKGROUND_PRIORITY) };
+  }
+  return {};
+}
 
 // NOTE(vllm-qwen3.6): The temporary non-leading system message rewrite
 // (Qwen chat template workaround) now lives in utils/openai-compat.ts as
@@ -97,7 +117,7 @@ export function createVllmProvider(
         const tools = convertToolsToOpenAI(options.tools);
         if (tools) {
           payload.tools = tools;
-          payload.tool_choice = "auto";
+          payload.tool_choice = options.toolChoice === "none" ? "none" : "auto"; // ported from prism-service providers/vllm.ts: the forced final turn calls with the same tool block but tool_choice "none"
         }
 
         // Thinking hard switch — vLLM extension for Qwen3/reasoning models
@@ -111,6 +131,7 @@ export function createVllmProvider(
         const response = await fetchOpenAICompat(
           `${baseUrl}/v1/chat/completions`,
           payload,
+          { headers: vllmRequestHeaders() },
         );
         const data = (await response.json()) as OpenAICompletionResponse;
         const { text, thinking, usage, toolCalls } =
@@ -189,7 +210,7 @@ export function createVllmProvider(
         const tools = convertToolsToOpenAI(options.tools);
         if (tools) {
           payload.tools = tools;
-          payload.tool_choice = "auto";
+          payload.tool_choice = options.toolChoice === "none" ? "none" : "auto"; // ported from prism-service providers/vllm.ts: the forced final turn calls with the same tool block but tool_choice "none"
         }
 
         // Thinking hard switch — vLLM extension for Qwen3/reasoning models
@@ -202,7 +223,7 @@ export function createVllmProvider(
         const response = await fetchOpenAICompat(
           `${baseUrl}/v1/chat/completions`,
           payload,
-          { signal: options.signal },
+          { signal: options.signal, headers: vllmRequestHeaders() },
         );
 
         const reader = response.body!.getReader();

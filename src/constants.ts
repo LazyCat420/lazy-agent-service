@@ -57,6 +57,7 @@ export const COLLECTIONS = {
   WEBHOOK_SUBSCRIPTIONS: "webhook_subscriptions",
   SOMATIC_STATE: "somatic_state",
   WORKFLOW_MEMORIES: "workflow_memories",
+  EXTRACTION_WATERMARKS: "extraction_watermarks",
 };
 
 /**

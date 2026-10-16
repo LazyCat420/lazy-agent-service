@@ -109,7 +109,7 @@ Each is one landed change with a test. Order = risk to the trading cycle.
   `registerSession` stores `enabledTools || []` (empty for trading), which
   makes `isToolAllowed` refuse every native call on a conversation id the proxy
   has seen.
-- [ ] **3. DENY before full-auto, and the core-tools decision.** `autoApprove`
+- [x] **3. DENY before full-auto, and the core-tools decision.** *Landed `a564866`: policies are read before the `fullAuto` short-circuit (`AutoApprovalEngine.check`, a DENY is final in every mode; full auto answers a policy ASK_USER with yes, prism `explainCall` order), and `AgenticToolResolver` keeps `execute_python` / `emit_structured_output` / `think` available even for `coreToolsLocked: false` personas (an explicit `blockedTools` entry still wins) — a trading run cannot produce its artifact without `emit_structured_output`. Tests: `DenyBeforeFullAuto`, `CognitiveToolsAlwaysAvailable`.* `autoApprove`
   short-circuits `ApprovalGate` and `AutoApprovalEngine.check` returns for
   full-auto before policies are read, so trading's DENY policies
   (`execute_command`, `execute_javascript`, `execute_skill`, `write_file`,
@@ -129,16 +129,16 @@ Each is one landed change with a test. Order = risk to the trading cycle.
   per-conversation breaker.
 - [~] **7. Tool-result bounding** *(trading path landed `1ae5dfe`, live 07:04 UTC: native trading dispatch returns McpAdapter's `modelVisibleText`; the `oversized_result` contract now holds. Still open: non-trading results and the mid-JSON slice in `expandMessagesForFunctionCall`)* with prism's 8k semantics, using our cut (no
   retrieve pointer: trading roles do not hold that tool); stop the mid-JSON slice.
-- [ ] **8. Malformed tool arguments, empty outputs and loop guards** *(measured 2026-10-07: 1 of 6 box-pinned replays on our loop ended as an empty GLM reply after one model call; prism retries empty outputs in-loop)*: `MALFORMED_TOOL_CALL_JSON`
+- [x] **8. Malformed tool arguments, empty outputs and loop guards** *(landed `a564866`: the provider flags unparseable tool-call argument JSON (`argsParseError`/`rawArgs`, prism `providers/openai-compat.ts`) and `ToolExecutor` returns `MALFORMED_TOOL_CALL_JSON` instead of running the tool with `{}` — the source of most "'data' is required and must be an object" failures from `emit_structured_output`; genuinely empty passes are retried in-loop with a temperature bump and a tagged `<empty-output-recovery>` nudge, `MAX_EMPTY_OUTPUT_RETRIES` 4 × +0.2 temp, prism constants; before/after: 5 of the 11 new assertions fail on the reverted sources, all 24 pass after. Not ported: `SemanticStallDetector` / `DeviationRuleEngine` — our warn-at-3/stop-at-5 repetition guard stays)* *(measured 2026-10-07: 1 of 6 box-pinned replays on our loop ended as an empty GLM reply after one model call; prism retries empty outputs in-loop)*: `MALFORMED_TOOL_CALL_JSON`
   instead of silently running the tool with `{}` (`utils/openai-compat.ts:778`
   — the source of most "'data' is required and must be an object" failures from
   `emit_structured_output`), empty-output retries, prism's stall/deviation
   detectors (`SemanticStallDetector`, `DeviationRuleEngine`,
   `RepetitionDetector`; ours warns at 3 identical iterations and stops at 5).
-- [~] **9. Forced final turn parity:** *(the directive part landed `dfa1c84` + `f4d6e86`, live 07:43 UTC: our iteration-limit notice carries prism's `<iteration-limit>` tag, so the shim directs the turn; `forced_final_turn` holds. Still open: the cache-stable form below)* keep the tool block, honour
+- [x] **9. Forced final turn parity:** *(directive part landed `dfa1c84` + `f4d6e86`; the rest landed `a564866`: the exhaustion pass keeps the same tool block and calls with `toolChoice: "none"` — `vllm.ts` now honours it instead of always sending `auto` — so the summary pass is prompt-cache stable, and when the recovery pass itself comes back empty a synthetic fallback summary (`buildSyntheticFallbackSummary`, prism `ExhaustionRecovery.ts`) is built from the tool history. Tests: `ExhaustionFallback`, plus `ForcedFinalTurn` and `TradingToolProtocol` for the directive.)* keep the tool block, honour
   `toolChoice: "none"` in our `vllm.ts` (we always send `auto`), tagged
   notices, a synthetic fallback summary.
-- [ ] **10. Memory-extraction watermark + `X-Vllm-Priority`:** today every
+- [x] **10. Memory-extraction watermark + `X-Vllm-Priority`:** *(landed `a564866`: `services/memory/ExtractionWatermark.ts` — a simplified port of prism's store — keys a watermark per conversation; `MemoryExtractor.extractAndStore` reads only the messages after the last extracted one (content-hash identities + anchor disambiguation, rawContent covered) and makes no call at all when the new span carries nothing the user wrote; the extraction call runs under `runWithRequestPriority("background")` and the vLLM provider sends `X-Vllm-Priority: 10` on background calls when `PROVIDER_VLLM_PRIORITY_SCHEDULING=true`. Tests: `ExtractionWatermark`, `VllmPriorityHeader`.)* today every
   trading run adds a full-transcript extraction call on the same GPU.
 
 ## General capability (P1) — after the trading path

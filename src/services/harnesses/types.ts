@@ -48,6 +48,10 @@ export interface ToolCall {
   };
   /** Populated by AutoApprovalEngine during beforeToolCall hook. */
   _approval?: { tier: string; tierLabel: string };
+  /** The model's argument JSON did not parse — the call must not run with {}. */
+  _argsParseError?: boolean;
+  /** The unparseable argument text (excerpt), reported back to the model. */
+  _rawArgs?: string;
   result?: unknown;
   status?: string;
   durationMs?: number;

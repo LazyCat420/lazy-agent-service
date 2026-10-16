@@ -199,6 +199,8 @@ interface PayloadDefaults {
 
 interface FetchOptions {
   signal?: AbortSignal;
+  /** Extra request headers (e.g. vLLM `X-Vllm-Priority`). */
+  headers?: Record<string, string>;
 }
 
 /** Union of event types yielded by parseSSEStream. */
@@ -213,6 +215,8 @@ export type SSEStreamChunk =
       result?: unknown;
       status?: "calling" | "done" | "error";
       native?: boolean;
+      argsParseError?: boolean;
+      rawArgs?: string;
     }
   | { type: "toolCallStart"; id: string; name: string }
   | { type: "toolCallDelta"; characters: number }
@@ -819,16 +823,25 @@ export async function* parseSSEStream(
           if (finishReason === "tool_calls" || finishReason === "tool") {
             for (const toolCall of Object.values(pendingToolCalls)) {
               let args: Record<string, unknown> = {};
+              let argsParseError = false;
               try {
                 args = JSON.parse(toolCall.args || "{}");
               } catch {
-                /* ignore */
+                // ported from prism-service providers/openai-compat.ts: never
+                // run a call with arguments the model did not write — the
+                // harness hands the raw text back as a malformed call
+                // (MALFORMED_TOOL_CALL_JSON) instead of silently executing {}.
+                argsParseError = true;
               }
               yield {
                 type: "toolCall",
                 id: toolCall.id,
                 name: toolCall.name,
                 args,
+                ...(argsParseError && {
+                  argsParseError: true,
+                  rawArgs: (toolCall.args || "").slice(0, 2000),
+                }),
               };
             }
           }
@@ -927,7 +940,7 @@ export async function fetchOpenAICompat(
 ): Promise<Response> {
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     body: JSON.stringify(payload),
     dispatcher: STREAMING_DISPATCHER,
     ...(options.signal && { signal: options.signal }),
