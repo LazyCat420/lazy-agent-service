@@ -10,6 +10,22 @@ import type { Db } from "mongodb";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import { COLLECTIONS } from "../constants.ts";
 import { ACCEPTED_MCP_PREFIXES } from "./McpPrefix.ts";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { ObjectId } from "mongodb";
+import MongoWrapper from "../wrappers/MongoWrapper.ts";
+import { MONGO_DB_NAME } from "../../config.ts";
+import {
+  approveMcpTools,
+  reviewMcpTools,
+  type McpQuarantinedTool,
+  type McpToolPins,
+} from "./mcp/McpToolFingerprint.ts";
+import { capMcpToolResult, resolveOutputCapTokens } from "./mcp/McpOutputCap.ts";
+import {
+  McpAuthorizationRequiredError,
+  McpOAuthProvider,
+  resolveProviderRedirectUrl,
+} from "./mcp/McpOAuth.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +57,18 @@ export interface MCPServerConfig {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  /** The stored document's id — keys OAuth credentials and the tool pins. */
+  _id?: unknown;
+  username?: string;
+  /** Fingerprints of the tools the owner approved (see McpToolFingerprint). */
+  toolPins?: McpToolPins | null;
+  /** Cap, in estimated tokens, on one tool result (default MCP_OUTPUT_CAP_TOKENS). */
+  outputCapTokens?: number | null;
+  toolOutputCapTokens?: Record<string, number> | null;
+  /** OAuth 2.1 (PKCE, dynamic registration) instead of static headers. */
+  auth?: { type: "oauth"; scope?: string | null } | null;
+  /** Origin of the request that started a connect — the OAuth redirect base. */
+  _requestOrigin?: string | null;
   [key: string]: unknown;
 }
 
@@ -50,8 +78,15 @@ interface MCPConnection {
     | StdioClientTransport
     | StreamableHTTPClientTransport
     | SSEClientTransport;
+  /** Approved tools only — what the model sees. */
   tools: MCPToolSchema[];
   mcpTools: MCPRawTool[];
+  /** Everything the server offers now, approved or not. */
+  offeredTools: MCPRawTool[];
+  /** Tools held back until the owner approves them (new or changed since approval). */
+  quarantined: McpQuarantinedTool[];
+  /** Approved fingerprints. Null: never approved (the first connect approves). */
+  pins: McpToolPins | null;
   config: MCPServerConfig;
   status: string;
   connectedAt: Date;
@@ -94,6 +129,25 @@ const RESERVED_SERVER_NAMES = new Set(
  * Map of serverName → { client: Client, transport, tools: [], config, status }
  */
 const connections = new Map<string, MCPConnection>();
+
+/** Pins by server name, kept across disconnects (the stored document also carries them). */
+const rememberedPins = new Map<string, McpToolPins>();
+
+/** Persist fields on the server's stored document. Best-effort: a missing DB or id only costs durability. */
+async function updateMcpServerRecord(
+  config: MCPServerConfig,
+  set: Record<string, unknown>,
+): Promise<void> {
+  const id = config._id ? String(config._id) : null;
+  if (!id || !ObjectId.isValid(id)) return;
+  try {
+    await MongoWrapper.getDb(MONGO_DB_NAME)
+      ?.collection(COLLECTIONS.MCP_SERVERS)
+      .updateOne({ _id: new ObjectId(id) }, { $set: set });
+  } catch (error: unknown) {
+    logger.warn(`[MCP] Could not save ${Object.keys(set).join(", ")} for "${config.name}": ${getErrorMessage(error)}`);
+  }
+}
 
 // Register shutdown cleanup — disconnect all MCP servers
 registerCleanup(async () => {
@@ -171,11 +225,46 @@ function parseMCPToolName(
   };
 }
 
+function oauthIdentityOf(config: MCPServerConfig) {
+  return { serverId: String(config._id ?? config.name), username: config.username ?? "any" };
+}
+
+/**
+ * Sort the server's current tool list into approved and quarantined, and
+ * publish the result.
+ * ported from prism-service src/services/MCPClientService.ts (applyToolList)
+ */
+function applyToolList(conn: MCPConnection, offered: MCPRawTool[]): void {
+  const review = reviewMcpTools(offered, conn.pins);
+  const serverName = conn.config.name;
+  if (review.pins) {
+    conn.pins = review.pins;
+    rememberedPins.set(serverName, review.pins);
+    void updateMcpServerRecord(conn.config, { toolPins: review.pins });
+  }
+  const before = JSON.stringify(conn.quarantined);
+  conn.offeredTools = offered;
+  conn.mcpTools = review.approved;
+  conn.tools = review.approved.map((tool) => mcpToolToSchema(serverName, tool));
+  conn.quarantined = review.quarantined;
+  if (before !== JSON.stringify(conn.quarantined)) {
+    void updateMcpServerRecord(conn.config, { quarantinedTools: conn.quarantined });
+  }
+}
+
+function describeQuarantine(conn: MCPConnection): string {
+  if (conn.quarantined.length === 0) return "";
+  return ` — QUARANTINED ${conn.quarantined.length}: ${conn.quarantined
+    .map((entry) => `${entry.name} (${entry.reason})`)
+    .join(", ")}`;
+}
+
 /**
  * Create the appropriate transport based on server config.
  */
 function createTransport(
   config: MCPServerConfig,
+  authProvider?: McpOAuthProvider,
 ): StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
   let rawUrl = config.url || "";
   const isDocker = fs.existsSync("/.dockerenv") || fs.existsSync("/opt/venv/bin/python");
@@ -202,6 +291,7 @@ function createTransport(
       requestInit: {
         headers: config.headers || {},
       },
+      ...(authProvider && { authProvider }),
     });
   }
 
@@ -211,6 +301,7 @@ function createTransport(
       requestInit: {
         headers: config.headers || {},
       },
+      ...(authProvider && { authProvider }),
     });
   }
 
@@ -239,15 +330,47 @@ const MCPClientService = {
 
     logger.info(`[MCP] Connecting to "${serverName}" (${config.transport})...`);
 
-    const transport = createTransport(config);
-    const client = new Client(
+    let authProvider: McpOAuthProvider | undefined;
+    if (config.auth?.type === "oauth") {
+      if (config.transport === "stdio") {
+        throw new Error(`MCP server "${serverName}": OAuth needs an HTTP transport`);
+      }
+      const identity = oauthIdentityOf(config);
+      authProvider = new McpOAuthProvider(
+        identity,
+        await resolveProviderRedirectUrl(identity, config._requestOrigin),
+        config.auth.scope ?? null,
+      );
+    }
+
+    const transport = createTransport(config, authProvider);
+    const client: Client = new Client(
       { name: "lazy-agent-mcp-client", version: "1.0.0" },
-      { capabilities: {} },
+      {
+        capabilities: {},
+        listChanged: {
+          tools: {
+            onChanged: (error, tools) =>
+              MCPClientService.handleToolListChanged(serverName, client, error, tools),
+          },
+        },
+      },
     );
 
     try {
       await client.connect(transport);
     } catch (error: unknown) {
+      try {
+        await transport.close();
+      } catch {
+        /* best-effort */
+      }
+      // An OAuth server without tokens: the caller opens this URL in a
+      // popup, and the callback finishes the connect.
+      if (authProvider?.authorizationUrl && error instanceof UnauthorizedError) {
+        logger.info(`[MCP] "${serverName}" needs OAuth authorization`);
+        throw new McpAuthorizationRequiredError(serverName, authProvider.authorizationUrl);
+      }
       logger.error(
         `[MCP] Failed to connect to "${serverName}": ${getErrorMessage(error)}`,
       );
@@ -265,24 +388,31 @@ const MCPClientService = {
       );
     }
 
-    // Convert to our schema format
-    const schemas = mcpTools.map((tool) => mcpToolToSchema(serverName, tool));
-
-    connections.set(serverName, {
+    // The first connect approves what the server offers (trust on first use);
+    // after that a new or changed tool is quarantined until approved.
+    const conn: MCPConnection = {
       client,
       transport,
-      tools: schemas,
-      mcpTools,
+      tools: [],
+      mcpTools: [],
+      offeredTools: [],
+      quarantined: [],
+      pins:
+        config.toolPins && typeof config.toolPins === "object"
+          ? { ...config.toolPins }
+          : (rememberedPins.get(serverName) ?? null),
       config,
       status: "connected",
       connectedAt: new Date(),
-    });
+    };
+    connections.set(serverName, conn);
+    applyToolList(conn, mcpTools);
 
     logger.info(
-      `[MCP] Connected to "${serverName}" — ${schemas.length} tools: ${mcpTools.map((mCPRawTool) => mCPRawTool.name).join(", ")}`,
+      `[MCP] Connected to "${serverName}" — ${conn.tools.length} tools: ${conn.mcpTools.map((mCPRawTool) => mCPRawTool.name).join(", ")}${describeQuarantine(conn)}`,
     );
 
-    return { tools: schemas, serverName };
+    return { tools: conn.tools, serverName, quarantinedTools: conn.quarantined };
   },
 
   /**
@@ -321,7 +451,84 @@ const MCPClientService = {
   async reconnect(serverName: string) {
     const conn = connections.get(serverName);
     if (!conn) throw new Error(`Server "${serverName}" is not connected`);
-    return this.connect(conn.config);
+    return this.connect({ ...conn.config, toolPins: conn.pins });
+  },
+
+  /**
+   * `notifications/tools/list_changed`: the SDK has re-fetched the list.
+   * Re-review it against the pins — a new or changed tool is quarantined
+   * right here, before the next call can reach it.
+   */
+  handleToolListChanged(
+    serverName: string,
+    client: Client,
+    error: Error | null,
+    tools: unknown[] | null,
+  ): void {
+    const conn = connections.get(serverName);
+    // A late notification from a connection that has since been replaced.
+    if (!conn || conn.client !== client) return;
+    if (error || !tools) {
+      logger.warn(
+        `[MCP] "${serverName}" announced a tool list change but the refresh failed: ${error ? getErrorMessage(error) : "no tools returned"}`,
+      );
+      return;
+    }
+    applyToolList(conn, tools as MCPRawTool[]);
+    logger.info(
+      `[MCP] "${serverName}" tool list changed — ${conn.tools.length} approved${describeQuarantine(conn)}`,
+    );
+  },
+
+  /**
+   * Approve quarantined tools: pin them at their current definitions. With
+   * no names, every quarantined tool the server offers is approved.
+   * Null when the server is not connected.
+   */
+  async approveTools(serverName: string, names: string[] | null) {
+    const conn = connections.get(serverName);
+    if (!conn) return null;
+    const wanted = names ?? conn.quarantined.map((entry) => entry.name);
+    const result = approveMcpTools(conn.offeredTools, conn.pins, wanted);
+    conn.pins = result.pins;
+    rememberedPins.set(serverName, result.pins);
+    await updateMcpServerRecord(conn.config, { toolPins: result.pins });
+    applyToolList(conn, conn.offeredTools);
+    await updateMcpServerRecord(conn.config, { quarantinedTools: conn.quarantined });
+    logger.info(
+      `[MCP] "${serverName}" tools approved: ${result.approved.join(", ") || "none"}${result.skipped.length ? ` (skipped: ${result.skipped.join(", ")})` : ""}`,
+    );
+    return {
+      approved: result.approved,
+      skipped: result.skipped,
+      quarantinedTools: conn.quarantined,
+      toolCount: conn.tools.length,
+    };
+  },
+
+  /**
+   * Finish an OAuth authorization at the callback: the SDK exchanges the code
+   * (with the stored PKCE verifier) and saves the tokens through the
+   * provider. The caller then connects as usual.
+   */
+  async finishOAuth(
+    config: MCPServerConfig,
+    provider: McpOAuthProvider,
+    authorizationCode: string,
+  ): Promise<void> {
+    const transport = createTransport(config, provider);
+    if (!("finishAuth" in transport)) {
+      throw new Error(`MCP server "${config.name}": OAuth needs an HTTP transport`);
+    }
+    try {
+      await transport.finishAuth(authorizationCode);
+    } finally {
+      try {
+        await transport.close();
+      } catch {
+        /* never started */
+      }
+    }
   },
 
   /**
@@ -335,6 +542,18 @@ const MCPClientService = {
     const conn = connections.get(serverName);
     if (!conn) {
       return { error: `MCP server "${serverName}" is not connected` };
+    }
+
+    // Only an approved tool is called; a quarantined one is refused with the
+    // reason, so a model holding a stale tool list can't reach a changed tool.
+    if (!conn.mcpTools.some((tool) => tool.name === toolName)) {
+      const held = conn.quarantined.find((entry) => entry.name === toolName);
+      if (held) {
+        return {
+          error: `MCP tool "${held.name}" on "${serverName}" is quarantined: its definition ${held.reason === "new" ? "appeared" : "changed"} after the server was approved. The owner has to re-approve it before it can run.`,
+        };
+      }
+      return { error: `MCP server "${serverName}" does not offer a tool named "${toolName}"` };
     }
 
     try {
@@ -360,16 +579,25 @@ const MCPClientService = {
         .map((item) => item.text || "");
 
       // If there's only one text part, return it directly for cleaner output
+      // (many MCP tools return JSON as text). The size cap applies to the
+      // result as the model will see it.
+      const capTokens = resolveOutputCapTokens(conn.config, toolName);
       if (textParts.length === 1) {
-        // Try to parse as JSON (many MCP tools return JSON as text)
         try {
-          return JSON.parse(textParts[0]);
+          const parsed: unknown = JSON.parse(textParts[0]);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            return capMcpToolResult(parsed as Record<string, unknown>, capTokens);
+          }
+          // An array or scalar is returned as it is, unless it is over the cap.
+          const capped = capMcpToolResult({ result: textParts[0] }, capTokens);
+          return "outputCapped" in capped ? capped : (parsed as Record<string, unknown>);
         } catch {
-          return { result: textParts[0] };
+          /* plain text */
         }
+        return capMcpToolResult({ result: textParts[0] }, capTokens);
       }
 
-      return { result: textParts.join("\n") };
+      return capMcpToolResult({ result: textParts.join("\n") }, capTokens);
     } catch (error: unknown) {
       // Attempt reconnect once on connection errors
       if (
@@ -412,6 +640,7 @@ const MCPClientService = {
       status: string;
       toolCount: number;
       tools: { name: string; description?: string }[];
+      quarantinedTools: McpQuarantinedTool[];
       transport: string;
       connectedAt: Date;
     }[] = [];
@@ -424,6 +653,7 @@ const MCPClientService = {
           name: tool.name,
           description: tool.description,
         })),
+        quarantinedTools: conn.quarantined,
         transport: conn.config.transport,
         connectedAt: conn.connectedAt,
       });
@@ -546,6 +776,74 @@ const MCPClientService = {
   },
 
   /**
+   * List a connected server's prompts.
+   * ported from prism-service src/services/MCPClientService.ts (listPrompts, per server)
+   */
+  async listPrompts(serverName: string) {
+    const conn = connections.get(serverName);
+    if (!conn) {
+      return { error: `MCP server "${serverName}" is not connected` };
+    }
+    if (!conn.client.getServerCapabilities()?.prompts) {
+      return { prompts: [], serverName, count: 0, note: "Server does not support prompts" };
+    }
+    try {
+      const result = await conn.client.listPrompts();
+      const prompts = (result.prompts ?? []).map((prompt) => ({
+        name: prompt.name,
+        title: prompt.title ?? null,
+        description: prompt.description ?? null,
+        arguments: (prompt.arguments ?? []).map((argument) => ({
+          name: argument.name,
+          description: argument.description ?? null,
+          required: argument.required === true,
+        })),
+      }));
+      return { prompts, serverName, count: prompts.length };
+    } catch (error: unknown) {
+      return { error: `Failed to list prompts of "${serverName}": ${getErrorMessage(error)}` };
+    }
+  },
+
+  /**
+   * Fill a prompt. Its messages are flattened to text.
+   * ported from prism-service src/services/MCPClientService.ts (getPrompt)
+   */
+  async getPrompt(serverName: string, name: string, args: Record<string, string> = {}) {
+    const conn = connections.get(serverName);
+    if (!conn) return { error: `MCP server "${serverName}" is not connected` };
+    try {
+      const result = await conn.client.getPrompt({ name, arguments: args });
+      const messages = (result.messages ?? []).map((message) => {
+        const content = message.content as {
+          type: string;
+          text?: string;
+          resource?: { uri?: string; text?: string };
+          uri?: string;
+        };
+        const text =
+          content.type === "text"
+            ? (content.text ?? "")
+            : content.type === "resource"
+              ? (content.resource?.text ?? `[resource ${content.resource?.uri ?? ""}]`)
+              : content.type === "resource_link"
+                ? `[resource ${content.uri ?? ""}]`
+                : `[${content.type}]`;
+        return { role: message.role, text };
+      });
+      return {
+        server: serverName,
+        name,
+        description: result.description ?? null,
+        messages,
+        text: messages.map((message) => message.text).join("\n\n"),
+      };
+    } catch (error: unknown) {
+      return { error: `Failed to get prompt "${name}" from "${serverName}": ${getErrorMessage(error)}` };
+    }
+  },
+
+  /**
    * Authenticate with an MCP server by updating its connection headers/env.
    * Reconnects the server with the new credentials.
    *
@@ -560,7 +858,7 @@ const MCPClientService = {
       return { error: `MCP server "${serverName}" is not connected` };
     }
 
-    const updatedConfig: MCPServerConfig = { ...conn.config };
+    const updatedConfig: MCPServerConfig = { ...conn.config, toolPins: conn.pins };
 
     // Apply auth to config based on transport type
     if (updatedConfig.transport === "streamable-http") {

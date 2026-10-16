@@ -185,13 +185,47 @@ previews.
     `MCPClientService.callTool`. Server names that would shadow this service's
     own prefixes (`lazy-agent-service`, `lazy-tool-service`, `lazy-tools`) are
     refused at connect.
-  - **Not ported:** `McpOAuthRoutes` and the `/:id/oauth` endpoints — an OAuth
-    server would hook in at `MCPClientService.connect` (a transport
-    `authProvider` + an `authorizationRequired` reply from `POST /:id/connect`,
-    as prism's `McpOAuth.ts` does) and a router beside `/mcp-servers`; also not
-    ported: prism's tool-fingerprint quarantine / `tools/approve`, `/prompts`,
-    `/resources`, profile scoping (`profileId` / `shared`), output caps,
-    elicitation.
+  - **Gaps closed 2026-10-16** (branch `wt-mcp-gaps`; tests
+    `src/services/__tests__/McpGaps.test.ts`, real in-process MCP servers):
+    - **Output cap** — `services/mcp/McpOutputCap.ts`: a tool result over
+      `outputCapTokens` (per server, `toolOutputCapTokens` per tool, default
+      25 000 tokens = chars/4) is cut to its head and gets `outputCapped` +
+      a `note`. Prism offloads the full result to `ToolResultOffloadService`
+      and points the model at `retrieve_offloaded_content`; this service has
+      no offload store, so the tail is dropped.
+    - **Tool-change approval** — `services/mcp/McpToolFingerprint.ts`: the
+      first connect pins every tool's fingerprint (name, description, schema,
+      annotations); afterwards a *new* or *changed* tool is quarantined —
+      absent from the catalog, refused by `callTool` — whether found on a
+      reconnect or announced live by `notifications/tools/list_changed`
+      (`handleToolListChanged`). `POST /mcp-servers/:id/tools/approve`
+      `{tools?}` re-pins (live, or from the stored `quarantinedTools` when
+      disconnected); pins and the quarantine list persist on the server's
+      document, `connect` replies with `quarantinedTools`, and `GET` shows
+      them. Not ported: duplicate-name rejection (`rejected`), permission
+      tiers from annotations.
+    - **Prompts / resources** — `GET /:id/prompts`, `POST /:id/prompts/get
+      {name, arguments}`, `GET /:id/resources`, `POST /:id/resources/read
+      {uri}`, per server (prism's are cross-server `/prompts`, `/resources`
+      for the composer); 409 while not connected, 502 on an MCP-side error.
+    - **OAuth** — `services/mcp/McpOAuth.ts` + `McpSecretBox.ts` +
+      `routes/McpOAuthRoutes.ts` (`GET /mcp/oauth/callback`, mounted before
+      auth: a browser redirect has no identity headers). A server with
+      `auth: {type: "oauth", scope?}` connects through the SDK's
+      `OAuthClientProvider` (PKCE, dynamic registration); with no tokens
+      `POST /:id/connect` answers `{success:false, authorizationRequired:true,
+      authorizationUrl}`, the callback exchanges the code and connects.
+      `GET|DELETE /:id/oauth` report state / sign out. Tokens, client
+      registration and the PKCE verifier are AES-256-GCM sealed in
+      `COLLECTIONS.MCP_OAUTH` (`mcp_oauth`) and never logged or returned;
+      needs `MCP_OAUTH_ENCRYPTION_KEY` (32 bytes, base64/hex; connect is a 503
+      without it) and, behind a proxy, `LAZY_AGENT_SERVICE_PUBLIC_URL` for the
+      redirect (else the request origin). Not ported: the Client ID Metadata
+      Document and `iss` binding (the 1.29 SDK has neither).
+  - **Still not ported:** elicitation (`McpElicitation.ts`, ~250 lines plus
+    the question-card plumbing — not a few lines), profile scoping
+    (`profileId` / `shared`), tool permission tiers, MCP protocol-era
+    negotiation, server log notifications into the turn.
   - Tests: `src/services/__tests__/McpServersPort.test.ts` (real SDK MCP server
     over streamable HTTP; only the Mongo collection is an in-memory stand-in).
 

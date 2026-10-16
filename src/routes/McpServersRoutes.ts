@@ -1,4 +1,4 @@
-// ported from prism-service src/routes/McpServersRoutes.ts (restored from lazy-agent-service 9113901^ and brought up to prism's id validation, scoping and name-clash rules; OAuth/prompts/resources/tool-approval endpoints not ported)
+// ported from prism-service src/routes/McpServersRoutes.ts (restored from lazy-agent-service 9113901^ and brought up to prism's id validation, scoping and name-clash rules; plus prism's /oauth, /prompts, /resources and /tools/approve endpoints, per server)
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import { errorMessage } from "@rodrigo-barraza/utilities-library";
 import express, { Request, Response, NextFunction } from "express";
@@ -8,7 +8,20 @@ import MCPClientService from "../services/MCPClientService.ts";
 import type { MCPServerConfig } from "../services/MCPClientService.ts";
 import logger from "../utils/logger.ts";
 import { COLLECTIONS } from "../constants.ts";
-import { PostMcpServerSchema, PutMcpServerSchema } from "../types/index.ts";
+import {
+  ApproveMcpToolsSchema,
+  GetMcpPromptSchema,
+  PostMcpServerSchema,
+  PutMcpServerSchema,
+  ReadMcpResourceSchema,
+} from "../types/index.ts";
+import {
+  McpAuthorizationRequiredError,
+  forgetMcpOAuth,
+  getMcpOAuthStatus,
+} from "../services/mcp/McpOAuth.ts";
+import { McpOAuthKeyMissingError } from "../services/mcp/McpSecretBox.ts";
+import type { McpToolPins } from "../services/mcp/McpToolFingerprint.ts";
 
 const router = express.Router();
 router.use(requireDb);
@@ -28,6 +41,11 @@ interface McpServerDocument {
   url?: string;
   headers?: Record<string, string>;
   enabled: boolean;
+  outputCapTokens?: number | null;
+  toolOutputCapTokens?: Record<string, number>;
+  auth?: { type: "oauth"; scope?: string | null } | null;
+  toolPins?: McpToolPins;
+  quarantinedTools?: Array<{ name: string; reason: string; hash: string; description: string }>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,6 +53,11 @@ interface McpServerDocument {
 /** Whether `id` parses as the ObjectId it spells (a bad id is a 404, not a 500). */
 function isObjectId(id: string): boolean {
   return ObjectId.isValid(id) && String(new ObjectId(id)) === id;
+}
+
+/** The origin the request came in on — the OAuth redirect base when no public URL is configured. */
+function requestOrigin(req: Request): string {
+  return `${req.protocol}://${req.get("host")}`;
 }
 
 function scopeOf(req: Request) {
@@ -144,6 +167,9 @@ router.post(
         url,
         headers,
         enabled,
+        outputCapTokens,
+        toolOutputCapTokens,
+        auth,
       } = parsed.data;
 
       const document = {
@@ -158,6 +184,9 @@ router.post(
         url,
         headers,
         enabled,
+        ...(outputCapTokens !== undefined && { outputCapTokens }),
+        ...(toolOutputCapTokens !== undefined && { toolOutputCapTokens }),
+        ...(auth !== undefined && { auth }),
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -287,9 +316,10 @@ router.post(
         return res.status(404).json(NOT_FOUND);
       }
 
-      const result = await MCPClientService.connect(
-        server as unknown as MCPServerConfig,
-      );
+      const result = await MCPClientService.connect({
+        ...(server as unknown as MCPServerConfig),
+        _requestOrigin: requestOrigin(req),
+      });
       res.json({
         success: true,
         serverName: result.serverName,
@@ -298,13 +328,24 @@ router.post(
           name: tool.name,
           description: tool.description,
         })),
+        quarantinedTools: result.quarantinedTools,
       });
     } catch (error: unknown) {
+      // An OAuth server without tokens: the client opens this URL in a
+      // popup, and the callback finishes the connect.
+      // ported from prism-service src/routes/McpServersRoutes.ts
+      if (error instanceof McpAuthorizationRequiredError) {
+        return res.json({
+          success: false,
+          authorizationRequired: true,
+          authorizationUrl: error.authorizationUrl,
+        });
+      }
       const serverId = req.params.id as string;
       const errorText = errorMessage(error);
       logger.error(`MCP connect failed for ${serverId}: ${errorText}`);
       res
-        .status(502)
+        .status(error instanceof McpOAuthKeyMissingError ? 503 : 502)
         .json({ error: `MCP server connection failed: ${errorText}` });
     }
   }),
@@ -336,6 +377,195 @@ router.post(
       res.json({ success: true });
     } catch (error: unknown) {
       _next(error);
+    }
+  }),
+);
+
+/**
+ * Look up the scoped server a `/:id/...` route addresses; answers 404 itself
+ * (bad id, another scope's id) and returns null.
+ */
+async function findServer(req: Request, res: Response): Promise<McpServerDocument | null> {
+  const serverId = req.params.id as string;
+  const server = isObjectId(serverId)
+    ? await req.db
+        .collection<McpServerDocument>(COLLECTION)
+        .findOne({ _id: new ObjectId(serverId), ...scopeOf(req) })
+    : null;
+  if (!server) res.status(404).json(NOT_FOUND);
+  return server;
+}
+
+const oauthIdentity = (server: McpServerDocument) => ({
+  serverId: String(server._id),
+  username: server.username,
+});
+
+/**
+ * GET /mcp-servers/:id/oauth — the server's authorization state (never a token).
+ * DELETE /mcp-servers/:id/oauth — forget its tokens and registration, and disconnect.
+ * ported from prism-service src/routes/McpServersRoutes.ts
+ */
+router.get(
+  "/:id/oauth",
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const server = await findServer(req, res);
+      if (!server) return;
+      res.json({
+        ...(await getMcpOAuthStatus(oauthIdentity(server))),
+        connected: MCPClientService.isConnected(server.name),
+      });
+    } catch (error: unknown) {
+      next(error);
+    }
+  }),
+);
+
+router.delete(
+  "/:id/oauth",
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const server = await findServer(req, res);
+      if (!server) return;
+      await MCPClientService.disconnect(server.name);
+      await forgetMcpOAuth(oauthIdentity(server));
+      res.json({ success: true });
+    } catch (error: unknown) {
+      next(error);
+    }
+  }),
+);
+
+/**
+ * GET /mcp-servers/:id/prompts — the connected server's prompts.
+ * POST /mcp-servers/:id/prompts/get { name, arguments } — fill one.
+ * A server that is not connected is a 409; an MCP-side failure is a 502.
+ */
+router.get(
+  "/:id/prompts",
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const server = await findServer(req, res);
+      if (!server) return;
+      const result = await MCPClientService.listPrompts(server.name);
+      if ("error" in result) {
+        return res.status(MCPClientService.isConnected(server.name) ? 502 : 409).json(result);
+      }
+      res.json(result);
+    } catch (error: unknown) {
+      next(error);
+    }
+  }),
+);
+
+router.post(
+  "/:id/prompts/get",
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const server = await findServer(req, res);
+      if (!server) return;
+      const parsed = GetMcpPromptSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.format() });
+      const result = await MCPClientService.getPrompt(server.name, parsed.data.name, parsed.data.arguments);
+      if ("error" in result) {
+        return res.status(MCPClientService.isConnected(server.name) ? 502 : 409).json(result);
+      }
+      res.json(result);
+    } catch (error: unknown) {
+      next(error);
+    }
+  }),
+);
+
+/**
+ * GET /mcp-servers/:id/resources — the connected server's resources.
+ * POST /mcp-servers/:id/resources/read { uri } — read one.
+ */
+router.get(
+  "/:id/resources",
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const server = await findServer(req, res);
+      if (!server) return;
+      const result = await MCPClientService.listResources(server.name);
+      if ("error" in result) {
+        return res.status(MCPClientService.isConnected(server.name) ? 502 : 409).json(result);
+      }
+      res.json(result);
+    } catch (error: unknown) {
+      next(error);
+    }
+  }),
+);
+
+router.post(
+  "/:id/resources/read",
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const server = await findServer(req, res);
+      if (!server) return;
+      const parsed = ReadMcpResourceSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.format() });
+      const result = await MCPClientService.readResource(server.name, parsed.data.uri);
+      if ("error" in result) {
+        return res.status(MCPClientService.isConnected(server.name) ? 502 : 409).json(result);
+      }
+      res.json(result);
+    } catch (error: unknown) {
+      next(error);
+    }
+  }),
+);
+
+/**
+ * POST /mcp-servers/:id/tools/approve   { tools?: string[] }
+ * Re-approve quarantined tools at their current definitions (all of them
+ * when `tools` is omitted). A tool that is new or changed since the server
+ * was approved is hidden from the model and refused if called until then.
+ * ported from prism-service src/routes/McpServersRoutes.ts (tools/approve)
+ */
+router.post(
+  "/:id/tools/approve",
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const server = await findServer(req, res);
+      if (!server) return;
+      const parsed = ApproveMcpToolsSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.format() });
+      const names = parsed.data.tools ?? null;
+
+      const live = await MCPClientService.approveTools(server.name, names);
+      if (live) {
+        return res.json({ success: true, connected: true, ...live });
+      }
+
+      // Not connected: approve what the last connection recorded. The pin is
+      // the fingerprint the owner was shown, so a server that has changed
+      // again since is quarantined again on its next connect.
+      const stored = server.quarantinedTools ?? [];
+      const wanted = new Set(names ?? stored.map((entry) => entry.name));
+      const pins: McpToolPins = { ...(server.toolPins ?? {}) };
+      const approved: string[] = [];
+      const approvedAt = new Date().toISOString();
+      for (const entry of stored) {
+        if (!wanted.has(entry.name) || entry.reason === "duplicate") continue;
+        pins[entry.name] = { hash: entry.hash, approvedAt };
+        approved.push(entry.name);
+      }
+      const remaining = stored.filter((entry) => !approved.includes(entry.name));
+      await req.db
+        .collection<McpServerDocument>(COLLECTION)
+        .updateOne({ _id: server._id }, { $set: { toolPins: pins, quarantinedTools: remaining } });
+      res.json({
+        success: true,
+        connected: false,
+        approved,
+        skipped: [...wanted].filter((name) => !approved.includes(name)),
+        quarantinedTools: remaining,
+      });
+    } catch (error: unknown) {
+      next(error);
     }
   }),
 );
