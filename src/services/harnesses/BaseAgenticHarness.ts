@@ -5,11 +5,14 @@ import {
   createUsageAccumulator,
   calculateTextCost,
   estimateTokens,
+  getTotalInputTokens,
 } from "../../utils/CostCalculator.ts";
 import { calculateTokensPerSec } from "../../utils/math.ts";
 import { getPricing, TYPES } from "../../config.ts";
 import { stripToolCallMarkup } from "../../utils/StreamChunkDispatcher.ts";
 import ContextWindowManager from "../../utils/ContextWindowManager.ts";
+import ContextBudgetTracker from "./ContextBudgetTracker.ts";
+import type { ProviderInputBaseline } from "../compact/ContextBudgets.ts";
 import {
   parseContextOverflowError,
   reducedMaxTokensForOverflow,
@@ -114,6 +117,12 @@ export default class BaseAgenticHarness {
   protected _activeModelSpan: Span | null = null;
   /** Per-stream pass abort controllers (stall watchdog aborts the provider request). */
   private passAborts = new WeakMap<object, AbortController>();
+  /** Lazily created context budget tracker (calibrated output clamp). */
+  private budgetTracker: ContextBudgetTracker | null = null;
+  /** chars/4 estimate of the messages for the most recent clamp (calibration input). */
+  private lastEstimatedMessageTokens = 0;
+  /** Latest provider-reported input, paired with the chars/4 messages it carried. */
+  private providerInputBaseline: ProviderInputBaseline | null = null;
 
   constructor(
     context: AgenticContext,
@@ -389,6 +398,16 @@ export default class BaseAgenticHarness {
   ): ConversationMessage[] {
     const { modelDefinition, options = {}, emit } = this.context;
     const preEnforceCount = messages.length;
+    // The fixed overhead (system prompt + tool schemas) the request carries
+    // besides the messages, and the latest reported input — so the truncation
+    // budget is measured in the same units as the compaction trigger
+    // (ContextBudgets) instead of messages-only chars/4.
+    const tracker = this.ensureBudgetTracker();
+    const { systemPromptTokens, toolSchemaTokens } =
+      ContextBudgetTracker.estimateFixedOverhead(
+        (options.systemPrompt as string | undefined) || "",
+        this.tools.finalTools,
+      );
     const contextResult = ContextWindowManager.enforce(
       messages as ChatMessage[],
       {
@@ -396,6 +415,9 @@ export default class BaseAgenticHarness {
         maxOutputTokens: options.maxTokens || DEFAULT_MAX_OUTPUT_TOKENS,
         toolCount,
         locale: options?.locale as string | undefined,
+        fixedOverheadTokens: systemPromptTokens + toolSchemaTokens,
+        providerInputBaseline: this.providerInputBaseline,
+        calibrationRatio: tracker?.getCalibrationRatio() ?? null,
       },
     );
     if (contextResult.truncated) {
@@ -453,10 +475,54 @@ export default class BaseAgenticHarness {
   }
 
   /**
+   * The model's context window: the static catalog entry when it has one,
+   * else the length discovered from the serving endpoint
+   * (`options._loadedContextLength`, written by the provider's
+   * `discoverContextWindow`). Null when neither is known — the clamp and
+   * exhaustion guard stay inert, as on cloud models without a catalog entry.
+   */
+  private resolveContextWindow(): number | null {
+    return (
+      this.context.modelDefinition?.maxInputTokens ||
+      (this.context.options?._loadedContextLength as number | undefined) ||
+      null
+    );
+  }
+
+  /**
+   * Lazily create or update the ContextBudgetTracker.
+   *
+   * The context window isn't always available at construction time:
+   *   - Cloud providers: known statically from modelDefinition
+   *   - Self-hosted cached (vLLM 2nd+ req): cached discovery
+   *   - Self-hosted cold (vLLM 1st req): discovered mid-turn by the provider
+   */
+  private ensureBudgetTracker(): ContextBudgetTracker | null {
+    const contextWindow = this.resolveContextWindow();
+    if (!contextWindow) return null;
+
+    if (!this.budgetTracker) {
+      this.budgetTracker = new ContextBudgetTracker(
+        this.context.emit,
+        contextWindow,
+      );
+    } else {
+      this.budgetTracker.updateContextWindow(contextWindow);
+    }
+    return this.budgetTracker;
+  }
+
+  /**
    * Dynamically clamp maxTokens so that input + output never exceeds
    * the model's context window. This is the industry-standard approach
    * (used by OpenAI SDKs, Cursor, Claude Code) to prevent 400 errors
    * from context overflow on models with finite context windows.
+   *
+   * Accounts for the FULL provider input budget (ported from
+   * prism-service): the conversation messages, the system prompt
+   * (passed as a first-class parameter, NOT in messages) and the
+   * serialized tool schemas — all calibrated against the previous
+   * call's real reported input.
    *
    * Returns the clamped maxTokens value. If no clamping is needed,
    * returns the original value unchanged.
@@ -465,27 +531,45 @@ export default class BaseAgenticHarness {
     messages: ConversationMessage[],
     requestedMaxTokens: number | undefined,
   ): number | undefined {
-    const { modelDefinition } = this.context;
-    const contextWindow = modelDefinition?.maxInputTokens;
-
+    const contextWindow = this.resolveContextWindow();
     if (!contextWindow || !requestedMaxTokens) return requestedMaxTokens;
 
-    const estimatedInputTokens = this.estimateInputTokens(messages);
-    const availableForOutput =
-      contextWindow - estimatedInputTokens - OUTPUT_TOKEN_CLAMP_SAFETY_MARGIN;
+    const tracker = this.ensureBudgetTracker();
 
-    if (requestedMaxTokens <= availableForOutput) return requestedMaxTokens;
+    // 1. Conversation messages (raw heuristic, before calibration)
+    const estimatedMessageTokens = this.estimateInputTokens(messages);
+    this.lastEstimatedMessageTokens = estimatedMessageTokens;
 
-    const clampedMaxTokens = Math.max(availableForOutput, MINIMUM_CLAMPED_OUTPUT_TOKENS);
+    // 2. System prompt (sent as systemInstruction, invisible to messages)
+    const systemPromptText =
+      (this.context.options?.systemPrompt as string | undefined) || "";
 
-    logger.warn(
-      `[OutputTokenClamp] Clamping maxTokens from ${requestedMaxTokens} → ${clampedMaxTokens} ` +
-        `(contextWindow=${contextWindow}, estimatedInput=${estimatedInputTokens}, ` +
-        `safetyMargin=${OUTPUT_TOKEN_CLAMP_SAFETY_MARGIN}). ` +
-        `Without clamping: ${estimatedInputTokens + requestedMaxTokens} > ${contextWindow}.`,
-    );
+    // 3. Tool schemas (serialized function definitions in the payload)
+    const toolSchemas = this.tools.finalTools;
 
-    return clampedMaxTokens;
+    if (tracker) {
+      const { clampedMaxTokens, adjustedInput, availableForOutput } =
+        tracker.computeAndEmitEstimate(
+          estimatedMessageTokens,
+          systemPromptText,
+          toolSchemas,
+          requestedMaxTokens,
+        );
+
+      if (clampedMaxTokens !== requestedMaxTokens) {
+        logger.warn(
+          `[OutputTokenClamp] CLAMPING maxTokens ${requestedMaxTokens} → ${clampedMaxTokens}. ` +
+            `Without clamp: ${adjustedInput + requestedMaxTokens} > ${contextWindow}.`,
+        );
+      }
+
+      return clampedMaxTokens;
+    }
+
+    // Unreachable: ensureBudgetTracker always returns a tracker when
+    // contextWindow is non-null (checked at method entry). This return
+    // satisfies TypeScript's control flow analysis.
+    return requestedMaxTokens;
   }
 
   /**
@@ -504,6 +588,14 @@ export default class BaseAgenticHarness {
     passOptions: AgenticOptions,
   ): Promise<AsyncIterable<unknown> | null> {
     const { provider, providerName, resolvedModel, modelDefinition, signal } = this.context;
+
+    // Pre-discover the context window for self-hosted providers so
+    // clampOutputTokens has the budget available on the very first
+    // iteration (ported from prism-service: fixes the cold-start race
+    // where discovery ran inside the async generator, after clamping).
+    if (provider.discoverContextWindow) {
+      await provider.discoverContextWindow(resolvedModel, this.context.options);
+    }
 
     if (this.context.runtimeToolExecutor) {
       const limit = this.context.options.maxTokens ?? 0;
@@ -786,6 +878,22 @@ export default class BaseAgenticHarness {
       pass.usageReported = usageChunk !== undefined && Object.values(usageChunk).some(value => typeof value === "number");
       mergeUsage(state.overallUsage, usageChunk);
       mergeUsage(pass.usage, usageChunk);
+      // Calibrate the budget tracker with the real reported input
+      // (ported from prism-service): the next clamp scales its chars/4
+      // estimate by real ÷ estimated instead of trusting the heuristic.
+      if (usageChunk) {
+        const realInput = getTotalInputTokens(usageChunk);
+        if (realInput > 0) {
+          this.providerInputBaseline = {
+            inputTokens: realInput,
+            messageTokens: this.lastEstimatedMessageTokens,
+          };
+          this.budgetTracker?.recordRealUsage(
+            usageChunk,
+            this.lastEstimatedMessageTokens,
+          );
+        }
+      }
       const rawUsage = streamChunk.usage as Record<string, number> | undefined;
       if (pass.requestId) {
         const reportedInput =
