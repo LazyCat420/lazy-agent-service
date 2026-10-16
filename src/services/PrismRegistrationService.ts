@@ -75,6 +75,13 @@ export interface PrismConsumer {
    * tool set (~79 tools) and the agent wanders.
    */
   persona?: string;
+  /**
+   * MCP server name for this scope; defaults to MCP_SERVER_NAME. Prism refuses
+   * to connect a second same-named server where another is already visible —
+   * coding/admin and html-notes-client/admin share username `admin`, so
+   * coding/admin got HTTP 409 until it used its own name.
+   */
+  mcpName?: string;
 }
 
 interface McpServerDoc {
@@ -138,7 +145,7 @@ async function callPrism(
  * one-off setups.
  */
 const DEFAULT_CONSUMERS: PrismConsumer[] = [
-  { project: "coding", username: "admin" },
+  { project: "coding", username: "admin", mcpName: "lazy-agent-service-coding" },
   { project: "vllm-trading-bot", username: "lazy-trader" },
   // username MUST match what html-notes actually sends as x-username
   // (AGENT_USERNAME, default "admin"). It was "lazycat" — inherited verbatim
@@ -188,10 +195,15 @@ async function registerMcpServer(
   }
   const body = (await listRes.json()) as McpServerDoc[] | { servers?: McpServerDoc[] };
   const servers: McpServerDoc[] = Array.isArray(body) ? body : (body?.servers ?? []);
-  const existing = servers.find((s) => s.name === MCP_SERVER_NAME);
+  const name = consumer.mcpName ?? MCP_SERVER_NAME;
+  // A renamed scope still owns its old default-named row: rename it in place
+  // rather than POSTing a second row on the same URL.
+  const existing =
+    servers.find((s) => s.name === name) ??
+    servers.find((s) => s.name === MCP_SERVER_NAME);
 
   const payload = {
-    name: MCP_SERVER_NAME,
+    name,
     displayName: MCP_DISPLAY_NAME,
     transport: "sse",
     url: mcpUrl,
@@ -212,7 +224,7 @@ async function registerMcpServer(
     }
     id = docId((await res.json()) as McpServerDoc);
     logger.info(`[Prism-Reg] [${label}] created MCP registration ${id}`);
-  } else if (existing.url !== mcpUrl || existing.enabled !== true || existing.headers?.["x-lazy-tool-client"] !== payload.headers["x-lazy-tool-client"]) {
+  } else if (existing.name !== name || existing.url !== mcpUrl || existing.enabled !== true || existing.headers?.["x-lazy-tool-client"] !== payload.headers["x-lazy-tool-client"]) {
     // Our host/port moved, or somebody disabled us. Repair in place — a new
     // row under the same name would shadow this one.
     const res = await callPrism(base, `/mcp-servers/${id}`, {
