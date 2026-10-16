@@ -540,6 +540,58 @@ export const ARG_REMAPS: Record<string, Record<string, string>> = {
   search_products: { query: "q" },
 };
 
+/**
+ * Classify a read_url failure into a stable error class plus the guidance the
+ * model should follow. Classes mirror the telemetry grouping: bot_blocked
+ * (401/403), not_found (404/410), server_error (5xx), timeout, network
+ * (DNS/connection), other.
+ */
+export function classifyReadUrlError(errorText: string): {
+  kind: string;
+  guidance: string;
+} {
+  const text = errorText.toLowerCase();
+  if (/\b(401|403)\b/.test(text)) {
+    return {
+      kind: "bot_blocked",
+      guidance:
+        "this site blocks automated fetchers. Do not retry this URL; try scrape_url or read_web_page, or use another source.",
+    };
+  }
+  if (/\b(404|410)\b/.test(text)) {
+    return {
+      kind: "not_found",
+      guidance:
+        "the page does not exist at this address. Do not retry this URL; verify the address or use search_web to find a current source.",
+    };
+  }
+  if (/\b5\d\d\b/.test(text) || /api returned 5/.test(text)) {
+    return {
+      kind: "server_error",
+      guidance:
+        "the origin server failed. You may retry once later, or use another source.",
+    };
+  }
+  if (/timed?\s?out|timeout|etimedout|econnaborted/.test(text)) {
+    return {
+      kind: "timeout",
+      guidance:
+        "the fetch timed out. Retry once, or use another source.",
+    };
+  }
+  if (/failed to reach api|econnrefused|enotfound|dns|getaddrinfo/.test(text)) {
+    return {
+      kind: "network",
+      guidance:
+        "the host could not be reached (DNS or connection failure). Check the URL or use another source.",
+    };
+  }
+  return {
+    kind: "other",
+    guidance: "Use another source or try again later.",
+  };
+}
+
 async function executeToolGeneric(
   name: string,
   args: Record<string, unknown> = {},
@@ -1396,6 +1448,15 @@ export default class ToolOrchestratorService {
       return ToolOrchestratorService.executeMCPTool(name, args, context);
     }
 
+    // read_url failures are classified (see telemetry 2026-10-16: 9/38 failed
+    // in 7 d, almost all HTTP 403 bot-blocks and 404s) and get one structured
+    // untruncated log line; bot-blocked hosts fall back to our own
+    // WebExtractService (scraper-service) before giving the model an error
+    // that says what happened and what to do instead.
+    if (name === "read_url") {
+      return ToolOrchestratorService.executeReadUrl(args, context);
+    }
+
     // scrape_url is never sent to tools-service. It now reads through the
     // shared WebExtractService (scraper-service, engine auto) with the
     // truncate-and-store budget, so the model gets clean text under a fixed
@@ -1763,6 +1824,65 @@ export default class ToolOrchestratorService {
     } catch (error: unknown) {
       return { error: getErrorMessage(error) };
     }
+  }
+
+  /**
+   * `read_url`, forwarded to tools-service, but with failure handling we own
+   * (tools-service is read-only for us). Telemetry 2026-10-16: 9 of 38
+   * read_url calls failed in 7 d — HTTP 403 bot-blocks (discogs, thestreet,
+   * investopedia, apnews) and 404s (reggaedb, unitedreggae, wikipedia) — and
+   * the pino pretty-printer truncated the error, so the model and the logs
+   * never saw what happened. Now every failure is classified, logged once as
+   * one structured line with the full error, and given actionable guidance;
+   * bot-blocked (401/403) URLs additionally fall back to our own
+   * WebExtractService (scraper-service) before failing.
+   */
+  static async executeReadUrl(
+    args: Record<string, unknown> = {},
+    context: ToolExecutionContext = {},
+  ) {
+    const url = typeof args.url === "string" ? args.url.trim() : "";
+    if (!url) {
+      return { error: "read_url requires 'url': a non-empty http(s) URL string" };
+    }
+    const result = (await executeToolGeneric("read_url", args, context)) as Record<string, unknown>;
+    const errorText = typeof result.error === "string" ? result.error : "";
+    if (!errorText) return result;
+
+    const { kind, guidance } = classifyReadUrlError(errorText);
+    let host = url;
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      // keep raw url as host when it does not parse
+    }
+    // One structured line, full error untruncated (the pretty-printer cut
+    // these before — keep it a single message string, not a nested object).
+    logger.warn(
+      `[ReadUrl] tool=read_url host=${host} class=${kind} url=${url} error=${errorText}`,
+    );
+
+    if (kind === "bot_blocked") {
+      const extracted = await webExtract(url);
+      if (extracted.status === "ok") {
+        logger.info(
+          `[ReadUrl] tool=read_url host=${host} class=${kind} fallback=web_extract status=ok url=${url}`,
+        );
+        return {
+          url,
+          success: true,
+          content: extracted.content,
+          truncated: extracted.truncated,
+          ...(extracted.storedPath ? { stored_path: extracted.storedPath, read_hint: extracted.readHint } : {}),
+          ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
+          fallback: "web_extract",
+        };
+      }
+      return {
+        error: `${errorText} — ${guidance} A fallback scrape also failed (${extracted.error || "no detail"}).`,
+      };
+    }
+    return { error: `${errorText} — ${guidance}` };
   }
 
   /**
