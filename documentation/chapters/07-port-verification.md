@@ -1,0 +1,60 @@
+# 07 — Port verification (2026-10-16)
+
+Live proof that LazyCat420's apps run on lazy-agent-service (NAS :5591) with no Prism (:7777) traffic.
+Source: NAS `docker logs` for `prism-service`, `lazy-agent-service`, `trading-service`; Mongo via `trading-service`.
+
+## Prism traffic
+- After the 07:47 UTC trading restart: **0** non-`/health` requests to prism-service through 09:05 UTC.
+  Last caller before cutover: `vllm-trading-bot/lazy-trader GET /mcp-servers` 07:46:30.
+- `/prism-proxy` on lazy-agent-service: **0** hits since 07:47.
+
+## Trading cycle `cycle-v3-1792140750` (command `job-ae99dd1e`, AAPL/MSFT/NVDA)
+- Started 08:52:30, `pipeline_state.status = done` 08:59:37. `trading-service` logged
+  `prism_client.url set to http://10.0.0.16:5591 (PRISM_ENABLED=False)`.
+- `analysis_results`: 3 rows. AAPL `v3_delta` HOLD conf 68 (5.1 KB result); NVDA `v3_delta_escalated` HOLD conf 68
+  (31 KB result, RESEARCH → DEBATE → PM all SUCCESS); MSFT `v3_glance` skipped by the triage gate (no news, 1 h old),
+  conf 0 by design.
+- lazy-agent-service served the cycle's `POST /agent` (`vllm-trading-bot/lazycat-sdk`), `/embed`, `/chat`, `/agent/stop`.
+- Not harness faults: yfinance 404s for symbols extracted from news (WRP, KONE); one AAPL claim-verification warning
+  (2 of 6 numeric claims mismatched).
+
+## html-notes
+- `POST :8035/session/message` (JWST research ask) → 200 in 43 s, streamed a `data_card` widget; tools ran on
+  lazy-agent-service (`/execute/news_search`, `/execute/web_search`); prism-service 0 hits.
+- The `default/anonymous GET /config` poller (~2/min, from the NAS docker gateway) is html-notes' health probe
+  (`app/main.py _agent_dependency_status`) and model list (`routes/message.py:28`); they now send scope headers.
+
+## Music-player / strategy chat
+- music-player `POST /agent` (music-player/admin) and trading strategy chat `/v1/runs` served natively.
+
+## After Prism code removal (deployed 2026-10-16 09:59–10:14 UTC)
+lazycat-sdk `19a2a52` (`agent_client`/`AgentClient`, `LAZY_AGENT_URL`), trading-service `dc46829c` (no `PRISM_ENABLED`
+branches), trading-client `ab57ab38`, html-notes `915a8aa`, lazy-agent-service `727da8e`. NAS trading `.env` lost its
+dead `PRISM_URL=:7777` / `PRISM_ENABLED=True` lines (backup `.env.bak-prism-removal-20261016`).
+
+### Cycle #2 `cycle-v3-1792145034` (AMD/GOOGL/TSLA)
+All three analysed on the native harness: AMD `v3_delta_escalated` HOLD 68 (35 KB), GOOGL `v3_delta` HOLD 70,
+TSLA `v3_delta_escalated` HOLD 68 (32 KB); 142 pipeline events, 0 with status error/failed.
+
+### Harness parity (`scripts/harness/parity_check.py`, 09:50–10:05 UTC)
+| work | prism | ours |
+|---|---|---|
+| 6 boundary contracts | 6/6 PASS | 6/6 PASS (cut_stream 1 s, was 3–45 s) |
+| v3_junior_analyst replay | answered, artifact, 45 s | answered, artifact, 71 s |
+| v3_fundamental_analyst replay | answered, artifact, 132 s | answered, artifact, 127 s |
+| v3_quant_analyst replay | answered, artifact, 99 s | answered, artifact, 73 s |
+Oneshot arm skipped: cycle #2 went live. Only difference: prism forced a final turn on the junior replay; ours finished without needing one.
+
+### Success rate (prism.requests, project vllm-trading-bot, `/agent`)
+- Ours, every row after 10:06 UTC (native only): **162/165 success** (2 rows still `pending`, 1 failure).
+- Prism baseline (ch.05): 197/300.
+
+### `/prism-proxy`
+Kept until 2026-10-23: its only caller is the parity tool's prism arm (comparison runs). Delete then if production
+hits stay at 0.
+
+### read_url (ch.08) live
+`/agent` with `read_url` on `https://www.wsj.com/finance` → model told "HTTP 401 … site blocks automated fetchers";
+log `[ReadUrl] tool=read_url host=www.wsj.com class=bot_blocked … error=HTTP 401`. Known gap: tools-service routes any URL
+matching `/status/<n>` to its Twitter fetcher (`WebContentFetcher.ts:31`, Rod's repo), so such URLs come back as
+"Invalid Twitter/X URL" and are classified `bot_blocked`.
