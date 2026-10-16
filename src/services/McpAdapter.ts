@@ -12,6 +12,7 @@ import logger from "../utils/logger.ts";
 import { dispatchTool } from "./ToolDispatch.ts";
 import { classifyToolResult } from "./ToolResult.ts";
 import { modelVisibleText } from "./ModelVisibleToolResult.ts";
+import { compactFinnhubNews } from "./FinnhubNewsProjection.ts";
 import { verifyMcpClient } from "./TradingToolContext.ts";
 import { MCP_SERVER_NAME } from "../constants.ts";
 import { toMcpTool } from "./McpToolAnnotations.ts";
@@ -134,7 +135,14 @@ export default class McpAdapter {
         // TOOL_TIMEOUT result instead of protocol error -32001.
         return await raceToolDeadline(
           toolName,
-          dispatchTool(toolName, toolArgs, { transport: "mcp", authenticatedProject }).then((result) => {
+          dispatchTool(toolName, toolArgs, { transport: "mcp", authenticatedProject }).then((rawResult) => {
+            // get_finnhub_news is read as a compact projection (all headlines,
+            // short summaries) instead of the generic per-result cut that
+            // dropped most of the articles 4/10 calls (telemetry ch.08).
+            const result = compactFinnhubNews(toolName, rawResult);
+            if (result !== rawResult) {
+              logger.info(`[McpAdapter] ${toolName} result projected to compact news JSON`);
+            }
             // A trading bridge result goes to the model unwrapped and within prism's
             // per-result limit (ModelVisibleToolResult.ts); everything else is unchanged.
             const visible = modelVisibleText(result);

@@ -8,6 +8,7 @@ import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import { ORCHESTRATOR_ONLY_TOOLS } from "./OrchestratorPrompt.ts";
 import { filterResultsByDomain, webSearch, withSiteSearch } from "./WebSearchService.ts";
 import { webExtract, webExtractAnswered } from "./WebExtractService.ts";
+import { compactFinnhubNews } from "./FinnhubNewsProjection.ts";
 import { createAbortController } from "../utils/AbortController.ts";
 import {
   DOMAINS,
@@ -1457,6 +1458,15 @@ export default class ToolOrchestratorService {
       return ToolOrchestratorService.executeReadUrl(args, context);
     }
 
+    // get_music failures are made actionable (telemetry ch.08: 1/24 failed in
+    // the 2026-10-16 window with the error text lost to log rotation): the
+    // MusicBrainz fetcher's `MusicBrainz API error <status>` failures get
+    // guidance that says the failure is upstream and transient instead of a
+    // bare status the model would retry blindly.
+    if (name === "get_music") {
+      return ToolOrchestratorService.executeGetMusic(args, context);
+    }
+
     // scrape_url is never sent to tools-service. It now reads through the
     // shared WebExtractService (scraper-service, engine auto) with the
     // truncate-and-store budget, so the model gets clean text under a fixed
@@ -1827,6 +1837,31 @@ export default class ToolOrchestratorService {
   }
 
   /**
+   * `get_music`, forwarded to tools-service (MusicBrainz via
+   * tools-service/src/fetchers/knowledge/MusicBrainzFetcher.ts) with the
+   * failure made actionable: MusicBrainz rate-limits (~1 request/second) and
+   * answers 503 under load, so its `MusicBrainz API error <status>` failures
+   * say what to do instead of leaving the model to blind-retry.
+   */
+  static async executeGetMusic(
+    args: Record<string, unknown> = {},
+    context: ToolExecutionContext = {},
+  ) {
+    const result = (await executeToolGeneric("get_music", args, context)) as Record<string, unknown>;
+    const errorText = typeof result.error === "string" ? result.error : "";
+    if (!errorText) return result;
+    const status = /^MusicBrainz API error (\d{3})/.exec(errorText)?.[1];
+    if (!status) return result;
+    const guidance =
+      status === "503" || status === "429"
+        ? "MusicBrainz is rate-limited or temporarily overloaded (it allows roughly 1 request per second and returns 503 under load). Wait a few seconds and retry once; the query itself is fine."
+        : status.startsWith("4")
+          ? "MusicBrainz rejected the query arguments; check the action (search_artists, artist, search_albums, album, search_tracks), q/mbid/artist values and limit before retrying."
+          : "MusicBrainz failed on this request. Retry once later, or use another music source.";
+    return { error: `${errorText} — ${guidance}` };
+  }
+
+  /**
    * `read_url`, forwarded to tools-service, but with failure handling we own
    * (tools-service is read-only for us). Telemetry 2026-10-16: 9 of 38
    * read_url calls failed in 7 d — HTTP 403 bot-blocks (discogs, thestreet,
@@ -1849,20 +1884,33 @@ export default class ToolOrchestratorService {
     const errorText = typeof result.error === "string" ? result.error : "";
     if (!errorText) return result;
 
-    const { kind, guidance } = classifyReadUrlError(errorText);
     let host = url;
     try {
       host = new URL(url).hostname;
     } catch {
       // keep raw url as host when it does not parse
     }
+    // tools-service's platform detector sends ANY url containing `/status/<digits>`
+    // (unless it names reddit/github/stackoverflow) to its Twitter fetcher
+    // (tools-service/src/fetchers/web/WebContentFetcher.ts twitter pattern), which
+    // rejects real pages with "Invalid Twitter/X URL". That is a misroute, not a
+    // bot block: go straight to the generic web extractor.
+    const isTwitterHost = /(^|\.)((twitter|x)\.com)$/i.test(host);
+    const twitterMisroute = /^Invalid Twitter\/X URL/i.test(errorText) && !isTwitterHost;
+    const { kind, guidance } = twitterMisroute
+      ? {
+          kind: "misrouted",
+          guidance:
+            "the fetcher misrouted this URL to its Twitter handler; the page was fetched through the generic web extractor instead.",
+        }
+      : classifyReadUrlError(errorText);
     // One structured line, full error untruncated (the pretty-printer cut
     // these before — keep it a single message string, not a nested object).
     logger.warn(
       `[ReadUrl] tool=read_url host=${host} class=${kind} url=${url} error=${errorText}`,
     );
 
-    if (kind === "bot_blocked") {
+    if (kind === "bot_blocked" || kind === "misrouted") {
       const extracted = await webExtract(url);
       if (extracted.status === "ok") {
         logger.info(
@@ -2075,14 +2123,21 @@ export default class ToolOrchestratorService {
         agentName: context.agent || undefined,
         transport: "rest",
       });
+      // get_finnhub_news is read as a compact projection (all headlines, short
+      // summaries) instead of the generic per-result cut that dropped most of
+      // the articles 4/10 calls (telemetry ch.08, 2026-10-16).
+      const news = compactFinnhubNews(name, result);
+      if (news !== result) {
+        logger.info(`[ToolOrchestrator] ${name} result projected to compact news JSON`);
+      }
       // The model gets what prism's MCP call gives it for the same result
       // (McpAdapter): a bridge tool message unwrapped to its content and fitted
       // to the per-result limit with a note. Measured 2026-10-07: without
       // this the native loop handed the model the bridge's raw
       // {"role":"tool",...,"content":...} envelope, whole (8,186 chars where
       // prism showed 7,333). Errors and other results pass through unchanged.
-      if (bridgeContent(result) === null) return result;
-      const visible = modelVisibleText(result);
+      if (bridgeContent(news) === null) return news;
+      const visible = modelVisibleText(news);
       if (visible.cut) {
         logger.info(`[ToolOrchestrator] ${name} result cut to the per-result limit: ${visible.before} -> ${visible.after} chars`);
       }
