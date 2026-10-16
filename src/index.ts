@@ -322,7 +322,7 @@ setupWebSocket(wss);
       const indexDefinitions: Array<{
         collection: string;
         keys: Record<string, number>;
-        options?: { unique: boolean };
+        options?: { unique?: boolean; expireAfterSeconds?: number };
       }> = [
         // requests — primary lookup by requestId (admin detail view)
         { collection: COLLECTIONS.REQUESTS, keys: { requestId: 1 }, options: { unique: true } },
@@ -396,6 +396,10 @@ setupWebSocket(wss);
         { collection: COLLECTIONS.SOMATIC_STATE, keys: { agentId: 1 }, options: { unique: true } },
         // workflow_memories — retrieval query index
         { collection: COLLECTIONS.WORKFLOW_MEMORIES, keys: { agent: 1, project: 1, createdAt: -1 } },
+        // pending_decisions — durable approvals (settled records expire via expiresAt)
+        { collection: COLLECTIONS.PENDING_DECISIONS, keys: { id: 1 }, options: { unique: true } },
+        { collection: COLLECTIONS.PENDING_DECISIONS, keys: { conversationId: 1, status: 1 } },
+        { collection: COLLECTIONS.PENDING_DECISIONS, keys: { expiresAt: 1 }, options: { expireAfterSeconds: 0 } },
         // workflow_memories — uniqueness per agent conversation
         { collection: COLLECTIONS.WORKFLOW_MEMORIES, keys: { conversationId: 1, agentConversationId: 1 }, options: { unique: true } },
       ];

@@ -204,9 +204,20 @@ those items, all driven by real harness-turn tests
   `POST /conversation/approve` over the existing `ApprovalRegistry` /
   `ApprovalGate`. Strict `decision: "allow"|"deny"` (or boolean `approved`; a
   missing value is 400, not a yes), `toolCallId` 404 / ambiguous 400,
-  `scope`. Not ported: `editedArgs` (400), the durable `PendingDecisionStore`
-  (409 stale / `delivered: false` — a decision reaches only a live turn), and
-  relaying a denial `reason` to the model (the call ends `USER_REJECTED`).
+  `scope`. Durable follow-up (2026-10-16, branch `wt-durable-approvals`,
+  tests `routes/__tests__/DurableApprovals.test.ts`): tool approvals are
+  stored in Mongo `pending_decisions` (`services/PendingApprovalStore.ts`,
+  from prism `PendingDecisionStore`, tool approvals only; TTL on `expiresAt`,
+  index in `index.ts`). `ApprovalGate` writes the records before the card is
+  emitted, so a pending approval survives a restart; a decision is a
+  conditional write — a second one on the same call is **409**, and a decision
+  with no live turn is stored and answered `delivered: false`. `editedArgs`
+  (allow only; validated against the tool schema by `utils/ToolArgsValidator`,
+  400 if invalid or on a deny) replaces the call's arguments before it runs.
+  A deny `reason` (trimmed, 500 chars) reaches the model in the `USER_REJECTED`
+  tool result. Still not ported: plan approvals, questions and budget pauses
+  are not durable, and nothing re-drives a turn after a restart (the stored
+  decision is not yet picked up by a new turn).
 - **Ask-user** — the `ask_user` tool did not exist here (nothing ever filed a
   pending question), so the blocking path was ported
   (`harnesses/lifecycle/AskUserTool.ts`, from prism `AskUserQuestionTool`):

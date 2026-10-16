@@ -68,7 +68,16 @@ export const COLLECTIONS = {
   SOMATIC_STATE: "somatic_state",
   WORKFLOW_MEMORIES: "workflow_memories",
   EXTRACTION_WATERMARKS: "extraction_watermarks",
+  PENDING_DECISIONS: "pending_decisions",
 };
+
+/** Durable approval records (PendingApprovalStore). */
+export const PENDING_DECISIONS = {
+  /** A settled record is kept this long (TTL on `expiresAt`) so a late second POST still reads 409. */
+  SETTLED_RETENTION_DAYS: 7,
+  /** A denial reason relayed to the model is cut to this many characters. */
+  MAX_REASON_CHARS: 500,
+} as const;
 
 /**
  * Reusable MongoDB $group aggregation expression for summing estimated costs.

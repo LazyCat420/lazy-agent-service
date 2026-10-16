@@ -12,6 +12,9 @@ import {
 import ConversationGenerationTracker from "./ConversationGenerationTracker.ts";
 import ToolContext from "./ToolContext.ts";
 import logger from "../utils/logger.ts";
+import { pendingApprovalStore } from "./PendingApprovalStore.ts";
+import { validateToolArgs } from "../utils/ToolArgsValidator.ts";
+import { PENDING_DECISIONS } from "../constants.ts";
 import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
 import { TraceContext } from "../platform/trace/TraceContext.ts";
 import { DEFAULT_CONTEXT_BUDGET } from "../platform/context/ContextBudget.ts";
@@ -587,6 +590,11 @@ export default class AgenticLoopService {
       // Clean up in-memory state keyed by conversationId (client-facing)
       pendingApprovals.delete(conversationId);
       pendingQuestions.delete(conversationId);
+      try {
+        await pendingApprovalStore.cancelPending(conversationId, "turn_ended");
+      } catch (storeError: unknown) {
+        logger.warn(`[Approvals] Could not cancel pending approvals for ${conversationId}: ${storeError}`);
+      }
 
       // Always clean up per-session tracker entries to prevent memory leaks —
       // sub-agent sessions have their own agentConversationId that must be released.
@@ -618,7 +626,14 @@ export default class AgenticLoopService {
     {
       shouldApproveAll = false,
       reason,
-    }: { shouldApproveAll?: boolean; reason?: string } = {},
+      denialReason,
+      editedArgs,
+    }: {
+      shouldApproveAll?: boolean;
+      reason?: string;
+      denialReason?: string;
+      editedArgs?: Record<string, Record<string, unknown>>;
+    } = {},
   ): boolean {
     const entry = pendingApprovals.get(conversationId);
     if (!entry) return false;
@@ -630,50 +645,137 @@ export default class AgenticLoopService {
         isApproved,
         shouldApproveAll,
         reason: reason ?? (isApproved ? "user_approved" : "user_rejected"),
+        ...(denialReason ? { denialReason } : {}),
+        ...(editedArgs ? { editedArgs } : {}),
       });
     }
     return true;
   }
 
   /**
-   * Decide the pending approval with the checks the HTTP route needs:
-   * `not_found` (nothing pending, or `toolCallId` is not among the pending
-   * calls) and `ambiguous` (several calls pending, none named, and the
-   * decision is not batch-wide). ported from prism-service
-   * AgenticLoopService.decideApproval, narrowed to this service's single
-   * pending batch per conversation.
+   * Decide the pending approval with the checks the HTTP route needs.
+   * Tool approvals are durable (PendingApprovalStore): the decision is a
+   * conditional write on the stored record, so it works after a restart
+   * (`delivered: false` — no live turn took it) and a second decision on the
+   * same call is `already_decided`. `invalid` is a bad `editedArgs`.
+   * ported from prism-service AgenticLoopService.decideApproval /
+   * ApprovalRegistry.decide, narrowed to this service's single pending batch
+   * per conversation.
    */
-  static decideApproval(
+  static async decideApproval(
     conversationId: string,
     input: {
       isApproved: boolean;
       toolCallId?: string;
       batchWide?: boolean;
       reason?: string;
+      editedArgs?: Record<string, unknown>;
     },
-  ):
-    | { status: "decided"; type: "tool" | "plan"; decidedToolCallIds: string[] }
+  ): Promise<
+    | { status: "decided"; type: "tool" | "plan"; decidedToolCallIds: string[]; delivered: boolean }
     | { status: "not_found" }
-    | { status: "ambiguous"; pendingToolCallIds: string[] } {
+    | { status: "already_decided" }
+    | { status: "invalid"; error: string }
+    | { status: "ambiguous"; pendingToolCallIds: string[] }
+  > {
     const entry = pendingApprovals.get(conversationId);
-    if (!entry) return { status: "not_found" };
-    const pendingIds = (entry.toolCalls ?? [])
-      .map((call) => call.id)
-      .filter((id): id is string => typeof id === "string");
-    if (input.toolCallId && !pendingIds.includes(input.toolCallId)) {
-      return { status: "not_found" };
+    const pending = await pendingApprovalStore.listPending(conversationId);
+
+    if (pending.length === 0) {
+      if (input.toolCallId) {
+        const settled = await pendingApprovalStore.findByItem(conversationId, input.toolCallId);
+        if (settled) return { status: "already_decided" };
+      }
+      // No stored tool approval: a plan approval, which lives only in the live turn.
+      if (!entry) {
+        return (await pendingApprovalStore.hasSettled(conversationId))
+          ? { status: "already_decided" }
+          : { status: "not_found" };
+      }
+      if (input.editedArgs !== undefined) {
+        return { status: "invalid", error: "a plan's arguments cannot be edited" };
+      }
+      const livePendingIds = (entry.toolCalls ?? [])
+        .map((call) => call.id)
+        .filter((id): id is string => typeof id === "string");
+      if (input.toolCallId && !livePendingIds.includes(input.toolCallId)) {
+        return { status: "not_found" };
+      }
+      AgenticLoopService.resolveApproval(conversationId, input.isApproved, {
+        shouldApproveAll: input.batchWide === true && input.isApproved,
+      });
+      return {
+        status: "decided",
+        type: entry.type,
+        decidedToolCallIds: input.toolCallId ? [input.toolCallId] : livePendingIds,
+        delivered: true,
+      };
     }
-    if (!input.toolCallId && !input.batchWide && pendingIds.length > 1) {
+
+    const pendingIds = pending.map((record) => record.itemId);
+    if (input.toolCallId) {
+      const settled = await pendingApprovalStore.findByItem(conversationId, input.toolCallId);
+      if (settled && settled.status !== "pending") return { status: "already_decided" };
+      if (!pendingIds.includes(input.toolCallId)) return { status: "not_found" };
+    } else if (!input.batchWide && pending.length > 1) {
       return { status: "ambiguous", pendingToolCallIds: pendingIds };
     }
-    AgenticLoopService.resolveApproval(conversationId, input.isApproved, {
-      shouldApproveAll: input.batchWide === true && input.isApproved,
-      reason: input.reason,
-    });
+    const target = input.toolCallId
+      ? pending.find((record) => record.itemId === input.toolCallId)
+      : pending.length === 1
+        ? pending[0]
+        : undefined;
+
+    if (input.editedArgs !== undefined) {
+      if (!input.isApproved) {
+        return { status: "invalid", error: "editedArgs can only accompany an allow" };
+      }
+      if (!target) return { status: "invalid", error: "editedArgs needs a toolCallId" };
+      const validation = validateToolArgs(target.argsSchema, input.editedArgs);
+      if (validation.ok === false) {
+        return { status: "invalid", error: `editedArgs rejected: ${validation.error}` };
+      }
+    }
+
+    const reason = input.isApproved
+      ? undefined
+      : input.reason?.trim().slice(0, PENDING_DECISIONS.MAX_REASON_CHARS) || undefined;
+    const scope = input.batchWide ? "batch" : "call";
+    const delivered = entry?.type === "tool";
+    // Settle the targeted call first: losing that conditional write means
+    // someone decided it already.
+    const ordered = target ? [target, ...pending.filter((record) => record !== target)] : pending;
+    for (const [index, record] of ordered.entries()) {
+      const isTarget = record === target;
+      const settled = await pendingApprovalStore.settle(record.id, {
+        status: "decided",
+        delivered,
+        decision: {
+          decision: input.isApproved ? "allow" : "deny",
+          scope,
+          source: "user",
+          ...(reason ? { reason } : {}),
+          ...(isTarget && input.editedArgs !== undefined ? { editedArgs: input.editedArgs } : {}),
+        },
+      });
+      if (!settled && index === 0) return { status: "already_decided" };
+    }
+
+    if (delivered) {
+      AgenticLoopService.resolveApproval(conversationId, input.isApproved, {
+        shouldApproveAll: input.batchWide === true && input.isApproved,
+        reason: input.reason,
+        ...(reason ? { denialReason: reason } : {}),
+        ...(target && input.editedArgs !== undefined
+          ? { editedArgs: { [target.itemId]: input.editedArgs } }
+          : {}),
+      });
+    }
     return {
       status: "decided",
-      type: entry.type,
-      decidedToolCallIds: input.toolCallId ? [input.toolCallId] : pendingIds,
+      type: "tool",
+      decidedToolCallIds: target ? [target.itemId] : pendingIds,
+      delivered,
     };
   }
 

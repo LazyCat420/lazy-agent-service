@@ -11,7 +11,7 @@ import PromptLocaleService from "../PromptLocaleService.ts";
 
 import { createStandardHooks } from "./lifecycle/HookInitializer.ts";
 import { executeToolBatch } from "./lifecycle/ToolExecutor.ts";
-import { checkAndWaitForApproval } from "./lifecycle/ApprovalGate.ts";
+import { checkAndWaitForApproval, rejectionResult } from "./lifecycle/ApprovalGate.ts";
 import {
   emitPostExecutionStatus,
   processToolResultMedia,
@@ -309,7 +309,7 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
           }
 
           // ── Approval gating ───────────────────────────────────
-          const { isApproved, shouldApproveAll } =
+          const { isApproved, shouldApproveAll, reason: denialReason } =
             await checkAndWaitForApproval(
               pass.pendingToolCalls,
               context,
@@ -321,11 +321,7 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
             results = pass.pendingToolCalls.map((toolCall) => ({
               name: toolCall.name,
               id: toolCall.id,
-              result: {
-                success: false,
-                error: "USER_REJECTED",
-                message: "Tool execution was manually rejected by the user.",
-              },
+              result: rejectionResult(denialReason),
             }));
           } else {
             if (shouldApproveAll) {
