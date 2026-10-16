@@ -43,16 +43,28 @@ function contextTokensFromEntry(entry: Record<string, unknown> | undefined | nul
   return undefined;
 }
 
+function entriesOf(payload: unknown): Record<string, unknown>[] | null {
+  // OpenAI-compat list: { data: [...] } or a bare array.
+  if (Array.isArray(payload)) return payload as Record<string, unknown>[];
+  const data = (payload as { data?: unknown } | null)?.data;
+  if (Array.isArray(data)) return data as Record<string, unknown>[];
+  // vLLM /model_info: an object keyed by model name — { "<model>": {...} }.
+  if (data && typeof data === "object") {
+    return Object.entries(data as Record<string, unknown>).map(
+      ([id, entry]) => ({ id, ...(typeof entry === "object" && entry ? entry : {}) }),
+    );
+  }
+  return null;
+}
+
 function pickEntry(payload: unknown, modelName: string | undefined): Record<string, unknown> | undefined {
-  const list = Array.isArray((payload as { data?: unknown })?.data)
-    ? (payload as { data: unknown[] }).data
-    : Array.isArray(payload) ? payload : null;
+  const list = entriesOf(payload);
   if (!list) return undefined;
   if (modelName) {
-    const named = list.find((entry) => (entry as { id?: string })?.id === modelName);
-    if (named) return named as Record<string, unknown>;
+    const named = list.find((entry) => entry?.id === modelName);
+    if (named) return named;
   }
-  return list[0] as Record<string, unknown> | undefined;
+  return list[0];
 }
 
 async function probe(

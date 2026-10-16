@@ -133,6 +133,14 @@ export interface LLMProvider {
     model: string,
     options: Record<string, unknown>,
   ): AsyncIterable<unknown>;
+  /**
+   * Ask the serving endpoint what context its model takes (ported from
+   * prism-service) — writes `_loadedContextLength` onto `options`.
+   */
+  discoverContextWindow?(
+    model: string,
+    options: Record<string, unknown>,
+  ): Promise<void>;
 }
 
 // ── Model Definition ────────────────────────────────────────

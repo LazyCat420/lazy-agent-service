@@ -5,6 +5,7 @@ import type {
   ToolCall,
   AgenticLoopStateInit,
   PassState,
+  ConversationMessage,
 } from "./harnesses/types.ts";
 
 interface CriteriaScores {
@@ -63,6 +64,14 @@ export default class AgenticLoopState {
   // messages for DB persistence. The client sends the full
   // history; we must not re-append already-persisted messages.
   originalMessageCount: number;
+
+  // ── Turn transcript (ported from prism-service) ─────────
+  // The loop's message array is a VIEW; this records, by verbatim
+  // original (MessageLineage.pristineOf), every message the turn
+  // produced, before any shrink layer can hide it. See
+  // harnesses/lifecycle/TurnTranscript.ts.
+  turnTranscript: ConversationMessage[] | null;
+  turnTranscriptSeen: WeakSet<object>;
 
   // ── Compaction tracking ─────────────────────────────────
   // Set when LLM-powered auto-compaction fires during the loop.
@@ -128,6 +137,9 @@ export default class AgenticLoopState {
     this.planModeText = "";
 
     this.originalMessageCount = originalMessageCount;
+
+    this.turnTranscript = null;
+    this.turnTranscriptSeen = new WeakSet();
 
     this.compactionPerformed = false;
     this.preCompactTokenCount = null;

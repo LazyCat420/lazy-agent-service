@@ -142,11 +142,30 @@ describe("enforceToolPairIntegrity", () => {
       msg("user", "turn 5"),
     ];
 
-    const result = await CompactionService.compactConversation(messages, {
-      project: "p",
-      username: "u",
-      memoryFlush,
-    });
+    const result = await CompactionService.compactConversation(
+      [
+        msg("user", "turn 1"),
+        {
+          ...assistantWithToolCall("a1"),
+          toolCalls: [
+            { id: "a1", name: "read_file", args: {}, result: "x".repeat(2000) },
+          ],
+        },
+        toolResult("a1"),
+        msg("user", "turn 2"),
+        msg("assistant", "answer 2"),
+        msg("user", "turn 3"),
+        msg("assistant", "answer 3"),
+        msg("user", "turn 4"),
+        msg("assistant", "answer 4"),
+        msg("user", "turn 5"),
+      ],
+      {
+        project: "p",
+        username: "u",
+        memoryFlush,
+      },
+    );
 
     expect(memoryFlush).toHaveBeenCalledTimes(1);
     expect(result).not.toBeNull();
@@ -176,11 +195,23 @@ describe("enforceToolPairIntegrity", () => {
       msg("user", "turn 3"),
     ];
 
-    const result = await CompactionService.compactConversation(messages, {
-      project: "p",
-      username: "u",
-      memoryFlush,
-    });
+    const result = await CompactionService.compactConversation(
+      [
+        msg("user", "turn 1"),
+        msg("assistant", `answer 1 ${"x".repeat(2000)}`),
+        msg("user", "turn 2"),
+        msg("assistant", "answer 2"),
+        msg("user", "turn 3"),
+        msg("assistant", "answer 3"),
+        msg("user", "turn 4"),
+        msg("assistant", "answer 4"),
+      ],
+      {
+        project: "p",
+        username: "u",
+        memoryFlush,
+      },
+    );
 
     expect(memoryFlush).toHaveBeenCalledTimes(1);
     expect(result).not.toBeNull();
@@ -192,7 +223,21 @@ describe("enforceToolPairIntegrity", () => {
     const memoryFlush = vi.fn(() => new Promise<void>(() => {}));
     const started = Date.now();
     const result = await CompactionService.compactConversation(
-      [msg("user", "turn 1"), msg("assistant", "answer 1"), msg("user", "turn 2"), msg("assistant", "answer 2"), msg("user", "turn 3")],
+      // The first pair is long enough that summarizing it actually shrinks
+      // the history — the shrink guard discards a compaction that grows it.
+      // The 2000-char pair sits before the 3-turn recent tail, so
+      // summarizing it actually shrinks the history — the shrink guard
+      // discards a compaction that grows it.
+      [
+        msg("user", "turn 1"),
+        msg("assistant", `answer 1 ${"x".repeat(2000)}`),
+        msg("user", "turn 2"),
+        msg("assistant", "answer 2"),
+        msg("user", "turn 3"),
+        msg("assistant", "answer 3"),
+        msg("user", "turn 4"),
+        msg("assistant", "answer 4"),
+      ],
       { project: "p", username: "u", memoryFlush },
     );
     vi.unstubAllEnvs();
@@ -206,7 +251,21 @@ describe("enforceToolPairIntegrity", () => {
     const { DynamicModelResolver } = await import("../DynamicModelResolver.ts");
     const aux = vi.spyOn(DynamicModelResolver, "resolveAuxModel").mockReturnValue({ provider: "vllm", model: "light-model" });
     const result = await CompactionService.compactConversation(
-      [msg("user", "turn 1"), msg("assistant", "answer 1"), msg("user", "turn 2"), msg("assistant", "answer 2"), msg("user", "turn 3")],
+      // The first pair is long enough that summarizing it actually shrinks
+      // the history — the shrink guard discards a compaction that grows it.
+      // The 2000-char pair sits before the 3-turn recent tail, so
+      // summarizing it actually shrinks the history — the shrink guard
+      // discards a compaction that grows it.
+      [
+        msg("user", "turn 1"),
+        msg("assistant", `answer 1 ${"x".repeat(2000)}`),
+        msg("user", "turn 2"),
+        msg("assistant", "answer 2"),
+        msg("user", "turn 3"),
+        msg("assistant", "answer 3"),
+        msg("user", "turn 4"),
+        msg("assistant", "answer 4"),
+      ],
       { project: "p", username: "u", memoryFlush: async () => {} },
     );
     expect(aux).toHaveBeenCalledWith("compression");

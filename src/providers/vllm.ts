@@ -11,6 +11,7 @@ import type { TokenUsage } from "../types/admin.ts";
 
 import { TYPES, getDefaultModels } from "../config.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
+import { discoverContextWindow } from "../platform/models/discoverContextWindow.ts";
 import {
   convertToolsToOpenAI,
   buildPayloadParams,
@@ -408,6 +409,23 @@ export function createVllmProvider(
       } catch (error: unknown) {
         if (error instanceof ProviderError) throw error;
         throw new ProviderError("vllm", getErrorMessage(error), 500, error);
+      }
+    },
+
+    // ported from prism-service providers/vllm.ts discoverContextWindow:
+    // ask /v1/models (or /model_info) for max_model_len so the harness's
+    // output clamp and compaction budgets have the window on iteration 1.
+    async discoverContextWindow(
+      model: string,
+      options: ProviderOptions,
+    ): Promise<void> {
+      if (options._loadedContextLength) return;
+      const discovered = await discoverContextWindow(getBaseUrl(), model);
+      if (discovered) {
+        options._loadedContextLength = discovered;
+        logger.info(
+          `[ContextDiscovery] vllm model=${model} → contextLength=${discovered}`,
+        );
       }
     },
   };

@@ -332,7 +332,7 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
 
         this.registerTrackerRequest(passRequestId);
 
-        const stream = this.createProviderStream(currentMessages, passOptions);
+        const stream = await this.createProviderStream(currentMessages, passOptions);
         if (stream === null) {
           logger.warn(
             `[PromptedToolCallingHarness] Context exhaustion guard fired on iteration ${state.iterations}.`,

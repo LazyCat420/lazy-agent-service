@@ -279,7 +279,7 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
         this.registerTrackerRequest(passRequestId);
 
         // ── Stream LLM response ────────────────────────────────
-        const stream = this.createProviderStream(currentMessages, passOptions);
+        const stream = await this.createProviderStream(currentMessages, passOptions);
         await this.consumeStream(stream, pass, allowedToolNames);
 
         // ── Finalize tracker for this pass ─────────────────────

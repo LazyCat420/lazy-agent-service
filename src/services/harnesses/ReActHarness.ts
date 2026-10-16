@@ -399,11 +399,11 @@ export default class ReActHarness extends BaseAgenticHarness {
         // A context-window/overflow failure triggers exactly ONE retry
         // after forced compaction of older tool results, instead of
         // failing the whole run.
-        let stream: ReturnType<InstanceType<typeof BaseAgenticHarness>["createProviderStream"]> = null;
+        let stream: AsyncIterable<unknown> | null = null;
         let overflowRetried = false;
         while (true) {
           try {
-            stream = this.createProviderStream(currentMessages, passOptions);
+            stream = await this.createProviderStream(currentMessages, passOptions);
           } catch (setupError: unknown) {
             if (!overflowRetried && isContextWindowError(setupError)) {
               overflowRetried = true;

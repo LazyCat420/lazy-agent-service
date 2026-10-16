@@ -117,18 +117,33 @@ Each is one landed change with a test. Order = risk to the trading cycle.
   core agentic tools (`coreToolsLocked ?? true`); ours honours the SDK's
   `coreToolsLocked:false`, so trading agents lose `execute_python`,
   `emit_structured_output` and `think` here — decide which behaviour we want.
-- [ ] **4. Context-length discovery + calibrated budget + overflow halving**
-  (`ContextLengthDiscovery`, `ContextBudgetTracker`, the 400-retry). Every
+- [x] **4. Context-length discovery + calibrated budget + overflow halving.**
+  *Landed on `wt-harness-a`: the vLLM provider asks `/v1/models` (then
+  `/model_info`) for `max_model_len` on the first iteration
+  (`providers/vllm.ts discoverContextWindow`); `BaseAgenticHarness.resolveContextWindow`
+  reads the catalog or the discovered `_loadedContextLength`; the output clamp
+  now counts the system prompt and tool schemas and calibrates against the
+  last reported input (`compact/ContextBudgets.ts`,
+  `harnesses/ContextBudgetTracker.ts`); a context-overflow rejection halves
+  `maxTokens` and retries (`utils/ProviderStreamResilience.ts`,
+  `reducedMaxTokensForOverflow`).)* Every
   context guard is inert on vLLM without them.
 - [~] **5. Provider stream resilience** *(cut-stream part landed `6098253`, live 07:04 UTC: `parseSSEStream` fails a stream with no finish_reason with prism's 502; the `cut_stream` contract now holds — but in 45 s where prism takes 1 s: we retry after output already reached the consumer)* (`utils/ProviderStreamResilience.ts`):
   retry 408/429/5xx with zero chunks, 300 s idle abort, a cut stream is a
   failure. Our own shim answers saturation with 503 + Retry-After and our loop
   never retries it.
-- [ ] **6. The single-turn rolling window:** recency by model calls, unified
-  budgets, verbatim originals, a compaction fallback model, a shrink check, a
-  per-conversation breaker.
-- [~] **7. Tool-result bounding** *(trading path landed `1ae5dfe`, live 07:04 UTC: native trading dispatch returns McpAdapter's `modelVisibleText`; the `oversized_result` contract now holds. Still open: non-trading results and the mid-JSON slice in `expandMessagesForFunctionCall`)* with prism's 8k semantics, using our cut (no
-  retrieve pointer: trading roles do not hold that tool); stop the mid-JSON slice.
+- [x] **6. The single-turn rolling window.** *(Landed on `wt-harness-a`:
+  recency by model calls — `compact/RecencyProtection.ts`, the last 4 model
+  calls / 20k tool-output tokens, not user turns — drives every shrink in
+  `ContextWindowManager`; its budget comes from `ContextBudgets` in the same
+  units as the clamp and compaction trigger; the per-conversation breaker,
+  the shrink check with a no-shrink cooldown and the compaction fallback
+  model (aux compression chain, `dd69148`) are in `CompactionService`; and
+  verbatim originals are kept — `compact/MessageLineage.ts` registers every
+  shrunk view copy and `harnesses/lifecycle/TurnTranscript.ts` records the
+  turn's messages by their pristine originals before any shrink, so
+  persistence (`collectTurnMessages`) never captures a truncated view.)*
+- [x] **7. Tool-result bounding** *(trading path landed `1ae5dfe`; the rest landed on `wt-harness-a`: `expandMessagesForFunctionCall` bounds every non-trading result — strings and standalone tool messages included — with prism's 8k / 10-items semantics through `fitForPrism`, and the `serialized.slice(0, maxChars) + "…}"` mid-JSON slice is gone: cuts are valid JSON or line-aligned previews. No retrieve pointer, as the chapter prescribes.)*
 - [x] **8. Malformed tool arguments, empty outputs and loop guards** *(landed `a564866`: the provider flags unparseable tool-call argument JSON (`argsParseError`/`rawArgs`, prism `providers/openai-compat.ts`) and `ToolExecutor` returns `MALFORMED_TOOL_CALL_JSON` instead of running the tool with `{}` — the source of most "'data' is required and must be an object" failures from `emit_structured_output`; genuinely empty passes are retried in-loop with a temperature bump and a tagged `<empty-output-recovery>` nudge, `MAX_EMPTY_OUTPUT_RETRIES` 4 × +0.2 temp, prism constants; before/after: 5 of the 11 new assertions fail on the reverted sources, all 24 pass after. Not ported: `SemanticStallDetector` / `DeviationRuleEngine` — our warn-at-3/stop-at-5 repetition guard stays)* *(measured 2026-10-07: 1 of 6 box-pinned replays on our loop ended as an empty GLM reply after one model call; prism retries empty outputs in-loop)*: `MALFORMED_TOOL_CALL_JSON`
   instead of silently running the tool with `{}` (`utils/openai-compat.ts:778`
   — the source of most "'data' is required and must be an object" failures from

@@ -284,6 +284,16 @@ export interface Provider {
     options?: ProviderOptions,
   ): Promise<EmbeddingResult>;
   listModels?(): Promise<ListModelsResult>;
+  /**
+   * Ask the serving endpoint what context its model takes (ported from
+   * prism-service: providers/vllm.ts discoverContextWindow) so the
+   * harness's output clamp and compaction budgets have the window on the
+   * first iteration. Writes `_loadedContextLength` onto `options`.
+   */
+  discoverContextWindow?(
+    model: string,
+    options: ProviderOptions,
+  ): Promise<void>;
   checkHealth?(): Promise<HealthCheckResult>;
   generateSpeech?(
     text: string,
