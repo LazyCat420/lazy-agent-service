@@ -264,9 +264,10 @@ app.use("/prism-proxy", async (req: Request, res: Response) => {
 // Prism→vLLM translation shim. ALL PROVIDER_VLLM_*_URL entries in the vault
 // point here (/vllm-shim/gold-spark, /vllm-shim/jetson, /vllm-shim/jetson-2)
 // so prism's Qwen-spelled thinking flag works on every model family and a
-// model swap on any box can never silently strand it again. Sits BELOW prism:
-// requests still enter prism at :7777 first, so prism's request
-// logging/attribution is unaffected. See VllmShimService for why.
+// model swap on any box can never silently strand it again. This service is
+// now the gateway (:5591); prism-service is only reached via the
+// /prism-proxy route above, kept for parity runs until 2026-10-23.
+// See VllmShimService for why.
 import { VllmShimService } from "./services/vllm/VllmShimService.js";
 app.use("/vllm-shim", async (req: Request, res: Response) => {
   await VllmShimService.handle(req, res);

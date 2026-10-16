@@ -8,10 +8,11 @@ import { Persona } from "../types.ts";
  * tools, or a <think> stream through up to 15 iterations.
  *
  * Tool list mirrors the caller's RESEARCH_TOOLS with one deliberate omission:
- * mcp__lazy-agent-service__lazy_web_search only resolves when the loop runs on
- * real prism (:7777); on this gateway it resolves to nothing (the caller's own
- * comment says so), so listing it here would be a phantom tool for the model
- * to fail against.
+ * lazy_web_search is left out to keep the model from dithering between two web
+ * tools — search_web on this gateway is answered by the shared keyless search
+ * (ToolOrchestratorService.executeSharedWebSearch), and lazy_web_search is
+ * also resolvable here via the local MCP bridge, but listing both would just
+ * split web traffic (DeepResearchPersona makes the same choice).
  *
  * thinkingDefault is false to kill the reasoning-event flood fleet-wide; if
  * artist-verification quality measurably drops, the caller can send

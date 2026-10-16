@@ -6,6 +6,26 @@ import {
   EXPLORE_LOW_FIT_WEIGHT,
 } from "../WallgardenService.js";
 import type { BrainstormContext } from "../WallgardenService.js";
+import type { SseEvent } from "../../../types/SseTypes.js";
+
+// The completion is now in-process (callPrismChat → handleConversation), so
+// the completion leg is stubbed at the handler; fetch only serves /v1/models.
+type ChatBody = Record<string, unknown> & { messages: Array<{ role: string; content: string }> };
+const chatState = vi.hoisted(() => ({
+  bodies: [] as Array<ChatBody>,
+  replyFn: null as null | ((body: ChatBody) => string),
+}));
+
+vi.mock("../../../routes/ChatRoutes.js", () => ({
+  handleConversation: async (
+    params: Record<string, unknown>,
+    emit: (event: SseEvent) => void,
+  ) => {
+    chatState.bodies.push(params as ChatBody);
+    emit({ type: "chunk", content: chatState.replyFn?.(params as ChatBody) ?? "" } as SseEvent);
+    emit({ type: "done", provider: "vllm", model: params.model } as SseEvent);
+  },
+}));
 
 // Roles are decided by the BATCH. The old prompt told 75% of every call to
 // leave the user's scene; now one blended CORE batch, ADJACENT batches by
@@ -74,20 +94,20 @@ describe("planBrainstormBatches", () => {
 
 // ── Outbound bodies ────────────────────────────────────────────────
 const JETSON_MODEL = "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit";
-let chatBodies: any[];
-let replyFor: (body: any) => string;
+let chatBodies: ChatBody[];
+let replyFor: (body: ChatBody) => string;
 
 function installFetchStub() {
-  chatBodies = [];
+  chatBodies = chatState.bodies;
+  chatBodies.length = 0;
   replyFor = () => '{"topics": ["wood ash glaze", "raku kiln reduction"]}';
-  vi.stubGlobal("fetch", async (url: any, init?: any) => {
+  chatState.replyFn = (body) => replyFor(body); // indirection: tests reassign replyFor per test
+  vi.stubGlobal("fetch", async (url: any) => {
     const u = String(url);
     if (u.endsWith("/v1/models")) {
       return { ok: true, json: async () => ({ data: [{ id: JETSON_MODEL }] }) } as any;
     }
-    const body = JSON.parse(init.body);
-    chatBodies.push(body);
-    return { ok: true, json: async () => ({ text: replyFor(body), model: JETSON_MODEL }) } as any;
+    throw new Error(`unexpected fetch: ${u}`);
   });
 }
 const userOf = (b: any) => b.messages.find((m: any) => m.role === "user").content as string;

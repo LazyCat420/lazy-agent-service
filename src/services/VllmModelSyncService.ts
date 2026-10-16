@@ -2,7 +2,6 @@ import logger from "../utils/logger.ts";
 import SettingsService, { SettingsData } from "./SettingsService.ts";
 import { getInstancesByType } from "../providers/instance-registry.ts";
 import { getProvider } from "../providers/index.ts";
-import { prismAttributionHeaders } from "../utils/PrismAttribution.ts";
 import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { MONGO_DB_NAME } from "../../config.ts";
 import { COLLECTIONS } from "../constants.ts";
@@ -58,42 +57,14 @@ function scoreGeneralModel(modelName: string): number {
   return 10;
 }
 
-// Real prism, NOT localhost. This container binds 7778 (see src/index.ts) and
-// prism runs on another host, so the previous hardcoded "http://localhost:7777"
-// could never connect: every heal fell through to the direct-DB fallback below.
-// That write bypasses prism's API, so the RUNNING prism process kept serving its
-// cached settings — the DB looked healed while prism still used the stale
-// (embedding-model-on-a-generation-role) values until someone restarted it.
-const PRISM_SETTINGS_URL =
-  process.env.REAL_PRISM_URL || "http://10.0.0.16:7777";
-
+// This service IS the gateway now (lazy-agent-service on :5591), so healed
+// settings are written through our own SettingsService — no outbound call to
+// prism-service. The old PUT to prism /settings + direct-DB fallback is gone:
+// writing two stores let the running gateway serve stale cached settings
+// (embedding-model-on-a-generation-role) until someone restarted it.
 async function updateSettings(mergedData: Partial<SettingsData>) {
-  try {
-    const response = await fetch(`${PRISM_SETTINGS_URL}/settings`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        // Prism attributes requests by header only — without these the call is
-        // filed under its catch-all "default"/"anonymous" project.
-        ...prismAttributionHeaders(),
-      },
-      body: JSON.stringify(mergedData),
-    });
-    if (response.ok) {
-      logger.info("[VllmModelSyncService] Successfully updated settings via prism-service PUT /settings");
-      // Also update local cache
-      await SettingsService.update(mergedData);
-      return;
-    } else {
-      const text = await response.text();
-      logger.warn(`[VllmModelSyncService] prism-service PUT /settings returned status ${response.status}: ${text}`);
-    }
-  } catch (error) {
-    logger.warn(`[VllmModelSyncService] Failed to update settings via prism-service, falling back to direct DB update: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  // Fallback: direct update
   await SettingsService.update(mergedData);
+  logger.info("[VllmModelSyncService] Successfully updated settings via SettingsService");
 }
 
 export const VllmModelSyncService = {

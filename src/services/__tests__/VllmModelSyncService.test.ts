@@ -50,14 +50,16 @@ SettingsService.update = async (data: Partial<SettingsData>) => {
 };
 
 // ── Mock Global Fetch ────────────────────────────────────────
-let lastPutPayload: any = null;
+// Records any fetch that would leave this service toward prism-service
+// (PUT /settings on the real prism host) — the sync cycle must never do that.
+let lastPrismPut: { url: string; body: string } | null = null;
 const originalFetch = globalThis.fetch;
 
 const mockFetch = async (url: string | URL | Request, options?: RequestInit): Promise<Response> => {
   const urlStr = typeof url === "string" ? url : (url instanceof Request ? url.url : String(url));
 
   if (urlStr.includes("/settings") && options?.method === "PUT") {
-    lastPutPayload = JSON.parse(options.body as string);
+    lastPrismPut = { url: urlStr, body: options.body as string };
     return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
   }
 
@@ -132,10 +134,13 @@ describe("VllmModelSyncService — auto-healing of stale provider/model settings
     expect(mockSettings.agents.criticProvider).toBe("");
   });
 
-  it("sends the healed configuration to prism-service via PUT /settings", () => {
-    expect(lastPutPayload).not.toBeNull();
-    expect(lastPutPayload.memory.extractionProvider).toBe("vllm");
-    expect(lastPutPayload.agents.subAgentModel).toBe("google/gemma-4-26B-A4B-it");
+  it("writes the healed configuration through SettingsService, with no fetch to prism", () => {
+    // Healed values must land in our own settings store (state, not fetch —
+    // the prism PUT /settings hop is gone; this service is the harness).
+    expect(mockSettings.memory.extractionProvider).toBe("vllm");
+    expect(mockSettings.agents.subAgentModel).toBe("google/gemma-4-26B-A4B-it");
+    // No outbound call to prism-service may happen during a sync cycle.
+    expect(lastPrismPut).toBeNull();
   });
 });
 

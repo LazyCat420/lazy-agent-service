@@ -1,6 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildOutcomesBlock } from "../WallgardenService.js";
 import type { BrainstormContext, TopicOutcomes } from "../WallgardenService.js";
+import type { SseEvent } from "../../../types/SseTypes.js";
+
+// The completion is now in-process (callPrismChat → handleConversation), so
+// the completion leg is stubbed at the handler; fetch only serves /v1/models.
+const chatState = vi.hoisted(() => ({
+  bodies: [] as Array<ChatBody>,
+  reply: '{"topics": ["wood ash glaze"]}',
+}));
+
+vi.mock("../../../routes/ChatRoutes.js", () => ({
+  handleConversation: async (
+    params: Record<string, unknown>,
+    emit: (event: SseEvent) => void,
+  ) => {
+    chatState.bodies.push(params as ChatBody);
+    emit({ type: "chunk", content: chatState.reply } as SseEvent);
+    emit({ type: "done", provider: "vllm", model: params.model } as SseEvent);
+  },
+}));
 
 // The measured-outcomes block is the only feedback the model gets about what
 // its OWN past suggestions did. These tests pin two things: the block says the
@@ -57,20 +76,19 @@ describe("buildOutcomesBlock", () => {
 
 // ── The part that matters: does it reach the model? ────────────────
 const JETSON_MODEL = "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit";
-let chatBodies: any[];
+type ChatBody = Record<string, unknown> & { messages: Array<{ role: string; content: string }> };
+let chatBodies: ChatBody[];
 
 function installFetchStub() {
-  chatBodies = [];
-  vi.stubGlobal("fetch", async (url: any, init?: any) => {
+  chatBodies = chatState.bodies;
+  chatBodies.length = 0;
+  chatState.reply = '{"topics": ["wood ash glaze"]}';
+  vi.stubGlobal("fetch", async (url: any) => {
     const u = String(url);
     if (u.endsWith("/v1/models")) {
       return { ok: true, json: async () => ({ data: [{ id: JETSON_MODEL }] }) } as any;
     }
-    chatBodies.push(JSON.parse(init.body));
-    return {
-      ok: true,
-      json: async () => ({ text: '{"topics": ["wood ash glaze"]}', model: JETSON_MODEL }),
-    } as any;
+    throw new Error(`unexpected fetch: ${u}`);
   });
 }
 

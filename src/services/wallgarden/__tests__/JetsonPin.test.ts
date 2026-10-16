@@ -1,11 +1,31 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { BrainstormContext } from "../WallgardenService.js";
+import type { SseEvent } from "../../../types/SseTypes.js";
 
 // Wallgarden is pinned to the Jetson. These tests drive the REAL seam —
-// discovery + resolution + the outbound prism call — by stubbing global fetch,
-// because the bug this pin prevents is invisible to a parser test: the old
-// resolver preferred Gold Spark and took any client-supplied provider verbatim,
-// so a stale browser localStorage value silently kept driving the wrong box.
+// discovery + resolution + the outbound completion — by stubbing global fetch
+// (for /v1/models discovery) and the in-process chat handler, because the bug
+// this pin prevents is invisible to a parser test: the old resolver preferred
+// Gold Spark and took any client-supplied provider verbatim, so a stale
+// browser localStorage value silently kept driving the wrong box.
+
+// The chat completion is now IN-PROCESS (callPrismChat → handleConversation),
+// so the completion leg is stubbed at the handler, not at fetch.
+const chatState = vi.hoisted(() => ({
+  bodies: [] as Array<ChatBody>,
+  reply: '{"topics": ["wood ash glaze"]}',
+}));
+
+vi.mock("../../../routes/ChatRoutes.js", () => ({
+  handleConversation: async (
+    params: Record<string, unknown>,
+    emit: (event: SseEvent) => void,
+  ) => {
+    chatState.bodies.push(params as ChatBody);
+    emit({ type: "chunk", content: chatState.reply } as SseEvent);
+    emit({ type: "done", provider: "vllm", model: params.model } as SseEvent);
+  },
+}));
 
 const JETSON_URL = "http://10.0.0.30:8000";
 const GOLD_SPARK_URL = "http://10.0.0.141:8000";
@@ -22,13 +42,16 @@ const CTX: BrainstormContext = {
   numTopics: 5,
 };
 
-/** Records every prism /chat body sent during a test. */
-let chatBodies: any[];
+/** Records every completion body sent during a test. */
+type ChatBody = Record<string, unknown> & { messages: Array<{ role: string; content: string }> };
+let chatBodies: ChatBody[];
 /** Which boxes answer /v1/models. */
 let onlineBoxes: Record<string, string>;
 
 function installFetchStub() {
-  chatBodies = [];
+  chatBodies = chatState.bodies;
+  chatBodies.length = 0;
+  chatState.reply = '{"topics": ["wood ash glaze"]}';
   vi.stubGlobal("fetch", async (url: any, init?: any) => {
     const u = String(url);
 
@@ -39,18 +62,6 @@ function installFetchStub() {
       return {
         ok: true,
         json: async () => ({ data: [{ id: model }] }),
-      } as any;
-    }
-
-    if (u.includes("/chat")) {
-      chatBodies.push(JSON.parse(init.body));
-      return {
-        ok: true,
-        json: async () => ({
-          text: '{"topics": ["wood ash glaze"]}',
-          provider: "vllm",
-          model: JETSON_MODEL,
-        }),
       } as any;
     }
 
@@ -133,21 +144,21 @@ describe("Jetson pin", () => {
 
   it("routes channel recommendations through the discovered Jetson", async () => {
     const { recommendChannels } = await loadService();
-    vi.stubGlobal("fetch", async (url: any, init?: any) => {
+    vi.stubGlobal("fetch", async (url: any) => {
       const u = String(url);
       if (u.endsWith("/v1/models")) {
         const base = u.replace(/\/v1\/models$/, "");
         return { ok: true, json: async () => ({ data: [{ id: onlineBoxes[base] }] }) } as any;
       }
-      if (u.includes("/chat")) {
-        const body = JSON.parse(init.body);
-        expect(body.provider).toBe("vllm");
-        expect(body.model).toBe(JETSON_MODEL);
-        return { ok: true, json: async () => ({ text: '{"channels":[{"name":"Ceramic Lab","handle":"@ceramiclab","reason":"same craft depth"}]}' }) } as any;
-      }
       throw new Error(`unexpected fetch: ${u}`);
     });
+    chatState.reply = '{"channels":[{"name":"Ceramic Lab","handle":"@ceramiclab","reason":"same craft depth"}]}';
     const result = await recommendChannels({ channels: ["Old Channel"], model: JETSON_MODEL, provider: "vllm" });
+    expect(chatBodies.length).toBeGreaterThan(0);
+    for (const body of chatBodies) {
+      expect(body.provider).toBe("vllm");
+      expect(body.model).toBe(JETSON_MODEL);
+    }
     expect(result.channels[0].name).toBe("Ceramic Lab");
   });
 
@@ -172,14 +183,9 @@ describe("Jetson pin", () => {
         const base = u.replace(/\/v1\/models$/, "");
         return { ok: true, json: async () => ({ data: [{ id: onlineBoxes[base] }] }) } as any;
       }
-      if (u.includes("/chat")) {
-        return {
-          ok: true,
-          json: async () => ({ text, provider: "vllm", model: JETSON_MODEL }),
-        } as any;
-      }
       throw new Error(`unexpected fetch: ${u}`);
     });
+    chatState.reply = text;
 
     await expect(recommendChannels({ channels: ["Old Channel"] })).rejects.toThrow(expected);
   });

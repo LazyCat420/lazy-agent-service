@@ -58,3 +58,28 @@ hits stay at 0.
 log `[ReadUrl] tool=read_url host=www.wsj.com class=bot_blocked … error=HTTP 401`. Known gap: tools-service routes any URL
 matching `/status/<n>` to its Twitter fetcher (`WebContentFetcher.ts:31`, Rod's repo), so such URLs come back as
 "Invalid Twitter/X URL" and are classified `bot_blocked`.
+
+## Outbound Prism calls removed
+
+2026-10-16 (wt-no-prism-out) — `lazy-agent-service` no longer calls
+`prism-service` (:7777) on any of its own code paths. This service is the
+gateway; the live evidence that motivated this change was prism logging
+`PUT /settings 200 [lazy-agent-service/admin]` every time this service
+restarted, meaning healed settings were written to a second store the running
+gateway then kept serving stale.
+
+- `VllmModelSyncService.updateSettings` writes healed settings only through
+  our own `SettingsService.update` (no `PUT ${REAL_PRISM_URL}/settings`, no
+  direct-DB-vs-prism divergence). Verified by
+  `src/services/__tests__/VllmModelSyncService.test.ts` ("writes the healed
+  configuration through SettingsService, with no fetch to prism").
+- `WallgardenService.callPrismChat` now calls the in-process
+  `handleConversation` (the same handler the `POST /chat` route uses) instead
+  of `POST ${REAL_PRISM_URL}/chat?stream=false`. Verified by
+  `src/services/wallgarden/__tests__/WallgardenNoPrismOut.test.ts`.
+- `PrismAttribution` headers are now used only by `PrismProxyService` (kept
+  until 2026-10-23 for parity runs). Stale comments in `src/index.ts`
+  (vllm-shim "sits below prism") and `MusicResearchPersona` (lazy_web_search
+  "only resolves on real prism") updated to current reality.
+- `grep -rn "7777\|REAL_PRISM_URL" src | grep -v __tests__` lists only
+  `src/services/prism/PrismProxyService.ts`.

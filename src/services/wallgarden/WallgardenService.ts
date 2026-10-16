@@ -1,10 +1,9 @@
 import logger from "../../logger.js";
 import { getInstancesByType } from "../../providers/instance-registry.js";
 import type { InstanceEntry } from "../../types/ProviderTypes.js";
-import { prismAttributionHeaders } from "../../utils/PrismAttribution.js";
-
-// ── Prism Service URL ───────────────────────────────────────
-const PRISM_URL = process.env.REAL_PRISM_URL || "http://10.0.0.16:7777";
+import { handleConversation } from "../../routes/ChatRoutes.js";
+import type { SseEvent } from "../../types/SseTypes.js";
+import { getErrorMessage } from "../../utils/ErrorHelpers.js";
 
 // ── Model Cache ─────────────────────────────────────────────
 interface VllmBoxInfo {
@@ -486,12 +485,14 @@ const RETRY_BACKOFF_MS = [1_000, 4_000];
 const retryDelay = (attempt: number) =>
   RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length - 1)];
 
-/** Call prism /chat endpoint (non-streaming, no agent persona, no tools).
+/** Non-streaming plain completion (no agent persona, no tools).
  *
  * Deliberately NOT /agent: that endpoint defaults to the full CODING persona
  * and attaches every tool schema (~106K tokens), which blows the local vLLM
- * context window and makes prism skip the model call entirely — returning an
- * empty 200. /chat is the plain server-to-server completion path. */
+ * context window and makes the model call be skipped entirely — returning an
+ * empty 200. This is the plain server-to-server completion path, called
+ * IN-PROCESS through the same handleConversation handler the POST /chat route
+ * uses (this service is the gateway; no HTTP hop, no prism-service). */
 async function callPrismChat(
   model: string,
   provider: string,
@@ -499,46 +500,53 @@ async function callPrismChat(
   temperature: number = 0.1,
   maxTokens: number = 4000,
 ): Promise<any> {
-  const url = `${PRISM_URL}/chat?stream=false`;
-  const body = {
+  const params = {
     model,
     provider,
     messages,
-    maxTokens, // camelCase — /chat silently drops snake_case max_tokens
+    maxTokens, // camelCase — the chat path silently drops snake_case max_tokens
     temperature,
     thinkingEnabled: false,
     skipConversation: true, // don't persist a conversation doc per call
+    stream: false,
+    project: "youtube-wallgarden",
+    username: "admin",
   };
 
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      // Prism attributes requests by header only — without these the call is
-      // filed under its catch-all "default"/"anonymous" project.
-      ...prismAttributionHeaders("youtube-wallgarden"),
-    },
-    body: JSON.stringify(body),
-    // Kept below nginx's 110s and the browser's 120s so each layer sees a
-    // real error from the layer below instead of racing its own timer.
-    signal: AbortSignal.timeout(100_000),
-  });
-
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => "");
-    throw new Error(`Prism /chat returned ${resp.status}: ${errText.substring(0, 300)}`);
-  }
-
-  const data: any = await resp.json();
-  // Empty text is a gateway/provider failure, never valid model output —
-  // distinct from "the model answered but we couldn't parse topics".
-  if (!data || typeof data.text !== "string" || !data.text.trim()) {
+  const events: SseEvent[] = [];
+  try {
+    await handleConversation(
+      params as unknown as Record<string, unknown>,
+      (event: SseEvent) => {
+        events.push(event);
+      },
+      { signal: AbortSignal.timeout(100_000) },
+    );
+  } catch (error) {
     throw new Error(
-      `Prism /chat returned empty text (provider=${data?.provider ?? provider}, ` +
-      `model=${data?.model ?? model}, usage=${JSON.stringify(data?.usage ?? null)})`
+      `Chat handler failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  return data;
+
+  const errorEvent = events.find((event) => event.type === "error");
+  if (errorEvent) {
+    throw new Error(`Chat handler returned error: ${errorEvent.message || "Unknown error"}`);
+  }
+
+  // Empty text is a gateway/provider failure, never valid model output —
+  // distinct from "the model answered but we couldn't parse topics".
+  const text = events
+    .filter((event) => event.type === "chunk")
+    .map((event) => event.content)
+    .join("");
+  const doneEvent = events.find((event) => event.type === "done");
+  if (!text.trim()) {
+    throw new Error(
+      `Chat handler returned empty text (provider=${doneEvent?.provider ?? provider}, ` +
+      `model=${doneEvent?.model ?? model}, usage=${JSON.stringify(doneEvent?.usage ?? null)})`
+    );
+  }
+  return { text, provider: doneEvent?.provider ?? provider, model: doneEvent?.model ?? model };
 }
 
 // ── Public API ──────────────────────────────────────────────
