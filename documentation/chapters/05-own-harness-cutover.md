@@ -114,3 +114,45 @@ single-sample "ours makes twice the calls" did not survive the repeat.
    vault-service config.
 8. [ ] Stop forwarding our own traffic through `/prism-proxy`. Keep this
    service's prism registration for Rod's projects that still use prism.
+
+---
+
+## Native route cutover for trading-service + lazycat-sdk (2026-10-15, slice wt-native-routes)
+
+With `PRISM_ENABLED=false` (NAS: `PRISM_URL=http://<host>:5591/prism-proxy`,
+trading-service/lazycat-sdk resolve `prism_client.url` to the bare
+`http://<host>:5591` — this service), trading-service and lazycat-sdk must make
+ZERO calls to prism (`:7777`, or anything forwarded via `/prism-proxy`) and
+every call must land on a native route HERE.
+
+Endpoint coverage — every HTTP call the callers make, and where it lands:
+
+| Caller endpoint (via prism_client / PRISM_URL) | Native route here | Status | Test |
+|---|---|---|---|
+| POST /agent (vllm-trading-bot, music-player) | `AgentRoutes.ts` POST `/` | existing | `NativePrismExitRoutes.test.ts` |
+| POST /agent/stop | `AgentRoutes.ts` POST `/stop` | existing | `NativePrismExitRoutes.test.ts` |
+| GET/POST/PUT /custom-agents(/:id) (registration, music-player PUT) | `CustomAgentsRoutes.ts` | existing | `NativePrismExitRoutes.test.ts` |
+| GET /conversations | `ConversationsRoutes.ts` GET `/` | existing | `NativePrismExitRoutes.test.ts` |
+| GET /config?includeLocal=true (lazycat-sdk model→provider resolve) | `ConfigRoutes.ts` GET `/` — returns `textToText.models` map, same shape as prism | existing | `NativePrismExitRoutes.test.ts` |
+| GET /config/agents | `ConfigRoutes.ts` GET `/agents` | existing | `NativePrismExitRoutes.test.ts` |
+| POST /chat (youtube-wallgarden, trading /chat shim) | `ChatRoutes.ts` POST `/` | existing | `NativePrismExitRoutes.test.ts` |
+| POST /embed | `EmbedRoutes.ts` POST `/` | existing | `NativePrismExitRoutes.test.ts` |
+| GET /health (startup_tasks, service_health_probe) | `index.ts` GET `/health` | existing | — |
+| GET /mcp-servers, POST /mcp-servers/:id/connect | none, intentionally | REMOVED from callers: MCP registration/connect only makes sense in prism's Mongo; trading-service no longer does it, html-notes (slice D) drops its polling | — |
+
+Caller-side changes (LazyCat420 repos only):
+
+- **trading-service** — new `harness_base_url()` / `harness_agent_url()` in
+  `app/config/config.py`: PRISM_ENABLED=true → PRISM_URL verbatim;
+  PRISM_ENABLED=false → `/prism-proxy` stripped, so no production call can
+  reach prism through the proxy. Wired into: scraper `/collect` default and
+  `reddit_purge_collector` (previously hardcoded
+  `http://10.0.0.16:7777/agent`), `service_health_probe` prism probe,
+  `prism_agent_caller` /chat shim, `v3/prism_registration` target.
+  `pipeline_service`/`boot_service` already set `prism_client.url` to bare
+  :5591 when disabled. Tests: `tests/unit/test_prism_exit_native_wiring.py`.
+- **lazycat-sdk** — `config.py` defaults moved off :7777 to the native
+  :5591; `call_agent` no longer bypasses to direct vLLM when
+  `PRISM_ENABLED=false` AND `prism_client.url` was set explicitly (the
+  trading case) — it routes to the native harness. Callers that never set a
+  URL keep the old direct-vLLM bypass. Tests: `tests/test_prism_exit_routing.py`.
