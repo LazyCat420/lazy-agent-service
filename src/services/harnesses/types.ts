@@ -203,6 +203,8 @@ export interface AgenticOptions {
   skipSandbox?: boolean;
   /** Maximum cost in dollars before the loop terminates with an exhaustion recovery. */
   maxCostDollars?: number;
+  /** How long a turn paused at its conversation budget cap waits for a raise before it ends. Default 30 min. */
+  budgetPauseTimeoutMs?: number;
   /** Iteration interval at which abbreviated system prompt reminders are re-injected to counteract instruction fade-out. Default: 8. */
   reminderInterval?: number;
   /** Model for LLM-based system prompt distillation (instruction fade-out countermeasure). If empty, reminders are disabled. */

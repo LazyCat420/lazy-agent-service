@@ -69,6 +69,7 @@ export const COLLECTIONS = {
   WORKFLOW_MEMORIES: "workflow_memories",
   EXTRACTION_WATERMARKS: "extraction_watermarks",
   PENDING_DECISIONS: "pending_decisions",
+  CONVERSATION_BUDGETS: "conversation_budgets",
 };
 
 /** Durable approval records (PendingApprovalStore). */

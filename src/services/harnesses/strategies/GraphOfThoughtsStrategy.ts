@@ -410,7 +410,12 @@ export async function runGraphOfThoughts(
       harness.emitUsageUpdate();
 
       // ── Cost budget enforcement ────────────────────────────
-      if (checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId)) {
+      if (
+        await checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId, {
+          signal: context.signal,
+          pauseTimeoutMs: options.budgetPauseTimeoutMs,
+        })
+      ) {
         break;
       }
 

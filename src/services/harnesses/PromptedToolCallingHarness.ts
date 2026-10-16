@@ -357,7 +357,12 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
 
         if (signal?.aborted) break;
 
-        if (checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId)) {
+        if (
+        await checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId, {
+          signal: context.signal,
+          pauseTimeoutMs: options.budgetPauseTimeoutMs,
+        })
+      ) {
           break;
         }
 
