@@ -6,6 +6,7 @@ import {
   calculateTextCost,
   estimateTokens,
   getTotalInputTokens,
+  withTotalInputTokens,
 } from "../../utils/CostCalculator.ts";
 import { calculateTokensPerSec } from "../../utils/math.ts";
 import { getPricing, TYPES } from "../../config.ts";
@@ -389,7 +390,7 @@ export default class BaseAgenticHarness {
 
     emit({
       type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
-      usage,
+      usage: withTotalInputTokens(usage),
       estimatedCost,
     });
   }

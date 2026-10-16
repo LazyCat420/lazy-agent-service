@@ -31,6 +31,7 @@ import {
   estimateTokens,
   calculateImageCost,
   mergeUsage,
+  withTotalInputTokens,
 } from "../utils/CostCalculator.ts";
 import type { TokenUsage } from "../types/admin.ts";
 import type {
@@ -1406,7 +1407,7 @@ async function handleStreamingText(context: GenerationContext) {
       emit({
         type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
         usage: {
-          ...(streamState.usage as Record<string, unknown>),
+          ...withTotalInputTokens(streamState.usage as TokenUsage),
           requests: functionCallIteration + 1,
         },
       });

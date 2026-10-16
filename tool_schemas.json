@@ -1665,13 +1665,13 @@
   },
   {
     "name": "get_portfolio_covariance",
-    "description": "Estimate the Ledoit-Wolf shrunk covariance/correlation structure of a set of tickers (default: the bot's current holdings) from daily returns history. Returns shrinkage intensity, matrix condition number (>1000 = near-singular), per-ticker annualized vol, average pairwise correlation, and the most/least correlated pairs. Use before sizing a BUY to see whether the candidate actually diversifies the book.",
+    "description": "Estimate the Ledoit-Wolf shrunk covariance/correlation structure of 2+ tickers from daily returns history. Pass the tickers explicitly (e.g. the BUY candidate plus the names to compare it with); omitting them uses the bot's current holdings, which fails when fewer than 2 are held. Returns shrinkage intensity, matrix condition number (>1000 = near-singular), per-ticker annualized vol, average pairwise correlation, and the most/least correlated pairs. Use before sizing a BUY to see whether the candidate actually diversifies the book.",
     "parameters": {
       "type": "object",
       "properties": {
         "tickers": {
           "type": "string",
-          "description": "Comma-separated tickers. Empty = current holdings."
+          "description": "Comma-separated tickers, at least 2 (e.g. \"NVDA,AMD,MSFT\"). Leave empty only to analyse the current holdings, which requires 2+ open positions."
         },
         "lookback_days": {
           "type": "integer",
@@ -2047,6 +2047,10 @@
         "query": {
           "type": "string",
           "description": "The search query."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum results to return, 1-10 (default 6)."
         }
       },
       "required": [

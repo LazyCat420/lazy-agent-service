@@ -6,6 +6,7 @@ import { SERVER_SENT_EVENT_TYPES } from "@rodrigo-barraza/utilities-library/taxo
 import {
   calculateTextCost,
   getTotalInputTokens,
+  withTotalInputTokens,
 } from "../../../utils/CostCalculator.ts";
 import { calculateTokensPerSec } from "../../../utils/math.ts";
 import { TYPES, getPricing } from "../../../config.ts";
@@ -529,7 +530,7 @@ export async function finalizeTextGeneration(
         type: SERVER_SENT_EVENT_TYPES.DONE,
         provider: providerName,
         model: resolvedModel,
-        usage: usage || null,
+        usage: withTotalInputTokens(usage) || null,
         estimatedCost,
         tokensPerSec,
         ...(audioRef ? { audioRef } : {}),
