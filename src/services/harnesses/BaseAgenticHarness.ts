@@ -11,9 +11,17 @@ import { getPricing, TYPES } from "../../config.ts";
 import { stripToolCallMarkup } from "../../utils/StreamChunkDispatcher.ts";
 import ContextWindowManager from "../../utils/ContextWindowManager.ts";
 import {
+  parseContextOverflowError,
+  reducedMaxTokensForOverflow,
+  streamWithRetries,
+  withIdleTimeout,
+} from "../../utils/ProviderStreamResilience.ts";
+import { STREAM_IDLE_TIMEOUT_MILLISECONDS } from "../../constants/StreamResilience.ts";
+import {
   DEFAULT_MAX_INPUT_TOKENS,
   DEFAULT_MAX_OUTPUT_TOKENS,
   OUTPUT_TOKEN_CLAMP_SAFETY_MARGIN,
+  OUTPUT_TOKEN_CLAMP_FIXED_HEADROOM_TOKENS,
   MINIMUM_CLAMPED_OUTPUT_TOKENS,
   MINIMUM_VIABLE_OUTPUT_TOKENS,
 } from "../../constants/TokenBudgetDefaults.ts";
@@ -104,6 +112,8 @@ export default class BaseAgenticHarness {
   protected tools: ResolvedTools;
   protected trackerConversationId: string;
   protected _activeModelSpan: Span | null = null;
+  /** Per-stream pass abort controllers (stall watchdog aborts the provider request). */
+  private passAborts = new WeakMap<object, AbortController>();
 
   constructor(
     context: AgenticContext,
@@ -489,10 +499,10 @@ export default class BaseAgenticHarness {
    * request would only produce a mid-tool-call truncation. A
    * `context_exhausted` status event is emitted before returning null.
    */
-  createProviderStream(
+  async createProviderStream(
     messages: ConversationMessage[],
     passOptions: AgenticOptions,
-  ): AsyncIterable<unknown> | null {
+  ): Promise<AsyncIterable<unknown> | null> {
     const { provider, providerName, resolvedModel, modelDefinition, signal } = this.context;
 
     if (this.context.runtimeToolExecutor) {
@@ -594,23 +604,64 @@ export default class BaseAgenticHarness {
     });
     this._activeModelSpan = modelSpan;
 
-    try {
-      return modelDefinition?.liveAPI && provider.generateTextStreamLive
-        ? provider.generateTextStreamLive(expandedMessages, resolvedModel, {
-            ...clampedPassOptions,
-            signal,
-          })
-        : provider.generateTextStream(expandedMessages, resolvedModel, {
-            ...clampedPassOptions,
-            signal,
-          });
-    } catch (setupErr: unknown) {
-      const errMsg = setupErr instanceof Error ? setupErr.message : String(setupErr);
-      modelSpan.end("ERROR", errMsg);
-      TraceExporter.getGlobalInstance().enqueueSpan(modelSpan.toJSON());
-      this._activeModelSpan = null;
-      throw setupErr;
-    }
+    // The turn's signal (a stop) or this pass's own (a stall) ends the request.
+    const passAbort = new AbortController();
+    const providerOptions = {
+      ...clampedPassOptions,
+      signal: signal ? AbortSignal.any([signal, passAbort.signal]) : passAbort.signal,
+    };
+
+    // Shared transient-error retry for ALL providers (ported from
+    // prism-service's ProviderStreamResilience). Retries fire only when zero
+    // chunks were yielded — once output reached the consumer, a retry would
+    // duplicate streamed text and re-execute tool calls.
+    const createStream = () =>
+      modelDefinition?.liveAPI && provider.generateTextStreamLive
+        ? provider.generateTextStreamLive(
+            expandedMessages,
+            resolvedModel,
+            providerOptions,
+          )
+        : provider.generateTextStream(
+            expandedMessages,
+            resolvedModel,
+            providerOptions,
+          );
+
+    // Context-overflow recovery: the pre-flight clamp works from a chars/4
+    // heuristic that dense content (JSON, hex, code) can undershoot far
+    // beyond any fixed margin, and vLLM's rejection only reports a LOWER
+    // BOUND on the real prompt size (window - max_tokens + 1). So on an
+    // overflow rejection, shrink maxTokens — halving guarantees geometric
+    // convergence even when the reported numbers understate the overshoot —
+    // and retry. The factory re-reads providerOptions on every call, so the
+    // mutation reaches the next attempt.
+    const recoverFromContextOverflow = (error: unknown): boolean => {
+      const overflow = parseContextOverflowError(error);
+      if (!overflow) return false;
+      const reducedMaxTokens = reducedMaxTokensForOverflow(
+        providerOptions.maxTokens,
+        overflow,
+        MINIMUM_CLAMPED_OUTPUT_TOKENS,
+        OUTPUT_TOKEN_CLAMP_FIXED_HEADROOM_TOKENS,
+      );
+      if (reducedMaxTokens === null) return false;
+      logger.warn(
+        `[ContextOverflowRecovery] ${providerName} rejected the request ` +
+          `(window=${overflow.contextWindow}, reported input≥${overflow.inputTokens ?? "?"}). ` +
+          `Retrying with maxTokens ${providerOptions.maxTokens} → ${reducedMaxTokens}.`,
+      );
+      providerOptions.maxTokens = reducedMaxTokens;
+      return true;
+    };
+
+    const stream = streamWithRetries(createStream, {
+      signal,
+      label: providerName,
+      tryRecoverFromError: recoverFromContextOverflow,
+    });
+    this.passAborts.set(stream, passAbort);
+    return stream;
   }
 
   // ── Stream consumption ────────────────────────────────────
@@ -644,15 +695,26 @@ export default class BaseAgenticHarness {
     });
     this._activeModelSpan = null;
 
+    // Stall watchdog (ported from prism-service): a provider that produces
+    // no chunk for STREAM_IDLE_TIMEOUT_MILLISECONDS aborts the pass instead
+    // of hanging the turn until the housekeeping sweep.
+    const passAbort = this.passAborts.get(stream as object) ?? null;
+    const watchedStream = withIdleTimeout(
+      stream,
+      STREAM_IDLE_TIMEOUT_MILLISECONDS,
+      this.context.providerName,
+      () => passAbort?.abort(),
+    );
+
     try {
-      for await (const chunk of stream) {
+      for await (const chunk of watchedStream) {
         const result = await this.processStreamChunk(
           chunk,
           pass,
           allowedToolNames,
         );
         if (result.action === "break") {
-          const returnable = stream as AsyncGenerator<unknown>;
+          const returnable = watchedStream as AsyncGenerator<unknown>;
           if (typeof returnable.return === "function")
             returnable.return(undefined);
           break;

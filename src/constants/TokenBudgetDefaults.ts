@@ -45,3 +45,18 @@ export const MINIMUM_CLAMPED_OUTPUT_TOKENS = 1_024;
  * of sending it, the harness fails fast with a context_exhausted event.
  */
 export const MINIMUM_VIABLE_OUTPUT_TOKENS = 4_096;
+
+/**
+ * Fixed token headroom subtracted when deriving an output budget from a
+ * provider-reported input size (ported from prism-service's
+ * OUTPUT_TOKEN_CLAMP_FIXED_HEADROOM_TOKENS). Covers chat-template and
+ * serialization overhead the provider's token count does not include.
+ */
+export const OUTPUT_TOKEN_CLAMP_FIXED_HEADROOM_TOKENS = 1_024;
+
+/**
+ * Output-clamp safety multiplier: the clamp reserves this fraction of the
+ * estimated input as extra margin (ported from prism-service, which pairs
+ * it with OUTPUT_TOKEN_CLAMP_FIXED_HEADROOM_TOKENS).
+ */
+export const OUTPUT_TOKEN_CLAMP_SAFETY_MULTIPLIER = 0.10;
