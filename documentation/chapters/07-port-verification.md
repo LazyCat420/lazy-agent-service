@@ -83,3 +83,18 @@ gateway then kept serving stale.
   "only resolves on real prism") updated to current reality.
 - `grep -rn "7777\|REAL_PRISM_URL" src | grep -v __tests__` lists only
   `src/services/prism/PrismProxyService.ts`.
+
+## Post-port cycle #3 findings (2026-10-16)
+
+Cycle `cycle-v3-1792183632` (META/AMZN/NFLX) completed with 0 Prism requests and
+tool_execution spans from both services. It surfaced three bugs, all fixed and
+deployed (trading-service `18582e6c`, lazycat-sdk `ffdc12c`):
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Board repair `EMPTY RESPONSE ... usage={}` | lazy-agent `/chat` streams SSE only with `Accept: text/event-stream` or `?stream=true`; `_chat_toolless_impl` sent neither and parsed the JSON reply as `''` | request SSE explicitly; `test_toolless_chat_requests_sse.py` |
+| `Failed to fetch whiteboard summary: Expecting value` | 16 `whiteboard_entries` rows held plain-text content; `json.loads` raised and dropped the whole board | `_decode_content` in `whiteboard.py`; tests in `test_whiteboard_delivery.py` |
+| `screener_query` validation failed (2 errors), AMZN triage forced to FULL | model sent list args JSON-encoded as strings | `ToolRegistry._validate_input` decodes JSON-string arrays/objects and retries; `test_registry_json_string_args.py` |
+
+Note: lazy-agent's `/chat` docstring says "Default: SSE"; the code defaults to JSON.
+Any other client that relies on the Prism-style default must send the Accept header.
