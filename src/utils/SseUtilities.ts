@@ -86,7 +86,7 @@ export function buildJsonResponseFromEvents(
       error: new ProviderError(
         "server",
         errorEvent.message || "Unknown error",
-        500,
+        errorEvent.statusCode ?? 500,
       ),
     };
   }

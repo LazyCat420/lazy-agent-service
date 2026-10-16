@@ -2,6 +2,8 @@ export interface SseEvent {
   type: string;
   content?: string;
   message?: string;
+  /** HTTP status for `error` events; non-streaming callers answer with it. */
+  statusCode?: number;
   data?: string;
   mimeType?: string;
   minioRef?: string;

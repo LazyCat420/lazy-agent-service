@@ -452,7 +452,7 @@ export async function recommendChannels(
       }),
     },
   ];
-  const data = await callPrismChat(model, provider, messages, 0.2, 1000);
+  const data = await callChat(model, provider, messages, 0.2, 1000);
   const text = typeof data.text === "string" ? data.text.trim() : "";
   const fenced = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   let parsed: any;
@@ -493,7 +493,7 @@ const retryDelay = (attempt: number) =>
  * empty 200. This is the plain server-to-server completion path, called
  * IN-PROCESS through the same handleConversation handler the POST /chat route
  * uses (this service is the gateway; no HTTP hop, no prism-service). */
-async function callPrismChat(
+async function callChat(
   model: string,
   provider: string,
   messages: Array<{ role: string; content: string }>,
@@ -745,7 +745,7 @@ Suggest ${batch.size} new topics.`;
         // further so a model that failed to produce valid JSON gets more
         // deterministic.
         const temperature = Math.max(0.4, batch.temperature - attempt * 0.25);
-        const data = await callPrismChat(
+        const data = await callChat(
           model,
           provider,
           [
@@ -907,7 +907,7 @@ export async function rateTopics(
     const MAX_RETRIES = 1;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const data = await callPrismChat(
+        const data = await callChat(
           model,
           provider,
           [
@@ -1074,7 +1074,7 @@ export async function extractVideoTopics(
       try {
         // Extraction is grounded — start cool and get colder on retries.
         const temperature = Math.max(0.1, 0.3 - attempt * 0.1);
-        const data = await callPrismChat(
+        const data = await callChat(
           model,
           provider,
           [
@@ -1213,7 +1213,7 @@ export async function generateTasteProfile(
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const data = await callPrismChat(
+      const data = await callChat(
         model,
         provider,
         [
@@ -1316,7 +1316,7 @@ export async function judgeTopicGrounding(
     const MAX_RETRIES = 1;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const data = await callPrismChat(
+        const data = await callChat(
           model,
           provider,
           [
@@ -1418,7 +1418,7 @@ ${ask}`;
 
       // Adjacent-first, so cooler than the old 0.9 brainstorm heat.
       const temperature = Math.max(0.4, 0.7 - attempt * 0.25);
-      const data = await callPrismChat(
+      const data = await callChat(
         model,
         provider,
         [
@@ -1590,7 +1590,7 @@ Classify each video as ON_TOPIC, ADJACENT, NOVELTY, or OFF_TOPIC.`;
     const MAX_RETRIES = 1;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const data = await callPrismChat(
+        const data = await callChat(
           model,
           provider,
           [

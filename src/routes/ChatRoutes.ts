@@ -593,6 +593,7 @@ export async function handleConversation(
     emit({
       type: SERVER_SENT_EVENT_TYPES.ERROR,
       message: getErrorMessage(error),
+      ...(error instanceof ProviderError && { statusCode: error.statusCode }),
     });
     return;
   }
@@ -810,6 +811,7 @@ export async function handleAgent(
     emit({
       type: SERVER_SENT_EVENT_TYPES.ERROR,
       message: getErrorMessage(error),
+      ...(error instanceof ProviderError && { statusCode: error.statusCode }),
     });
     return;
   }
