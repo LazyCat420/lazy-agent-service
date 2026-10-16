@@ -24,8 +24,14 @@ export interface ConversationBudget {
 /** Used only while Mongo is not connected. */
 const fallback = new Map<string, ConversationBudget>();
 
+/** null while Mongo is not connected (getCollection throws then), so callers
+ * use the process-local fallback instead of failing the turn. */
 function collection() {
-  return MongoWrapper.getCollection(MONGO_DB_NAME, COLLECTIONS.CONVERSATION_BUDGETS);
+  try {
+    return MongoWrapper.getCollection(MONGO_DB_NAME, COLLECTIONS.CONVERSATION_BUDGETS);
+  } catch {
+    return null;
+  }
 }
 
 function isEmpty(budget: ConversationBudget): boolean {
