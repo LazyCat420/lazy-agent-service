@@ -33,7 +33,7 @@ import MinioWrapper from "./wrappers/MinioWrapper.ts";
 import ChangeStreamService from "./services/ChangeStreamService.ts";
 import MemoryConsolidationService from "./services/MemoryConsolidationService.ts";
 import BackgroundHousekeepingService from "./services/BackgroundHousekeepingService.ts";
-import { registerWithPrism } from "./services/PrismRegistrationService.ts";
+import { syncClientPersonas } from "./services/ClientPersonaSync.ts";
 import {
   installShutdownHandlers,
   registerCleanup,
@@ -674,11 +674,10 @@ setupWebSocket(wss);
       logger.warn(`Failed eager profile loading at startup: ${err.message}`);
     }
 
-    // Announce ourselves to Prism once we are actually accepting connections —
-    // Prism dials back into /mcp/sse, so registering before listen() would race.
-    // Owning this here (rather than in a consumer's boot) is what makes a
-    // redeploy self-healing: the SSE link dies with us and we are the process
-    // that comes back.
-    await registerWithPrism();
+    // Upsert the client personas our consuming apps run under, once we are
+    // actually accepting connections. Native since 2026-10-16 — prism-service
+    // is no longer registered with or called; the personas live in our own
+    // custom_agents collection and the live persona registry.
+    await syncClientPersonas();
   });
 })();

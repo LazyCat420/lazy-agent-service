@@ -10,9 +10,9 @@
  * **Who actually mints the prefix.** Not this service. `/mcp/sse` advertises
  * BARE tool names — re-verified 2026-08-07 against the live server, where
  * `tools/list` returns 86 bare names (`get_market_data`, `whiteboard_write`, …)
- * — and prism prepends `mcp__<registered-server-name>__` from `MCP_SERVER_NAME`
- * in `PrismRegistrationService`. So the emitted spelling follows the PRISM
- * REGISTRATION; changing a constant here changes only what is accepted.
+ * — and consumers prepend `mcp__<server-name>__` from `MCP_SERVER_NAME`
+ * (src/constants.ts). So the accepted spelling follows that constant;
+ * changing one here changes only what is accepted.
  *
  * (The earlier note here cited `music_player_suggest_artists` as the evidence
  * for "bare". The conclusion is right, the example is not: those schemas were

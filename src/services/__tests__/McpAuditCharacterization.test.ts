@@ -5,7 +5,6 @@ vi.mock("@modelcontextprotocol/sdk/server/index.js", () => ({ Server: class {
   setRequestHandler(schema: any, handler: Function) { mocks.handlers.set(schema.shape.method.value, handler); }
 } }));
 vi.mock("../LocalToolRouter.ts", () => ({ routeLocalTool: mocks.route }));
-vi.mock("../PrismRegistrationService.ts", () => ({ MCP_SERVER_NAME: "offline-audit" }));
 import McpAdapter from "../McpAdapter.ts";
 import { dispatchTool } from "../ToolDispatch.ts";
 import { signToolContext, TOOL_CONTEXT_ARG } from "../TradingToolContext.ts";

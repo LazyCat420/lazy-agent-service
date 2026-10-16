@@ -28,6 +28,16 @@ export const TOOL_API_HEALTH_TIMEOUT_MS = 3000;
 export const DIRECTORY_FETCH_TIMEOUT_MS = 5000;
 
 /**
+ * How this service identifies itself over MCP (see McpAdapter.ts).
+ *
+ * `/mcp/sse` advertises bare tool names; consumers address this service's
+ * tools as `mcp__<this-name>__<tool>`. The name is load-bearing for
+ * McpAdapter.ts:16 and the mcp__ prefix logic (McpPrefix.ts) — do not rename
+ * it without migrating every consumer's tool references in the same change.
+ */
+export const MCP_SERVER_NAME = "lazy-agent-service";
+
+/**
  * MongoDB collection names — single source of truth.
  * Import from here instead of defining local `const COLLECTION = "..."`.
  */

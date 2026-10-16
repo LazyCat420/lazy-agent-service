@@ -112,8 +112,13 @@ single-sample "ours makes twice the calls" did not survive the repeat.
    lazycat-sdk, html-notes, music-player, SmartGardenDashBoard,
    LLMSortObsidian, office-client, scraper-service, youtube-wallgarden,
    vault-service config.
-8. [ ] Stop forwarding our own traffic through `/prism-proxy`. Keep this
-   service's prism registration for Rod's projects that still use prism.
+8. [x] Stop forwarding our own traffic through `/prism-proxy`. **Done
+   2026-10-16: registration removed — this service no longer registers with
+   prism at all** (`PrismRegistrationService.ts` deleted; `MCP_SERVER_NAME`
+   moved to src/constants.ts; the HTML-Notes Canvas persona is upserted
+   natively at boot by `ClientPersonaSync.ts` into our own custom_agents
+   collection, test `ClientPersonaSync.test.ts`). Rod's projects may still
+   call prism themselves; we no longer announce ourselves to it.
 
 ---
 

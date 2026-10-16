@@ -253,11 +253,10 @@ let cachedStaticRoots: string[] = [];
  *
  * **STILL EMITS THE OLD SPELLING ON PURPOSE.** This prefix is not minted here:
  * `/mcp/sse` advertises BARE tool names (re-verified 2026-08-07 against the
- * live server — `tools/list` returns 86 bare names), and prism prepends
- * `mcp__<registered-server-name>__` using `MCP_SERVER_NAME` from
- * `PrismRegistrationService`. So the emitted spelling changes when the PRISM
- * REGISTRATION changes, not when this constant does. Flipping this alone would
- * advertise a name on `/agent` that prism never routes.
+ * live server — `tools/list` returns 86 bare names), and consumers prepend
+ * `mcp__<server-name>__` using `MCP_SERVER_NAME` (src/constants.ts). So the
+ * accepted spelling changes when that constant changes, not when this one
+ * does. Flipping this alone would break acceptance of the documented names.
  *
  * The previous revision cited `music_player_suggest_artists` as the observed
  * bare name. It is not in `tools/list` and has not been since c620151 dropped

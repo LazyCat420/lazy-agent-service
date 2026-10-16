@@ -13,7 +13,7 @@ import { dispatchTool } from "./ToolDispatch.ts";
 import { classifyToolResult } from "./ToolResult.ts";
 import { modelVisibleText } from "./ModelVisibleToolResult.ts";
 import { verifyMcpClient } from "./TradingToolContext.ts";
-import { MCP_SERVER_NAME } from "./PrismRegistrationService.ts";
+import { MCP_SERVER_NAME } from "../constants.ts";
 import { toMcpTool } from "./McpToolAnnotations.ts";
 
 // One MCP tool result, in the shape the CallToolRequestSchema handler returns.

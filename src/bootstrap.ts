@@ -74,12 +74,6 @@ export function bootstrapLocalEnvironment() {
         }
       }
     }
-    // 3. Prism consumer scopes — the projects we register ourselves under as
-    // an MCP server on boot. Serialized because env vars are strings; see
-    // PrismRegistrationService.loadConsumers().
-    if (Array.isArray(data.prismConsumers) && process.env.PRISM_CONSUMERS === undefined) {
-      process.env.PRISM_CONSUMERS = JSON.stringify(data.prismConsumers);
-    }
     if (process.env.DEFAULT_HOST === undefined) {
       process.env.DEFAULT_HOST = String(host);
     }
