@@ -4,12 +4,14 @@ import { MONGO_DB_NAME } from "../../config.ts";
 import { COLLECTIONS, PENDING_DECISIONS } from "../constants.ts";
 
 /**
- * PendingApprovalStore — the durable half of a tool approval wait.
- * ported from prism-service src/services/PendingDecisionStore.ts (tool
- * approvals only; questions, plans and budget pauses are not stored here).
+ * PendingApprovalStore — the durable half of every wait a turn makes on its
+ * user: a tool call's approval, a plan's approval, an `ask_user` question.
+ * ported from prism-service src/services/PendingDecisionStore.ts (budget
+ * pauses are not stored here).
  *
- * One record per pending tool call in `pending_decisions`. ApprovalGate
- * writes the records BEFORE the `approval_required` card goes out, and every
+ * One record per pending item in `pending_decisions`. ApprovalGate,
+ * PlanModeController and AskUserTool write the record BEFORE the card goes
+ * out, and every
  * decision is a conditional write (`status: "pending"` -> decided), so the
  * database — not a Map in the process that asked — says what is pending and
  * what was decided. A pending record therefore survives a restart, and a
@@ -19,6 +21,7 @@ import { COLLECTIONS, PENDING_DECISIONS } from "../constants.ts";
  * a per-instance map with the same semantics.
  */
 
+export type PendingDecisionKind = "tool" | "plan" | "question";
 export type PendingApprovalStatus = "pending" | "decided" | "cancelled";
 
 export interface StoredApprovalDecision {
@@ -32,6 +35,7 @@ export interface StoredApprovalDecision {
 export interface PendingApprovalRecord {
   /** `<conversationId>/<batchId>/<itemId>` — unique. */
   id: string;
+  kind: PendingDecisionKind;
   conversationId: string;
   batchId: string;
   /** The tool call's id (or `call-<position>` when the model gave none). */
@@ -45,6 +49,10 @@ export interface PendingApprovalRecord {
   tierLabel?: string;
   /** The tool's JSON-Schema `parameters` — edited arguments must satisfy it. */
   argsSchema: Record<string, unknown> | null;
+  /** A question's normalized questions (the match key when a re-driven turn asks again). */
+  questions?: unknown[];
+  /** A question's answers once decided. */
+  answers?: unknown[];
   createdAt: string;
   decidedAt?: string;
   decision?: StoredApprovalDecision;
@@ -61,6 +69,7 @@ export type NewPendingApproval = Omit<
 
 export type SettlePatch =
   | { status: "decided"; decision: StoredApprovalDecision; delivered: boolean }
+  | { status: "decided"; answers: unknown[]; delivered: boolean }
   | { status: "cancelled"; source: StoredApprovalDecision["source"] };
 
 function stripMongoId(document: Document): PendingApprovalRecord {
@@ -96,14 +105,18 @@ export default class PendingApprovalStore {
     return records;
   }
 
-  /** Pending records of a conversation, in the model's order. */
-  async listPending(conversationId: string): Promise<PendingApprovalRecord[]> {
+  /** Pending records of a conversation (of the given kinds), in the model's order. */
+  async listPending(
+    conversationId: string,
+    kinds?: readonly PendingDecisionKind[],
+  ): Promise<PendingApprovalRecord[]> {
     const collection = this.collection();
-    const records = collection
+    const all = collection
       ? (await collection.find({ conversationId, status: "pending" }).toArray()).map(stripMongoId)
       : [...this.memory.values()].filter(
           (record) => record.conversationId === conversationId && record.status === "pending",
         );
+    const records = kinds ? all.filter((record) => kinds.includes(record.kind)) : all;
     return records.sort(
       (left, right) =>
         left.createdAt.localeCompare(right.createdAt) || left.position - right.position,
@@ -122,17 +135,13 @@ export default class PendingApprovalStore {
     return records[0] ?? null;
   }
 
-  /** True when the conversation has a settled (decided/cancelled) record still retained. */
-  async hasSettled(conversationId: string): Promise<boolean> {
+  /** True when the conversation has a settled (decided/cancelled) record of these kinds still retained. */
+  async hasSettled(conversationId: string, kinds: readonly PendingDecisionKind[]): Promise<boolean> {
     const collection = this.collection();
-    if (collection) {
-      const decided = await collection.find({ conversationId, status: "decided" }).toArray();
-      if (decided.length > 0) return true;
-      return (await collection.find({ conversationId, status: "cancelled" }).toArray()).length > 0;
-    }
-    return [...this.memory.values()].some(
-      (record) => record.conversationId === conversationId && record.status !== "pending",
-    );
+    const records = collection
+      ? (await collection.find({ conversationId }).toArray()).map(stripMongoId)
+      : [...this.memory.values()].filter((record) => record.conversationId === conversationId);
+    return records.some((record) => record.status !== "pending" && kinds.includes(record.kind));
   }
 
   /** Conditional write: true only for the caller that moved the record out of `pending`. */
@@ -143,7 +152,9 @@ export default class PendingApprovalStore {
       decidedAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + PENDING_DECISIONS.SETTLED_RETENTION_DAYS * 86_400_000),
       ...(patch.status === "decided"
-        ? { decision: patch.decision, delivered: patch.delivered }
+        ? "answers" in patch
+          ? { answers: patch.answers, delivered: patch.delivered }
+          : { decision: patch.decision, delivered: patch.delivered }
         : {
             decision: { decision: "deny", scope: "call", source: patch.source },
             delivered: false,
@@ -160,12 +171,57 @@ export default class PendingApprovalStore {
     return true;
   }
 
+  /**
+   * Decided records no live turn took (`delivered: false`, stored while the
+   * server was down or the turn gone): what a re-driven turn consumes.
+   */
+  async listUndelivered(
+    conversationId: string,
+    kind: PendingDecisionKind,
+  ): Promise<PendingApprovalRecord[]> {
+    const collection = this.collection();
+    const records = collection
+      ? (
+          await collection
+            .find({ conversationId, kind, status: "decided", delivered: false })
+            .toArray()
+        ).map(stripMongoId)
+      : [...this.memory.values()].filter(
+          (record) =>
+            record.conversationId === conversationId &&
+            record.kind === kind &&
+            record.status === "decided" &&
+            record.delivered === false,
+        );
+    return records.sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.position - right.position,
+    );
+  }
+
+  /** Conditional write: true only for the caller that took an undelivered decision. */
+  async markDelivered(id: string): Promise<boolean> {
+    const collection = this.collection();
+    if (collection) {
+      const result = await collection.updateOne(
+        { id, status: "decided", delivered: false },
+        { $set: { delivered: true } },
+      );
+      return result.modifiedCount === 1;
+    }
+    const record = this.memory.get(id);
+    if (!record || record.status !== "decided" || record.delivered !== false) return false;
+    record.delivered = true;
+    return true;
+  }
+
   /** Cancel everything still pending for a conversation (turn ended / superseded / timed out). */
   async cancelPending(
     conversationId: string,
     source: Exclude<StoredApprovalDecision["source"], "user">,
+    kinds?: readonly PendingDecisionKind[],
   ): Promise<void> {
-    for (const record of await this.listPending(conversationId)) {
+    for (const record of await this.listPending(conversationId, kinds)) {
       await this.settle(record.id, { status: "cancelled", source });
     }
   }

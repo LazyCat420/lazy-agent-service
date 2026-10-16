@@ -28,9 +28,6 @@ import { getSharedOffloadStore } from "../platform/offload/OffloadStore.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
 
-/** Ids of question cards already answered, so a second answer reads 409. */
-const answeredQuestionIds = new Set<string>();
-
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Loop resilience helpers (compaction pressure + overflow recovery)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -289,6 +286,8 @@ export const SKILL_READ_TOOL_SCHEMA = {
  *
  * Also exposes approval/question resolution APIs used by AgentRoutes.
  */
+const APPROVAL_KINDS = ["tool", "plan"] as const;
+
 export default class AgenticLoopService {
   /** Run an agentic loop using the specified (or default) harness. */
   static async runAgenticLoop(
@@ -679,38 +678,18 @@ export default class AgenticLoopService {
     | { status: "ambiguous"; pendingToolCallIds: string[] }
   > {
     const entry = pendingApprovals.get(conversationId);
-    const pending = await pendingApprovalStore.listPending(conversationId);
+    const pending = await pendingApprovalStore.listPending(conversationId, APPROVAL_KINDS);
 
     if (pending.length === 0) {
       if (input.toolCallId) {
         const settled = await pendingApprovalStore.findByItem(conversationId, input.toolCallId);
         if (settled) return { status: "already_decided" };
       }
-      // No stored tool approval: a plan approval, which lives only in the live turn.
-      if (!entry) {
-        return (await pendingApprovalStore.hasSettled(conversationId))
-          ? { status: "already_decided" }
-          : { status: "not_found" };
-      }
-      if (input.editedArgs !== undefined) {
-        return { status: "invalid", error: "a plan's arguments cannot be edited" };
-      }
-      const livePendingIds = (entry.toolCalls ?? [])
-        .map((call) => call.id)
-        .filter((id): id is string => typeof id === "string");
-      if (input.toolCallId && !livePendingIds.includes(input.toolCallId)) {
-        return { status: "not_found" };
-      }
-      AgenticLoopService.resolveApproval(conversationId, input.isApproved, {
-        shouldApproveAll: input.batchWide === true && input.isApproved,
-      });
-      return {
-        status: "decided",
-        type: entry.type,
-        decidedToolCallIds: input.toolCallId ? [input.toolCallId] : livePendingIds,
-        delivered: true,
-      };
+      return (await pendingApprovalStore.hasSettled(conversationId, APPROVAL_KINDS))
+        ? { status: "already_decided" }
+        : { status: "not_found" };
     }
+    const type = pending[0].kind === "plan" ? "plan" : "tool";
 
     const pendingIds = pending.map((record) => record.itemId);
     if (input.toolCallId) {
@@ -730,6 +709,9 @@ export default class AgenticLoopService {
       if (!input.isApproved) {
         return { status: "invalid", error: "editedArgs can only accompany an allow" };
       }
+      if (type === "plan") {
+        return { status: "invalid", error: "a plan's arguments cannot be edited" };
+      }
       if (!target) return { status: "invalid", error: "editedArgs needs a toolCallId" };
       const validation = validateToolArgs(target.argsSchema, input.editedArgs);
       if (validation.ok === false) {
@@ -741,7 +723,7 @@ export default class AgenticLoopService {
       ? undefined
       : input.reason?.trim().slice(0, PENDING_DECISIONS.MAX_REASON_CHARS) || undefined;
     const scope = input.batchWide ? "batch" : "call";
-    const delivered = entry?.type === "tool";
+    const delivered = entry?.type === type;
     // Settle the targeted call first: losing that conditional write means
     // someone decided it already.
     const ordered = target ? [target, ...pending.filter((record) => record !== target)] : pending;
@@ -773,7 +755,7 @@ export default class AgenticLoopService {
     }
     return {
       status: "decided",
-      type: "tool",
+      type,
       decidedToolCallIds: target ? [target.itemId] : pendingIds,
       delivered,
     };
@@ -815,27 +797,37 @@ export default class AgenticLoopService {
   }
 
   /**
-   * Resolve a pending question for a conversation. With `questionId` only
-   * that card is answered: a different id is `unknown_question`, and an id
-   * answered a moment ago is `already_answered` (a second answer must not
-   * be taken for the next question). ported from prism-service
-   * AgenticLoopService.resolveUserQuestion.
+   * Resolve a pending question for a conversation. Questions are durable
+   * (PendingApprovalStore): the answer is a conditional write on the stored
+   * record, so an answer to a card whose turn died (a restart) is stored and
+   * reported `delivered: false`, and a second answer to the same card is
+   * `already_answered`. With `questionId` only that card is answered: a
+   * different id is `unknown_question`. ported from prism-service
+   * AgenticLoopService.resolveUserQuestion / QuestionRegistry.
    */
-  static resolveUserQuestion(
+  static async resolveUserQuestion(
     conversationId: string,
     answers: QuestionAnswer[],
     { questionId }: { questionId?: string } = {},
-  ):
-    | { resolved: true; questionId: string | undefined; reason?: undefined }
+  ): Promise<
+    | { resolved: true; questionId: string | undefined; delivered: boolean; reason?: undefined }
     | {
         resolved: false;
         reason: "no_pending_question" | "unknown_question" | "already_answered";
         questionId?: string;
-      } {
+      }
+  > {
     const entry = pendingQuestions.get(conversationId);
-    if (!entry) {
-      if (questionId && answeredQuestionIds.has(questionId)) {
-        return { resolved: false, reason: "already_answered", questionId };
+    const pending = await pendingApprovalStore.listPending(conversationId, ["question"]);
+    const target = questionId
+      ? pending.find((record) => record.itemId === questionId)
+      : pending[pending.length - 1];
+    if (!target) {
+      if (questionId) {
+        const settled = await pendingApprovalStore.findByItem(conversationId, questionId);
+        if (settled?.kind === "question") {
+          return { resolved: false, reason: "already_answered", questionId };
+        }
       }
       return {
         resolved: false,
@@ -843,18 +835,17 @@ export default class AgenticLoopService {
         ...(questionId ? { questionId } : {}),
       };
     }
-    if (questionId && entry.questionId && entry.questionId !== questionId) {
+    if (questionId && entry?.questionId && entry.questionId !== questionId) {
       return { resolved: false, reason: "unknown_question", questionId };
     }
-    pendingQuestions.delete(conversationId);
-    if (entry.questionId) {
-      answeredQuestionIds.add(entry.questionId);
-      if (answeredQuestionIds.size > 1000) {
-        answeredQuestionIds.delete(answeredQuestionIds.values().next().value as string);
-      }
+    const delivered = entry !== undefined && entry.questionId === target.itemId;
+    const won = await pendingApprovalStore.settle(target.id, { status: "decided", answers, delivered });
+    if (!won) return { resolved: false, reason: "already_answered", questionId: target.itemId };
+    if (delivered) {
+      pendingQuestions.delete(conversationId);
+      entry.resolve({ answers });
     }
-    entry.resolve({ answers });
-    return { resolved: true, questionId: entry.questionId };
+    return { resolved: true, questionId: target.itemId, delivered };
   }
 
   /** Check if a conversation has a pending question. */

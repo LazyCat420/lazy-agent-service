@@ -215,9 +215,18 @@ those items, all driven by real harness-turn tests
   (allow only; validated against the tool schema by `utils/ToolArgsValidator`,
   400 if invalid or on a deny) replaces the call's arguments before it runs.
   A deny `reason` (trimmed, 500 chars) reaches the model in the `USER_REJECTED`
-  tool result. Still not ported: plan approvals, questions and budget pauses
-  are not durable, and nothing re-drives a turn after a restart (the stored
-  decision is not yet picked up by a new turn).
+  tool result. Plan approvals and `ask_user` questions are durable on the same
+  store (record written before the card; a plan or answer for a dead turn is
+  stored and answered `delivered: false`; a second one is 409).
+  **Re-drive after a restart:** prism re-runs the interrupted turn at boot
+  from its `TurnRunStore` + checkpoint (`TurnResumeService`); that machinery is
+  not ported. Here the stored decision is consumed by the *next* turn on the
+  conversation: when it reaches the same tool call (same tool, same arguments),
+  the same plan text, or asks the same questions, the gate/plan/ask_user takes
+  the stored allow (with its `editedArgs`), denial (with its reason) or answer
+  instead of asking, once (conditional `delivered` write), without emitting a
+  new card. A call that differs is asked normally. Not ported: budget pauses
+  and non-blocking questions are not durable; no boot-time replay.
 - **Ask-user** — the `ask_user` tool did not exist here (nothing ever filed a
   pending question), so the blocking path was ported
   (`harnesses/lifecycle/AskUserTool.ts`, from prism `AskUserQuestionTool`):

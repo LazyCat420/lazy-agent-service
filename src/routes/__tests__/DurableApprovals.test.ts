@@ -57,7 +57,8 @@ import PromptedToolCallingHarness from "../../services/harnesses/PromptedToolCal
 import AgenticLoopState from "../../services/AgenticLoopState.ts";
 import PendingApprovalStore from "../../services/PendingApprovalStore.ts";
 import AgenticLoopService from "../../services/AgenticLoopService.ts";
-import { pendingApprovals } from "../../services/ApprovalRegistry.ts";
+import { pendingApprovals, pendingQuestions } from "../../services/ApprovalRegistry.ts";
+import { handleExitPlanMode } from "../../services/harnesses/lifecycle/PlanModeController.ts";
 import conversationRouter from "../ConversationExecutionRoute.ts";
 import type { AgenticContext, ToolSchema } from "../../services/harnesses/types.ts";
 
@@ -72,7 +73,10 @@ const TOOLS: ToolSchema[] = [
       required: ["title", "body"],
     },
   },
+  { name: "ask_user", description: "ask", parameters: { type: "object", properties: {} } },
 ];
+const ASK_USER_CALL =
+  '<tool_call>{"name": "ask_user", "arguments": {"questions": [{"question": "Which env?", "options": [{"label": "prod"}, {"label": "dev"}]}]}}</tool_call>';
 const ASK = [{ tool: "take_note", decision: "ASK_USER", name: "confirm" }];
 
 let server: import("node:http").Server;
@@ -91,6 +95,7 @@ beforeEach(() => {
   database.documents.length = 0;
   database.connected = true;
   pendingApprovals.clear();
+  pendingQuestions.clear();
 });
 
 const post = (body: unknown) =>
@@ -112,9 +117,14 @@ function provider(responses: string[], calls: unknown[] = []) {
   };
 }
 
-function makeContext(conversationId: string, prov: unknown) {
+function makeContext(
+  conversationId: string,
+  prov: unknown,
+  options: Record<string, unknown> = { policies: ASK },
+  events: Array<Record<string, unknown>> = [],
+) {
   return {
-    options: { maxIterations: 6, maxTokens: 100000, policies: ASK },
+    options: { maxIterations: 6, maxTokens: 100000, ...options },
     messages: [{ role: "user", content: "go" }],
     project: "test",
     username: "tester",
@@ -125,7 +135,7 @@ function makeContext(conversationId: string, prov: unknown) {
     providerName: "mock",
     resolvedModel: "m",
     signal: null,
-    emit: () => {},
+    emit: (event: Record<string, unknown>) => events.push(event),
     runtimeTools: { finalTools: TOOLS, resolvedEnabledTools: null },
     workspaceRoot: mkdtempSync(join(tmpdir(), "durable-approvals-")),
     requestId: `req-${conversationId}`,
@@ -136,6 +146,29 @@ function makeContext(conversationId: string, prov: unknown) {
 function startTurn(context: AgenticContext) {
   const state = new AgenticLoopState({ originalMessageCount: context.messages.length });
   return new PromptedToolCallingHarness(context, state, context.runtimeTools!).run();
+}
+
+const postAnswer = (body: unknown) =>
+  fetch(`${baseUrl}/conversation/answer`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+/**
+ * A turn parks on its approval card; the "process restarts" (the live
+ * registry entry is gone, the database record stays) and the user decides.
+ * The dead turn is then released so the test can finish.
+ */
+async function decideAfterRestart(conversationId: string, body: Record<string, unknown>) {
+  const dead = startTurn(makeContext(conversationId, provider([NOTE_CALL, "dead turn done"])));
+  await waitFor(() => pendingApprovals.has(conversationId));
+  const live = pendingApprovals.get(conversationId)!;
+  pendingApprovals.clear();
+  const res = await post({ conversationId, ...body });
+  expect(await res.json()).toMatchObject({ ok: true, delivered: false });
+  (live.resolve as (value: unknown) => void)({ isApproved: false });
+  await dead;
 }
 
 const waitFor = async (predicate: () => boolean) => {
@@ -262,5 +295,157 @@ describe("durable pending approvals", () => {
     expect(seen).toContain("use staging instead");
     expect(seen).not.toContain("x".repeat(600));
     expect(notesText(context.workspaceRoot!)).toBe("");
+  });
+});
+
+describe("a stored decision is consumed by the next turn (re-drive after a restart)", () => {
+  it("runs the call on a stored allow without asking again", async () => {
+    await decideAfterRestart("r-allow", { decision: "allow" });
+
+    const events: Array<Record<string, unknown>> = [];
+    const next = makeContext("r-allow", provider([NOTE_CALL, "done"]), { policies: ASK }, events);
+    await startTurn(next);
+    expect(events.some((event) => event.type === "approval_required")).toBe(false);
+    expect(notesText(next.workspaceRoot!)).toContain("# T");
+  });
+
+  it("applies the stored editedArgs", async () => {
+    const dead = makeContext("r-edit", provider([NOTE_CALL, "x"]));
+    const deadTurn = startTurn(dead);
+    await waitFor(() => pendingApprovals.has("r-edit"));
+    const toolCallId = (await new PendingApprovalStore().listPending("r-edit"))[0].itemId;
+    const live = pendingApprovals.get("r-edit")!;
+    pendingApprovals.clear();
+    await post({ conversationId: "r-edit", toolCallId, decision: "allow", editedArgs: { title: "Edited", body: "Body2" } });
+    (live.resolve as (value: unknown) => void)({ isApproved: false });
+    await deadTurn;
+
+    const next = makeContext("r-edit", provider([NOTE_CALL, "done"]));
+    await startTurn(next);
+    expect(notesText(next.workspaceRoot!)).toContain("Edited");
+  });
+
+  it("rejects with the stored deny reason without asking again", async () => {
+    await decideAfterRestart("r-deny", { decision: "deny", reason: "wrong environment" });
+
+    const calls: Array<Array<{ content: unknown }>> = [];
+    const events: Array<Record<string, unknown>> = [];
+    const next = makeContext("r-deny", provider([NOTE_CALL, "ok"], calls as unknown[]), { policies: ASK }, events);
+    await startTurn(next);
+    expect(events.some((event) => event.type === "approval_required")).toBe(false);
+    expect(notesText(next.workspaceRoot!)).toBe("");
+    expect(JSON.stringify(calls[1])).toContain("wrong environment");
+  });
+
+  it("does not apply a stored decision to a different call, and takes it only once", async () => {
+    await decideAfterRestart("r-once", { decision: "allow" });
+
+    const different = '<tool_call>{"name": "take_note", "arguments": {"title": "Other", "body": "B"}}</tool_call>';
+    const other = startTurn(makeContext("r-once", provider([different, "done"])));
+    await waitFor(() => pendingApprovals.has("r-once"));
+    await post({ conversationId: "r-once", decision: "deny" });
+    await other;
+
+    await startTurn(makeContext("r-once", provider([NOTE_CALL, "done"])));
+    // the stored allow is still there for the call it was given for: take it
+    const again = startTurn(makeContext("r-once", provider([NOTE_CALL, "done"])));
+    await waitFor(() => pendingApprovals.has("r-once"));
+    await post({ conversationId: "r-once", decision: "deny" });
+    await again;
+  });
+});
+
+describe("durable ask_user questions", () => {
+  const live = (conversationId: string) => pendingQuestions.get(conversationId)!;
+
+  it("stores the question before the card, so a fresh store reads it", async () => {
+    const turn = startTurn(makeContext("q-store", provider([ASK_USER_CALL, "done"]), { autoApprove: true }));
+    await waitFor(() => pendingQuestions.has("q-store"));
+    const records = await new PendingApprovalStore().listPending("q-store", ["question"]);
+    expect(records).toHaveLength(1);
+    expect(records[0].itemId).toBe(live("q-store").questionId);
+    await postAnswer({ conversationId: "q-store", answer: "dev" });
+    await turn;
+  });
+
+  it("stores an answer to a dead turn with delivered:false, 409s a second, and the next turn takes it", async () => {
+    const dead = startTurn(makeContext("q-restart", provider([ASK_USER_CALL, "x"]), { autoApprove: true }));
+    await waitFor(() => pendingQuestions.has("q-restart"));
+    const entry = live("q-restart");
+    const questionId = entry.questionId!;
+    pendingQuestions.clear();
+
+    const res = await postAnswer({ conversationId: "q-restart", questionId, answer: "dev" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, delivered: false, questionId });
+    expect((await postAnswer({ conversationId: "q-restart", questionId, answer: "prod" })).status).toBe(409);
+    entry.resolve({ answers: null });
+    await dead;
+
+    const calls: Array<Array<{ content: unknown }>> = [];
+    const events: Array<Record<string, unknown>> = [];
+    await startTurn(
+      makeContext("q-restart", provider([ASK_USER_CALL, "deploying to dev"], calls as unknown[]), { autoApprove: true }, events),
+    );
+    expect(events.some((event) => event.type === "user_question")).toBe(false);
+    expect(JSON.stringify(calls[1])).toMatch(/\\"answer\\": \\"dev\\"/);
+  });
+});
+
+describe("durable plan approvals", () => {
+  const PLAN = "1. Read the config\n2. Change the port";
+  const run = async (conversationId: string, events: Array<Record<string, unknown>> = []) => {
+    const context = makeContext(conversationId, provider([]), { policies: [] }, events);
+    const state = new AgenticLoopState({ originalMessageCount: 1, planModeActive: true });
+    state.planModeText = PLAN;
+    return handleExitPlanMode(
+      { id: "plan-call", name: "exit_plan_mode", args: {} },
+      { streamedText: "" } as never,
+      [],
+      [],
+      context,
+      state,
+    );
+  };
+
+  it("stores the plan before its card; an approve on the live turn continues it", async () => {
+    const turn = run("p-live");
+    await waitFor(() => pendingApprovals.has("p-live"));
+    const records = await new PendingApprovalStore().listPending("p-live", ["plan"]);
+    expect(records).toHaveLength(1);
+    expect(records[0].args.plan).toBe(PLAN);
+
+    const res = await post({ conversationId: "p-live", decision: "allow" });
+    expect(await res.json()).toMatchObject({ ok: true, type: "plan", delivered: true });
+    expect(await turn).toEqual({ shouldContinueLoop: true });
+    expect((await post({ conversationId: "p-live", decision: "allow" })).status).toBe(409);
+  });
+
+  it("stores a decision for a dead turn (delivered:false) and the next proposal of the same plan takes it", async () => {
+    const dead = run("p-restart");
+    await waitFor(() => pendingApprovals.has("p-restart"));
+    const entry = pendingApprovals.get("p-restart")!;
+    pendingApprovals.clear();
+
+    const res = await post({ conversationId: "p-restart", decision: "allow" });
+    expect(await res.json()).toMatchObject({ ok: true, type: "plan", delivered: false });
+    (entry.resolve as (value: unknown) => void)(false);
+    await dead;
+
+    // No card is waited on: this resolves by itself.
+    expect(await run("p-restart")).toEqual({ shouldContinueLoop: true });
+    expect(pendingApprovals.has("p-restart")).toBe(false);
+  });
+
+  it("a stored denial ends the next proposal of the same plan", async () => {
+    const dead = run("p-deny");
+    await waitFor(() => pendingApprovals.has("p-deny"));
+    const entry = pendingApprovals.get("p-deny")!;
+    pendingApprovals.clear();
+    await post({ conversationId: "p-deny", decision: "deny" });
+    (entry.resolve as (value: unknown) => void)(false);
+    await dead;
+
+    expect(await run("p-deny")).toEqual({ shouldContinueLoop: false });
   });
 });

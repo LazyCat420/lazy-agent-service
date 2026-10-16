@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { pendingApprovals } from "../../ApprovalRegistry.ts";
-import { pendingApprovalStore } from "../../PendingApprovalStore.ts";
+import { pendingApprovalStore, type PendingApprovalRecord } from "../../PendingApprovalStore.ts";
 import { SERVER_SENT_EVENT_TYPES } from "@rodrigo-barraza/utilities-library/taxonomy";
 import type { ToolCall, AgenticContext } from "../types.ts";
 import type AutoApprovalEngine from "../../AutoApprovalEngine.ts";
@@ -39,6 +40,54 @@ export function rejectionResult(reason?: string): { success: false; error: "USER
 }
 
 /**
+ * Run each approved call with the arguments the user edited it to (already
+ * validated against the tool schema by the approval route). The gate holds
+ * copies of the calls, so the originals are matched by position.
+ */
+function applyEditedArgs(
+  toolCalls: ToolCall[],
+  needsApproval: Array<Pick<ToolCall, "id" | "name">>,
+  editedByPosition: Array<Record<string, unknown> | undefined>,
+): void {
+  let cursor = 0;
+  for (const toolCall of toolCalls) {
+    const pending = needsApproval[cursor];
+    if (!pending || pending.id !== toolCall.id || pending.name !== toolCall.name) continue;
+    const edited = editedByPosition[cursor];
+    if (edited) toolCall.args = edited;
+    cursor++;
+  }
+}
+
+/**
+ * A decision the user posted while no turn was running (a restart killed the
+ * turn that asked): the next turn that reaches the same calls consumes it
+ * instead of asking again. Every call of the batch must have a stored
+ * decision (same tool, same arguments) or none is taken.
+ */
+async function consumeStoredDecisions(
+  conversationId: string,
+  needsApproval: Array<Pick<ToolCall, "name" | "args">>,
+): Promise<PendingApprovalRecord[] | null> {
+  const stored = await pendingApprovalStore.listUndelivered(conversationId, "tool");
+  const matched: PendingApprovalRecord[] = [];
+  for (const toolCall of needsApproval) {
+    const record = stored.find(
+      (candidate) =>
+        !matched.includes(candidate) &&
+        candidate.name === toolCall.name &&
+        isDeepStrictEqual(candidate.args, toolCall.args),
+    );
+    if (!record) return null;
+    matched.push(record);
+  }
+  for (const record of matched) {
+    if (!(await pendingApprovalStore.markDelivered(record.id))) return null;
+  }
+  return matched;
+}
+
+/**
  * Check a batch of tool calls against the approval engine and, if any
  * require approval, pause until the user responds or timeout occurs.
  */
@@ -71,6 +120,31 @@ export async function checkAndWaitForApproval(
     return { isApproved: false, shouldApproveAll: false };
   }
 
+  const storedDecisions = await consumeStoredDecisions(conversationId, needsApproval);
+  if (storedDecisions) {
+    const denied = storedDecisions.find((record) => record.decision?.decision === "deny");
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.STATUS,
+      message: `Applied the ${denied ? "denial" : "approval"} you gave before the restart: ${needsApproval.map((toolCall) => toolCall.name).join(", ")}`,
+    });
+    if (denied) {
+      return {
+        isApproved: false,
+        shouldApproveAll: false,
+        ...(denied.decision?.reason ? { reason: denied.decision.reason } : {}),
+      };
+    }
+    applyEditedArgs(
+      toolCalls,
+      needsApproval,
+      storedDecisions.map((record) => record.decision?.editedArgs),
+    );
+    return {
+      isApproved: true,
+      shouldApproveAll: storedDecisions.some((record) => record.decision?.scope !== "call"),
+    };
+  }
+
   // Record the batch durably BEFORE the card goes out: a decision is a
   // conditional write on these records (restart-safe, exactly-once).
   const batchId = randomUUID();
@@ -78,9 +152,10 @@ export async function checkAndWaitForApproval(
   const schemaByName = new Map(
     (context.runtimeTools?.finalTools ?? []).map((tool) => [tool.name, tool.parameters ?? null]),
   );
-  await pendingApprovalStore.cancelPending(conversationId, "superseded");
+  await pendingApprovalStore.cancelPending(conversationId, "superseded", ["tool"]);
   await pendingApprovalStore.create(
     needsApproval.map((toolCall, position) => ({
+      kind: "tool" as const,
       conversationId,
       batchId,
       itemId: itemIds[position],
@@ -113,7 +188,7 @@ export async function checkAndWaitForApproval(
   >((resolve) => {
     const timeoutId = setTimeout(() => {
       pendingApprovals.delete(conversationId);
-      void pendingApprovalStore.cancelPending(conversationId, "timeout");
+      void pendingApprovalStore.cancelPending(conversationId, "timeout", ["tool"]);
       resolve({ isApproved: false, reason: "timeout" });
     }, APPROVAL_TIMEOUT_MS);
 
@@ -158,18 +233,12 @@ export async function checkAndWaitForApproval(
     };
   }
 
-  // Run the approved call with the arguments the user edited it to (already
-  // validated against the tool schema by the approval route). The gate holds
-  // copies of the calls, so the originals are matched by position.
   if (approvalResult.editedArgs) {
-    let cursor = 0;
-    for (const toolCall of toolCalls) {
-      const pending = needsApproval[cursor];
-      if (!pending || pending.id !== toolCall.id || pending.name !== toolCall.name) continue;
-      const edited = approvalResult.editedArgs[itemIds[cursor]];
-      if (edited) toolCall.args = edited;
-      cursor++;
-    }
+    applyEditedArgs(
+      toolCalls,
+      needsApproval,
+      itemIds.map((itemId) => approvalResult.editedArgs?.[itemId]),
+    );
   }
 
   if (approvalResult.shouldApproveAll) {
