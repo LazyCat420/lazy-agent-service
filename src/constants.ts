@@ -68,6 +68,7 @@ export const COLLECTIONS = {
   SOMATIC_STATE: "somatic_state",
   WORKFLOW_MEMORIES: "workflow_memories",
   EXTRACTION_WATERMARKS: "extraction_watermarks",
+  CONVERSATION_BUDGETS: "conversation_budgets",
 };
 
 /**

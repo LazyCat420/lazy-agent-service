@@ -207,13 +207,13 @@ describe("PUT /conversations/:id/budget against a running turn", () => {
     });
     expect(put.status).toBe(200);
     const got = await (await fetch(`${baseUrl}/conversations/c-budget/budget`)).json();
-    expect(got).toEqual({ conversationId: "c-budget", budget: { maxCostDollars: 0.5 } });
+    expect(got).toEqual({ conversationId: "c-budget", budget: { maxCostDollars: 0.5 }, paused: false });
 
     const calls: unknown[] = [];
     const { context, events } = makeContext(
       "c-budget",
       provider([{ text: NOTE_CALL, usage }, "never reached"], calls),
-      { autoApprove: true },
+      { autoApprove: true, budgetPauseTimeoutMs: 50 },
     );
     await startTurn(context);
     // The over-budget pass's tool call is not executed; the loop goes to

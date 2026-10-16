@@ -215,12 +215,25 @@ those items, all driven by real harness-turn tests
   targeting (404 unknown card, 409 second answer). Not ported: non-blocking
   cards and durability.
 - **Conversation budget** — `routes/ConversationBudgetRoute.ts`
-  (`GET|PUT|PATCH|DELETE /conversations/:id/budget`) over a new in-memory
-  `ConversationBudgetRegistry`; `CostBudgetEnforcer` takes the lower of the
-  request's `maxCostDollars` and the conversation's cap (plus an optional
-  `maxTotalTokens`), re-read after every model pass. Prism's route instead
-  raises the cap of a *budget-paused* turn; budget pause is still open, so
-  this service stops the turn (exhaustion recovery) rather than pausing it.
+  (`GET|PUT|PATCH|DELETE /conversations/:id/budget`) over
+  `ConversationBudgetRegistry`, now persisted in Mongo
+  (`COLLECTIONS.CONVERSATION_BUDGETS`, `conversation_budgets`; process-local map
+  only while Mongo is not connected), so a cap survives a restart.
+  `CostBudgetEnforcer` takes the lower of the request's `maxCostDollars` and the
+  conversation's cap (plus an optional `maxTotalTokens`), re-read after every
+  model pass.
+- **Budget pause** (ported from prism `BudgetPauseGate` / `BudgetPauseRegistry`,
+  simplified) — when the *conversation's* cap is the one reached, the turn emits
+  `budget_paused` and waits in `BudgetPauseRegistry` instead of ending. PUT/PATCH
+  wakes it: if the new cap clears the spend the same turn continues
+  (`budget_resumed`) and runs the pending tool; otherwise it stays paused.
+  DELETE, an abort, or the timeout (`options.budgetPauseTimeoutMs`, default 30
+  min) end it through the old exhaustion-recovery path. A request-level
+  `maxCostDollars` that binds first still ends the turn at once. Not ported:
+  a durable pause (`PendingDecisionStore`: a pause does not survive a restart,
+  only the cap does), a per-goal/per-turn cap split, attention/webhook/push
+  notification of the pause. Tests:
+  `routes/__tests__/ConversationBudgetPause.test.ts`.
 
 ## Prism-product features (P2) — not planned
 

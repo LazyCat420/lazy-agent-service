@@ -1,12 +1,17 @@
+import MongoWrapper from "../wrappers/MongoWrapper.ts";
+import { MONGO_DB_NAME } from "../../config.ts";
+import { COLLECTIONS } from "../constants.ts";
+import logger from "../utils/logger.ts";
+
 /**
  * ConversationBudgetRegistry — per-conversation cost / token ceilings set
  * over HTTP (PUT /conversations/:id/budget) and read live by
  * CostBudgetEnforcer after every model pass, so a cap set mid-turn applies
- * to that turn. In-memory: a cap does not survive a process restart.
+ * to that turn. Persisted in Mongo (COLLECTIONS.CONVERSATION_BUDGETS) so a
+ * cap survives a process restart; with no Mongo connection it falls back to
+ * a process-local map.
  *
- * Adapted from prism-service ConversationBudgetRoute (which raises the cap
- * of a paused turn); this service has no budget pause, so the cap is a
- * plain ceiling the running loop stops at.
+ * Adapted from prism-service ConversationBudgetRoute.
  */
 
 export interface ConversationBudget {
@@ -16,32 +21,73 @@ export interface ConversationBudget {
   maxTotalTokens?: number;
 }
 
-const budgets = new Map<string, ConversationBudget>();
+/** Used only while Mongo is not connected. */
+const fallback = new Map<string, ConversationBudget>();
+
+function collection() {
+  return MongoWrapper.getCollection(MONGO_DB_NAME, COLLECTIONS.CONVERSATION_BUDGETS);
+}
+
+function isEmpty(budget: ConversationBudget): boolean {
+  return budget.maxCostDollars === undefined && budget.maxTotalTokens === undefined;
+}
 
 const ConversationBudgetRegistry = {
-  get(conversationId: string | null | undefined): ConversationBudget | null {
+  async get(conversationId: string | null | undefined): Promise<ConversationBudget | null> {
     if (!conversationId) return null;
-    const budget = budgets.get(conversationId);
-    return budget ? { ...budget } : null;
+    const col = collection();
+    if (!col) {
+      const budget = fallback.get(conversationId);
+      return budget ? { ...budget } : null;
+    }
+    try {
+      const doc = (await col.findOne({ conversationId })) as ConversationBudget | null;
+      if (!doc) return null;
+      const budget: ConversationBudget = {};
+      if (doc.maxCostDollars !== undefined) budget.maxCostDollars = doc.maxCostDollars;
+      if (doc.maxTotalTokens !== undefined) budget.maxTotalTokens = doc.maxTotalTokens;
+      return isEmpty(budget) ? null : budget;
+    } catch (error) {
+      logger.warn(
+        `[ConversationBudgetRegistry] read failed for ${conversationId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
   },
 
   /** Replace the conversation's budget. An empty budget clears it. */
-  set(conversationId: string, budget: ConversationBudget): ConversationBudget | null {
-    if (budget.maxCostDollars === undefined && budget.maxTotalTokens === undefined) {
-      budgets.delete(conversationId);
+  async set(conversationId: string, budget: ConversationBudget): Promise<ConversationBudget | null> {
+    if (isEmpty(budget)) {
+      await ConversationBudgetRegistry.clear(conversationId);
       return null;
     }
-    budgets.set(conversationId, { ...budget });
-    return { ...budget };
+    const next: ConversationBudget = {};
+    if (budget.maxCostDollars !== undefined) next.maxCostDollars = budget.maxCostDollars;
+    if (budget.maxTotalTokens !== undefined) next.maxTotalTokens = budget.maxTotalTokens;
+    const col = collection();
+    if (!col) {
+      fallback.set(conversationId, next);
+      return { ...next };
+    }
+    // Replace, not merge: a PUT that omits a field drops it.
+    await col.replaceOne(
+      { conversationId },
+      { conversationId, ...next, updatedAt: new Date() },
+      { upsert: true },
+    );
+    return { ...next };
   },
 
-  clear(conversationId: string): boolean {
-    return budgets.delete(conversationId);
+  async clear(conversationId: string): Promise<boolean> {
+    const col = collection();
+    if (!col) return fallback.delete(conversationId);
+    const result = await col.deleteOne({ conversationId });
+    return result.deletedCount > 0;
   },
 
-  /** Test isolation. */
+  /** Test isolation for the no-Mongo fallback. */
   reset(): void {
-    budgets.clear();
+    fallback.clear();
   },
 };
 
