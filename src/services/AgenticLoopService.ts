@@ -18,11 +18,15 @@ import { DEFAULT_CONTEXT_BUDGET } from "../platform/context/ContextBudget.ts";
 import { SkillRegistry } from "../platform/skills/SkillRegistry.ts";
 import { enforceVerificationContract, type VerificationResult } from "../platform/verify/VerificationContract.ts";
 import { TAKE_NOTE_TOOL_SCHEMA } from "../platform/memory/NoteStore.ts";
+import { ASK_USER_TOOL_SCHEMA } from "./harnesses/lifecycle/AskUserTool.ts";
 import { applyModelProfile } from "../platform/models/applyModelProfile.ts";
 import { retrieveOffloadedContentTool } from "../platform/offload/retrieveOffloadedContent.ts";
 import { getSharedOffloadStore } from "../platform/offload/OffloadStore.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
+
+/** Ids of question cards already answered, so a second answer reads 409. */
+const answeredQuestionIds = new Set<string>();
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Loop resilience helpers (compaction pressure + overflow recovery)
@@ -342,7 +346,7 @@ export default class AgenticLoopService {
     // If dynamicEnabledTools is not in ToolContext, populate it with the resolved tools
     const toolContextStore = ToolContext.getStore(resolvedAgentConversationId);
 
-    // ── Inject internal tools (skill_read, take_note) ──────────
+    // ── Inject internal tools (skill_read, take_note, ask_user) ──────────
     // skill_read: bodies load from <repoRoot>/skills/<name>/SKILL.md on
     //   demand (handled in harnesses/lifecycle/ToolExecutor.ts).
     // take_note: persists per-run notes to <repoRoot>/data/notes/<runId>.md
@@ -352,6 +356,7 @@ export default class AgenticLoopService {
       const internalTools: Array<{ name: string }> = [];
       if (hasSkills) internalTools.push({ ...SKILL_READ_TOOL_SCHEMA });
       internalTools.push({ ...TAKE_NOTE_TOOL_SCHEMA });
+      internalTools.push({ ...ASK_USER_TOOL_SCHEMA });
       internalTools.push({ ...retrieveOffloadedContentTool(getSharedOffloadStore()).definition });
       if (internalTools.length > 0) {
         resolvedTools.finalTools = [...resolvedTools.finalTools, ...internalTools];
@@ -610,7 +615,10 @@ export default class AgenticLoopService {
   static resolveApproval(
     conversationId: string,
     isApproved: boolean,
-    { shouldApproveAll = false }: { shouldApproveAll?: boolean } = {},
+    {
+      shouldApproveAll = false,
+      reason,
+    }: { shouldApproveAll?: boolean; reason?: string } = {},
   ): boolean {
     const entry = pendingApprovals.get(conversationId);
     if (!entry) return false;
@@ -621,10 +629,52 @@ export default class AgenticLoopService {
       entry.resolve({
         isApproved,
         shouldApproveAll,
-        reason: isApproved ? "user_approved" : "user_rejected",
+        reason: reason ?? (isApproved ? "user_approved" : "user_rejected"),
       });
     }
     return true;
+  }
+
+  /**
+   * Decide the pending approval with the checks the HTTP route needs:
+   * `not_found` (nothing pending, or `toolCallId` is not among the pending
+   * calls) and `ambiguous` (several calls pending, none named, and the
+   * decision is not batch-wide). ported from prism-service
+   * AgenticLoopService.decideApproval, narrowed to this service's single
+   * pending batch per conversation.
+   */
+  static decideApproval(
+    conversationId: string,
+    input: {
+      isApproved: boolean;
+      toolCallId?: string;
+      batchWide?: boolean;
+      reason?: string;
+    },
+  ):
+    | { status: "decided"; type: "tool" | "plan"; decidedToolCallIds: string[] }
+    | { status: "not_found" }
+    | { status: "ambiguous"; pendingToolCallIds: string[] } {
+    const entry = pendingApprovals.get(conversationId);
+    if (!entry) return { status: "not_found" };
+    const pendingIds = (entry.toolCalls ?? [])
+      .map((call) => call.id)
+      .filter((id): id is string => typeof id === "string");
+    if (input.toolCallId && !pendingIds.includes(input.toolCallId)) {
+      return { status: "not_found" };
+    }
+    if (!input.toolCallId && !input.batchWide && pendingIds.length > 1) {
+      return { status: "ambiguous", pendingToolCallIds: pendingIds };
+    }
+    AgenticLoopService.resolveApproval(conversationId, input.isApproved, {
+      shouldApproveAll: input.batchWide === true && input.isApproved,
+      reason: input.reason,
+    });
+    return {
+      status: "decided",
+      type: entry.type,
+      decidedToolCallIds: input.toolCallId ? [input.toolCallId] : pendingIds,
+    };
   }
 
   /** Check if a conversation has a pending approval. */
@@ -662,16 +712,47 @@ export default class AgenticLoopService {
     pendingQuestions.set(conversationId, entry);
   }
 
-  /** Resolve a pending question for a conversation. */
+  /**
+   * Resolve a pending question for a conversation. With `questionId` only
+   * that card is answered: a different id is `unknown_question`, and an id
+   * answered a moment ago is `already_answered` (a second answer must not
+   * be taken for the next question). ported from prism-service
+   * AgenticLoopService.resolveUserQuestion.
+   */
   static resolveUserQuestion(
     conversationId: string,
     answers: QuestionAnswer[],
-  ): boolean {
+    { questionId }: { questionId?: string } = {},
+  ):
+    | { resolved: true; questionId: string | undefined; reason?: undefined }
+    | {
+        resolved: false;
+        reason: "no_pending_question" | "unknown_question" | "already_answered";
+        questionId?: string;
+      } {
     const entry = pendingQuestions.get(conversationId);
-    if (!entry) return false;
+    if (!entry) {
+      if (questionId && answeredQuestionIds.has(questionId)) {
+        return { resolved: false, reason: "already_answered", questionId };
+      }
+      return {
+        resolved: false,
+        reason: questionId ? "unknown_question" : "no_pending_question",
+        ...(questionId ? { questionId } : {}),
+      };
+    }
+    if (questionId && entry.questionId && entry.questionId !== questionId) {
+      return { resolved: false, reason: "unknown_question", questionId };
+    }
     pendingQuestions.delete(conversationId);
+    if (entry.questionId) {
+      answeredQuestionIds.add(entry.questionId);
+      if (answeredQuestionIds.size > 1000) {
+        answeredQuestionIds.delete(answeredQuestionIds.values().next().value as string);
+      }
+    }
     entry.resolve({ answers });
-    return true;
+    return { resolved: true, questionId: entry.questionId };
   }
 
   /** Check if a conversation has a pending question. */

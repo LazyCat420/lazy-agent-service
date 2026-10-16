@@ -487,7 +487,7 @@ export default class ReActHarness extends BaseAgenticHarness {
         this.emitUsageUpdate();
 
         // ── Cost budget enforcement ────────────────────────────
-        if (checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit)) {
+        if (checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId)) {
           break;
         }
 

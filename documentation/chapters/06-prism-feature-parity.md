@@ -195,6 +195,33 @@ previews.
   - Tests: `src/services/__tests__/McpServersPort.test.ts` (real SDK MCP server
     over streamable HTTP; only the Mongo collection is an in-memory stand-in).
 
+Ported 2026-10-16 (branch `wt-ask-user-budget`), the HTTP side of three of
+those items, all driven by real harness-turn tests
+(`routes/__tests__/AskUserApprovalBudgetRoutes.test.ts`):
+
+- **Approval decision** — `routes/ApprovalDecisionRoute.ts` (from prism
+  `ApprovalDecisionRoute`), mounted at `POST /agent/approve` and
+  `POST /conversation/approve` over the existing `ApprovalRegistry` /
+  `ApprovalGate`. Strict `decision: "allow"|"deny"` (or boolean `approved`; a
+  missing value is 400, not a yes), `toolCallId` 404 / ambiguous 400,
+  `scope`. Not ported: `editedArgs` (400), the durable `PendingDecisionStore`
+  (409 stale / `delivered: false` — a decision reaches only a live turn), and
+  relaying a denial `reason` to the model (the call ends `USER_REJECTED`).
+- **Ask-user** — the `ask_user` tool did not exist here (nothing ever filed a
+  pending question), so the blocking path was ported
+  (`harnesses/lifecycle/AskUserTool.ts`, from prism `AskUserQuestionTool`):
+  it emits `user_question`, parks the turn in `pendingQuestions`, and resumes
+  with the answer. `routes/QuestionAnswerHandler.ts` adds `questionId`
+  targeting (404 unknown card, 409 second answer). Not ported: non-blocking
+  cards and durability.
+- **Conversation budget** — `routes/ConversationBudgetRoute.ts`
+  (`GET|PUT|PATCH|DELETE /conversations/:id/budget`) over a new in-memory
+  `ConversationBudgetRegistry`; `CostBudgetEnforcer` takes the lower of the
+  request's `maxCostDollars` and the conversation's cap (plus an optional
+  `maxTotalTokens`), re-read after every model pass. Prism's route instead
+  raises the cap of a *budget-paused* turn; budget pause is still open, so
+  this service stops the turn (exhaustion recovery) rather than pausing it.
+
 ## Prism-product features (P2) — not planned
 
 ACP, the benchmark arena, push notifications, profiles, stats pages, the Bender

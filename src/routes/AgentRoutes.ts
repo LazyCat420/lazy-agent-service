@@ -4,111 +4,18 @@ import AgenticLoopService from "../services/AgenticLoopService.ts";
 import AgentSessionRegistry from "../services/AgentSessionRegistry.ts";
 import LiveFrameService from "../services/LiveFrameService.ts";
 import { handleAgent } from "./ChatRoutes.ts";
+import { handleApprovalDecision } from "./ApprovalDecisionRoute.ts";
+import { handleQuestionAnswer } from "./QuestionAnswerHandler.ts";
 import { prepareTradingAgentRequest } from "../services/TradingAgentRequest.ts";
 import logger from "../utils/logger.ts";
 import { handleSseRequest, handleJsonRequest } from "../utils/SseUtilities.ts";
 
 const router = express.Router();
 
-// ─── resolves pending plan/tool approvals ───────────────────
-
-/**
- * POST /agent/approve
- *
- * Body:
- *   { conversationId: string, approved: boolean }
- *
- * Resolves the pending approval promise in AgenticLoopService
- * so the agentic loop can continue (or abort).
- */
-router.post(
-  "/approve",
-  asyncHandler(async (req: Request, res: Response) => {
-    const { conversationId, approved, approveAll } = req.body;
-    const isApproved = approved !== false;
-    const shouldApproveAll = approveAll === true;
-
-    if (!conversationId) {
-      return res.status(400).json({ error: "Missing conversationId" });
-    }
-
-    const resolved = AgenticLoopService.resolveApproval(
-      conversationId,
-      isApproved,
-      { shouldApproveAll },
-    );
-
-    if (!resolved) {
-      return res.status(404).json({
-        error: "No pending approval for this conversation",
-        conversationId,
-      });
-    }
-
-    logger.info(
-      `[agent/approve] ${isApproved ? "Approved" : "Rejected"}${shouldApproveAll ? " (all future)" : ""} for conversation ${conversationId}`,
-    );
-
-    res.json({ ok: true, approved: isApproved });
-  }),
-);
-
-// ─── resolves pending ask_user_question pauses ──────────────
-
-/**
- * POST /agent/answer
- *
- * Body:
- *   { conversationId: string, answer: string }          ← simple (backward-compat)
- *   { conversationId: string, answers: Array<{ answer: string|string[], annotations?: string }> }  ← structured multi-question
- *
- * Resolves the pending question promise in AgenticLoopService
- * so the agentic loop can continue with the user's answer(s).
- */
-router.post(
-  "/answer",
-  asyncHandler(async (req: Request, res: Response) => {
-    const { conversationId, answer, answers } = req.body;
-
-    if (!conversationId) {
-      return res.status(400).json({ error: "Missing conversationId" });
-    }
-
-    // Normalize: structured answers take priority, fall back to simple string
-    let normalizedAnswers: {
-      answer: string | string[];
-      annotations?: string;
-    }[];
-    if (Array.isArray(answers) && answers.length > 0) {
-      normalizedAnswers = answers as {
-        answer: string | string[];
-        annotations?: string;
-      }[];
-    } else if (answer !== undefined && answer !== null) {
-      normalizedAnswers = [{ answer: String(answer) }];
-    } else {
-      return res.status(400).json({ error: "Missing answer or answers" });
-    }
-
-    const resolved = AgenticLoopService.resolveUserQuestion(
-      conversationId,
-      normalizedAnswers,
-    );
-
-    if (!resolved) {
-      return res.status(404).json({
-        error: "No pending question for this conversation",
-        conversationId,
-      });
-    }
-
-    logger.info(
-      `[agent/answer] ${normalizedAnswers.length} answer(s) for conversation ${conversationId}`,
-    );
-
-    res.json({ ok: true });
-  }),
-);
+// ─── resolves pending plan/tool approvals and ask_user questions ───
+// POST /agent/approve — see ApprovalDecisionRoute; POST /agent/answer — see QuestionAnswerHandler.
+router.post("/approve", handleApprovalDecision("[agent/approve]"));
+router.post("/answer", handleQuestionAnswer("agent/answer"));
 
 // ─── live vision frame streaming ────────────────────────────
 
