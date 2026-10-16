@@ -123,7 +123,16 @@ function estimateTotalTokens(messages: AdminChatMessage[]): number {
 }
 
 export default class CompactionService {
-  private static consecutiveFailures = 0;
+  /**
+   * Per-conversation consecutive-failure counts (ch.06 item 6): one bad
+   * conversation no longer opens the breaker for every other one. Keyed by
+   * agentConversationId; unkeyed calls share the "default" bucket.
+   */
+  private static consecutiveFailures = new Map<string, number>();
+
+  private static breakerKey(options: CompactionOptions): string {
+    return options.agentConversationId || "default";
+  }
 
   /**
    * Summarize a conversation using an LLM call.
@@ -141,10 +150,12 @@ export default class CompactionService {
     messages: AdminChatMessage[],
     options: CompactionOptions,
   ): Promise<CompactionResult | null> {
-    // ── Circuit breaker ────────────────────────────────────────
-    if (this.consecutiveFailures >= MAX_CONSECUTIVE_COMPACT_FAILURES) {
+    // ── Circuit breaker (per conversation) ─────────────────────
+    const breakerKey = this.breakerKey(options);
+    const consecutiveFailures = this.consecutiveFailures.get(breakerKey) ?? 0;
+    if (consecutiveFailures >= MAX_CONSECUTIVE_COMPACT_FAILURES) {
       logger.warn(
-        `[CompactionService] Circuit breaker open: ${this.consecutiveFailures} consecutive failures. Skipping compaction.`,
+        `[CompactionService] Circuit breaker open for ${breakerKey}: ${consecutiveFailures} consecutive failures. Skipping compaction.`,
       );
       return null;
     }
@@ -310,9 +321,10 @@ export default class CompactionService {
     } catch (error: unknown) {
       success = false;
       compactionError = errorMessage(error);
-      this.consecutiveFailures++;
+      const failures = (this.consecutiveFailures.get(breakerKey) ?? 0) + 1;
+      this.consecutiveFailures.set(breakerKey, failures);
       logger.error(
-        `[CompactionService] LLM call failed (failure ${this.consecutiveFailures}/${MAX_CONSECUTIVE_COMPACT_FAILURES}): ${compactionError}`,
+        `[CompactionService] LLM call failed (failure ${failures}/${MAX_CONSECUTIVE_COMPACT_FAILURES} for ${breakerKey}): ${compactionError}`,
       );
       options.emit?.({
         type: SERVER_SENT_EVENT_TYPES.STATUS,
@@ -352,9 +364,10 @@ export default class CompactionService {
     // ── Extract summary from response ─────────────────────────
     const summaryText = extractSummaryFromResponse(result!.text);
     if (!summaryText) {
-      this.consecutiveFailures++;
+      const failures = (this.consecutiveFailures.get(breakerKey) ?? 0) + 1;
+      this.consecutiveFailures.set(breakerKey, failures);
       logger.warn(
-        `[CompactionService] LLM returned no extractable summary. Failure ${this.consecutiveFailures}/${MAX_CONSECUTIVE_COMPACT_FAILURES}`,
+        `[CompactionService] LLM returned no extractable summary. Failure ${failures}/${MAX_CONSECUTIVE_COMPACT_FAILURES} for ${breakerKey}`,
       );
       options.emit?.({
         type: SERVER_SENT_EVENT_TYPES.STATUS,
@@ -405,7 +418,7 @@ export default class CompactionService {
     const postCompactTokenCount = estimateTotalTokens(compactedMessages);
 
     // ── Reset circuit breaker on success ──────────────────────
-    this.consecutiveFailures = 0;
+    this.consecutiveFailures.delete(this.breakerKey(options));
 
     logger.info(
       `[CompactionService] Compaction complete: ${preCompactTokenCount} → ${postCompactTokenCount} tokens ` +
@@ -461,7 +474,7 @@ export default class CompactionService {
 
   /** Reset the circuit breaker (for testing or session boundaries). */
   static resetCircuitBreaker(): void {
-    this.consecutiveFailures = 0;
+    this.consecutiveFailures.clear();
   }
 }
 

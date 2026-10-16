@@ -2,6 +2,12 @@ import logger from "./logger.ts";
 import { estimateTokens } from "./CostCalculator.ts";
 import type { ChatMessage, ToolCallEntry } from "../types/admin.ts";
 import MicroCompactionService from "../services/compact/MicroCompactionService.ts";
+import { findRecencyBoundary } from "../services/compact/RecencyProtection.ts";
+import {
+  computeContextBudgets,
+  messageTokenBudget,
+  type ProviderInputBaseline,
+} from "../services/compact/ContextBudgets.ts";
 import PromptLocaleService from "../services/PromptLocaleService.ts";
 import { PROMPT_DELIMITERS } from "../constants.ts";
 import {
@@ -37,14 +43,30 @@ const TARGET_UTILIZATION = 0.8;
 /** When truncating tool results aggressively, cap at this many chars */
 const AGGRESSIVE_TOOL_RESULT_CAP = 3000;
 
-/** Number of recent turns to always preserve (never compress) */
-const PROTECTED_RECENT_TURNS = 4;
+// Recency protection is by MODEL CALLS, not user turns — see
+// RecencyProtection.ts. A single-turn agent run has one user turn, so a
+// user-turn window protected the entire run and nothing ever shrank.
 
 interface EnforceOptions {
   maxInputTokens?: number;
   maxOutputTokens?: number;
   toolCount?: number;
   locale?: string;
+  /**
+   * System prompt + tool schema tokens the request carries besides the
+   * messages. Defaults to a per-tool heuristic when the caller has no
+   * measurement.
+   */
+  fixedOverheadTokens?: number;
+  /**
+   * The loop's latest provider-reported input and the ratio an earlier turn
+   * measured — so the truncation budget is measured in the same units as
+   * the compaction trigger (ContextBudgets.messageTokenBudget).
+   */
+  providerInputBaseline?: ProviderInputBaseline | null;
+  calibrationRatio?: number | null;
+  /** Why summarization did not keep the request under budget — logged if truncation runs. */
+  truncationReason?: string;
 }
 
 interface EnforceResult {
@@ -126,26 +148,13 @@ function estimateTotalTokens(messages: ChatMessage[]): number {
  * can dump 10k+ chars. This caps results that exceed the aggressive limit,
  * but only for messages OUTSIDE the protected recent window.
  *
- * Recent tool results (within the last `protectedTurns` user turns) are
- * preserved in full — the LLM is actively reasoning about them.
+ * Recent tool results (the recency-protected window) are preserved in
+ * full — the LLM is actively reasoning about them.
  */
-function truncateToolResults(
-  messages: ChatMessage[],
-  protectedTurns = PROTECTED_RECENT_TURNS,
-): ChatMessage[] {
-  // Find the protection boundary (same logic as compressOldAssistantMessages)
-  let userTurnsSeen = 0;
-  let protectionIndex = 0;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
-      userTurnsSeen++;
-      if (userTurnsSeen >= protectedTurns) {
-        protectionIndex = i;
-        break;
-      }
-    }
-  }
+function truncateToolResults(messages: ChatMessage[]): ChatMessage[] {
+  // The recency-protected window (the last model calls) is preserved in
+  // full — the LLM is actively reasoning about it.
+  const protectionIndex = findRecencyBoundary(messages);
 
   return messages.map((message, i) => {
     // Never truncate tool results in recent (protected) messages
@@ -179,23 +188,8 @@ function truncateToolResults(
  * Replaces assistant content with a "[Earlier response summarized]" marker.
  * Preserves tool call names but drops results.
  */
-function compressOldAssistantMessages(
-  messages: ChatMessage[],
-  protectedCount = PROTECTED_RECENT_TURNS,
-): ChatMessage[] {
-  // Count user turns from the end to determine protection boundary
-  let userTurnsSeen = 0;
-  let protectionIndex = 0;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
-      userTurnsSeen++;
-      if (userTurnsSeen >= protectedCount) {
-        protectionIndex = i;
-        break;
-      }
-    }
-  }
+function compressOldAssistantMessages(messages: ChatMessage[]): ChatMessage[] {
+  const protectionIndex = findRecencyBoundary(messages);
 
   return messages.map((message, i) => {
     // Never compress system messages, user messages, or protected recent messages
@@ -271,19 +265,8 @@ function slidingWindowTruncation(
     if (messages[i].role === "user") break; // Stop after first user message
   }
 
-  // Find the protection boundary based on PROTECTED_RECENT_TURNS
-  let userTurnsSeen = 0;
-  let protectionIndex = 0;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
-      userTurnsSeen++;
-      if (userTurnsSeen >= PROTECTED_RECENT_TURNS) {
-        protectionIndex = i;
-        break;
-      }
-    }
-  }
+  // The recency-protected window is always kept, whatever the budget
+  const protectionIndex = findRecencyBoundary(messages);
 
   // Build tail from the end until we approach budget
   const tail: ChatMessage[] = [];
@@ -338,24 +321,26 @@ export default class ContextWindowManager {
       toolCount = 0,
     } = options;
 
-    // Calculate the effective token budget
-    const schemaOverhead = TOOL_SCHEMA_OVERHEAD_TOKENS + toolCount * 150;
-    const outputReserve = Math.max(maxOutputTokens, MIN_OUTPUT_RESERVE);
-    const budget = Math.floor(
-      (maxInputTokens - outputReserve - schemaOverhead) * TARGET_UTILIZATION,
+    // The truncation budget is shared with the compaction trigger
+    // (ContextBudgets) and never below its threshold. Only the messages are
+    // estimated here, so the request budget is converted to message tokens
+    // with the trigger's own estimate (reported baseline or calibrated
+    // chars/4 + system prompt + tool schemas) — same units, no crossing.
+    const fixedOverhead =
+      options.fixedOverheadTokens ??
+      TOOL_SCHEMA_OVERHEAD_TOKENS + toolCount * 150;
+    const { truncationBudget } = computeContextBudgets(
+      maxInputTokens,
+      maxOutputTokens,
     );
-
-    if (budget <= 0) {
-      logger.warn(
-        `[ContextWindowManager] Negative budget: maxInput=${maxInputTokens}, outputReserve=${outputReserve}, schemaOverhead=${schemaOverhead}`,
-      );
-      return {
-        messages,
-        truncated: false,
-        strategy: null,
-        estimatedTokens: estimateTotalTokens(messages),
-      };
-    }
+    const budget = Math.max(
+      messageTokenBudget(truncationBudget, {
+        overheadTokens: fixedOverhead,
+        baseline: options.providerInputBaseline,
+        calibrationRatio: options.calibrationRatio,
+      }),
+      1024, // Ensure at least a small budget even if window is tight
+    );
 
     let currentTokens = estimateTotalTokens(messages);
 
@@ -369,8 +354,11 @@ export default class ContextWindowManager {
       };
     }
 
-    logger.info(
-      `[ContextWindowManager] Context overflow: ${currentTokens} tokens > ${budget} budget (${maxInputTokens} window, ${outputReserve} output reserve)`,
+    logger.warn(
+      `[ContextWindowManager] Truncating: ${currentTokens} message tokens > ${budget} message budget ` +
+        `(${truncationBudget}-token request budget of a ${maxInputTokens} window, ` +
+        `${options.providerInputBaseline ? "from reported usage" : `${fixedOverhead} fixed overhead`}) — ` +
+        `${options.truncationReason || "no compaction attempted on this path"}`,
     );
 
     // Strategy 0: Micro-compaction — clear old compactable tool results entirely
