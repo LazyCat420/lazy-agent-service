@@ -956,7 +956,14 @@ export async function fetchOpenAICompat(
     } catch {
       /* raw text fallback */
     }
-    throw new Error(errorMessage);
+    // ported from prism-service providers/openai-compat.ts: the headers go
+    // along for a Retry-After (computeRetryDelayMilliseconds) and the status
+    // for isTransientProviderError — without them a 503 + Retry-After from
+    // our own vllm-shim saturation shed is never retried.
+    throw Object.assign(new Error(errorMessage), {
+      status: response.status,
+      headers: response.headers,
+    });
   }
 
   return response;
