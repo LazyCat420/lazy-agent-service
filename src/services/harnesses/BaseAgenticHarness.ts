@@ -130,6 +130,10 @@ export default class BaseAgenticHarness {
     state: AgenticLoopState,
     tools: ResolvedTools,
   ) {
+    // Runtime (/v1/runs) callers may omit requestId; iteration log rows are
+    // keyed `${requestId}-${iteration}` on a unique index, so "undefined-1"
+    // collided across runs and the rows were dropped.
+    if (!context.requestId) context.requestId = crypto.randomUUID();
     this.context = context;
     this.state = state;
     this.tools = tools;
