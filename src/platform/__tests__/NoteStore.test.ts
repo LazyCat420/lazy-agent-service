@@ -74,6 +74,9 @@ describe("take_note tool", () => {
       project: "test",
       workspaceRoot: repoRoot,
       runId: "run-exec",
+      // take_note is write-tier: without autoApprove it would ask for approval.
+      options: { autoApprove: true },
+      emit: () => {},
     } as unknown as AgenticContext;
     ToolContext.getStore("conv-test");
 

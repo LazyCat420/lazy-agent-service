@@ -1,5 +1,5 @@
 import logger from "../../../utils/logger.ts";
-import { APPROVAL_TIERS } from "../../AutoApprovalEngine.ts";
+import { APPROVAL_TIERS, toolTier } from "../../ToolAuthorization.ts";
 import PromptLocaleService from "../../PromptLocaleService.ts";
 import RequestLogger from "../../RequestLogger.ts";
 
@@ -49,8 +49,7 @@ export default class CriticGate {
     toolCall: ToolCall,
     context: AgenticContext,
   ): Promise<CriticReviewResult> {
-    const approvalInfo = toolCall._approval as unknown as { tier: number } | undefined;
-    const tier = approvalInfo?.tier ?? APPROVAL_TIERS.WRITE;
+    const tier = toolTier(toolCall.name);
 
     const activeCriticModel = this.criticModel || context.resolvedModel;
 

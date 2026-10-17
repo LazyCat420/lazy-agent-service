@@ -1,77 +1,55 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { pendingApprovals } from "../../ApprovalRegistry.ts";
+import { pendingApprovals, type ApprovalResolution } from "../../ApprovalRegistry.ts";
 import { pendingApprovalStore, type PendingApprovalRecord } from "../../PendingApprovalStore.ts";
 import { SERVER_SENT_EVENT_TYPES } from "@rodrigo-barraza/utilities-library/taxonomy";
+import {
+  decideToolCall,
+  deniedToolResult,
+  type ApprovalAnswer,
+  type AuthorizationInput,
+  type DeniedToolResult,
+  type ToolAuthorization,
+} from "../../ToolAuthorization.ts";
+import type AgentHooks from "../../AgentHooks.ts";
 import type { ToolCall, AgenticContext } from "../types.ts";
-import type AutoApprovalEngine from "../../AutoApprovalEngine.ts";
 
 /**
- * ApprovalGate — extracted approval gating logic.
+ * ApprovalGate — authorizes a batch of tool calls through `decideToolCall`
+ * and, for the calls that decision leaves at "ask", obtains the answer: a
+ * durable decision posted while no turn was running, or a live one over the
+ * approval route (2-minute timeout). Every call gets its own verdict; a deny
+ * never becomes a run, whatever autoApprove, approve-all or the person says.
  *
- * Handles the promise-based approval pattern: emit approval_required events,
- * register a pending approval resolver, wait for the user's response
- * (or timeout after 2 minutes), and return the decision.
- *
- * Reusable by any harness that executes write/danger-tier tools.
+ * ported from prism-service src/services/harnesses/lifecycle/ApprovalGate.ts
+ * (per-call verdicts; denied calls never user-approvable).
  */
 
 const APPROVAL_TIMEOUT_MS = 120_000;
 
-export interface ApprovalOutcome {
-  isApproved: boolean;
-  shouldApproveAll: boolean;
-  /** The user's reason for a denial, bounded; absent for timeouts and silent denials. */
-  reason?: string;
-}
+type Denial = Extract<ToolAuthorization, { verdict: "deny" }>;
+type Ask = Extract<ToolAuthorization, { verdict: "ask" }>;
 
-/**
- * The tool result a rejected call ends with. A user's denial reason is
- * relayed so the model can adapt; without one the message is generic.
- */
-export function rejectionResult(reason?: string): { success: false; error: "USER_REJECTED"; message: string } {
-  return {
-    success: false,
-    error: "USER_REJECTED",
-    message: reason
-      ? `Tool execution was manually rejected by the user. Reason: ${reason}`
-      : "Tool execution was manually rejected by the user.",
-  };
-}
-
-/**
- * Run each approved call with the arguments the user edited it to (already
- * validated against the tool schema by the approval route). The gate holds
- * copies of the calls, so the originals are matched by position.
- */
-function applyEditedArgs(
-  toolCalls: ToolCall[],
-  needsApproval: Array<Pick<ToolCall, "id" | "name">>,
-  editedByPosition: Array<Record<string, unknown> | undefined>,
-): void {
-  let cursor = 0;
-  for (const toolCall of toolCalls) {
-    const pending = needsApproval[cursor];
-    if (!pending || pending.id !== toolCall.id || pending.name !== toolCall.name) continue;
-    const edited = editedByPosition[cursor];
-    if (edited) toolCall.args = edited;
-    cursor++;
-  }
+export interface AuthorizationVerdict {
+  /** Calls cleared to run. */
+  executable: Set<ToolCall>;
+  /** Denied calls and the one tool result each reports to the model. */
+  denied: Map<ToolCall, DeniedToolResult>;
 }
 
 /**
  * A decision the user posted while no turn was running (a restart killed the
  * turn that asked): the next turn that reaches the same calls consumes it
- * instead of asking again. Every call of the batch must have a stored
- * decision (same tool, same arguments) or none is taken.
+ * instead of asking again. Every asked call must have a stored decision
+ * (same tool, same arguments) or none is taken.
  */
 async function consumeStoredDecisions(
   conversationId: string,
-  needsApproval: Array<Pick<ToolCall, "name" | "args">>,
+  asked: ToolCall[],
 ): Promise<PendingApprovalRecord[] | null> {
   const stored = await pendingApprovalStore.listUndelivered(conversationId, "tool");
   const matched: PendingApprovalRecord[] = [];
-  for (const toolCall of needsApproval) {
+  for (const toolCall of asked) {
     const record = stored.find(
       (candidate) =>
         !matched.includes(candidate) &&
@@ -87,74 +65,22 @@ async function consumeStoredDecisions(
   return matched;
 }
 
-/**
- * Check a batch of tool calls against the approval engine and, if any
- * require approval, pause until the user responds or timeout occurs.
- */
-export async function checkAndWaitForApproval(
-  toolCalls: ToolCall[],
+/** Record the asks durably, emit the approval cards and wait for the answer. */
+async function waitForLiveAnswer(
+  asks: Array<{ toolCall: ToolCall; decision: Ask }>,
   context: AgenticContext,
-  approvalEngine: AutoApprovalEngine,
-): Promise<ApprovalOutcome> {
-  const { conversationId, emit, options } = context;
-  // Canonical runs use profile admission in runtimeToolExecutor; local destructive
-  // actions still require confirmation in the application executor. There is no
-  // legacy approval-response endpoint on /v1/runs.
-  if (context.runtimeToolExecutor) return { isApproved: true, shouldApproveAll: false };
-
-  const { needsApproval } = approvalEngine.checkBatch(toolCalls);
-
-  if (needsApproval.length === 0 || options.autoApprove) {
-    return { isApproved: true, shouldApproveAll: false };
-  }
-
-  // Unattended runs (no person at the keyboard — trading cycles, scheduled
-  // tasks): an unanswerable approval ask must never hang the loop. Deny
-  // immediately; the model reads the rejection and adapts (prism's
-  // `unattended` semantics, 2026-09-27 audit §1).
-  if (options.unattended === true) {
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.STATUS,
-      message: `Unattended run: approval for ${needsApproval.map((toolCall) => toolCall.name).join(", ")} denied automatically`,
-    });
-    return { isApproved: false, shouldApproveAll: false };
-  }
-
-  const storedDecisions = await consumeStoredDecisions(conversationId, needsApproval);
-  if (storedDecisions) {
-    const denied = storedDecisions.find((record) => record.decision?.decision === "deny");
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.STATUS,
-      message: `Applied the ${denied ? "denial" : "approval"} you gave before the restart: ${needsApproval.map((toolCall) => toolCall.name).join(", ")}`,
-    });
-    if (denied) {
-      return {
-        isApproved: false,
-        shouldApproveAll: false,
-        ...(denied.decision?.reason ? { reason: denied.decision.reason } : {}),
-      };
-    }
-    applyEditedArgs(
-      toolCalls,
-      needsApproval,
-      storedDecisions.map((record) => record.decision?.editedArgs),
-    );
-    return {
-      isApproved: true,
-      shouldApproveAll: storedDecisions.some((record) => record.decision?.scope !== "call"),
-    };
-  }
-
+): Promise<{ resolution: ApprovalResolution; itemIds: string[] }> {
+  const { conversationId, emit } = context;
   // Record the batch durably BEFORE the card goes out: a decision is a
   // conditional write on these records (restart-safe, exactly-once).
   const batchId = randomUUID();
-  const itemIds = needsApproval.map((toolCall, position) => toolCall.id ?? `call-${position}`);
+  const itemIds = asks.map(({ toolCall }, position) => toolCall.id ?? `call-${position}`);
   const schemaByName = new Map(
     (context.runtimeTools?.finalTools ?? []).map((tool) => [tool.name, tool.parameters ?? null]),
   );
   await pendingApprovalStore.cancelPending(conversationId, "superseded", ["tool"]);
   await pendingApprovalStore.create(
-    needsApproval.map((toolCall, position) => ({
+    asks.map(({ toolCall, decision }, position) => ({
       kind: "tool" as const,
       conversationId,
       batchId,
@@ -162,30 +88,22 @@ export async function checkAndWaitForApproval(
       position,
       name: toolCall.name,
       args: toolCall.args,
-      tier: String(toolCall._approval.tier),
-      tierLabel: toolCall._approval.tierLabel,
+      tier: String(decision.tier),
+      tierLabel: decision.tierLabel,
       argsSchema: (schemaByName.get(toolCall.name) as Record<string, unknown> | null) ?? null,
     })),
   );
 
-  // Emit approval_required events for each tool needing approval
-  for (const toolCallRequiringApproval of needsApproval) {
+  for (const { toolCall, decision } of asks) {
     emit({
       type: "approval_required",
-      toolCall: {
-        name: toolCallRequiringApproval.name,
-        args: toolCallRequiringApproval.args,
-        id: toolCallRequiringApproval.id,
-      },
-      tier: toolCallRequiringApproval._approval?.tier,
-      tierLabel: toolCallRequiringApproval._approval?.tierLabel,
+      toolCall: { name: toolCall.name, args: toolCall.args, id: toolCall.id },
+      tier: decision.tier,
+      tierLabel: decision.tierLabel,
     });
   }
 
-  // Wait for user approval or timeout
-  const approvalResult = await new Promise<
-    import("../../ApprovalRegistry.ts").ApprovalResolution
-  >((resolve) => {
+  const resolution = await new Promise<ApprovalResolution>((resolve) => {
     const timeoutId = setTimeout(() => {
       pendingApprovals.delete(conversationId);
       void pendingApprovalStore.cancelPending(conversationId, "timeout", ["tool"]);
@@ -199,51 +117,135 @@ export async function checkAndWaitForApproval(
     }
 
     pendingApprovals.set(conversationId, {
-      resolve: (
-        value: import("../../ApprovalRegistry.ts").ApprovalResolution,
-      ) => {
+      resolve: (value: ApprovalResolution) => {
         clearTimeout(timeoutId);
         pendingApprovals.delete(conversationId);
         resolve(value);
       },
       type: "tool",
       itemIds,
-      tools: needsApproval.map((toolCall) => toolCall.name),
-      toolCalls: needsApproval.map((toolCall) => ({
+      tools: asks.map(({ toolCall }) => toolCall.name),
+      toolCalls: asks.map(({ toolCall, decision }) => ({
         id: toolCall.id,
         name: toolCall.name,
         args: toolCall.args,
-        _approval: {
-          tier: String(toolCall._approval.tier),
-          tierLabel: toolCall._approval.tierLabel,
-        },
+        _approval: { tier: String(decision.tier), tierLabel: decision.tierLabel },
       })),
     });
   });
+  return { resolution, itemIds };
+}
 
-  if (!approvalResult?.isApproved) {
+/**
+ * Decide every call of the batch. Calls whose arguments did not parse are
+ * left out of both sets: the executor answers them as malformed.
+ */
+export async function authorizeToolCalls(
+  toolCalls: ToolCall[],
+  context: AgenticContext,
+  hooks?: AgentHooks,
+): Promise<AuthorizationVerdict> {
+  const { conversationId, emit, options } = context;
+  const decided = await Promise.all(
+    toolCalls
+      .filter((toolCall) => !toolCall._argsParseError)
+      .map(async (toolCall) => {
+        const input: AuthorizationInput = {
+          name: toolCall.name,
+          args: toolCall.args ?? {},
+          isAllowListed: toolCall.isUnauthorized !== true,
+          policies: options.policies ?? [],
+          autoApprove: options.autoApprove === true,
+          unattended: options.unattended === true,
+          asksResolvedByProfile: !!context.runtimeToolExecutor,
+        };
+        // Decide hooks (CriticGate, …) only see calls no earlier rail denied.
+        if (hooks && decideToolCall(input).verdict !== "deny") {
+          const hookVerdict = await hooks.run("beforeToolCall", structuredClone(toolCall), context);
+          if (hookVerdict && hookVerdict.isApproved === false) {
+            input.hookDenial =
+              typeof hookVerdict.reason === "string" && hookVerdict.reason
+                ? hookVerdict.reason
+                : "denied by a beforeToolCall hook";
+          }
+        }
+        return { toolCall, input, decision: decideToolCall(input) };
+      }),
+  );
+
+  const asks = decided.filter(
+    (entry): entry is typeof entry & { decision: Ask } => entry.decision.verdict === "ask",
+  );
+  const answers = new Map<ToolCall, ApprovalAnswer>();
+
+  if (asks.length > 0) {
+    const askedCalls = asks.map(({ toolCall }) => toolCall);
+    const stored = await consumeStoredDecisions(conversationId, askedCalls);
+    if (stored) {
+      emit({
+        type: SERVER_SENT_EVENT_TYPES.STATUS,
+        message: `Applied the decision you gave before the restart: ${askedCalls.map((toolCall) => toolCall.name).join(", ")}`,
+      });
+      stored.forEach((record, position) => {
+        const toolCall = askedCalls[position];
+        const decision = record.decision;
+        if (decision?.decision === "allow") {
+          if (decision.editedArgs) toolCall.args = decision.editedArgs;
+          if (decision.scope !== "call") options.autoApprove = true;
+          answers.set(toolCall, { decision: "allow" });
+        } else {
+          answers.set(toolCall, { decision: "deny", ...(decision?.reason ? { reason: decision.reason } : {}) });
+        }
+      });
+    } else {
+      const { resolution, itemIds } = await waitForLiveAnswer(asks, context);
+      askedCalls.forEach((toolCall, position) => {
+        if (resolution?.isApproved) {
+          const edited = resolution.editedArgs?.[itemIds[position]];
+          if (edited) toolCall.args = edited;
+          answers.set(toolCall, { decision: "allow" });
+        } else {
+          answers.set(toolCall, {
+            decision: "deny",
+            ...(resolution?.denialReason ? { reason: resolution.denialReason } : {}),
+          });
+        }
+      });
+      // Approve-all answers this conversation's later asks; it can never
+      // reach a deny, which decideToolCall settles before any ask.
+      if (resolution?.isApproved && resolution.shouldApproveAll) options.autoApprove = true;
+    }
+  }
+
+  const verdict: AuthorizationVerdict = { executable: new Set(), denied: new Map() };
+  const deniedBy = new Map<Denial["deniedBy"], string[]>();
+  for (const entry of decided) {
+    const answer = answers.get(entry.toolCall);
+    // An approval may carry edited arguments: the policies judge what will
+    // actually run, so a DENY matching the edited arguments still binds.
+    const decision = answer
+      ? decideToolCall({ ...entry.input, args: entry.toolCall.args ?? {}, answer })
+      : entry.decision;
+    if (decision.verdict === "allow") {
+      verdict.executable.add(entry.toolCall);
+    } else if (decision.verdict === "deny") {
+      verdict.denied.set(entry.toolCall, deniedToolResult(entry.toolCall.name, decision));
+      deniedBy.set(decision.deniedBy, [...(deniedBy.get(decision.deniedBy) ?? []), entry.toolCall.name]);
+    } else {
+      throw new Error(`Tool call "${entry.toolCall.name}" left unanswered by the approval gate`);
+    }
+  }
+
+  for (const [rail, names] of deniedBy) {
     emit({
       type: SERVER_SENT_EVENT_TYPES.STATUS,
-      message: `Tool execution rejected: ${needsApproval.map((toolCall) => toolCall.name).join(", ")}`,
+      message:
+        rail === "user"
+          ? `Tool execution rejected: ${names.join(", ")}`
+          : rail === "unattended"
+            ? `Unattended run: approval for ${names.join(", ")} denied automatically`
+            : `Tool call denied (${rail}): ${names.join(", ")}`,
     });
-    return {
-      isApproved: false,
-      shouldApproveAll: false,
-      ...(approvalResult?.denialReason ? { reason: approvalResult.denialReason } : {}),
-    };
   }
-
-  if (approvalResult.editedArgs) {
-    applyEditedArgs(
-      toolCalls,
-      needsApproval,
-      itemIds.map((itemId) => approvalResult.editedArgs?.[itemId]),
-    );
-  }
-
-  if (approvalResult.shouldApproveAll) {
-    return { isApproved: true, shouldApproveAll: true };
-  }
-
-  return { isApproved: true, shouldApproveAll: false };
+  return verdict;
 }

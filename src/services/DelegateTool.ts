@@ -3,6 +3,7 @@ import { SubagentRegistry } from "./SubagentRegistry.ts";
 import { getLastAssistantText } from "./orchestrator/SubAgentResultBuilder.ts";
 import logger from "../utils/logger.ts";
 import type AgenticLoopService from "./AgenticLoopService.ts";
+import type { PolicyRule } from "./PolicyEngine.ts";
 
 /** The sub-agent loop entry point — OrchestratorService's exact call shape. */
 export type AgenticLoopRunner = typeof AgenticLoopService.runAgenticLoop;
@@ -40,6 +41,8 @@ export interface DelegateContext {
   agentConversationId?: string;
   conversationId?: string;
   emit?: (event: unknown) => void;
+  /** The calling loop's tool policies; the subagent's DENYs come from these. */
+  policies?: PolicyRule[];
   /** Test seam: replaces AgenticLoopService.runAgenticLoop. */
   runner?: AgenticLoopRunner;
 }
@@ -153,7 +156,9 @@ export const DelegateTool = {
         modelDefinition,
         messages: buildMessages(task, definition.systemPrompt),
         options: {
+          // autoApprove only answers asks; the caller's DENYs still bind.
           autoApprove: true,
+          ...(context.policies ? { policies: context.policies } : {}),
           agenticLoopEnabled: true,
           isSubAgent: true,
           enabledTools: definition.tools === "all" ? undefined : [...definition.tools],

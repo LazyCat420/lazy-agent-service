@@ -34,7 +34,6 @@ import { getErrorMessage } from "../../../utils/ErrorHelpers.ts";
 import RequestLogger from "../../RequestLogger.ts";
 import { createStandardHooks } from "../lifecycle/HookInitializer.ts";
 import { executeToolBatch } from "../lifecycle/ToolExecutor.ts";
-import { checkAndWaitForApproval, rejectionResult } from "../lifecycle/ApprovalGate.ts";
 import {
   emitPostExecutionStatus,
   processToolResultMedia,
@@ -152,10 +151,8 @@ export async function runGraphOfThoughts(
   let truncationRecoveryCount = 0;
   let hasCleanTextBreak = false;
 
-  const { hooks, approvalEngine } = createStandardHooks({
+  const { hooks } = createStandardHooks({
     workspaceRoot: workspaceRoot || undefined,
-    autoApprove: options.autoApprove === true,
-    policies: options.policies,
     enableCriticGate: options.enableCriticGate === true,
     criticModel: options.criticModel || undefined,
   });
@@ -421,41 +418,22 @@ export async function runGraphOfThoughts(
 
       // ── Tool execution from synthesized output ──────────────
       if (synthesizedPass.pendingToolCalls.length > 0) {
-        const { isApproved, shouldApproveAll, reason: denialReason } =
-          await checkAndWaitForApproval(
-            synthesizedPass.pendingToolCalls,
-            context,
-            approvalEngine,
-          );
+        // executeToolBatch authorizes every call (allow-list, policies, hooks,
+        // approval) before running any; denied calls return their denial result.
+        context._currentMessages = currentMessages;
 
-        let results: ToolResult[] = [];
-        let sandboxCheckpointReference: string | null = null;
-        if (!isApproved) {
-          results = synthesizedPass.pendingToolCalls.map((toolCall) => ({
-            name: toolCall.name,
-            id: toolCall.id,
-            result: rejectionResult(denialReason),
-          }));
-        } else {
-          if (shouldApproveAll) {
-            options.autoApprove = true;
-          }
+        // ── Sandbox checkpoint (git-based rollback) ────────────
+        const sandboxCheckpointReference = options.enableSandbox
+          ? createSandboxCheckpoint(workspaceRoot, emit)
+          : null;
 
-          context._currentMessages = currentMessages;
-
-          // ── Sandbox checkpoint (git-based rollback) ────────────
-          sandboxCheckpointReference = options.enableSandbox
-            ? createSandboxCheckpoint(workspaceRoot, emit)
-            : null;
-
-          results = await executeToolBatch(
-            synthesizedPass.pendingToolCalls,
-            context,
-            tools,
-            hooks,
-            state,
-          );
-        }
+        const results: ToolResult[] = await executeToolBatch(
+          synthesizedPass.pendingToolCalls,
+          context,
+          tools,
+          hooks,
+          state,
+        );
 
         // ── Post-execution processing ─────────────────────────
         await processToolResultMedia(

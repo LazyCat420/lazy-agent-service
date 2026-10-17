@@ -1,18 +1,18 @@
 import AgentHooks, { type HookHandler } from "../../AgentHooks.ts";
-import AutoApprovalEngine from "../../AutoApprovalEngine.ts";
 import SystemPromptAssembler from "../../system-prompt/index.ts";
 import MemoryExtractor from "../../MemoryExtractor.ts";
 import ConversationEmbeddingService from "../../ConversationEmbeddingService.ts";
 import WorkflowMemoryService from "../../WorkflowMemoryService.ts";
 import CriticGate from "./CriticGate.ts";
-import type { PolicyRule } from "../../PolicyEngine.ts";
 
 /**
  * HookInitializer — standardized lifecycle hook wiring for agentic harnesses.
  *
  * Every harness needs the same baseline hooks:
  *   - beforePrompt  → SystemPromptAssembler (builds the system message)
- *   - beforeToolCall → AutoApprovalEngine (determines approval tier)
+ *   - beforeToolCall → CriticGate (optional decide hook; tool authorization
+ *                      itself is ToolAuthorization.decideToolCall, applied by
+ *                      ApprovalGate.authorizeToolCalls)
  *   - afterResponse  → MemoryExtractor (extracts memories from conversation)
  *   - afterResponse  → ConversationEmbeddingService (embeds conversation for cross-session search)
  *
@@ -22,9 +22,6 @@ import type { PolicyRule } from "../../PolicyEngine.ts";
 
 interface HookInitOptions {
   workspaceRoot?: string;
-  autoApprove?: boolean;
-  /** Declarative tool call policies passed to AutoApprovalEngine. */
-  policies?: PolicyRule[];
   /** Enable CriticGate multi-model review of dangerous tool calls. */
   enableCriticGate?: boolean;
   /** Model to use for CriticGate reviews. */
@@ -34,15 +31,13 @@ interface HookInitOptions {
 /** Create a fully wired AgentHooks instance with standard lifecycle hooks. */
 export function createStandardHooks({
   workspaceRoot,
-  autoApprove = false,
-  policies,
   enableCriticGate = false,
   criticModel,
 }: HookInitOptions = {}) {
   const hooks = new AgentHooks();
 
-  // CriticGate: registered first as a 'decide' hook so it short-circuits
-  // before AutoApprovalEngine if the critic denies a dangerous tool call.
+  // CriticGate: a 'decide' hook; its deny is honored by decideToolCall
+  // (hook deny ranks after allow-list and DENY policies, before asks).
   if (enableCriticGate) {
     const criticGate = new CriticGate({ model: criticModel });
     hooks.register(
@@ -52,17 +47,6 @@ export function createStandardHooks({
       "decide",
     );
   }
-
-  const approvalEngine = new AutoApprovalEngine({
-    fullAuto: autoApprove === true,
-    policies: policies || [],
-  });
-  hooks.register(
-    "beforeToolCall",
-    approvalEngine.createHook() as HookHandler,
-    "AutoApprovalEngine",
-    "decide",
-  );
 
   const assembler = new SystemPromptAssembler({
     workspaceRoot: workspaceRoot || undefined,
@@ -95,5 +79,5 @@ export function createStandardHooks({
     "inspect",
   );
 
-  return { hooks, approvalEngine, assembler };
+  return { hooks, assembler };
 }

@@ -19,7 +19,8 @@ import { getErrorMessage } from "../utils/ErrorHelpers.ts";
  * Within each priority group, first match wins (short-circuit).
  *
  * If no policy matches, returns `null` to signal the caller should
- * fall through to the existing AutoApprovalEngine tier system.
+ * fall through to the tier system in ToolAuthorization.decideToolCall.
+ * A predicate that throws fails closed for DENY and ASK_USER rules.
  *
  * Usage:
  *   const policies = [
@@ -163,10 +164,14 @@ export default class PolicyEngine {
         try {
           if (!rule.when(args)) continue;
         } catch (errorObject) {
+          // Fail closed: a DENY or ASK_USER rule whose predicate cannot be
+          // evaluated still applies (an unreadable argument must not slip a
+          // call past a deny). Only an APPROVE rule is skipped.
+          const failsClosed = rule.decision !== "APPROVE";
           logger.warn(
-            `[PolicyEngine] Predicate for "${rule.name}" threw: ${getErrorMessage(errorObject)}. Skipping rule.`,
+            `[PolicyEngine] Predicate for "${rule.name}" threw: ${getErrorMessage(errorObject)}. ${failsClosed ? "Applying" : "Skipping"} rule.`,
           );
-          continue;
+          if (!failsClosed) continue;
         }
       }
 

@@ -22,6 +22,8 @@ import { FILE_CATEGORIES } from "../constants.ts";
 import { getModelByName, MODELS } from "../config.ts";
 import { calculateTokensPerSec } from "../utils/math.ts";
 import PromptLocaleService from "../services/PromptLocaleService.ts";
+import AgentPersonaRegistry from "../services/AgentPersonaRegistry.ts";
+import { decideToolCall, deniedToolResult } from "../services/ToolAuthorization.ts";
 import type { WebSocket } from "ws";
 import type { IncomingMessage } from "http";
 import type { WebSocketServer } from "ws";
@@ -377,6 +379,9 @@ function handleWebsocketLive(
 
       // Tools setup
       const tools: GoogleToolConfigEntry[] = [];
+      // The allow-list decideToolCall checks Live API function calls against.
+      const liveOfferedToolNames = new Set<string>();
+      const livePolicies = (agent && AgentPersonaRegistry.get(agent)?.policies) || [];
       if (
         clientConfig.enabledTools &&
         Array.isArray(clientConfig.enabledTools)
@@ -412,6 +417,7 @@ function handleWebsocketLive(
           const filtered = dynamicTools.filter((dynamicTool) =>
             enabledSet.has(dynamicTool.name),
           );
+          for (const offered of filtered) liveOfferedToolNames.add(offered.name);
           const googleFormats = convertToolsToGoogle(
             filtered as {
               name: string;
@@ -605,6 +611,24 @@ function handleWebsocketLive(
 
                     const results: ToolResult[] = await Promise.all(
                       functionCalls.map(async (toolCall) => {
+                        // Same decision as every other path. A live voice
+                        // session has no approval channel, so asks resolve to
+                        // allow; the allow-list and DENY policies still bind.
+                        const authorization = decideToolCall({
+                          name: toolCall.name,
+                          args: toolCall.args,
+                          isAllowListed: liveOfferedToolNames.has(toolCall.name),
+                          policies: livePolicies,
+                          autoApprove: true,
+                          unattended: false,
+                        });
+                        if (authorization.verdict === "deny") {
+                          return {
+                            id: toolCall.id,
+                            name: toolCall.name,
+                            result: { ...deniedToolResult(toolCall.name, authorization) },
+                          };
+                        }
                         const result =
                           (await ToolOrchestratorService.executeTool(
                             toolCall.name,

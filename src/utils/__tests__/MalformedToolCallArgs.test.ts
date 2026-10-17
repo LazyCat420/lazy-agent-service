@@ -90,6 +90,7 @@ describe("executeToolBatch: MALFORMED_TOOL_CALL_JSON", () => {
     providerName: "mock",
     resolvedModel: "mock-model",
     emit: () => {},
+    options: {},
   } as unknown as AgenticContext;
   const tools: ResolvedTools = { finalTools: [], resolvedEnabledTools: null };
 

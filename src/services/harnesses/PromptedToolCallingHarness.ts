@@ -8,7 +8,7 @@ import {
 
 import { createStandardHooks } from "./lifecycle/HookInitializer.ts";
 import { executeToolBatch } from "./lifecycle/ToolExecutor.ts";
-import { checkAndWaitForApproval, rejectionResult } from "./lifecycle/ApprovalGate.ts";
+import { authorizeToolCalls } from "./lifecycle/ApprovalGate.ts";
 import {
   emitPostExecutionStatus,
   processToolResultMedia,
@@ -245,10 +245,8 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
     // One repair re-prompt per run for a malformed <tool_call> block.
     let repairAttempted = false;
 
-    const { hooks, approvalEngine } = createStandardHooks({
+    const { hooks } = createStandardHooks({
       workspaceRoot: workspaceRoot || undefined,
-      autoApprove: options.autoApprove === true,
-      policies: options.policies,
       enableCriticGate: options.enableCriticGate === true,
       criticModel: options.criticModel || undefined,
     });
@@ -442,64 +440,43 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
         // If no sandboxed code-execution tool is registered, evaluate the
         // fenced block locally instead of failing as an unknown tool.
         const partition = partitionCodeInterpreterCalls([toolCall], tools);
-        const hasRegisteredCodeInterpreter = partition.dispatchable.length > 0;
+        const isLocalInterpreter = partition.interpreterCalls.length > 0;
+        // Allow-list: a parsed call must name a tool this run offers (the
+        // local interpreter is this harness's own built-in).
+        if (!isLocalInterpreter && !tools.some((tool) => tool.name === toolCall.name)) {
+          toolCall.isUnauthorized = true;
+        }
+        context._currentMessages = currentMessages;
 
         let results: ToolResult[];
-        if (!hasRegisteredCodeInterpreter) {
-          // The local interpreter passes the same gates as any tool: a
-          // profile-admitted run (/v1/runs) admits only whitelisted
-          // capabilities, and the interpreter is never one of them; other
-          // runs go through the approval gate.
-          context._currentMessages = currentMessages;
-          const approval: { isApproved: boolean; shouldApproveAll: boolean; reason?: string } = context.runtimeToolExecutor
-            ? { isApproved: false, shouldApproveAll: false }
-            : await checkAndWaitForApproval([toolCall], context, approvalEngine);
-          if (approval.isApproved) {
-            if (approval.shouldApproveAll) options.autoApprove = true;
+        if (isLocalInterpreter && context.runtimeToolExecutor) {
+          // A profile-admitted run (/v1/runs) admits only whitelisted
+          // capabilities, and the local interpreter is never one of them.
+          results = [
+            {
+              name: toolCall.name,
+              id: toolCall.id,
+              result: {
+                success: false,
+                error: "CODE_INTERPRETER_NOT_ADMITTED",
+                message: "code_interpreter is not in this run's profile whitelist.",
+              },
+            },
+          ];
+        } else if (isLocalInterpreter) {
+          // The local interpreter passes the same authorization as any tool.
+          const authorization = await authorizeToolCalls([toolCall], context, hooks);
+          const denial = authorization.denied.get(toolCall);
+          if (denial) {
+            results = [{ name: toolCall.name, id: toolCall.id, result: denial }];
+          } else if (authorization.executable.has(toolCall)) {
             results = await runCodeInterpreterCalls([toolCall]);
           } else {
-            results = [
-              {
-                name: toolCall.name,
-                id: toolCall.id,
-                result: context.runtimeToolExecutor
-                  ? {
-                      success: false,
-                      error: "CODE_INTERPRETER_NOT_ADMITTED",
-                      message: "code_interpreter is not in this run's profile whitelist.",
-                    }
-                  : rejectionResult(approval.reason),
-              },
-            ];
+            throw new Error(`Tool call "${toolCall.name}" reached execution without an allow verdict`);
           }
         } else {
           // ── Execute through the same path ReActHarness uses ────
-          context._currentMessages = currentMessages;
-
-          const { isApproved, shouldApproveAll, reason: denialReason } = await checkAndWaitForApproval(
-            [toolCall],
-            context,
-            approvalEngine,
-          );
-
-          if (!isApproved) {
-            results = [
-              {
-                name: toolCall.name,
-                id: toolCall.id,
-                result: rejectionResult(denialReason),
-              },
-            ];
-          } else {
-            if (shouldApproveAll) options.autoApprove = true;
-            results = await executeToolBatch(
-              [toolCall],
-              context,
-              this.tools,
-              hooks,
-              state,
-            );
-          }
+          results = await executeToolBatch([toolCall], context, this.tools, hooks, state);
         }
 
         await processToolResultMedia([toolCall], results, state, pass, emit, context);

@@ -38,6 +38,7 @@ function truncateResultIfNeeded(result: any, project?: string, toolName?: string
   return result;
 }
 import type AgentHooks from "../../AgentHooks.ts";
+import { authorizeToolCalls } from "./ApprovalGate.ts";
 import { executeAskUser } from "./AskUserTool.ts";
 import { executeTakeNote, NoteStore } from "../../../platform/memory/NoteStore.ts";
 import { retrieveOffloadedContentTool } from "../../../platform/offload/retrieveOffloadedContent.ts";
@@ -113,6 +114,9 @@ export async function executeToolBatch(
 
   const resolvedAgentConversationId = agentConversationId || "";
 
+  // Every call is decided before any runs (asks may pause for a person).
+  const authorization = await authorizeToolCalls(toolCalls, context, hooks);
+
   const results = await Promise.all(
     toolCalls.map(async (toolCall) => {
       // ported from prism-service lifecycle/ToolExecutor.ts: malformed
@@ -132,16 +136,14 @@ export async function executeToolBatch(
         return { name: toolCall.name, id: toolCall.id, result, durationMs: 0 };
       }
 
-      await hooks.run("beforeToolCall", toolCall, context);
-
-      if (toolCall.isUnauthorized) {
-        const result = {
-          success: false,
-          error: "PERMISSION_DENIED",
-          message: `The tool "${toolCall.name}" is not whitelisted for your agent role. You must reason using the data in the 'Pre-Collected Data Report' instead of calling unauthorized tools.`,
-        };
-        await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result, durationMs: 0 };
+      // A denied call ends here with its one denial result; it never runs.
+      const denial = authorization.denied.get(toolCall);
+      if (denial) {
+        await hooks.run("afterToolCall", toolCall, denial, context);
+        return { name: toolCall.name, id: toolCall.id, result: denial, durationMs: 0 };
+      }
+      if (!authorization.executable.has(toolCall)) {
+        throw new Error(`Tool call "${toolCall.name}" reached execution without an allow verdict`);
       }
 
       if (context.runtimeToolExecutor) {
@@ -309,6 +311,9 @@ export async function executeToolBatch(
               _thinkingEnabled: context.options?.thinkingEnabled,
               _reasoningEffort: context.options?.reasoningEffort,
               _thinkingBudget: context.options?.thinkingBudget,
+              // Sub-agents inherit the parent's policies: a parent DENY
+              // binds every agent it spawns.
+              _policies: context.options?.policies,
             },
           );
         },

@@ -10,6 +10,7 @@ import type {
   EmitFunction,
   ToolCall,
 } from "../services/harnesses/types.ts";
+import type { PolicyRule } from "../services/PolicyEngine.ts";
 
 // ── Sub-Agent State ────────────────────────────────────────
 
@@ -56,6 +57,8 @@ export interface SubAgentState {
   thinkingEnabled?: boolean;
   reasoningEffort?: string;
   thinkingBudget?: number;
+  /** The spawning loop's tool policies; the sub-agent's loop runs under them. */
+  policies?: PolicyRule[];
 }
 
 export interface WorktreeDiff {
@@ -171,6 +174,8 @@ export interface OrchestratorContext {
   reasoningEffort?: string;
   /** Inherit parent's thinking token budget. */
   thinkingBudget?: number;
+  /** The parent loop's tool policies; a parent DENY binds every sub-agent. */
+  policies?: PolicyRule[];
   [key: string]: unknown;
 }
 

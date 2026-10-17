@@ -1,4 +1,10 @@
-import AutoApprovalEngine, { APPROVAL_TIERS } from "../services/AutoApprovalEngine.ts";
+import {
+  APPROVAL_TIERS,
+  decideToolCall,
+  deniedToolResult,
+  toolTier,
+} from "../services/ToolAuthorization.ts";
+import type { PolicyRule } from "../services/PolicyEngine.ts";
 import { scheduleToolCalls } from "../utils/ToolScheduling.ts";
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import {
@@ -360,6 +366,13 @@ async function prepareGenerationContext(
     // thinkingEnabled on the request still wins over both.
     personaThinkingDefault =
       AgentPersonaRegistry.get(agent)?.thinkingDefault;
+    // The persona's tool policies bind every run of this agent, on /agent
+    // and on /chat function calling alike. The request schema carries no
+    // policies, so the persona is their only source.
+    const personaPolicies = AgentPersonaRegistry.get(agent)?.policies;
+    if (personaPolicies && personaPolicies.length > 0) {
+      options.policies = personaPolicies;
+    }
     if (
       personaThinkingDefault !== undefined &&
       (thinkingEnabled === undefined || thinkingEnabled === null)
@@ -867,16 +880,6 @@ export async function handleAgent(
       const { default: AgenticLoopService } =
         await import("../services/AgenticLoopService.js");
 
-      // Inject persona-level policies into options (if the agent has them)
-      if (agent && !options.policies) {
-        const { default: AgentPersonaRegistry } =
-          await import("../services/AgentPersonaRegistry.js");
-        const persona = AgentPersonaRegistry.get(agent);
-        if (persona?.policies && persona.policies.length > 0) {
-          options.policies = persona.policies;
-        }
-      }
-
       await AgenticLoopService.runAgenticLoop({
         provider:
           context.provider as import("../services/harnesses/types.ts").LLMProvider,
@@ -1225,6 +1228,10 @@ async function handleStreamingText(context: GenerationContext) {
   // engine, no context manager, just direct execution.
   const MAX_FUNCTIONCALL_ITERATIONS = 10;
   let functionCallIteration = 0;
+  const offeredToolNames = new Set(
+    ((options.tools as Array<{ name: string }> | undefined) ?? []).map((tool) => tool.name),
+  );
+  const chatPolicies = (options.policies as PolicyRule[] | undefined) ?? [];
   while (
     options.functionCallingEnabled &&
     streamState.toolCalls.length > 0 &&
@@ -1259,6 +1266,32 @@ async function handleStreamingText(context: GenerationContext) {
         args: toolCall.args,
         status: "calling",
       });
+      // Same decision as the agentic harnesses. This route has no approval
+      // channel and has always run the tools it offered, so asks resolve to
+      // allow (autoApprove); the allow-list and DENY policies still bind.
+      const authorization = decideToolCall({
+        name: String(toolCall.name),
+        args: (toolCall.args ?? {}) as Record<string, unknown>,
+        isAllowListed: offeredToolNames.has(String(toolCall.name)),
+        policies: chatPolicies,
+        autoApprove: true,
+        unattended: false,
+      });
+      if (authorization.verdict === "deny") {
+        toolCall.result = deniedToolResult(String(toolCall.name), authorization);
+        toolCall.status = "error";
+        toolCall.durationMs = 0;
+        emit({
+          type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+          id: toolCall.id,
+          name: toolCall.name,
+          args: toolCall.args,
+          result: toolCall.result,
+          status: "error",
+          durationMs: 0,
+        });
+        return;
+      }
       const startTime = Date.now();
       try {
         const result = await ToolOrchestratorService.executeTool(
@@ -1315,11 +1348,10 @@ async function handleStreamingText(context: GenerationContext) {
     // Read-only tools (approval tier AUTO) run concurrently, at most
     // CHAT_TOOL_CONCURRENCY (4) at a time; anything that can write runs
     // one at a time afterwards, in the order the model asked for them.
-    const tierEngine = new AutoApprovalEngine();
     await scheduleToolCalls(
       pendingCalls,
       runToolCall,
-      (call) => tierEngine.getTier(String(call.name)) === APPROVAL_TIERS.AUTO,
+      (call) => toolTier(String(call.name)) === APPROVAL_TIERS.AUTO,
       Math.max(1, Number(process.env.CHAT_TOOL_CONCURRENCY) || 4),
     );
     // Build tool result messages for the provider

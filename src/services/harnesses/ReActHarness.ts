@@ -12,7 +12,6 @@ import {
 
 import { createStandardHooks } from "./lifecycle/HookInitializer.ts";
 import { executeToolBatch } from "./lifecycle/ToolExecutor.ts";
-import { checkAndWaitForApproval, rejectionResult } from "./lifecycle/ApprovalGate.ts";
 import {
   emitPostExecutionStatus,
   processToolResultMedia,
@@ -247,10 +246,8 @@ export default class ReActHarness extends BaseAgenticHarness {
     };
 
     // ── Initialize lifecycle hooks ──────────────────────────
-    const { hooks, approvalEngine } = createStandardHooks({
+    const { hooks } = createStandardHooks({
       workspaceRoot: workspaceRoot || undefined,
-      autoApprove: options.autoApprove === true,
-      policies: options.policies,
       enableCriticGate: options.enableCriticGate === true,
       criticModel: options.criticModel || undefined,
     });
@@ -544,45 +541,26 @@ export default class ReActHarness extends BaseAgenticHarness {
             }
           }
 
-          // ── Approval gating ───────────────────────────────────
-          const { isApproved, shouldApproveAll, reason: denialReason } =
-            await checkAndWaitForApproval(
-              pass.pendingToolCalls,
-              context,
-              approvalEngine,
-            );
+          // ── Execute tools in parallel ─────────────────────────
+          // executeToolBatch authorizes every call (allow-list, policies,
+          // hooks, approval) before running any; denied calls come back as
+          // their denial result.
+          // Attach currentMessages to context so ToolExecutor can pass them
+          // to tools-api (needed by tools like generate_image that inspect conversation)
+          context._currentMessages = currentMessages;
 
-          let results: ToolResult[] = [];
-          let sandboxCheckpointReference: string | null = null;
-          if (!isApproved) {
-            results = pass.pendingToolCalls.map((toolCall) => ({
-              name: toolCall.name,
-              id: toolCall.id,
-              result: rejectionResult(denialReason),
-            }));
-          } else {
-            if (shouldApproveAll) {
-              options.autoApprove = true;
-            }
+          // ── Sandbox checkpoint (git-based rollback) ────────────
+          const sandboxCheckpointReference = options.enableSandbox
+            ? createSandboxCheckpoint(workspaceRoot, emit)
+            : null;
 
-            // ── Execute tools in parallel ─────────────────────────
-            // Attach currentMessages to context so ToolExecutor can pass them
-            // to tools-api (needed by tools like generate_image that inspect conversation)
-            context._currentMessages = currentMessages;
-
-            // ── Sandbox checkpoint (git-based rollback) ────────────
-            sandboxCheckpointReference = options.enableSandbox
-              ? createSandboxCheckpoint(workspaceRoot, emit)
-              : null;
-
-            results = await executeToolBatch(
-              pass.pendingToolCalls,
-              context,
-              this.tools,
-              hooks,
-              state,
-            );
-          }
+          const results: ToolResult[] = await executeToolBatch(
+            pass.pendingToolCalls,
+            context,
+            this.tools,
+            hooks,
+            state,
+          );
 
           // ── Post-execution: media, errors, status ─────────────
           await processToolResultMedia(

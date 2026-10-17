@@ -244,6 +244,7 @@ export default class OrchestratorService {
       thinkingEnabled,
       reasoningEffort,
       thinkingBudget,
+      policies,
     } = orchestratorContext;
 
     // ── Recursion depth tracking ──────────────────────────────
@@ -484,6 +485,7 @@ export default class OrchestratorService {
       thinkingEnabled,
       reasoningEffort,
       thinkingBudget,
+      policies,
     };
 
     activeSubAgents.set(agentId, subAgentState);
@@ -1637,6 +1639,7 @@ export default class OrchestratorService {
             agentConversationId: subAgent.parentAgentConversationId,
             conversationId: subAgent.parentConversationId,
             emit: subAgentEmit,
+            policies: subAgent.policies,
           });
         }
         return profileExecutor(call);
@@ -1656,7 +1659,10 @@ export default class OrchestratorService {
           runId: admission.runId,
         } : {}),
         options: {
+          // autoApprove only answers asks; the inherited policies' DENYs
+          // still bind this sub-agent.
           autoApprove: true,
+          ...(subAgent.policies ? { policies: subAgent.policies } : {}),
           agenticLoopEnabled: true,
           isSubAgent: true,
           parentSpanId: delegateSpan.span_id,

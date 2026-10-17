@@ -11,7 +11,6 @@ import PromptLocaleService from "../PromptLocaleService.ts";
 
 import { createStandardHooks } from "./lifecycle/HookInitializer.ts";
 import { executeToolBatch } from "./lifecycle/ToolExecutor.ts";
-import { checkAndWaitForApproval, rejectionResult } from "./lifecycle/ApprovalGate.ts";
 import {
   emitPostExecutionStatus,
   processToolResultMedia,
@@ -109,10 +108,8 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
     let hasCleanTextBreak = false;
 
     // ── Initialize lifecycle hooks ──────────────────────────
-    const { hooks, approvalEngine } = createStandardHooks({
+    const { hooks } = createStandardHooks({
       workspaceRoot: workspaceRoot || undefined,
-      autoApprove: options.autoApprove === true,
-      policies: options.policies,
       enableCriticGate: options.enableCriticGate === true,
       criticModel: options.criticModel || undefined,
     });
@@ -308,36 +305,16 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
             }
           }
 
-          // ── Approval gating ───────────────────────────────────
-          const { isApproved, shouldApproveAll, reason: denialReason } =
-            await checkAndWaitForApproval(
-              pass.pendingToolCalls,
-              context,
-              approvalEngine,
-            );
+          // ── Execute (executeToolBatch authorizes every call first) ──
+          context._currentMessages = currentMessages;
 
-          let results: ToolResult[] = [];
-          if (!isApproved) {
-            results = pass.pendingToolCalls.map((toolCall) => ({
-              name: toolCall.name,
-              id: toolCall.id,
-              result: rejectionResult(denialReason),
-            }));
-          } else {
-            if (shouldApproveAll) {
-              options.autoApprove = true;
-            }
-
-            context._currentMessages = currentMessages;
-
-            results = await executeToolBatch(
-              pass.pendingToolCalls,
-              context,
-              this.tools,
-              hooks,
-              state,
-            );
-          }
+          const results: ToolResult[] = await executeToolBatch(
+            pass.pendingToolCalls,
+            context,
+            this.tools,
+            hooks,
+            state,
+          );
 
           // ── Post-execution: media, errors, status ─────────────
           await processToolResultMedia(

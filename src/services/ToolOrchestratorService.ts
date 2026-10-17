@@ -35,6 +35,7 @@ import {
   TTS_VOICE_CATALOG_PLACEHOLDER,
 } from "../utils/VoiceCatalog.ts";
 import type { OrchestratorContext, TeamMember } from "../types/orchestrator.ts";
+import type { PolicyRule } from "./PolicyEngine.ts";
 
 // ────────────────────────────────────────────────────────────
 // Strict JSON Schema validation
@@ -192,6 +193,8 @@ interface ToolExecutionContext {
   _thinkingEnabled?: boolean;
   _reasoningEffort?: string;
   _thinkingBudget?: number;
+  /** The calling loop's tool policies, inherited by any sub-agent it spawns. */
+  _policies?: PolicyRule[];
   clientIp?: string | null;
   _toolState?: unknown;
 }
@@ -1775,6 +1778,9 @@ export default class ToolOrchestratorService {
       thinkingEnabled: context._thinkingEnabled,
       reasoningEffort: context._reasoningEffort,
       thinkingBudget: context._thinkingBudget,
+
+      // Sub-agents run under the parent's policies: a parent DENY binds them.
+      policies: context._policies,
     };
 
     switch (name) {

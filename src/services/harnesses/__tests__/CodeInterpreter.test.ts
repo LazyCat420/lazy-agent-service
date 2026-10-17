@@ -440,7 +440,7 @@ describe("PromptedToolCallingHarness code_interpreter escape hatch", () => {
     });
     (context.options as Record<string, unknown>).unattended = true;
     await runHarness(context);
-    expect(String(calls[1].messages.at(-1)?.content ?? "")).toContain("USER_REJECTED");
+    expect(String(calls[1].messages.at(-1)?.content ?? "")).toContain("APPROVAL_UNAVAILABLE");
   });
 
   it("dispatches code_interpreter to the registered tool instead", async () => {

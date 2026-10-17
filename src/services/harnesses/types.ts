@@ -46,8 +46,6 @@ export interface ToolCall {
     id: string;
     summary: Array<{ type: string; text: string }>;
   };
-  /** Populated by AutoApprovalEngine during beforeToolCall hook. */
-  _approval?: { tier: string; tierLabel: string };
   /** The model's argument JSON did not parse — the call must not run with {}. */
   _argsParseError?: boolean;
   /** The unparseable argument text (excerpt), reported back to the model. */
@@ -55,6 +53,7 @@ export interface ToolCall {
   result?: unknown;
   status?: string;
   durationMs?: number;
+  /** Not on the run's allow-list (set by the harness's schema check); decideToolCall denies it. */
   isUnauthorized?: boolean;
 }
 
