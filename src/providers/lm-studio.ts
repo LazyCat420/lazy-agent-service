@@ -72,14 +72,14 @@ async function* parseNativeSSEStream(
   // Reactive abort: when the signal fires, cancel the reader immediately
   // so the pending reader.read() resolves with { done: true } instead of
   // blocking until the next chunk arrives from the upstream server.
-  const abortHandler = () => reader.cancel();
+  const abortHandler = () => { reader.cancel().catch(() => {}); };
   if (options.signal && !options.signal.aborted) {
     options.signal.addEventListener("abort", abortHandler, { once: true });
   }
   try {
     while (true) {
       if (options.signal?.aborted) {
-        reader.cancel();
+        reader.cancel().catch(() => {});
         break;
       }
       const { done, value } = await reader.read();

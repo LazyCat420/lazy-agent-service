@@ -223,7 +223,7 @@ export function createOllamaProvider(
 
         while (true) {
           if (options.signal?.aborted) {
-            reader.cancel();
+            reader.cancel().catch(() => {});
             break;
           }
           const { done, value } = await reader.read();

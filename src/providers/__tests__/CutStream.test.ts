@@ -54,4 +54,26 @@ describe("a cut-off stream", () => {
     controller.abort();
     await expect(drain([delta("partial")], controller.signal)).resolves.toBeDefined();
   });
+
+  it("a deadline abort mid-stream does not leak an unhandled rejection (it crashed the service)", async () => {
+    // A fetch body aborted by its signal rejects reader.cancel(); that rejection used to
+    // escape the abort listener and kill the Node process (DEADLINE_EXCEEDED, 2026-10-17).
+    // A leak surfaces as a vitest "Unhandled Errors" failure for the run.
+    const controller = new AbortController();
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      // First pull delivers a chunk; the second fires the deadline while read() is pending.
+      pull(c) {
+        if (pulls++ === 0) { c.enqueue(new TextEncoder().encode(delta("x"))); return; }
+        controller.abort(new Error("DEADLINE_EXCEEDED"));
+        return Promise.withResolvers<void>().promise;
+      },
+      cancel() { throw new Error("DEADLINE_EXCEEDED"); },
+    }, { highWaterMark: 0 });
+    const chunks: unknown[] = [];
+    for await (const chunk of parseSSEStream(stream.getReader(), { label: "vllm", signal: controller.signal })) chunks.push(chunk);
+    expect(chunks.filter((c) => typeof c === "string")).toEqual(["x"]);
+    // Unhandled rejections are reported after the microtask queue drains; yield one macrotask.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  });
 });

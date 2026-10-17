@@ -699,14 +699,14 @@ export async function* parseSSEStream(
   // so the pending reader.read() resolves with { done: true } instead of
   // blocking until the next chunk arrives from the upstream server.
   // Without this, llama.cpp keeps generating until the loop-top poll fires.
-  const abortHandler = () => reader.cancel();
+  const abortHandler = () => { reader.cancel().catch(() => {}); };
   if (options.signal && !options.signal.aborted) {
     options.signal.addEventListener("abort", abortHandler, { once: true });
   }
   try {
     while (true) {
       if (options.signal?.aborted) {
-        reader.cancel();
+        reader.cancel().catch(() => {});
         break;
       }
       const { done, value } = await reader.read();
