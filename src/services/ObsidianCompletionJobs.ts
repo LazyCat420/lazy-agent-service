@@ -12,6 +12,9 @@ export interface CompletionJob {
   response?: { status: number; data?: unknown; errText?: string };
 }
 
+/** OpenAI SSE tool-call fragment: name/arguments arrive split across chunks, keyed by index. */
+interface StreamToolCallDelta { index?: number; id?: string; function?: { name?: string; arguments?: string } }
+
 /** Durable model steps. Vault tools remain on the Obsidian client. */
 export class ObsidianCompletionJobs {
   private active = new Map<string, CompletionJob>();
@@ -85,6 +88,7 @@ export class ObsidianCompletionJobs {
     };
     let id = `chatcmpl-${job.id}`; let created = Math.floor(Date.now() / 1000); let model = ""; let finishReason: string | null = null;
     let usage: Record<string, unknown> | undefined;
+    const toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -100,19 +104,29 @@ export class ObsidianCompletionJobs {
         const data = line.slice(5).trim();
         if (data === "[DONE]") continue;
         try {
-          const chunk = JSON.parse(data) as { id?: string; created?: number; model?: string; choices?: Array<{ delta?: { content?: string | null; finish_reason?: string | null } }>; usage?: Record<string, unknown> };
+          const chunk = JSON.parse(data) as { id?: string; created?: number; model?: string; choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null; reasoning_content?: string | null; reasoning?: string | null; tool_calls?: StreamToolCallDelta[] } }>; usage?: Record<string, unknown> };
           if (chunk.id) id = chunk.id;
           if (chunk.created) created = chunk.created;
           if (chunk.model) model = chunk.model;
           if (chunk.usage) usage = chunk.usage;
-          const delta = chunk.choices?.[0]?.delta;
-          if (delta?.finish_reason) finishReason = delta.finish_reason;
+          const choice = chunk.choices?.[0];
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+          const delta = choice?.delta;
+          for (const call of delta?.tool_calls || []) {
+            const slot = toolCalls[call.index ?? toolCalls.length] ||= { id: "", type: "function", function: { name: "", arguments: "" } };
+            if (call.id) slot.id = call.id;
+            if (call.function?.name) slot.function.name += call.function.name;
+            if (call.function?.arguments) slot.function.arguments += call.function.arguments;
+          }
           if (typeof delta?.content === "string" && delta.content) { partial += delta.content; flushPartial(); }
         } catch { /* ignore malformed chunks mid-stream */ }
       }
     }
     flushPartial(true);
-    return { status: response.status, data: { id, object: "chat.completion", created, model, choices: [{ index: 0, message: { role: "assistant", content: partial }, finish_reason: finishReason }], usage } };
+    return { status: response.status, data: { id, object: "chat.completion", created, model, choices: [{ index: 0, message: {
+      role: "assistant", content: partial,
+      ...(toolCalls.length ? { tool_calls: toolCalls.filter(Boolean).map((call, i) => ({ ...call, id: call.id || `call_${job.id}_${i}` })) } : {}),
+    }, finish_reason: finishReason }], usage } };
   }
   private async execute(file: string, job: CompletionJob, target: string, payload: Record<string, unknown>) {
     const signal = AbortSignal.any([this.controllers.get(file)!.signal, AbortSignal.timeout(Number(process.env.OBSIDIAN_COMPLETION_TIMEOUT_MS) || 600000)]);

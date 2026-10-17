@@ -200,4 +200,39 @@ describe("Obsidian completion routes", () => {
     expect(done.response?.data).toMatchObject({ choices: [{ message: { content: "buffered reply" } }] });
     expect(transport).toHaveBeenCalledTimes(2);
   });
+
+  it("reassembles streamed tool calls and the choice-level finish_reason (vLLM shape)", async () => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "obsidian-completion-tools-"));
+    // Chunk shape captured from GLM on vLLM: reasoning, then tool calls split by index, finish_reason on the choice.
+    const chunks = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "search the web" }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_a", type: "function", function: { name: "search_web", arguments: "" } }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: "{\"query\":\"top " } }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: "news\"}" } }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 1, id: "call_b", type: "function", function: { name: "search_web", arguments: "{\"query\":\"world news\"}" } }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+    ];
+    const transport = vi.fn(async () => new Response(chunks.map((c) => `data: ${JSON.stringify({ id: "chatcmpl-3", model: "GLM", ...c })}\n\n`).join("") + "data: [DONE]\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+    const jobs = new ObsidianCompletionJobs(directory, transport);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.project = "test-project"; req.username = "test-user"; next(); });
+    app.use("/obsidian-completions", createObsidianCompletionRouter(jobs));
+    server = await new Promise<http.Server>((resolve) => { const instance = app.listen(0, "127.0.0.1", () => resolve(instance)); });
+    const address = server.address() as { port: number };
+    const id = crypto.randomUUID();
+    const body = { target: "http://10.0.0.141:8000/v1", payload: { model: "GLM", messages: [{ role: "user", content: "news today" }], tools: [] } };
+    await fetch(`http://127.0.0.1:${address.port}/obsidian-completions/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const scope = JSON.stringify(["test-project", "test-user"]);
+    await vi.waitFor(() => expect(jobs.get(scope, id)?.status).toBe("completed"));
+    // Completed job data is the assembled chat.completion built by consumeStream.
+    const data = jobs.get(scope, id)!.response?.data as { choices: Array<{ finish_reason: string | null; message: { content: string; tool_calls?: unknown[] } }> };
+    const choice = data.choices[0];
+    expect(choice.finish_reason).toBe("tool_calls");
+    expect(choice.message.content).toBe("");
+    expect(choice.message.tool_calls).toEqual([
+      { id: "call_a", type: "function", function: { name: "search_web", arguments: "{\"query\":\"top news\"}" } },
+      { id: "call_b", type: "function", function: { name: "search_web", arguments: "{\"query\":\"world news\"}" } },
+    ]);
+  });
 });
