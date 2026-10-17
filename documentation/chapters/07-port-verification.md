@@ -138,3 +138,10 @@ filter strips the native untagged blocks from the `[System Context]` message.
 Tests: `system-prompt/__tests__/tradingLearnedState.test.ts`,
 `TradingLearningBoundary.test.ts` ("strips our native assembler's untagged
 skills, memories and workflows").
+
+## Rails plan items 1-4 (2026-10-17)
+
+- **Item 1, stream by default** (`63ef313`): `/chat` and `/agent` stream unless `?stream=false`, `stream:false` or `Accept: application/json`.
+- **Item 3, authorization** (`33f1ff4`): `ToolAuthorization.decideToolCall` is the only decision for every tool path (harness, `/chat` FC, Live, `/v1/runs`, plan approval, post-write validator). Order: not allow-listed → deny; DENY policy → deny (fails closed, autoApprove cannot override); hook deny → deny; autoApprove only turns ask into allow. `AutoApprovalEngine` and `PermissionModes` deleted. Audit: `.agents/AUDIT-tool-authorization-2026-10-16.md`.
+- **Item 4, required tools** (trading `6df485e4` + `eb7b6be8`): per-role contract in `app/v3/tool_contract.py`; one re-prompt, then degraded with event and tag. `eb7b6be8` matches the `mcp__lazy-agent-service__` names lazy-agent reports; without it, cycle-v3-1792204024 degraded 9 of 12 runs. Cycle-v3-1792205952 (V/UNH/LLY): 4 re-prompts, 3 recovered, 1 degraded (LLY fundamental).
+- **Item 2, tool routing** (`3a14a8c`): parallel-call hint (`TRADING_PARALLEL_TOOL_HINT`) and learned opening stacks (`TRADING_TOOL_STACKS`, ≥90% presence over ≥30 runs, model still issues every call through `decideToolCall`). Prefetch, per-turn System-1 tool selection and schema trimming were rejected because they would break the prefix cache or bypass authorization. Audit: `.agents/AUDIT-tool-routing-2026-10-16.md`.
