@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { applyTradingToolProtocol, FINAL_TURN_DIRECTIVE } from "../TradingToolProtocol.ts";
+import { afterEach, describe, it, expect } from "vitest";
+import { applyTradingToolProtocol, FINAL_TURN_DIRECTIVE, PARALLEL_TOOL_HINT, openingStackLine } from "../TradingToolProtocol.ts";
 
 const tool = (name: string) => ({ type: "function", function: { name, parameters: { type: "object" } } });
 describe("trading execution protocol", () => {
@@ -139,5 +139,34 @@ describe("prism's forced final turn", () => {
     const fixed = applyTradingToolProtocol({ messages: [{ role: "system", content: "role" }, { role: "user", content: "## Ticker: NSC" }] });
     expect(fixed.finalTurnDirected).toBe(false);
     expect(fixed.body.messages[1].content).toBe("## Ticker: NSC");
+  });
+});
+
+describe("parallel tool-call hint", () => {
+  const body = () => ({ tools: [tool("get_finnhub_news"), tool("get_upcoming_events")],
+    messages: [{ role: "system", content: "role instructions" }, { role: "user", content: "## Ticker: AMD" }] });
+  afterEach(() => { delete process.env.TRADING_PARALLEL_TOOL_HINT; });
+
+  it("ends the system message with the hint so every turn of a run shares one prefix", () => {
+    const first = applyTradingToolProtocol(body(), ["get_finnhub_news", "get_upcoming_events"]).body.messages[0].content;
+    const later = applyTradingToolProtocol({ ...body(), messages: [...body().messages,
+      { role: "assistant", tool_calls: [{ id: "a", function: { name: "get_finnhub_news", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "a", content: "news" }] }, ["get_finnhub_news", "get_upcoming_events"]).body.messages[0].content;
+    expect(first.endsWith("role instructions\n\n" + PARALLEL_TOOL_HINT)).toBe(true);
+    expect(later).toBe(first);
+  });
+
+  it("is absent when one or no tool can be called, and when switched off", () => {
+    expect(applyTradingToolProtocol(body(), ["get_finnhub_news"]).body.messages[0].content).not.toContain(PARALLEL_TOOL_HINT);
+    expect(applyTradingToolProtocol(body(), []).body.messages[0].content).not.toContain(PARALLEL_TOOL_HINT);
+    process.env.TRADING_PARALLEL_TOOL_HINT = "false";
+    expect(applyTradingToolProtocol(body()).body.messages[0].content).not.toContain(PARALLEL_TOOL_HINT);
+  });
+
+  it("names the learned opening stack only for tools the request can call", () => {
+    const stack = ["get_upcoming_events", "get_finnhub_news", "get_institutional_holdings"];
+    const content = applyTradingToolProtocol(body(), ["get_finnhub_news", "get_upcoming_events"], stack).body.messages[0].content;
+    expect(content.endsWith(PARALLEL_TOOL_HINT + "\n" + openingStackLine(["get_upcoming_events", "get_finnhub_news"]))).toBe(true);
+    expect(applyTradingToolProtocol(body(), ["get_finnhub_news"], stack).body.messages[0].content).not.toContain("opening bundle");
   });
 });

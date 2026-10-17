@@ -16,6 +16,20 @@ const acknowledgement = JSON.stringify({
 });
 const isThink = (name: unknown) => typeof name === "string" && stripMcpPrefix(name) === "think";
 
+/** The executor already runs every tool_call of one response together (ToolExecutor
+ * executeToolBatch, each call authorized by decideToolCall), but nemotron35 rarely
+ * emits more than one: replaying the junior prompt and catalog on Jetson, 0 of 6 first
+ * responses carried 2+ calls without this text and 4 of 6 with it (3-5 calls each;
+ * .agents/AUDIT-tool-routing-2026-10-16.md §B). Junior runs a median 11 model turns at
+ * ~9.8 s each for ~10 tool calls, so each bundled lookup saves a turn. Appended to the
+ * end of the system message, which is identical on every turn of a run, so the cached
+ * prefix stays byte-stable. TRADING_PARALLEL_TOOL_HINT=false turns it off; requests
+ * without a signed trading context never reach this code.
+ */
+export const PARALLEL_TOOL_HINT = "Independent lookups go in ONE response: when you need several tools whose arguments do not depend on each " +
+  "other's results, emit all of those tool_calls together; they run in parallel. Only wait for a result when the " +
+  "next call needs it.";
+
 /** What the forced last turn is for. prism's exhaustion pass (its maxIterations
  * ceiling) turns the tools off and appends an <iteration-limit> user turn asking for
  * a prose progress summary; a trading agent's contract is its JSON artifact.
@@ -47,7 +61,12 @@ function isForcedFinalTurn(messages: any[], tools: unknown, toolChoice: unknown)
     && last.content.includes("<iteration-limit>") && !last.content.includes(FINAL_TURN_DIRECTIVE);
 }
 
-export function applyTradingToolProtocol(body: Record<string, any>, allowedTools?: string[]): {
+/** The role's learned opening stack (TradingToolStacks.openingStack). The replayed wording said
+ * "They take only the ticker"; "keyed by" stays true for stackable reads with optional extras. */
+export const openingStackLine = (stack: string[]) => "Usual opening bundle for this role (learned from past runs): " +
+  stack.join(", ") + ". They are keyed by the ticker; when you need them, call them together in your first response.";
+
+export function applyTradingToolProtocol(body: Record<string, any>, allowedTools?: string[], openingStack: string[] = []): {
   body: Record<string, any>; removedTools: number; correctedAcknowledgements: number; deniedTools: string[];
   finalTurnDirected: boolean;
 } {
@@ -67,6 +86,13 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
   const thinkIds = new Set<string>();
   let correctedAcknowledgements = 0;
   let injected = false;
+  const hintEnabled = (process.env.TRADING_PARALLEL_TOOL_HINT || "true").toLowerCase() !== "false";
+  const callable = new Set(Array.isArray(tools)
+    ? tools.map((t: { function?: { name?: unknown } }) => stripMcpPrefix(String(t.function?.name))) : []);
+  const stack = openingStack.filter((t) => callable.has(stripMcpPrefix(t)));
+  const lines = [hintEnabled && callable.size > 1 ? PARALLEL_TOOL_HINT : "", stack.length > 1 ? openingStackLine(stack) : ""]
+    .filter(Boolean);
+  const hint = lines.length ? "\n\n" + lines.join("\n") : "";
   const messages = (body.messages || []).map((m: any) => {
     if (m.role === "assistant") for (const call of m.tool_calls || []) {
       if (isThink(call.function?.name) && typeof call.id === "string") thinkIds.add(call.id);
@@ -77,11 +103,11 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
     }
     if (!injected && m.role === "system" && typeof m.content === "string") {
       injected = true;
-      return { ...m, content: protocol + "\n\n" + m.content };
+      return { ...m, content: protocol + "\n\n" + m.content + hint };
     }
     return m;
   });
-  if (!injected) messages.unshift({ role: "system", content: protocol });
+  if (!injected) messages.unshift({ role: "system", content: protocol + hint });
   const finalTurnDirected = isForcedFinalTurn(messages, tools, body.tool_choice);
   if (finalTurnDirected) {
     const last = messages[messages.length - 1];

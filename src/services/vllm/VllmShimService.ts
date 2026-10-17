@@ -1,5 +1,6 @@
 import { applyTradingToolProtocol } from "../TradingToolProtocol.ts";
 import { extractToolContext, verifyToolContext } from "../TradingToolContext.ts";
+import { openingStack } from "../TradingToolStacks.ts";
 import { cutStreamBody, probeFault } from "../ProbeFault.ts";
 import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 import { filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
@@ -837,7 +838,10 @@ export class VllmShimService {
       try {
         const execution = extractToolContext(req.body);
         toolContextToken = execution.token;
-        const protocol = execution.token ? applyTradingToolProtocol(execution.body, verifyToolContext(execution.token).allowedTools) : null;
+        const signed = execution.token ? verifyToolContext(execution.token) : null;
+        const protocol = signed
+          ? applyTradingToolProtocol(execution.body, signed.allowedTools, openingStack(signed.agentName, signed.allowedTools))
+          : null;
         boundary = filterTradingPayload(protocol?.body || execution.body);
         if (boundary.receipt && protocol) {
           boundary.receipt.tool_protocol_version = 1;
