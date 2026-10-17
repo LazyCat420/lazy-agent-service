@@ -112,7 +112,8 @@ export class InternalLoopRunner {
         app_id: appId,
         session_id: sessionId,
         signal: req.signal,
-      }, (event) => onEvent?.(event as unknown as Record<string, unknown>));      if (processed.status === "denied") {
+      }, (event) => onEvent?.(event as unknown as Record<string, unknown>));
+      if (processed.status === "denied") {
         throw Object.assign(new Error(processed.error?.message || "Tool denied"), { code: processed.error?.code });
       }
       if (processed.status === "admitted_local") {

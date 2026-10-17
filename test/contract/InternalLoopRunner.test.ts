@@ -77,7 +77,7 @@ describe("InternalLoopRunner", () => {
 		});
 
 		// A non-whitelisted tool must be denied by admission policy.
-		await expect(admission!.runtimeToolExecutor({ name: "obsidian.read_note", args: {} })).rejects.toThrow(/not allowed|denied/i);
+		await expect(admission!.runtimeToolExecutor({ name: "obsidian.read_note", args: {} })).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
 		expect(processSpy).toHaveBeenCalled();
 
 		// processToolCall itself must be queried with the internal profile identity.
