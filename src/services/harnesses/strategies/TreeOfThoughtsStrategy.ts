@@ -44,7 +44,6 @@ import type {
 import {
   SERVER_SENT_EVENT_TYPES,
   STATUS_MESSAGES,
-  TOOL_NAMES,
   MAX_TOOL_ITERATIONS,
 } from "@rodrigo-barraza/utilities-library/taxonomy";
 import logger from "../../../utils/logger.ts";
@@ -60,7 +59,7 @@ import {
 } from "../lifecycle/PostExecutionEmitter.ts";
 import { runExhaustionRecoveryPass } from "../lifecycle/ExhaustionRecovery.ts";
 import {
-  handleExitPlanMode,
+  runPlanningPhase,
   checkForPlanModeEntry,
 } from "../lifecycle/PlanModeController.ts";
 import { validateAfterToolExecution } from "../lifecycle/ValidationInterceptor.ts";
@@ -82,7 +81,6 @@ import { handleCodexPlanningResponse } from "../lifecycle/CodexPlanningDetector.
 import { maybeInjectSystemReminder, cleanupReminderCache } from "../lifecycle/SystemReminderInjector.ts";
 import { checkCostBudget } from "../lifecycle/CostBudgetEnforcer.ts";
 import { createSandboxCheckpoint, restoreSandboxCheckpoint } from "../lifecycle/SandboxExecutor.ts";
-import PlanningModeService from "../../PlanningModeService.ts";
 
 interface IterationPassOptions extends AgenticOptions {
   project: string;
@@ -234,7 +232,7 @@ export async function runTreeOfThoughts(
 
   // ── Pre-loop planning phase ─────────────────────────────
   if (state.planModeActive) {
-    const { planApproved } = await runPlanningPhase(harness, currentMessages);
+    const { planApproved } = await runPlanningPhase(harness, currentMessages, "TreeOfThoughts");
     if (!planApproved) return { messages: currentMessages };
   }
 
@@ -583,7 +581,7 @@ export async function runTreeOfThoughts(
           selectedPass.pendingToolCalls,
           results,
           context,
-          state,
+          tools,
         );
 
         if (validationFeedback.length > 0) {
@@ -769,7 +767,7 @@ export async function runTreeOfThoughts(
         );
 
         if (state.planModeActive) {
-          const { planApproved } = await runPlanningPhase(harness, currentMessages);
+          const { planApproved } = await runPlanningPhase(harness, currentMessages, "TreeOfThoughts");
           if (!planApproved) return { messages: currentMessages };
         }
 
@@ -1053,168 +1051,6 @@ async function generateBranch(
     },
     pass,
   };
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Pre-loop planning phase
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-async function runPlanningPhase(
-  harness: BaseAgenticHarness,
-  currentMessages: ConversationMessage[],
-): Promise<{ planApproved: boolean }> {
-  const context = harness["context"];
-  const state: AgenticLoopState = harness["state"];
-  const tools = harness["tools"];
-  const { options, project, agent, username, signal } = context;
-
-  const MAX_PLANNING_ITERATIONS = 10;
-
-  await PlanningModeService.injectPlanningInstruction(currentMessages);
-
-  const planModeTools = tools.finalTools.filter(
-    (tool: ToolSchema) => tool.name === TOOL_NAMES.EXIT_PLAN_MODE,
-  );
-  const allowedPlanToolNames = new Set(
-    planModeTools.map((tool: ToolSchema) => tool.name),
-  );
-  const planPassOptions: IterationPassOptions = {
-    ...options,
-    project,
-    agent,
-    username,
-    tools: planModeTools,
-  };
-
-  logger.info(
-    `[TreeOfThoughts] Planning phase started — model will plan before full branching.`,
-  );
-
-  let planningIteration = 0;
-  while (planningIteration < MAX_PLANNING_ITERATIONS) {
-    planningIteration++;
-
-    if (signal?.aborted) return { planApproved: false };
-
-    const pass = harness.createPassState(planPassOptions);
-    const requestIdBase =
-      context.requestId || context.agentConversationId || crypto.randomUUID();
-    const passRequestId = `${requestIdBase}-plan-${planningIteration}`;
-    pass.requestId = passRequestId;
-    harness.registerTrackerRequest(passRequestId);
-
-    const stream = await harness.createProviderStream(currentMessages, planPassOptions);
-    await harness.consumeStream(stream, pass, allowedPlanToolNames);
-
-    finalizePassTracker(pass, passRequestId);
-    harness.logIteration(pass, currentMessages);
-    harness.emitGenerationProgress();
-    harness.emitUsageUpdate();
-
-    if (signal?.aborted) return { planApproved: false };
-
-    const exitPlanToolCall = pass.pendingToolCalls.find(
-      (toolCall) => toolCall.name === TOOL_NAMES.EXIT_PLAN_MODE,
-    );
-
-    if (exitPlanToolCall) {
-      const results: ToolResult[] = [
-        {
-          name: exitPlanToolCall.name,
-          id: exitPlanToolCall.id || "",
-          result: {},
-        },
-      ];
-
-      const { shouldContinueLoop } = await handleExitPlanMode(
-        exitPlanToolCall,
-        pass,
-        results,
-        currentMessages,
-        context,
-        state,
-      );
-
-      if (!shouldContinueLoop) return { planApproved: false };
-
-      currentMessages.push({
-        role: "assistant",
-        content: pass.streamedText || "",
-        ...(pass.streamedThinking.trim() && {
-          thinking: pass.streamedThinking.trim(),
-        }),
-        ...(pass.thinkingSignature && {
-          thinkingSignature: pass.thinkingSignature,
-        }),
-        toolCalls: [
-          {
-            id: exitPlanToolCall.id || null,
-            name: exitPlanToolCall.name,
-            args: exitPlanToolCall.args,
-            result: results[0].result,
-          },
-        ],
-      });
-
-      logger.info(
-        `[TreeOfThoughts] Plan approved — entering full branching loop with ${tools.finalTools.length} tool(s).`,
-      );
-      return { planApproved: true };
-    }
-
-    const unauthorizedCalls = pass.pendingToolCalls.filter(
-      (toolCall) => toolCall.name !== TOOL_NAMES.EXIT_PLAN_MODE,
-    );
-    if (unauthorizedCalls.length > 0) {
-      const blockedNames = unauthorizedCalls
-        .map((toolCall) => toolCall.name)
-        .join(", ");
-      logger.warn(
-        `[TreeOfThoughts] Planning phase: blocked ${unauthorizedCalls.length} unauthorized tool call(s): [${blockedNames}]`,
-      );
-      if (pass.streamedText) {
-        currentMessages.push({
-          role: "assistant",
-          content: pass.streamedText,
-          ...(pass.streamedThinking.trim() && {
-            thinking: pass.streamedThinking.trim(),
-          }),
-          ...(pass.thinkingSignature && {
-            thinkingSignature: pass.thinkingSignature,
-          }),
-        });
-      }
-      currentMessages.push({
-        role: "system",
-        content: PromptLocaleService.get((options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(), "harness.planningMode.blocked", { blockedNames }),
-      });
-      continue;
-    }
-
-    if (pass.streamedText || pass.streamedThinking.trim()) {
-      currentMessages.push({
-        role: "assistant",
-        content: pass.streamedText,
-        ...(pass.streamedThinking.trim() && {
-          thinking: pass.streamedThinking.trim(),
-        }),
-        ...(pass.thinkingSignature && {
-          thinkingSignature: pass.thinkingSignature,
-        }),
-      });
-      continue;
-    }
-
-    logger.warn(
-      `[TreeOfThoughts] Planning phase iteration ${planningIteration}: empty output. Aborting planning phase.`,
-    );
-    return { planApproved: false };
-  }
-
-  logger.warn(
-    `[TreeOfThoughts] Planning phase exhausted ${MAX_PLANNING_ITERATIONS} iterations without exit_plan_mode call.`,
-  );
-  return { planApproved: false };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

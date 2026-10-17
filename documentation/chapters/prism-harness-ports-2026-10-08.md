@@ -45,10 +45,14 @@ post-pass in `executeToolBatch` — idempotent, stub-aware.
 
 ## 2. Unattended runs
 
-`src/platform/approval/` — `options.unattended: true` makes every approval ask an immediate
+`options.unattended: true` makes every approval ask an immediate
 denial the model reads as a tool result (no more 30-minute hangs on trading/scheduled runs).
-`resolveBudgetAction` mirrors prism's unattended/auto-approve matrix; `ApprovalRegistry`
-registers/waiters/retireOrphaned. Wired in `ApprovalGate.checkAndWaitForApproval`.
+Since 2026-10-16 this is one step of `decideToolCall` (`src/services/ToolAuthorization.ts`):
+an unanswered ask on an unattended run becomes `APPROVAL_UNAVAILABLE`, after the allow-list,
+DENY policies and hooks, and only when `autoApprove` did not answer the ask. The harness
+applies it in `authorizeToolCalls` (`harnesses/lifecycle/ApprovalGate.ts`);
+`ApprovalRegistry` holds the live waiters. The former `src/platform/approval/` module and
+`ApprovalGate.checkAndWaitForApproval` no longer exist.
 
 ## 3. Model profiles
 

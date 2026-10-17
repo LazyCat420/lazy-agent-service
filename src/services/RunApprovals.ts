@@ -8,20 +8,25 @@ export interface RunApproval {
 }
 export class RunApprovals {
   private static waiters = new Map<string, (approved: boolean) => void>();
-  static async wait(runId: string, call: any, appId: string, sessionId: string, signal: AbortSignal, emit: (event: Omit<RunEvent, "id" | "timestamp">) => void): Promise<string> {
+  /**
+   * Ask a person and wait for the answer. It only reports what the person
+   * said (`approved` true/false, null when the approval expired unanswered);
+   * the caller turns that answer into the decision via `decideToolCall`.
+   * Cancelling the run rejects with the abort reason.
+   */
+  static async wait(runId: string, call: any, appId: string, sessionId: string, signal: AbortSignal, emit: (event: Omit<RunEvent, "id" | "timestamp">) => void): Promise<{ id: string; approved: boolean | null }> {
     const approval: RunApproval = { id: crypto.randomUUID(), tool_call_id: call.id, tool_name: call.name, arguments_hash: crypto.createHash("sha256").update(JSON.stringify(call.args || {})).digest("hex"), app_id: appId, session_id: sessionId, expires_at: new Date(Date.now() + 180000).toISOString() };
     await RunStore.mutateRun(runId, run => ({ status: "waiting_for_approval", approvals: { ...run.approvals, [approval.id]: approval } }));
     signal.throwIfAborted();
-    await new Promise<void>((resolve, reject) => {
+    const approved = await new Promise<boolean | null>((resolve, reject) => {
       const cleanup = () => { clearTimeout(timer); signal.removeEventListener("abort", abort); this.waiters.delete(approval.id); };
-      const abort = () => { cleanup(); reject(Object.assign(new Error("Approval cancelled or expired"), { code: "APPROVAL_EXPIRED" })); };
-      const timer = setTimeout(abort, 180000);
+      const abort = () => { cleanup(); reject(signal.reason); };
+      const timer = setTimeout(() => { cleanup(); resolve(null); }, 180000);
       signal.addEventListener("abort", abort, { once: true });
-      this.waiters.set(approval.id, approved => { cleanup(); if (approved) resolve(); else reject(Object.assign(new Error("Tool approval denied"), { code: "APPROVAL_DENIED" })); });
+      this.waiters.set(approval.id, answer => { cleanup(); resolve(answer); });
       try { emit({ run_id: runId, type: "approval.required", data: { ...approval, arguments: call.args || {} } }); } catch (error) { cleanup(); reject(error); }
     });
-    signal.throwIfAborted();
-    return approval.id;
+    return { id: approval.id, approved };
   }
   static async resolve(runId: string, id: string, approved: boolean): Promise<{ duplicate: boolean }> {
     if (typeof approved !== "boolean") throw new Error("Boolean approval decision required");

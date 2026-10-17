@@ -109,7 +109,8 @@ Each is one landed change with a test. Order = risk to the trading cycle.
   `registerSession` stores `enabledTools || []` (empty for trading), which
   makes `isToolAllowed` refuse every native call on a conversation id the proxy
   has seen.
-- [x] **3. DENY before full-auto, and the core-tools decision.** *Landed `a564866`: policies are read before the `fullAuto` short-circuit (`AutoApprovalEngine.check`, a DENY is final in every mode; full auto answers a policy ASK_USER with yes, prism `explainCall` order), and `AgenticToolResolver` keeps `execute_python` / `emit_structured_output` / `think` available even for `coreToolsLocked: false` personas (an explicit `blockedTools` entry still wins) — a trading run cannot produce its artifact without `emit_structured_output`. Tests: `DenyBeforeFullAuto`, `CognitiveToolsAlwaysAvailable`.* `autoApprove`
+- [x] **3. DENY before full-auto, and the core-tools decision.** *Landed `a564866`: policies are read before the `fullAuto` short-circuit (then `AutoApprovalEngine.check`; since 2026-10-16 `decideToolCall` in `src/services/ToolAuthorization.ts`, which replaced it — a DENY is final in every mode; full auto answers a policy ASK_USER with yes, prism `explainCall` order), and `AgenticToolResolver` keeps `execute_python` / `emit_structured_output` / `think` available even for `coreToolsLocked: false` personas (an explicit `blockedTools` entry still wins) — a trading run cannot produce its artifact without `emit_structured_output`. Tests: `DenyBeforeFullAuto`, `CognitiveToolsAlwaysAvailable`.* Original finding (before `a564866`; both
+  `AutoApprovalEngine` and the short-circuit are gone): `autoApprove`
   short-circuits `ApprovalGate` and `AutoApprovalEngine.check` returns for
   full-auto before policies are read, so trading's DENY policies
   (`execute_command`, `execute_javascript`, `execute_skill`, `write_file`,

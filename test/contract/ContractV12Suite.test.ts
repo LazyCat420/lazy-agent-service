@@ -271,9 +271,9 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
 
     expect(processed.status).toBe("denied");
     expect(processed.event.type).toBe("tool.failed");
-    expect(processed.error?.code).toBe("POLICY_VIOLATION");
+    expect(processed.error?.code).toBe("PERMISSION_DENIED");
     expect(processed.error?.category).toBe("POLICY");
-    expect(processed.error?.message).toContain("is not allowed by profile");
+    expect(processed.error?.message).toContain("is not whitelisted");
   });
 
   it("startRun emits signed local calls through the harness executor and forwards text", async () => {

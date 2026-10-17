@@ -35,10 +35,34 @@
       "description": "Profile manifest violated schema, model constraints, or capability permissions."
     },
     {
-      "code": "POLICY_VIOLATION",
+      "code": "PERMISSION_DENIED",
       "category": "POLICY",
       "retryable": false,
-      "description": "Tool invocation violated execution policy, security boundary, or confirmation requirement."
+      "description": "Tool is not on the profile's allow-list (whitelist, allowed global capabilities, allowed local tools)."
+    },
+    {
+      "code": "POLICY_DENIED",
+      "category": "POLICY",
+      "retryable": false,
+      "description": "A policy rule denied the tool call (for example a local tool without local_tool_policy, or a write in plan mode before an approved plan)."
+    },
+    {
+      "code": "BLOCKED_BY_SAFETY_HOOK",
+      "category": "POLICY",
+      "retryable": false,
+      "description": "A beforeToolCall decide hook denied the tool call."
+    },
+    {
+      "code": "USER_REJECTED",
+      "category": "POLICY",
+      "retryable": false,
+      "description": "A person answered the tool call's approval request with no."
+    },
+    {
+      "code": "APPROVAL_UNAVAILABLE",
+      "category": "POLICY",
+      "retryable": false,
+      "description": "The tool call needs a person's approval and none was given (no registered approval, or the approval expired unanswered)."
     },
     {
       "code": "SCOPE_VIOLATION",

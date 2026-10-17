@@ -29,27 +29,31 @@ import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
 import { RunEvidenceStore } from "../platform/verify/RunEvidenceStore.ts";
 import { DynamicModelResolver } from "./DynamicModelResolver.ts";
 import AgentHooks from "./AgentHooks.ts";
-import { permissionModeOf, resolvePermission } from "./PermissionModes.ts";
+import { decideProfileToolCall, type ProfileToolCall } from "./ProfileAuthorization.ts";
+import { deniedToolResult, type ToolAuthorization } from "./ToolAuthorization.ts";
 import { EMPTY_TOOL_OUTPUT_MESSAGE, normalizeEmptyToolContent } from "./ToolResult.ts";
 import { captureWriteSyntaxGuard, enforceWriteSyntaxGuard } from "./WriteSyntaxGuard.ts";
 import { applyObservation, createSessionState, sessionStateHash } from "./SessionState.ts";
 import type { ToolCall } from "./harnesses/types.ts";
 
+/** The reason a beforeToolCall decide hook gave for its denial. */
+function hookDenialReason(verdict: Record<string, unknown>): string {
+  if (typeof verdict.reason === "string" && verdict.reason) return verdict.reason;
+  if (typeof verdict.message === "string" && verdict.message) return verdict.message;
+  return "denied by a beforeToolCall hook";
+}
+
 /**
- * The structured denial an execution returns when a decide hook blocks a tool
- * call: no execution happened, and the model is told why it saw no result.
+ * The structured error a /v1/runs authorization denial reports: the code and
+ * message of the call's DeniedToolResult, so a profile run speaks the same
+ * vocabulary as every other path. Only a deny has one.
  */
-export function hookDenialObservation(
-  callName: string,
-  verdict: Record<string, unknown>,
-): Record<string, unknown> {
-  return {
-    success: false,
-    error: "HOOK_DENIED",
-    message: typeof verdict.message === "string"
-      ? verdict.message
-      : `Tool call '${callName}' denied by a decide hook; no execution was performed.`,
-  };
+function authorizationError(toolName: string, decision: ToolAuthorization): StructuredError {
+  if (decision.verdict !== "deny") {
+    throw new Error(`Tool call "${toolName}" left unanswered by profile authorization (${decision.verdict})`);
+  }
+  const denied = deniedToolResult(toolName, decision);
+  return { code: denied.error, message: denied.message, category: "POLICY", retryable: false };
 }
 
 export class RunExecutionEngine {
@@ -570,7 +574,6 @@ export class RunExecutionEngine {
       // injected per model call by BaseAgenticHarness.createProviderStream.
       context.sessionState = createSessionState(new Date().toISOString());
       await hooks.run("sessionStart", context, { runId });
-      const permissionMode = permissionModeOf(profile);
       const planApproved = !!(context as any).planApproved || !!((request.runtime_overrides as any)?.planApproved);
       const executeAdmittedTool = async (
         call: ToolCall & { arguments?: Record<string, unknown> },
@@ -590,27 +593,55 @@ export class RunExecutionEngine {
         }
         const validator = toolValidators.get(call.name);
         if (!validator || !validator.safeParse(call.args || {}).success) throw Object.assign(new Error("Tool arguments do not match the admitted schema"), { code: "TOOL_ARGUMENTS_INVALID" });
-        // Decide hooks run before any guard/approval flow and may deny the call
-        // outright: the model receives a structured denial, nothing executes.
-        const hookVerdict = await hooks.run("beforeToolCall", structuredClone(call), context);
-        if (hookVerdict && hookVerdict.isApproved === false) {
-          return { observation: hookDenialObservation(call.name, hookVerdict), dispatched: false };
+        // One decision (decideToolCall over the profile's rules). Decide hooks
+        // only see calls no earlier rail denied; a hook denial is the model's
+        // observation, nothing executes. An ask waits for a person
+        // (RunApprovals); processToolCall then re-decides with that answer.
+        const authorization: ProfileToolCall = {
+          profile,
+          name: call.name,
+          args: call.args || {},
+          planApproved,
+          unattended: false,
+        };
+        let decision = decideProfileToolCall(authorization);
+        if (decision.verdict !== "deny") {
+          const hookVerdict = await hooks.run("beforeToolCall", structuredClone(call), context);
+          if (hookVerdict && hookVerdict.isApproved === false) {
+            decision = decideProfileToolCall({ ...authorization, hookDenial: hookDenialReason(hookVerdict) });
+          }
+        }
+        if (decision.verdict === "deny" && decision.deniedBy === "hook") {
+          return { observation: deniedToolResult(call.name, decision), dispatched: false };
         }
         for (const extension of extensions) await extension.beforeTool?.(structuredClone(call));
-        const localPolicy = profile.local_tool_policy?.[call.name];
-        const perm = localPolicy
-          ? resolvePermission({ mode: permissionMode, effect: localPolicy.effect, planApproved })
-          : undefined;
-        const modeAutoApproved = permissionMode !== "default" && !!perm && perm.approved && !perm.requiresApproval && !perm.denial;
-        const approvalId = localPolicy && (localPolicy.requires_confirmation || localPolicy.effect === "destructive") && !modeAutoApproved
-          ? await RunApprovals.wait(runId, call, request.app_id || "", request.session_id || "", abortController.signal, emitEvent) : undefined;
+        const scopeAppId = request.app_id ?? request.appId ?? requestContext.app_id;
+        const scopeSessionId = request.session_id ?? request.sessionId ?? requestContext.session_id;
+        let approvalId: string | undefined;
+        if (decision.verdict === "ask") {
+          // Same app/session scope processToolCall checks the approval against.
+          const approvalAppId = scopeAppId || call.name.split(".")[0].replace(/_/g, "-");
+          const approval = await RunApprovals.wait(runId, call, approvalAppId, scopeSessionId || "", abortController.signal, emitEvent);
+          approvalId = approval.id;
+          if (approval.approved !== true) {
+            // A person said no → USER_REJECTED; nobody answered in time →
+            // APPROVAL_UNAVAILABLE. A yes is re-checked by processToolCall
+            // against the registered approval for this exact call.
+            const unanswered = decideProfileToolCall(approval.approved === false
+              ? { ...authorization, answer: { decision: "deny" } }
+              : { ...authorization, unattended: true });
+            const denied = authorizationError(call.name, unanswered);
+            emitEvent({ run_id: runId, type: "tool.failed", data: { tool_call_id: call.id, tool_name: call.name, error: denied } });
+            throw Object.assign(new Error(denied.message), { code: denied.code });
+          }
+        }
         const processed = await this.processToolCall(runId, call, {
           approval_id: approvalId,
           signal: abortController.signal,
           profile_id: profile.profile_id,
           profile_version: profile.version,
-          app_id: request.app_id ?? request.appId ?? requestContext.app_id,
-          session_id: request.session_id ?? request.sessionId ?? requestContext.session_id,
+          app_id: scopeAppId,
+          session_id: scopeSessionId,
           planApproved,
         });
         if (processed.status !== "admitted_local") emitEvent(processed.event);
@@ -890,24 +921,24 @@ export class RunExecutionEngine {
       return { status: "denied", event: evt, error: err };
     }
 
-    // 1. Verify Profile Whitelist / Permissions
-    const permittedTools = [
-      ...(profile.tool_policy.whitelist || []),
-      ...(profile.allowed_global_capabilities || []).map((c) => c.split("@")[0]),
-      ...(profile.allowed_local_tools || []).map((c) => c.split("@")[0]),
-    ];
-
-    const isPermitted = permittedTools.some(
-      (p) => p === toolName || p.split("@")[0] === toolName,
-    );
-
-    if (!isPermitted) {
-      const err: StructuredError = {
-        code: "POLICY_VIOLATION",
-        message: `Tool '${toolName}' is not allowed by profile '${context.profile_id}' policy`,
-        category: "POLICY",
-        retryable: false,
-      };
+    // 1. Authorization: one decision (decideToolCall over the profile's
+    // whitelist, capability / local tool metadata and permission mode). No
+    // person waits here: an ask counts only with a registered approval
+    // (RunApprovals) for this exact call, otherwise it is APPROVAL_UNAVAILABLE.
+    const appPrefix = toolName.split(".")[0];
+    const appId = context.app_id || appPrefix.replace(/_/g, "-");
+    const sessionId = context.session_id || "";
+    const approved = await RunApprovals.permits(runId, context.approval_id, { id: toolCallId, name: toolName, args: toolArgs }, appId, sessionId);
+    const decision = decideProfileToolCall({
+      profile,
+      name: toolName,
+      args: toolArgs,
+      planApproved: !!context.planApproved,
+      unattended: true,
+      answer: approved ? { decision: "allow" } : null,
+    });
+    if (decision.verdict !== "allow") {
+      const err = authorizationError(toolName, decision);
       const evt: RunEvent = {
         id: `evt_denied_${Date.now()}`,
         run_id: runId,
@@ -940,12 +971,6 @@ export class RunExecutionEngine {
         return { status: "denied", event: evt, error: err };
       }
 
-      if (cap.requires_confirmation) {
-        const error: StructuredError = { code: "CONFIRMATION_REQUIRED", message: "This capability requires an explicit confirmation flow", category: "POLICY", retryable: false };
-        const event: RunEvent = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: new Date().toISOString(), data: { tool_call_id: toolCallId, tool_name: toolName, error } };
-        emitEvent?.(event);
-        return { status: "denied", event, error };
-      }
       const execResult = await GlobalCapabilityExecutor.execute(toolName, toolArgs, context.signal);
       if (!execResult.success) {
         const err: StructuredError = {
@@ -1025,7 +1050,6 @@ export class RunExecutionEngine {
       return { status: "denied", event: evt, error: err };
     }
 
-    const appPrefix = toolName.split(".")[0];
     if (context.app_id) {
       const normalizedCallerApp = context.app_id.replace(/-/g, "_");
       if (normalizedCallerApp !== appPrefix) {
@@ -1050,33 +1074,10 @@ export class RunExecutionEngine {
     const receiptId = `auth_rec_${runId}_${crypto.randomUUID()}`;
     const issuedAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + 300000).toISOString(); // 5 min TTL
-    const appId = context.app_id || appPrefix.replace(/_/g, "-");
-    const sessionId = context.session_id || "";
     const profileId = context.profile_id || "";
-
-    const toolPolicy = profile.local_tool_policy?.[toolName];
-    const approved = await RunApprovals.permits(runId, context.approval_id, { id: toolCallId, name: toolName, args: toolArgs }, appId, sessionId);
-    // Permission-mode policy: plan mode blocks writes until a plan is approved,
-    // acceptEdits/bypass auto-approve writes, and the destructive hard floor
-    // always requires the human approval gate in every mode.
-    const perm = resolvePermission({
-      mode: permissionModeOf(profile),
-      effect: toolPolicy?.effect,
-      planApproved: !!context.planApproved,
-      approvalSatisfied: approved,
-    });
-    if (perm.denial) {
-      const event: RunEvent = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error: { ...perm.denial, category: "POLICY", retryable: false } } };
-      emitEvent?.(event);
-      return { status: "denied", event, error: { ...perm.denial, category: "POLICY", retryable: false } };
-    }
-    if (!toolPolicy || (perm.requiresApproval && !perm.approved) || (toolPolicy.requires_confirmation && !approved)) {
-      const error: StructuredError = { code: toolPolicy ? "CONFIRMATION_REQUIRED" : "TOOL_POLICY_MISSING", message: "Local tool requires registered effect metadata and satisfied approval policy", category: "POLICY", retryable: false };
-      const event: RunEvent = { id: `evt_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed", timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error } };
-      emitEvent?.(event);
-      return { status: "denied", event, error };
-    }
-    const effect = toolPolicy.effect;
+    // decideProfileToolCall above denied any local tool without
+    // local_tool_policy, so its effect metadata is registered here.
+    const effect = profile.local_tool_policy?.[toolName]?.effect;
 
     const secret = process.env.RUNTIME_AUTH_SECRET || process.env.INTERNAL_EXECUTE_TOKEN;
     if (!secret) {

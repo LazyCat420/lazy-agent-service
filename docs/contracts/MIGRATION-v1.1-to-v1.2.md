@@ -47,7 +47,11 @@ The runtime rejects requests and profile manifests under the following condition
 | Unsupported Capability Version | Profile Load | `PROFILE_VALIDATION_ERROR` |
 | Local Tool without Scope / Session ID | Tool Invocation | `SCOPE_VIOLATION` |
 | Local Tool Caller `app_id` Mismatch | Tool Invocation | `SCOPE_VIOLATION` |
-| Unwhitelisted Tool Invocation | Tool Invocation | `POLICY_VIOLATION` |
+| Unwhitelisted Tool Invocation | Tool Invocation | `PERMISSION_DENIED` |
+| Policy-Denied Tool (no `local_tool_policy`, plan-mode write) | Tool Invocation | `POLICY_DENIED` |
+| Decide Hook Denial | Tool Invocation | `BLOCKED_BY_SAFETY_HOOK` |
+| Approval Answered No | Tool Invocation | `USER_REJECTED` |
+| Approval Required, None Given / Expired | Tool Invocation | `APPROVAL_UNAVAILABLE` |
 
 ---
 

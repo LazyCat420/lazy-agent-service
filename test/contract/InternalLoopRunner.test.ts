@@ -4,7 +4,7 @@
  *  1. admission resolves global capabilities into runtimeTools.finalTools
  *  2. the runtimeToolExecutor routes local-tool calls through
  *     RunExecutionEngine.processToolCall (receipt-bound) and legacy
- *     tool names stay blocked (POLICY_VIOLATION)
+ *     tool names stay blocked (PERMISSION_DENIED)
  *  3. absent/unknown profile → undefined admission → spread is a no-op
  *  4. the loop actually receives runtimeTools when admission succeeds
  */

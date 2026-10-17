@@ -2399,25 +2399,6 @@ export default class ToolOrchestratorService {
     }
   }
 
-  static async executeToolCalls(
-    toolCalls: Array<{
-      name: string;
-      id: string;
-      args?: Record<string, unknown>;
-    }>,
-  ) {
-    return Promise.all(
-      toolCalls.map(async (toolCall) => ({
-        name: toolCall.name,
-        id: toolCall.id,
-        result: await ToolOrchestratorService.executeTool(
-          toolCall.name,
-          toolCall.args || {},
-        ),
-      })),
-    );
-  }
-
   // ── Worktree State Helpers — used by WorktreeTools.js ──────
   /** @internal */ static _setWorktree(
     agentConversationId: string,

@@ -25,7 +25,7 @@ function loadTs(): TsApi | null {
   return cachedTs;
 }
 import logger from "../utils/logger.ts";
-import { effectClass } from "./PermissionModes.ts";
+import { effectClass } from "./ProfileAuthorization.ts";
 import { classifyToolResult } from "./ToolResult.ts";
 
 /**

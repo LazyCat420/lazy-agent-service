@@ -24,7 +24,7 @@ Source research: [docs/harness-research/](https://github.com/LazyCat420/lazy-age
 | Never-silent tool observations | SWE-agent | `src/services/ToolResult.ts` (`normalizeEmptyToolContent`) |
 | Strict-schema tool gate (auto-tighten, drop only unrecoverable) | DeepSeek | `src/services/ToolOrchestratorService.ts` (`tightenToolSchema`, `filterStrictSchemas`) |
 | PreToolUse decide-deny hooks + `runStop` event | Claude Code | `src/services/AgentHooks.ts` + `RunExecutionEngine.ts` |
-| Permission modes w/ destructive hard floor | Claude Code | `src/services/PermissionModes.ts` (new) |
+| Permission modes w/ destructive hard floor | Claude Code | `src/services/PermissionModes.ts` (new; since 2026-10-16 replaced by `src/services/ProfileAuthorization.ts`, which feeds the modes into `decideToolCall`) |
 | Stuck detector (5 loop patterns, warn→end 'stuck') | OpenHands | `src/platform/verify/StuckDetector.ts` (new) |
 | Path-scoped rules (`rules/*.md`, `paths:` globs) | omp / Claude Code | `src/platform/rules/RuleLoader.ts` (new) |
 | Lazy skills + `skill_read` tool; always-on `memory/*.md` | omp / Claude Code | `src/platform/skills/SkillRegistry.ts` (new), `AgenticLoopService.ts` |

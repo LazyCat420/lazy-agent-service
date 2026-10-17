@@ -137,7 +137,7 @@ describe("local tool schema missing warning", () => {
 	});
 
 	it.each(["trading-junior-analyst-v1", "trading-analyst-v1"])(
-		"%s: a direct run's catalog-fallback scrape_url is admitted, not POLICY_VIOLATION (audit D1)",
+		"%s: a direct run's catalog-fallback scrape_url is admitted, not PERMISSION_DENIED (audit D1)",
 		async (profileId) => {
 			vi.stubEnv("RUNTIME_AUTH_SECRET", `auth_${crypto.randomUUID()}`);
 			let advertised: string[] = [];
@@ -161,8 +161,8 @@ describe("local tool schema missing warning", () => {
 			vi.unstubAllEnvs();
 			expect(advertised).toContain("trading.research.scrape_url");
 			const failed = events.filter((e) => e.type === "tool.failed").map((e) => (e.data as { error?: { code?: string } }).error?.code);
-			expect(failed).not.toContain("POLICY_VIOLATION");
-			expect(failed).not.toContain("TOOL_POLICY_MISSING");
+			expect(failed).not.toContain("PERMISSION_DENIED");
+			expect(failed).not.toContain("POLICY_DENIED");
 			expect(events.some((e) => e.type === "tool.invoked" && (e.data as { tool_name?: string }).tool_name === "trading.research.scrape_url")).toBe(true);
 		},
 	);

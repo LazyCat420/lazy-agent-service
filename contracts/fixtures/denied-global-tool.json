@@ -26,9 +26,9 @@
       "data": {
         "tool_name": "global.media.transcribe",
         "error": {
-          "code": "POLICY_VIOLATION",
+          "code": "PERMISSION_DENIED",
           "category": "POLICY",
-          "message": "Capability 'global.media.transcribe' is not permitted by profile 'html-notes-researcher-v1'",
+          "message": "The tool \"global.media.transcribe\" is not whitelisted for your agent role. You must reason using the data in the 'Pre-Collected Data Report' instead of calling unauthorized tools.",
           "retryable": false
         }
       }
@@ -40,9 +40,9 @@
       "timestamp": "2026-09-19T11:03:00.300Z",
       "data": {
         "error": {
-          "code": "POLICY_VIOLATION",
+          "code": "PERMISSION_DENIED",
           "category": "POLICY",
-          "message": "Capability 'global.media.transcribe' is not permitted by profile 'html-notes-researcher-v1'",
+          "message": "The tool \"global.media.transcribe\" is not whitelisted for your agent role. You must reason using the data in the 'Pre-Collected Data Report' instead of calling unauthorized tools.",
           "retryable": false
         }
       }
@@ -55,9 +55,9 @@
     "profile_id": "html-notes-researcher-v1",
     "messages": [],
     "error": {
-      "code": "POLICY_VIOLATION",
+      "code": "PERMISSION_DENIED",
       "category": "POLICY",
-      "message": "Capability 'global.media.transcribe' is not permitted by profile 'html-notes-researcher-v1'",
+      "message": "The tool \"global.media.transcribe\" is not whitelisted for your agent role. You must reason using the data in the 'Pre-Collected Data Report' instead of calling unauthorized tools.",
       "retryable": false
     }
   }

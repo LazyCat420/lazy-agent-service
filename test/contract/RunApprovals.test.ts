@@ -11,7 +11,7 @@ it("waits for an explicit scope-bound decision and rejects changed arguments", a
   await vi.waitFor(() => expect(approvalId).not.toBe(""));
   expect(await RunApprovals.permits(id, approvalId, call, "obsidian", "vault")).toBe(false);
   expect(await RunApprovals.resolve(id, approvalId, true)).toEqual({ duplicate: false });
-  expect(await promise).toBe(approvalId);
+  expect(await promise).toEqual({ id: approvalId, approved: true });
   expect(await RunApprovals.permits(id, approvalId, call, "obsidian", "vault")).toBe(true);
   expect(await RunApprovals.permits(id, approvalId, { ...call, args: { note_path: "other.md" } }, "obsidian", "vault")).toBe(false);
   expect(await RunApprovals.resolve(id, approvalId, true)).toEqual({ duplicate: true });

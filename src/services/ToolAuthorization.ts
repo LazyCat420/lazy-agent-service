@@ -4,8 +4,9 @@ import type { PolicyRule } from "./PolicyEngine.ts";
 
 /**
  * ToolAuthorization — the one function that decides whether a tool call
- * runs. Every caller (the harness gate, the /chat function-calling loop)
- * asks `decideToolCall`; nothing else may turn a call into "run".
+ * runs. Every caller (the harness gate, the /chat function-calling loop, the
+ * Live API, /v1/runs profile admission, plan approval, the post-write
+ * validator) asks `decideToolCall`; nothing else may turn a call into "run".
  *
  * Fixed precedence (first match wins, see the audit
  * .agents/AUDIT-tool-authorization-2026-10-16.md):
@@ -14,6 +15,7 @@ import type { PolicyRule } from "./PolicyEngine.ts";
  *   3. a decide hook denied                 → deny (hook)
  *   4. APPROVE policy / read-only tier      → allow
  *      ASK_USER policy / write+danger tier  → ask
+ *      an approval request (a plan)         → ask, whatever its tier
  *   5. an ask only: autoApprove             → allow
  *                   profile-admitted run    → allow (the profile runtime confirms)
  *                   a person's answer       → allow / deny (user)
@@ -171,6 +173,12 @@ export interface AuthorizationInput {
    * policy + RunApprovals): an ask passes to it as an allow.
    */
   asksResolvedByProfile?: boolean;
+  /**
+   * The call itself asks a person to approve something (exit_plan_mode's
+   * plan): the read-only tier does not settle it, only an APPROVE policy or
+   * an answer to the ask does.
+   */
+  isApprovalRequest?: boolean;
   /** Reason a decide hook (CriticGate, …) gave for denying this call. */
   hookDenial?: string | null;
   /** The answer to this call's ask, once one exists. */
@@ -202,7 +210,7 @@ export function decideToolCall(input: AuthorizationInput): ToolAuthorization {
   if (policy?.decision === "APPROVE") {
     return { ...tierInfo, verdict: "allow", reason: policy.reason };
   }
-  if (policy?.decision !== "ASK_USER" && tier === APPROVAL_TIERS.AUTO) {
+  if (policy?.decision !== "ASK_USER" && tier === APPROVAL_TIERS.AUTO && !input.isApprovalRequest) {
     return { ...tierInfo, verdict: "allow", reason: "read_only" };
   }
   const askReason = policy?.decision === "ASK_USER" ? policy.reason : "requires_approval";
@@ -245,6 +253,27 @@ export interface DeniedToolResult {
   success: false;
   error: "PERMISSION_DENIED" | "POLICY_DENIED" | "BLOCKED_BY_SAFETY_HOOK" | "USER_REJECTED" | "APPROVAL_UNAVAILABLE";
   message: string;
+}
+
+const DENIAL_CODES: Record<DeniedToolResult["error"], true> = {
+  PERMISSION_DENIED: true,
+  POLICY_DENIED: true,
+  BLOCKED_BY_SAFETY_HOOK: true,
+  USER_REJECTED: true,
+  APPROVAL_UNAVAILABLE: true,
+};
+
+/** A tool result is the denial the gate reported for its call. */
+export function isDeniedToolResult(value: unknown): value is DeniedToolResult {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    "success" in value &&
+    value.success === false &&
+    "error" in value &&
+    typeof value.error === "string" &&
+    Object.hasOwn(DENIAL_CODES, value.error)
+  );
 }
 
 export function deniedToolResult(

@@ -56,7 +56,9 @@ others or main chat.
 ### Already satisfied (verified, no change)
 - **Budget exhaustion**: `lifecycle/ExhaustionRecovery.ts` runs a tool-free recovery pass that
   emits `ITERATION_LIMIT_REACHED` and a progress summary — no exception (N8).
-- **Parallel tool calls**: `ToolOrchestratorService.executeToolCalls` uses `Promise.all`;
+- **Parallel tool calls**: `ToolExecutor.executeToolBatch` uses `Promise.all` (the
+  ungated `ToolOrchestratorService.executeToolCalls` was deleted 2026-10-16, see the tool
+  authorization audit);
   results restore original call order by index (N10). Note: `ChatRoutes.handleConversation`
   executes sequentially — that is the chat-route path, not the harness; left unchanged.
 

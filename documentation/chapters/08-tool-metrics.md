@@ -1,3 +1,9 @@
+---
+part: Operations
+status: approved
+updated: 2026-10-16
+---
+
 # 08 — Tool Metrics (one week, 2026-10-09 → 2026-10-16)
 
 ## Date & scope

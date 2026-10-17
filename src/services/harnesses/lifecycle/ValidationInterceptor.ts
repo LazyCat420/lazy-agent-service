@@ -1,14 +1,15 @@
 import logger from "../../../utils/logger.ts";
 import { TOOL_NAMES } from "../../ToolTaxonomyConstants.ts";
 import ToolOrchestratorService from "../../ToolOrchestratorService.ts";
+import { decideToolCall } from "../../ToolAuthorization.ts";
 import path from "node:path";
 import fs from "node:fs";
 
-import type AgenticLoopState from "../../AgenticLoopState.ts";
 import type {
   ToolCall,
   ToolResult,
   AgenticContext,
+  ResolvedTools,
   ValidationFeedback,
 } from "../types.ts";
 import { getErrorMessage } from "../../../utils/ErrorHelpers.ts";
@@ -116,6 +117,7 @@ async function runShellValidator(
   validatorConfig: ValidatorConfig,
   filePath: string,
   context: AgenticContext,
+  offeredTools: ResolvedTools,
 ): Promise<ValidationFeedback | null> {
   if (!validatorConfig.command) return null;
 
@@ -124,15 +126,38 @@ async function runShellValidator(
   if (!workspaceRoot) return null;
 
   const executionCwd = findNearestConfigDir(filePath, workspaceRoot);
+  const validatorArgs = {
+    command: validatorConfig.command,
+    cwd: executionCwd,
+    timeout: VALIDATION_TIMEOUT_MS,
+  };
+
+  // The validator is a shell command (tsc / eslint load configs the model may
+  // have just written), so it is authorized like the model calling
+  // execute_command itself: the run must offer that tool, a DENY policy
+  // binds, and an ask is never waited on — without autoApprove or an APPROVE
+  // policy the validation is skipped, not run.
+  const decision = decideToolCall({
+    name: TOOL_NAMES.RUN_COMMAND,
+    args: validatorArgs,
+    isAllowListed: offeredTools.finalTools.some(
+      (tool) => tool.name === TOOL_NAMES.RUN_COMMAND,
+    ),
+    policies: context.options.policies ?? [],
+    autoApprove: context.options.autoApprove === true,
+    unattended: true,
+  });
+  if (decision.verdict !== "allow") {
+    logger.info(
+      `[ValidationInterceptor] Skipped ${validatorConfig.type} validation of ${filePath}: ${decision.reason}`,
+    );
+    return null;
+  }
 
   try {
     const shellResult = (await ToolOrchestratorService.executeTool(
       TOOL_NAMES.RUN_COMMAND,
-      {
-        command: validatorConfig.command,
-        cwd: executionCwd,
-        timeout: VALIDATION_TIMEOUT_MS,
-      },
+      validatorArgs,
       {
         project: context.project,
         username: context.username,
@@ -187,12 +212,14 @@ async function runShellValidator(
  *
  * Called by harnesses after `executeToolBatch()` returns. Returns an empty
  * array when all validations pass or no file-mutating tools were called.
+ * `offeredTools` are the run's tools: a shell validator runs only when
+ * `decideToolCall` allows execute_command for this run (see runShellValidator).
  */
 export async function validateAfterToolExecution(
   toolCalls: ToolCall[],
   results: ToolResult[],
   context: AgenticContext,
-  _state: AgenticLoopState,
+  offeredTools: ResolvedTools,
 ): Promise<ValidationFeedback[]> {
   const feedbackItems: ValidationFeedback[] = [];
 
@@ -232,6 +259,7 @@ export async function validateAfterToolExecution(
       validatorConfig,
       filePath,
       context,
+      offeredTools,
     );
     if (shellFeedback) {
       // Override filePath to the specific file that was edited

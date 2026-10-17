@@ -1,3 +1,9 @@
+---
+part: Operations
+status: approved
+updated: 2026-10-16
+---
+
 # 07 — Port verification (2026-10-16)
 
 Live proof that LazyCat420's apps run on lazy-agent-service (NAS :5591) with no Prism (:7777) traffic.

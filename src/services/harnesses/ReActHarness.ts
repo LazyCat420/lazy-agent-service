@@ -589,7 +589,7 @@ export default class ReActHarness extends BaseAgenticHarness {
             pass.pendingToolCalls,
             results,
             context,
-            state,
+            this.tools,
           );
 
           if (validationFeedback.length > 0) {

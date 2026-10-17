@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { normalizeEmptyToolContent, EMPTY_TOOL_OUTPUT_MESSAGE } from "../ToolResult.ts";
 import { validateStrictToolSchema } from "../ToolOrchestratorService.ts";
-import { permissionModeOf, resolvePermission, PLAN_MODE_DENIAL } from "../PermissionModes.ts";
+import {
+  decideProfileToolCall,
+  permissionModeOf,
+  PLAN_MODE_DENIAL_REASON,
+  type ProfileToolCall,
+} from "../ProfileAuthorization.ts";
+import type { AgentProfile } from "../ProfileRegistry.ts";
+import { deniedToolResult } from "../ToolAuthorization.ts";
 import AgentHooks from "../AgentHooks.ts";
-import { hookDenialObservation } from "../RunExecutionEngine.ts";
 
 describe("empty tool content normalization", () => {
   it("replaces an empty string with the explicit no-output message", () => {
@@ -76,15 +82,15 @@ describe("decide-hook denial", () => {
     expect(ran).toBe(false);
   });
 
-  it("maps a deny verdict to a structured denial observation", () => {
-    const denial = hookDenialObservation("delete_all", { isApproved: false });
-    expect(denial).toEqual({
+  it("maps a hook deny to BLOCKED_BY_SAFETY_HOOK through decideToolCall", () => {
+    const decision = decideProfileToolCall(call("fixture.delete_all", { effect: "destructive" }, { hookDenial: "No." }));
+    expect(decision).toMatchObject({ verdict: "deny", deniedBy: "hook", reason: "No." });
+    if (decision.verdict !== "deny") throw new Error("expected deny");
+    expect(deniedToolResult("fixture.delete_all", decision)).toEqual({
       success: false,
-      error: "HOOK_DENIED",
-      message: "Tool call 'delete_all' denied by a decide hook; no execution was performed.",
+      error: "BLOCKED_BY_SAFETY_HOOK",
+      message: "Tool execution was denied by a safety hook: No.",
     });
-    const withReason = hookDenialObservation("delete_all", { isApproved: false, message: "No." });
-    expect(withReason.message).toBe("No.");
   });
 
   it("fires the runStop event when registered", async () => {
@@ -96,51 +102,82 @@ describe("decide-hook denial", () => {
   });
 });
 
-describe("permission-mode matrix", () => {
+type LocalPolicy = NonNullable<AgentProfile["local_tool_policy"]>[string];
+
+/** A /v1/runs profile call for the fixture local tool `name` with `policy`. */
+function call(
+  name: string,
+  policy: LocalPolicy | undefined,
+  extra: Partial<ProfileToolCall> & { mode?: string } = {},
+): ProfileToolCall {
+  const { mode, ...rest } = extra;
+  const profile = {
+    profile_id: "fixture",
+    tool_policy: { whitelist: [name] },
+    local_tool_policy: policy ? { [name]: policy } : {},
+    ...(mode ? { permissionMode: mode } : {}),
+  } as unknown as AgentProfile;
+  return { profile, name, args: {}, planApproved: false, unattended: false, ...rest };
+}
+
+describe("permission-mode matrix (decideProfileToolCall)", () => {
   it("defaults missing or unknown profile modes to default", () => {
     expect(permissionModeOf({})).toBe("default");
     expect(permissionModeOf({ permissionMode: "bogus" })).toBe("default");
     expect(permissionModeOf({ permissionMode: "bypass" })).toBe("bypass");
   });
 
-  it("requires approval for destructive tools in ALL four modes", () => {
-    for (const mode of ["default", "acceptEdits", "plan", "bypass"] as const) {
-      const decision = resolvePermission({ mode, effect: "destructive" });
-      expect(decision.requiresApproval, mode).toBe(true);
-      expect(decision.approved, mode).toBe(false);
-      // and the gate is satisfied by a registered approval
-      const approved = resolvePermission({ mode, effect: "destructive", approvalSatisfied: true });
-      expect(approved.approved, mode).toBe(true);
+  it("asks for destructive tools in ALL four modes; only a person answers", () => {
+    for (const mode of ["default", "acceptEdits", "plan", "bypass"]) {
+      const planApproved = mode === "plan";
+      expect(decideProfileToolCall(call("fixture.wipe", { effect: "destructive" }, { mode, planApproved })).verdict, mode).toBe("ask");
+      expect(
+        decideProfileToolCall(call("fixture.wipe", { effect: "destructive" }, { mode, planApproved, answer: { decision: "allow" } })).verdict,
+        mode,
+      ).toBe("allow");
+      const rejected = decideProfileToolCall(call("fixture.wipe", { effect: "destructive" }, { mode, planApproved, answer: { decision: "deny" } }));
+      expect(rejected).toMatchObject({ verdict: "deny", deniedBy: "user" });
+      const unattended = decideProfileToolCall(call("fixture.wipe", { effect: "destructive" }, { mode, planApproved, unattended: true }));
+      expect(unattended).toMatchObject({ verdict: "deny", deniedBy: "unattended" });
     }
   });
 
-  it("acceptEdits auto-approves writes but not destructive", () => {
-    const decision = resolvePermission({ mode: "acceptEdits", effect: "write" });
-    expect(decision.approved).toBe(true);
-    expect(decision.requiresApproval).toBe(false);
-    expect(resolvePermission({ mode: "acceptEdits", effect: "destructive" }).approved).toBe(false);
+  it("acceptEdits auto-approves confirmed writes but not destructive", () => {
+    expect(decideProfileToolCall(call("fixture.save", { effect: "write", requires_confirmation: true }, { mode: "acceptEdits" })).verdict).toBe("allow");
+    expect(decideProfileToolCall(call("fixture.save", { effect: "write", requires_confirmation: true })).verdict).toBe("ask");
+    expect(decideProfileToolCall(call("fixture.wipe", { effect: "destructive" }, { mode: "acceptEdits" })).verdict).toBe("ask");
   });
 
-  it("plan blocks writes until planApproved is set", () => {
-    const blocked = resolvePermission({ mode: "plan", effect: "write" });
-    expect(blocked.approved).toBe(false);
-    expect(blocked.denial).toEqual(PLAN_MODE_DENIAL);
-    expect(PLAN_MODE_DENIAL.message).toBe("plan mode: write blocked until an approved plan exists");
-    const allowed = resolvePermission({ mode: "plan", effect: "write", planApproved: true });
-    expect(allowed.approved).toBe(true);
-    expect(allowed.denial).toBeUndefined();
+  it("plan denies writes (POLICY_DENIED) until planApproved is set, and no answer overrides it", () => {
+    const blocked = decideProfileToolCall(call("fixture.save", { effect: "write" }, { mode: "plan", answer: { decision: "allow" } }));
+    expect(blocked).toMatchObject({ verdict: "deny", deniedBy: "policy" });
+    expect(blocked.reason).toContain(PLAN_MODE_DENIAL_REASON);
+    if (blocked.verdict !== "deny") throw new Error("expected deny");
+    expect(deniedToolResult("fixture.save", blocked).error).toBe("POLICY_DENIED");
+    expect(decideProfileToolCall(call("fixture.save", { effect: "write" }, { mode: "plan", planApproved: true })).verdict).toBe("allow");
+    expect(decideProfileToolCall(call("fixture.read", { effect: "read" }, { mode: "plan" })).verdict).toBe("allow");
   });
 
-  it("bypass auto-approves everything except the destructive hard floor", () => {
-    for (const effect of ["read", "write", "mutating"]) {
-      expect(resolvePermission({ mode: "bypass", effect }).approved, effect).toBe(true);
+  it("bypass auto-approves every non-destructive ask, never the destructive hard floor", () => {
+    for (const effect of ["read", "write"] as const) {
+      expect(decideProfileToolCall(call("fixture.tool", { effect, requires_confirmation: true }, { mode: "bypass" })).verdict, effect).toBe("allow");
     }
-    expect(resolvePermission({ mode: "bypass", effect: "destructive" }).approved).toBe(false);
+    expect(decideProfileToolCall(call("fixture.wipe", { effect: "destructive" }, { mode: "bypass" })).verdict).toBe("ask");
   });
 
-  it("default mode defers to the engine's own policy flags", () => {
-    const decision = resolvePermission({ mode: "default", effect: "write" });
-    expect(decision.requiresApproval).toBe(false);
-    expect(decision.denial).toBeUndefined();
+  it("a hook DENY is not overridable by bypass or a person's yes", () => {
+    const decision = decideProfileToolCall(call("fixture.save", { effect: "write" }, { mode: "bypass", hookDenial: "blocked", answer: { decision: "allow" } }));
+    expect(decision).toMatchObject({ verdict: "deny", deniedBy: "hook" });
+  });
+
+  it("default mode admits an unconfirmed write by profile policy", () => {
+    expect(decideProfileToolCall(call("fixture.save", { effect: "write" })).verdict).toBe("allow");
+  });
+
+  it("denies a non-whitelisted tool (PERMISSION_DENIED) and a local tool without local_tool_policy (POLICY_DENIED)", () => {
+    const unlisted = decideProfileToolCall({ ...call("fixture.save", { effect: "write" }), name: "fixture.other" });
+    expect(unlisted).toMatchObject({ verdict: "deny", deniedBy: "scope" });
+    const unregistered = decideProfileToolCall(call("fixture.save", undefined, { mode: "bypass" }));
+    expect(unregistered).toMatchObject({ verdict: "deny", deniedBy: "policy" });
   });
 });

@@ -24,8 +24,11 @@ This service is a fork of prism, and the pieces already exist here:
   reads `prism.custom_agents`, the same collection prism-service writes. Our
   `GET /custom-agents` already lists all 34 agents, trading's V3 agents included,
   so nothing needs migrating.
-- **Tool approval and deny policies** live in `AutoApprovalEngine`, `PolicyEngine` and
-  `ApprovalGate`.
+- **Tool approval and deny policies** are one decision, `decideToolCall`
+  (`src/services/ToolAuthorization.ts`), fed by `PolicyEngine` rules and applied
+  by `ApprovalGate.authorizeToolCalls` (harnesses), `/chat` function calling, the
+  Live API, `/v1/runs` (`ProfileAuthorization.ts`), plan approval and the
+  post-write validator. `AutoApprovalEngine` was removed on 2026-10-16.
 - **Request logging** is global middleware and writes `prism.requests`.
 
 Every repo currently reaches prism through this service's `/prism-proxy`

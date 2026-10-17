@@ -343,7 +343,7 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
             pass.pendingToolCalls,
             results,
             context,
-            state,
+            this.tools,
           );
 
           if (validationFeedback.length > 0) {
