@@ -96,8 +96,15 @@ deployed (trading-service `18582e6c`, lazycat-sdk `ffdc12c`):
 | `Failed to fetch whiteboard summary: Expecting value` | 16 `whiteboard_entries` rows held plain-text content; `json.loads` raised and dropped the whole board | `_decode_content` in `whiteboard.py`; tests in `test_whiteboard_delivery.py` |
 | `screener_query` validation failed (2 errors), AMZN triage forced to FULL | model sent list args JSON-encoded as strings | `ToolRegistry._validate_input` decodes JSON-string arrays/objects and retries; `test_registry_json_string_args.py` |
 
-Note: lazy-agent's `/chat` docstring says "Default: SSE"; the code defaults to JSON.
-Any other client that relies on the Prism-style default must send the Accept header.
+Note: lazy-agent's `/chat` docstring said "Default: SSE"; the code defaulted to JSON.
+
+Resolved 2026-10-16 (branch `wt-stream-default`): `/chat` and `/agent` stream SSE by
+default again, as Prism did. One function decides for both routes:
+`wantsSse` in `src/utils/StreamNegotiation.ts`. The first explicit signal wins:
+`?stream=true|false`, then body `"stream": true|false`, then `Accept`
+(`text/event-stream` → SSE; `application/json` without it → JSON). With no signal,
+or `Accept: */*`, the reply is SSE. JSON callers must opt out explicitly. The caller
+audit is in `.agents/AUDIT-stream-default-2026-10-16.md` at the workspace root.
 
 ## Post-port finding: harness memories reached trading runs (2026-10-16)
 

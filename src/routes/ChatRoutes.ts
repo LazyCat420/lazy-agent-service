@@ -58,6 +58,7 @@ import {
   appendAndFinalize,
 } from "../utils/ConversationUtilities.ts";
 import { handleSseRequest, handleJsonRequest } from "../utils/SseUtilities.ts";
+import { wantsSse } from "../utils/StreamNegotiation.ts";
 import { SseEvent } from "../types/SseTypes.ts";
 import { ChatRequestSchema } from "../types/index.ts";
 import type {
@@ -1614,8 +1615,11 @@ async function handleNonStreamingText(context: GenerationContext) {
 /**
  * POST /chat
  *
- * Default:       SSE streaming (text/event-stream)
- * ?stream=false: Plain JSON response (for server-to-server callers)
+ * Response mode (see utils/StreamNegotiation.ts wantsSse):
+ *   Default: SSE streaming (text/event-stream).
+ *   JSON only on an explicit opt-out: `?stream=false`, body `"stream": false`,
+ *   or `Accept: application/json` without text/event-stream.
+ *   `?stream=true` always streams.
  *
  * Body (flat, OpenAI-style):
  *   { provider, model?, messages, tools?, temperature?, maxTokens?, ... }
@@ -1629,11 +1633,7 @@ router.post(
       username: req.username,
       clientIp: req.clientIp,
     };
-    const acceptsSse = req.headers.accept?.includes("text/event-stream");
-    const streamQuery = req.query.stream;
-    const isSse = streamQuery === "true" || (acceptsSse && streamQuery !== "false" && req.body.stream !== false);
-
-    if (isSse) {
+    if (wantsSse(req)) {
       // persistOnDisconnect mirrors /agent: a dropped TCP connection (e.g.
       // mobile screen lock) must not abort generation — the handler keeps
       // running server-side and the final messages still land in the

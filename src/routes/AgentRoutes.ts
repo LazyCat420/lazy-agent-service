@@ -9,6 +9,7 @@ import { handleQuestionAnswer } from "./QuestionAnswerHandler.ts";
 import { prepareTradingAgentRequest } from "../services/TradingAgentRequest.ts";
 import logger from "../utils/logger.ts";
 import { handleSseRequest, handleJsonRequest } from "../utils/SseUtilities.ts";
+import { wantsSse } from "../utils/StreamNegotiation.ts";
 
 const router = express.Router();
 
@@ -95,8 +96,11 @@ router.post(
  * AgenticLoopService tool-execution loop. Use this for autonomous
  * agent workflows; use /chat for simple LLM calls.
  *
- * Default:       SSE streaming (text/event-stream)
- * ?stream=false: Plain JSON response (for server-to-server callers)
+ * Response mode (see utils/StreamNegotiation.ts wantsSse):
+ *   Default: SSE streaming (text/event-stream).
+ *   JSON only on an explicit opt-out: `?stream=false`, body `"stream": false`,
+ *   or `Accept: application/json` without text/event-stream.
+ *   `?stream=true` always streams.
  *
  * Body (flat, OpenAI-style):
  *   { provider, model?, messages, enabledTools?, temperature?, maxTokens?, ... }
@@ -129,11 +133,7 @@ router.post(
       return;
     }
 
-    const acceptsSse = req.headers.accept?.includes("text/event-stream");
-    const streamQuery = req.query.stream;
-    const isSse = streamQuery === "true" || (acceptsSse && streamQuery !== "false" && req.body.stream !== false);
-
-    if (isSse) {
+    if (wantsSse(req)) {
       await handleSseRequest(req, res, params, handleAgent, {
         persistOnDisconnect: true,
       });
