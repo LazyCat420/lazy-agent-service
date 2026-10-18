@@ -95,4 +95,50 @@ describe("runCoreLoop", () => {
     ]);
     expect(events[0]).toMatchObject({ type: "model.start", step: 0, finalPass: false });
   });
+
+  it("T5: the final pass streams text.delta whose concatenation equals result.text", async () => {
+    const model = scriptedModel([
+      [{ type: "toolCall", id: "t1", name: "lookup", args: {} }],
+      ["final ", "answer"],
+    ]);
+    const { result, events } = await runLoop(
+      baseOptions({ model, tools: [okTool("lookup", "out")], maxSteps: 1 }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(events.some((event) => event.type === "finalize")).toBe(true);
+    const finalDeltas = events.filter((event) => event.type === "text.delta").map((event) => event.text);
+    expect(finalDeltas.join("")).toBe("final answer");
+    expect(result.text).toBe(finalDeltas.join(""));
+  });
+
+  it("T6: a failing final pass after a successful tool call synthesizes the tool output", async () => {
+    const model = scriptedModel([
+      [{ type: "toolCall", id: "t1", name: "lookup", args: {} }],
+      { throw: new Error("500") },
+      { throw: new Error("500") },
+      { throw: new Error("500") },
+      { throw: new Error("500") },
+      { throw: new Error("500") },
+    ]);
+    const { result } = await runLoop(baseOptions({ model, tools: [okTool("lookup", "the widget output: 42")] }));
+
+    expect(result.status).toBe("completed");
+    expect(result.answerSource).toBe("synthetic");
+    expect(result.text).toContain("the widget output: 42");
+  });
+
+  it("T7: retries exhausted with no usable tools ends failed with an error code and no crash", async () => {
+    const model = scriptedModel([
+      { throw: new Error("500") },
+      { throw: new Error("500") },
+      { throw: new Error("500") },
+      { throw: new Error("500") },
+      { throw: new Error("500") },
+    ]);
+    const { result } = await runLoop(baseOptions({ model }));
+
+    expect(result.status).toBe("failed");
+    expect(result.error?.code).toBeTruthy();
+  });
 });

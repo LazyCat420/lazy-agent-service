@@ -275,7 +275,7 @@ export const runToolBatch: RunToolBatch = async (calls, options) => {
           isError: false,
           durationMs: opts.now() - start,
         };
-      } else if (winner === "exec" && outcome !== undefined) {
+      } else if (winner === "exec" && outcome !== undefined && outcome.ok === false) {
         result = {
           toolCallId: call.id,
           name: call.name,

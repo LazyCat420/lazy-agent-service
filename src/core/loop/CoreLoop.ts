@@ -156,20 +156,21 @@ export async function* runCoreLoop(
           }
         }
         break;
-      } catch (error) {
+      } catch (caught) {
         await closeStream(stream);
-        const code = errorOf(error).code;
+        const code = errorOf(caught).code;
         if (code === "TOKEN_BUDGET_FINALIZE") {
           finalizeReason = "TOKEN_BUDGET";
           break;
         }
         if (options.signal.aborted) return makeCancelled();
         if (attempt === providerRetries) {
-          const error = errorOf(error);
+          const failure = errorOf(caught);
           finalizeReason = "PROVIDER_ERROR";
-          yield { type: "warning", code: error.code, message: error.message };
+          yield { type: "warning", code: failure.code, message: failure.message };
           break;
         }
+        yield { type: "warning", code: "PROVIDER_RETRY", message: errorOf(caught).message };
       }
     }
     if (finalizeReason !== undefined) continue;
@@ -276,7 +277,14 @@ export async function* runCoreLoop(
         finalPass: true,
       });
       for await (const chunk of stream) {
-        if (typeof chunk === "string") finalText += chunk;
+        if (typeof chunk === "string") {
+          finalText += chunk;
+          yield { type: "text.delta", text: chunk };
+        } else if (chunk.type === "thinking") {
+          yield { type: "thinking.delta", text: chunk.content };
+        } else if (chunk.type === "usage") {
+          yield { type: "usage", usage: { ...chunk.usage } };
+        }
         // Tool calls in the final pass are ignored: not run, not recorded.
       }
       finalError = undefined;
@@ -286,6 +294,28 @@ export async function* runCoreLoop(
       finalError = error;
       if (options.signal.aborted) return makeCancelled();
     }
+  }
+
+  const synthetic =
+    usableToolResults.length === 0
+      ? "I couldn't finish an answer and no tool returned usable results."
+      : `I couldn't finish a full answer. Here is what the tools returned:\n${usableToolResults
+          .map((entry) => `- ${entry.name}: ${entry.content.slice(0, 300)}`)
+          .join("\n")}`;
+
+  if (finalError !== undefined && usableToolResults.length > 0) {
+    const failure = errorOf(finalError);
+    yield { type: "warning", code: failure.code, message: failure.message };
+    messages.push({ role: "assistant", content: synthetic });
+    return {
+      status: "completed",
+      text: synthetic,
+      messages,
+      modelCalls,
+      toolCalls,
+      finalizeReason,
+      answerSource: "synthetic",
+    };
   }
 
   if (finalError !== undefined) {
@@ -316,12 +346,6 @@ export async function* runCoreLoop(
     };
   }
 
-  const synthetic =
-    usableToolResults.length === 0
-      ? "I couldn't finish an answer and no tool returned usable results."
-      : `I couldn't finish a full answer. Here is what the tools returned:\n${usableToolResults
-          .map((entry) => `- ${entry.name}: ${entry.content.slice(0, 300)}`)
-          .join("\n")}`;
   messages.push({ role: "assistant", content: synthetic });
   return {
     status: "completed",
