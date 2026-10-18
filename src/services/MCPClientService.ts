@@ -133,6 +133,9 @@ const connections = new Map<string, MCPConnection>();
 /** Pins by server name, kept across disconnects (the stored document also carries them). */
 const rememberedPins = new Map<string, McpToolPins>();
 
+/** Event-driven waiters for notifications/tools/list_changed per server (Backlog 15). */
+const toolListChangedWaiters = new Map<string, Set<() => void>>();
+
 /** Persist fields on the server's stored document. Best-effort: a missing DB or id only costs durability. */
 async function updateMcpServerRecord(
   config: MCPServerConfig,
@@ -478,6 +481,44 @@ const MCPClientService = {
     logger.info(
       `[MCP] "${serverName}" tool list changed — ${conn.tools.length} approved${describeQuarantine(conn)}`,
     );
+    const waiters = toolListChangedWaiters.get(serverName);
+    if (waiters) {
+      toolListChangedWaiters.delete(serverName);
+      for (const resolve of waiters) {
+        resolve();
+      }
+    }
+  },
+
+  /**
+   * Wait deterministically for the next `notifications/tools/list_changed`
+   * refresh to complete for `serverName`.
+   */
+  waitForToolListChanged(
+    serverName: string,
+    timeoutMs: number = 5000,
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let set = toolListChangedWaiters.get(serverName);
+      if (!set) {
+        set = new Set();
+        toolListChangedWaiters.set(serverName, set);
+      }
+      const onDone = () => {
+        clearTimeout(timer);
+        set?.delete(onDone);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        set?.delete(onDone);
+        reject(
+          new Error(
+            `Timed out after ${timeoutMs}ms waiting for tool list change on "${serverName}"`,
+          ),
+        );
+      }, timeoutMs);
+      set.add(onDone);
+    });
   },
 
   /**

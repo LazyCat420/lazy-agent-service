@@ -114,6 +114,7 @@ export interface InputMessage {
   // Thinking
   thinking?: string;
   thinkingSignature?: string;
+  reasoning_content?: string;
 }
 
 interface OpenAIToolCall {
@@ -168,6 +169,7 @@ export interface PreparedMessage {
   role: string;
   name?: string;
   content: string | ContentPart[] | null;
+  reasoning_content?: string;
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
@@ -498,6 +500,11 @@ export function prepareOpenAICompatMessages(
       message.toolCalls &&
       message.toolCalls.length > 0
     ) {
+      const reasoningContent =
+        (typeof message.reasoning_content === "string" &&
+          message.reasoning_content.trim()) ||
+        (typeof message.thinking === "string" && message.thinking.trim()) ||
+        "";
       return {
         ...base,
         // Per OpenAI spec, content must be null when tool_calls are present
@@ -509,10 +516,8 @@ export function prepareOpenAICompatMessages(
         // templates (Qwen3, GLM) render it for turns after the last user
         // message so the chain survives across tool calls. ROUND_TRIP_REASONING=0
         // disables it for a backend that rejects the field.
-        ...(typeof message.thinking === "string" &&
-        message.thinking.trim() &&
-        process.env.ROUND_TRIP_REASONING !== "0"
-          ? { reasoning_content: message.thinking }
+        ...(reasoningContent && process.env.ROUND_TRIP_REASONING !== "0"
+          ? { reasoning_content: reasoningContent }
           : {}),
         tool_calls: message.toolCalls.map(
           (toolCall: ToolCallEntry, i: number) => ({
@@ -640,14 +645,36 @@ export function processNonStreamingResponse(
   data: OpenAICompletionResponse,
   options: { thinkingEnabled?: boolean } = {},
 ) {
-  const message = data.choices?.[0]?.message;
+  const choice = data.choices?.[0];
+  const message = choice?.message;
+  const finishReason = choice?.finish_reason ?? null;
   const rawText = message?.content || "";
 
   // When thinking is disabled, return raw text without parsing <think> tags
   if (options.thinkingEnabled === false) {
     const usage = normalizeUsage(data.usage);
     const toolCalls = extractToolCallsFromMessage(message ?? null);
-    return { text: rawText, thinking: null, usage, toolCalls };
+    const isEmpty =
+      rawText.trim() === "" && (!toolCalls || toolCalls.length === 0);
+    if (isEmpty) {
+      logger.warn(
+        `[openai-compat] Zero-output completion (thinkingEnabled=false): finish_reason=${finishReason ?? "null"} completion_tokens=${usage.outputTokens ?? 0}`,
+      );
+    }
+    return {
+      text: rawText,
+      thinking: null,
+      usage,
+      toolCalls,
+      ...(isEmpty
+        ? {
+            emptyOutputDiagnostic: {
+              finishReason,
+              completionTokens: usage.outputTokens ?? 0,
+            },
+          }
+        : {}),
+    };
   }
 
   // Check native reasoning fields first, fall back to <think> tag parsing
@@ -658,8 +685,28 @@ export function processNonStreamingResponse(
 
   const usage = normalizeUsage(data.usage);
   const toolCalls = extractToolCallsFromMessage(message ?? null);
+  const isEmpty =
+    text.trim() === "" && !thinking && (!toolCalls || toolCalls.length === 0);
+  if (isEmpty) {
+    logger.warn(
+      `[openai-compat] Zero-output completion: finish_reason=${finishReason ?? "null"} completion_tokens=${usage.outputTokens ?? 0}`,
+    );
+  }
 
-  return { text, thinking, usage, toolCalls };
+  return {
+    text,
+    thinking,
+    usage,
+    toolCalls,
+    ...(isEmpty
+      ? {
+          emptyOutputDiagnostic: {
+            finishReason,
+            completionTokens: usage.outputTokens ?? 0,
+          },
+        }
+      : {}),
+  };
 }
 
 // ── Text-markup tool call recovery ──────────────────────────
@@ -974,6 +1021,19 @@ export async function* parseSSEStream(
     // Surface max_tokens truncation so harnesses can detect and warn the user
     if (lastFinishReason === "length") {
       yield { type: "stopReason", stopReason: "length" };
+    }
+
+    // B25: Log finish_reason diagnostic when a stream finishes with 0 output tokens/chars and no tool calls
+    if (
+      sawTerminalEvent &&
+      partialOutputCharacters === 0 &&
+      partialReasoningCharacters === 0 &&
+      !nativeToolCallsYielded &&
+      Object.keys(pendingToolCalls).length === 0
+    ) {
+      logger.warn(
+        `[${options.label ?? "openai-compat"}] Zero-token SSE completion: finish_reason=${lastFinishReason ?? "null"} completion_tokens=${usage?.outputTokens ?? 0} thinkingEnabled=${String(options.thinkingEnabled)}`,
+      );
     }
   } catch (streamError) {
     // Yield partial usage BEFORE re-throwing so the consumer captures

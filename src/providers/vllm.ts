@@ -122,9 +122,10 @@ export function createVllmProvider(
           payload.tool_choice = options.toolChoice === "none" ? "none" : "auto"; // ported from prism-service providers/vllm.ts: the forced final turn calls with the same tool block but tool_choice "none"
         }
 
-        // Thinking hard switch — vLLM extension for Qwen3/reasoning models
-        // Uses chat_template_kwargs to control <think> token generation
+        // Thinking hard switch — vLLM extension for Qwen3/GLM/reasoning models (B25)
+        // Sets both top-level enable_thinking and chat_template_kwargs.enable_thinking
         if (options.thinkingEnabled !== undefined) {
+          payload.enable_thinking = options.thinkingEnabled;
           payload.chat_template_kwargs = {
             enable_thinking: options.thinkingEnabled,
           };
@@ -220,8 +221,9 @@ export function createVllmProvider(
           payload.tool_choice = options.toolChoice === "none" ? "none" : "auto"; // ported from prism-service providers/vllm.ts: the forced final turn calls with the same tool block but tool_choice "none"
         }
 
-        // Thinking hard switch — vLLM extension for Qwen3/reasoning models
+        // Thinking hard switch — vLLM extension for Qwen3/GLM/reasoning models (B25)
         if (options.thinkingEnabled !== undefined) {
+          payload.enable_thinking = options.thinkingEnabled;
           payload.chat_template_kwargs = {
             enable_thinking: options.thinkingEnabled,
           };

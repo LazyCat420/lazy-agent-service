@@ -35,6 +35,7 @@ export interface ChatMessage {
   }>;
   thinking?: string;
   thinkingSignature?: string;
+  reasoning_content?: string;
   /** Tool result correlation — maps this message to the tool_use that produced it. */
   tool_call_id?: string;
   /** Generic message ID — fallback for tool correlation. */

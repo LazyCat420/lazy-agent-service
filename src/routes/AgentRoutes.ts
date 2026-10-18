@@ -10,6 +10,17 @@ import { prepareTradingAgentRequest } from "../services/TradingAgentRequest.ts";
 import logger from "../utils/logger.ts";
 import { handleSseRequest, handleJsonRequest } from "../utils/SseUtilities.ts";
 import { wantsSse } from "../utils/StreamNegotiation.ts";
+import {
+  dispatchAgentRouteWithRollback,
+  runCoreLoopForAgent,
+  shouldUseCoreLoopForAgent,
+} from "../core/loop/AgentRouteAdapter.ts";
+
+export {
+  dispatchAgentRouteWithRollback,
+  runCoreLoopForAgent,
+  shouldUseCoreLoopForAgent,
+};
 
 const router = express.Router();
 

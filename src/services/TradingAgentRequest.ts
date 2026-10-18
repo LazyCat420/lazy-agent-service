@@ -14,8 +14,36 @@
  * conversation identity); callers answer 422, as the proxy always has.
  */
 import { markUnattended, prepareToolContext } from "./TradingToolContext.ts";
-import { prepareTradingRequest } from "./learning/TradingLearningBoundary.ts";
+import {
+  excludesLearnedState,
+  prepareTradingRequest,
+} from "./learning/TradingLearningBoundary.ts";
 
-export function prepareTradingAgentRequest<T extends Record<string, any>>(body: T): T {
-  return markUnattended(prepareToolContext(prepareTradingRequest(body))) as T;
+export { excludesLearnedState };
+
+export function shouldSkipLearningForProject(
+  project: string | null | undefined,
+  flags?: { skipMemoryExtraction?: boolean; skipWorkflowExtraction?: boolean },
+): boolean {
+  return (
+    excludesLearnedState(project) ||
+    flags?.skipMemoryExtraction === true ||
+    flags?.skipWorkflowExtraction === true
+  );
+}
+
+export function prepareTradingAgentRequest<T extends Record<string, any>>(
+  body: T,
+): T {
+  const prepared = markUnattended(
+    prepareToolContext(prepareTradingRequest(body)),
+  ) as T;
+  if (excludesLearnedState(prepared?.project)) {
+    return {
+      ...prepared,
+      skipMemoryExtraction: true,
+      skipWorkflowExtraction: true,
+    };
+  }
+  return prepared;
 }

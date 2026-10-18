@@ -170,7 +170,7 @@ const WorkflowMemoryService = {
     const resolvedAgentConversationId = agentConversationId || "";
 
     if (!conversationId || !resolvedAgentConversationId) return;
-    if (!project) return;
+    if (!project || project === "vllm-trading-bot") return;
 
     // Only persist workflows from sessions that completed successfully.
     // Exhausted, errored, or aborted sessions produce unreliable procedures.

@@ -17,6 +17,9 @@ import FileService from "../../FileService.ts";
 import WebhookEventBus from "../../WebhookEventBus.ts";
 import ToolOrchestratorService from "../../ToolOrchestratorService.ts";
 import { FILE_CATEGORIES } from "../../../constants.ts";
+import { shouldSkipLearningForProject } from "../../TradingAgentRequest.ts";
+
+export { shouldSkipLearningForProject };
 
 interface ToolResultPayload {
   error?: string;
@@ -41,6 +44,11 @@ interface ToolResultPayload {
 export function emitPostExecutionStatus(
   toolCalls: ToolCall[],
   emit: EmitFunction,
+  context?: {
+    project?: string | null;
+    skipMemoryExtraction?: boolean;
+    skipWorkflowExtraction?: boolean;
+  },
 ): void {
   if (
     toolCalls.some(
@@ -70,7 +78,10 @@ export function emitPostExecutionStatus(
     });
   }
 
-  if (toolCalls.some((toolCall) => toolCall.name === TOOL_NAMES.SAVE_MEMORY)) {
+  if (
+    !shouldSkipLearningForProject(context?.project, context) &&
+    toolCalls.some((toolCall) => toolCall.name === TOOL_NAMES.SAVE_MEMORY)
+  ) {
     emit({
       type: SERVER_SENT_EVENT_TYPES.STATUS,
       message: STATUS_MESSAGES.MEMORIES_UPDATED,

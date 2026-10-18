@@ -461,13 +461,14 @@ describe("live tools/list_changed notification", () => {
       const { body: server } = await create("live", { url });
       expect((await call("POST", `/${server.id}/connect`)).body).toMatchObject({ toolCount: 1, quarantinedTools: [] });
 
+      const listChanged = MCPClientService.waitForToolListChanged("live");
       liveServers[0].registerTool("late", { description: "Added after approval" }, async () => ({
         content: [{ type: "text", text: JSON.stringify({ late: true }) }],
       }));
+      await listChanged;
 
       const quarantined = () =>
         MCPClientService.getConnectedServers().find((entry) => entry.name === "live")?.quarantinedTools ?? [];
-      for (let i = 0; i < 200 && quarantined().length === 0; i++) await new Promise((r) => setTimeout(r, 25));
       expect(quarantined()).toMatchObject([{ name: "late", reason: "new" }]);
       expect(toolNames()).not.toContain("mcp__live__late");
       expect(toolNames()).toContain("mcp__live__echo");

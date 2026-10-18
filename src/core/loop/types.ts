@@ -7,12 +7,17 @@
  */
 import type { ChatMessage } from "../../types/ProviderTypes.ts";
 import type { StreamChunk } from "../../types/provider.ts";
+import type { SpillBuffer } from "./SpillBuffer.ts";
+
+export type { ChatMessage };
 
 export interface CoreToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
 }
+
+export type ToolCallSpec = CoreToolCall;
 
 export type CoreToolErrorCode =
   | "TOOL_THREW"
@@ -22,7 +27,9 @@ export type CoreToolErrorCode =
   | "TOOL_NOT_FOUND"
   | "TOOL_BAD_ARGS"
   | "REPLY_CUT_OFF"
-  | "TOOL_REPEATED_FAILURE";
+  | "TOOL_REPEATED_FAILURE"
+  | "TOOL_STALL"
+  | "TOOL_OSCILLATION";
 
 /** Exactly one per CoreToolCall, appended in call order (invariant I3). */
 export interface CoreToolResult {
@@ -60,6 +67,8 @@ export interface CoreToolSchema {
   parameters: Record<string, unknown>;
 }
 
+export type ToolDefinition = CoreToolSchema;
+
 export interface CoreModelRequest {
   messages: ChatMessage[];
   tools: CoreToolSchema[];
@@ -70,11 +79,11 @@ export interface CoreModelRequest {
 }
 
 /**
- * A model call. Adapters wrap an LAS provider's `generateTextStream`.
- * Chunks used by the loop: string (text), {type:"thinking"}, {type:"toolCall"},
- * {type:"usage"}, {type:"stopReason", stopReason:"length"}. Others are ignored.
- * Throwing an error with `code: "TOKEN_BUDGET_FINALIZE"` asks the loop to finalize.
- */
+  * A model call. Adapters wrap an LAS provider's `generateTextStream`.
+  * Chunks used by the loop: string (text), {type:"thinking"}, {type:"toolCall"},
+  * {type:"usage"}, {type:"stopReason", stopReason:"length"}. Others are ignored.
+  * Throwing an error with `code: "TOKEN_BUDGET_FINALIZE"` asks the loop to finalize.
+  */
 export type CoreModel = (request: CoreModelRequest) => AsyncIterable<StreamChunk>;
 
 export type CoreFinalizeReason =
@@ -83,7 +92,21 @@ export type CoreFinalizeReason =
   | "TOKEN_BUDGET"
   | "EMPTY_REPLY"
   | "PROVIDER_ERROR"
-  | "CUT_OFF_TWICE";
+  | "CUT_OFF_TWICE"
+  | "RUNAWAY_GENERATION"
+  | `repeated_tool_call:${string}`;
+
+export interface ToolCallHistoryEntry {
+  name: string;
+  fingerprint: string;
+  isError: boolean;
+}
+
+export interface ToolCallHistory {
+  entries: ToolCallHistoryEntry[];
+  finalizeNow?: boolean;
+  finalizeReason?: CoreFinalizeReason;
+}
 
 export type CoreBeforeToolDecision =
   | { action: "allow"; args?: Record<string, unknown> }
@@ -120,6 +143,14 @@ export interface CoreLoopOptions {
   providerRetries?: number;
   /** Same tool failing this many times in a row gets TOOL_REPEATED_FAILURE instead of running. Default 3. */
   maxConsecutiveToolErrors?: number;
+  /** H10: Maximum concurrent parallel non-exclusive tool calls (default 8). */
+  parallelToolMaxConcurrency?: number;
+  /** H5: Maximum total bytes stored in the run-scoped SpillBuffer (default 4 MiB). */
+  spillMaxTotalBytes?: number;
+  /** H9: Polled after each tool batch; returned messages are injected before the next model turn. */
+  getSteeringMessages?: () => Promise<ChatMessage[]> | ChatMessage[];
+  /** H9: Polled when the model attempts to stop with 0 tool calls; if non-empty, messages are appended and the loop continues. */
+  getFollowUpMessages?: () => Promise<ChatMessage[]> | ChatMessage[];
   /** Injected clock for durations; default Date.now. */
   now?: () => number;
   /** Max time for the toolless final pass; on expiry the loop answers with streamed partial text or the synthetic fallback. Undefined = no limit. */
@@ -164,14 +195,20 @@ export interface ToolBatchOptions {
   maxConsecutiveToolErrors: number;
   /** Per-tool consecutive error count, owned by the loop, mutated by the runner across batches. */
   failureStreak: Map<string, number>;
+  /** H2: Per-run tool call history for semantic stall & A<->B oscillation detection. */
+  callHistory?: ToolCallHistory;
+  /** H5: Run-scoped SpillBuffer for oversized tool outputs and read_tool_spill queries. */
+  spillBuffer?: SpillBuffer;
+  /** H10: Bounded concurrency cap for parallel non-exclusive tools (default 8). */
+  parallelToolMaxConcurrency?: number;
   now: () => number;
   timeoutSignalFor?: (toolName: string, ms: number) => AbortSignal;
 }
 
 /**
- * Runs one batch. Never throws (I2). Returns exactly one result per call, in call order (I3).
- * Non-exclusive tools run in parallel; exclusive ones run after, one at a time. Implemented in ToolRunner.ts.
- */
+  * Runs one batch. Never throws (I2). Returns exactly one result per call, in call order (I3).
+  * Non-exclusive tools run in parallel; exclusive ones run after, one at a time. Implemented in ToolRunner.ts.
+  */
 export type RunToolBatch = (calls: CoreToolCall[], options: ToolBatchOptions) => Promise<CoreToolResult[]>;
 
 /** `runCoreLoop(options)` yields events and returns the result. Implemented in CoreLoop.ts. */

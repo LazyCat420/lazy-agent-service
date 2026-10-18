@@ -17,19 +17,44 @@ export interface HostModelStatus {
   online: boolean;
 }
 
+/**
+ * Backlog 13: Normalize stale local model IDs (`GLM-5.3-Flash-EXL3` without `-TF`)
+ * to the canonical served model ID (`GLM-5.3-Flash-EXL3-TF`).
+ */
+export function normalizeLocalModelId(modelId: string): string {
+  if (!modelId) return modelId;
+  if (modelId === "GLM-5.3-Flash-EXL3") {
+    return "GLM-5.3-Flash-EXL3-TF";
+  }
+  if (modelId.endsWith("/GLM-5.3-Flash-EXL3")) {
+    return `${modelId}-TF`;
+  }
+  return modelId;
+}
+
 export class DynamicModelResolver {
   private static cachedStatuses: HostModelStatus[] = [];
   private static lastProbeTime = 0;
   private static readonly PROBE_CACHE_TTL_MS = 5000; // 5 seconds cache
   private static mockStatuses: HostModelStatus[] | null = null;
 
+  public static normalizeModelId(modelId: string): string {
+    return normalizeLocalModelId(modelId);
+  }
+
   /**
    * For testing: stub host model statuses
    */
   public static setMockStatuses(statuses: HostModelStatus[] | null) {
-    this.mockStatuses = statuses;
-    if (statuses) {
-      this.cachedStatuses = statuses;
+    const normalized = statuses
+      ? statuses.map((s) => ({
+          ...s,
+          models: s.models.map(normalizeLocalModelId),
+        }))
+      : null;
+    this.mockStatuses = normalized;
+    if (normalized) {
+      this.cachedStatuses = normalized;
       this.lastProbeTime = Date.now();
     }
   }
@@ -69,7 +94,7 @@ export class DynamicModelResolver {
 
           const rawModels = res?.models || res?.data || [];
           const models: string[] = rawModels
-            .map((m: any) => m.key || m.id || "")
+            .map((m: any) => normalizeLocalModelId(m.key || m.id || ""))
             .filter(Boolean);
           return {
             instanceId: inst.id,
@@ -118,6 +143,7 @@ export class DynamicModelResolver {
     allowedProviders: string[],
     role: string,
   ): { allowed: boolean; hostInstance?: string; reason?: string } {
+    const normalizedModelName = normalizeLocalModelId(modelName);
     const statuses = this.getCachedLiveHosts();
     const onlineHosts = statuses.filter((h) => h.online);
 
@@ -128,26 +154,29 @@ export class DynamicModelResolver {
     // Single-box fallback: If only one box is online, it does all jobs
     if (onlineHosts.length === 1) {
       const singleHost = onlineHosts[0];
-      if (singleHost.models.includes(modelName)) {
+      if (singleHost.models.map(normalizeLocalModelId).includes(normalizedModelName)) {
         return { allowed: true, hostInstance: singleHost.instanceId };
       }
       return {
         allowed: false,
-        reason: `Model '${modelName}' not found on single online host (${singleHost.instanceId})`,
+        reason: `Model '${normalizedModelName}' not found on single online host (${singleHost.instanceId})`,
       };
     }
 
     // Both (or multiple) boxes online:
     // Check if the model is on any host matching allowedProviders
     for (const host of onlineHosts) {
-      if (allowedProviders.includes(host.instanceId) && host.models.includes(modelName)) {
+      if (
+        allowedProviders.includes(host.instanceId) &&
+        host.models.map(normalizeLocalModelId).includes(normalizedModelName)
+      ) {
         return { allowed: true, hostInstance: host.instanceId };
       }
     }
 
     return {
       allowed: false,
-      reason: `Model '${modelName}' not found on any allowed online host (${allowedProviders.join(", ")})`,
+      reason: `Model '${normalizedModelName}' not found on any allowed online host (${allowedProviders.join(", ")})`,
     };
   }
 
@@ -163,6 +192,9 @@ export class DynamicModelResolver {
     requestedModel?: string,
     requestedProvider?: string,
   ): { provider: string; model: string } {
+    const normalizedRequestedModel = requestedModel
+      ? normalizeLocalModelId(requestedModel)
+      : undefined;
     const statuses = this.getCachedLiveHosts();
     const onlineHosts = statuses.filter((h) => h.online);
 
@@ -170,20 +202,26 @@ export class DynamicModelResolver {
     if (requestedProvider) {
       const match = onlineHosts.find((h) => h.instanceId === requestedProvider);
       if (match) {
-        if (requestedModel && match.models.includes(requestedModel)) {
-          return { provider: requestedProvider, model: requestedModel };
+        const hostModels = match.models.map(normalizeLocalModelId);
+        if (normalizedRequestedModel && hostModels.includes(normalizedRequestedModel)) {
+          return { provider: requestedProvider, model: normalizedRequestedModel };
         }
-        if (match.models.length > 0) {
-          return { provider: requestedProvider, model: requestedModel || match.models[0] };
+        if (hostModels.length > 0) {
+          return {
+            provider: requestedProvider,
+            model: normalizedRequestedModel || hostModels[0],
+          };
         }
       }
     }
 
     // If requestedModel is supplied, find which online host serves it
-    if (requestedModel) {
-      const match = onlineHosts.find((h) => h.models.includes(requestedModel));
+    if (normalizedRequestedModel) {
+      const match = onlineHosts.find((h) =>
+        h.models.map(normalizeLocalModelId).includes(normalizedRequestedModel),
+      );
       if (match) {
-        return { provider: match.instanceId, model: requestedModel };
+        return { provider: match.instanceId, model: normalizedRequestedModel };
       }
     }
 
@@ -192,7 +230,9 @@ export class DynamicModelResolver {
       const single = onlineHosts[0];
       return {
         provider: single.instanceId,
-        model: requestedModel || single.models[0] || "default-model",
+        model:
+          normalizedRequestedModel ||
+          (single.models[0] ? normalizeLocalModelId(single.models[0]) : "default-model"),
       };
     }
 
@@ -206,7 +246,9 @@ export class DynamicModelResolver {
     if (preferredHost && preferredHost.models.length > 0) {
       return {
         provider: preferredInstanceId,
-        model: requestedModel || preferredHost.models[0],
+        model:
+          normalizedRequestedModel ||
+          normalizeLocalModelId(preferredHost.models[0]),
       };
     }
 
@@ -216,7 +258,9 @@ export class DynamicModelResolver {
       if (host && host.models.length > 0) {
         return {
           provider: provId,
-          model: requestedModel || host.models[0],
+          model:
+            normalizedRequestedModel ||
+            normalizeLocalModelId(host.models[0]),
         };
       }
     }
@@ -224,7 +268,7 @@ export class DynamicModelResolver {
     // Default fallback
     return {
       provider: allowedProviders[0] || "vllm-2",
-      model: requestedModel || "default-model",
+      model: normalizedRequestedModel || "default-model",
     };
   }
 

@@ -35,6 +35,9 @@ import { RunEvidenceStore } from "../../../platform/verify/RunEvidenceStore.ts";
 import { Span } from "../../../platform/trace/Span.ts";
 import { TraceExporter } from "../../../platform/trace/TraceExporter.ts";
 import { TraceContext } from "../../../platform/trace/TraceContext.ts";
+import { shouldSkipLearningForProject } from "../../TradingAgentRequest.ts";
+
+export { shouldSkipLearningForProject };
 
 export interface FinalizerContext {
   providerName: string;
@@ -56,6 +59,8 @@ export interface FinalizerContext {
   agent?: string | null;
   workspaceRoot?: string | null;
   requestId?: string;
+  skipMemoryExtraction?: boolean;
+  skipWorkflowExtraction?: boolean;
   emit?: (event: { type: string; [key: string]: unknown }) => void;
   signal?: AbortSignal;
 }

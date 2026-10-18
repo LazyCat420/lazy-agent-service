@@ -124,6 +124,12 @@ export default class MemoryExtractor {
     activeProviderName,
     activeResolvedModel,
   }: MemoryExtractionContext): Promise<StoredMemory[]> {
+    if (project === "vllm-trading-bot") {
+      logger.info(
+        `[MemoryExtractor] Skipping — project "${project}" is isolated from harness memory extraction (B4).`,
+      );
+      return [];
+    }
     if (!messages || messages.length < MIN_MESSAGES_FOR_EXTRACTION) {
       logger.info(
         `[MemoryExtractor] Skipping — only ${messages?.length || 0} messages (min: ${MIN_MESSAGES_FOR_EXTRACTION})`,

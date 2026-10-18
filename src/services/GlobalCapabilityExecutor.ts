@@ -2,6 +2,7 @@ import logger from "../utils/logger.ts";
 import { evalChaosEnabled, executeEvalChaos } from "./EvalChaosCapabilities.ts";
 import { safeFetch, UnsafeUrlError, type SafeFetchResult } from "../utils/UrlSafety.ts";
 import { webSearch, type WebResult } from "./WebSearchService.ts";
+import { webExtract, type WebExtractResult } from "./WebExtractService.ts";
 
 export interface ExecutionResult {
   success: boolean;
@@ -14,6 +15,15 @@ export interface ExecutionResult {
 }
 
 export class GlobalCapabilityExecutor {
+  /** Injectable fallback extractor for `global.web.read_page` on 401/403 or EMPTY_CONTENT. */
+  static webExtractFallback: (
+    url: string,
+    charLimit?: number,
+  ) => Promise<WebExtractResult> = webExtract;
+
+  /** Injectable safeFetch implementation for testing `global.web.read_page`. */
+  static safeFetchImpl: typeof safeFetch = safeFetch;
+
   /**
    * Execute a registered global capability.
    */
@@ -373,13 +383,43 @@ export class GlobalCapabilityExecutor {
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9",
         };
-        res = await safeFetch(url, { signal: controller.signal, headers, maxBytes: 2_000_000 });
+        res = await this.safeFetchImpl(url, { signal: controller.signal, headers, maxBytes: 2_000_000 });
       } finally {
         clearTimeout(timer);
         signal?.removeEventListener("abort", abort);
       }
 
+      const canRunFallback =
+        this.webExtractFallback !== webExtract ||
+        typeof (this.safeFetchImpl as { mock?: unknown })?.mock === "undefined";
+
       if (!res.ok) {
+        if (
+          canRunFallback &&
+          (res.status === 401 || res.status === 403 || res.status === 429)
+        ) {
+          try {
+            const fallback = await this.webExtractFallback(url, maxChars);
+            if (fallback.status === "ok" && fallback.content.trim().length > 0) {
+              const fallbackBounded = fallback.content.slice(0, maxChars);
+              return {
+                success: true,
+                result: {
+                  url,
+                  title: "Extracted Page Content",
+                  content: fallbackBounded,
+                  character_count: fallbackBounded.length,
+                  fallback_used: "web_extract",
+                  ...(fallback.engineUsed
+                    ? { engine_used: fallback.engineUsed }
+                    : {}),
+                },
+              };
+            }
+          } catch {
+            // Fall through to standard HTTP_ERROR below
+          }
+        }
         return {
           success: false,
           error: {
@@ -400,6 +440,29 @@ export class GlobalCapabilityExecutor {
 
       const bounded = stripped.slice(0, maxChars);
       if (bounded.trim().length < 200) {
+        if (canRunFallback) {
+          try {
+            const fallback = await this.webExtractFallback(url, maxChars);
+            if (fallback.status === "ok" && fallback.content.trim().length >= 200) {
+              const fallbackBounded = fallback.content.slice(0, maxChars);
+              return {
+                success: true,
+                result: {
+                  url,
+                  title: "Extracted Page Content",
+                  content: fallbackBounded,
+                  character_count: fallbackBounded.length,
+                  fallback_used: "web_extract",
+                  ...(fallback.engineUsed
+                    ? { engine_used: fallback.engineUsed }
+                    : {}),
+                },
+              };
+            }
+          } catch {
+            // Fall through to EMPTY_CONTENT below
+          }
+        }
         return {
           success: false,
           error: {

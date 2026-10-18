@@ -27,6 +27,12 @@ import { retrieveOffloadedContentTool } from "../platform/offload/retrieveOffloa
 import { getSharedOffloadStore } from "../platform/offload/OffloadStore.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
+import {
+  shouldUseCoreLoopForAgent,
+  runCoreLoopForAgent,
+  type AgentRouteCoreLoopInput,
+  type AgentRouteCoreLoopOutput,
+} from "../core/loop/AgentRouteAdapter.ts";
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Loop resilience helpers (compaction pressure + overflow recovery)
@@ -879,4 +885,20 @@ export default class AgenticLoopService {
       description: string;
     }>;
   }
+
+  /**
+   * Returns true when `POST /agent` should route onto `CoreLoop` (Option B),
+   * or false when `LAS_AGENT_LOOP=legacy` rollback switch is active.
+   */
+  static shouldUseCoreLoop(env?: NodeJS.ProcessEnv): boolean {
+    return shouldUseCoreLoopForAgent(env);
+  }
+
+  /**
+   * Execute an agent turn through `CoreLoop` via `AgentRouteAdapter` (Option B).
+   */
+  static async runViaCoreLoop(input: AgentRouteCoreLoopInput): Promise<AgentRouteCoreLoopOutput> {
+    return runCoreLoopForAgent(input);
+  }
 }
+

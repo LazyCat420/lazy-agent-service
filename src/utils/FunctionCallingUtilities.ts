@@ -98,6 +98,7 @@ interface ExpandedMessage {
   tool_call_id?: string | null;
   thinking?: string;
   thinkingSignature?: string;
+  reasoning_content?: string;
   toolCalls?: ExpandedToolCall[];
   images?: string[];
   video?: string[];
@@ -133,11 +134,16 @@ export function expandMessagesForFunctionCall(
       message.toolCalls &&
       message.toolCalls.length > 0
     ) {
+      const msgWithReasoning = message as ChatMessage & {
+        reasoning_content?: string;
+      };
+      const reasoning = msgWithReasoning.reasoning_content || message.thinking;
       const assistantMessage: ExpandedMessage = {
         role: "assistant",
         content: message.content?.toString().trim() || null,
-        // Preserve thinking + signature for Anthropic multi-turn round-trips
+        // Preserve thinking + signature + reasoning_content for multi-turn round-trips (H1)
         ...(message.thinking && { thinking: message.thinking }),
+        ...(reasoning && { reasoning_content: reasoning }),
         ...(message.thinkingSignature && {
           thinkingSignature: message.thinkingSignature,
         }),
@@ -233,6 +239,16 @@ export function expandMessagesForFunctionCall(
         ...(message.pdf && message.pdf.length > 0 ? { pdf: message.pdf } : {}),
         ...(message.role === "assistant" && message.thinking
           ? { thinking: message.thinking }
+          : {}),
+        ...(message.role === "assistant" &&
+        ((message as ChatMessage & { reasoning_content?: string })
+          .reasoning_content ||
+          message.thinking)
+          ? {
+              reasoning_content:
+                (message as ChatMessage & { reasoning_content?: string })
+                  .reasoning_content || message.thinking,
+            }
           : {}),
         ...(message.role === "assistant" &&
         (message as ChatMessage & { thinkingSignature?: string })
