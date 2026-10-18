@@ -302,9 +302,11 @@ export async function* runCoreLoop(
         continue;
       }
 
-      // H1: Preserve thinking & reasoning_content on the assistant message across tool turns
+      // H1: Preserve thinking & reasoning_content on the assistant message across tool/text turns.
+      // Do not attach truncated thinking to empty-reply turns (no text and no toolCalls),
+      // which would otherwise bloat retry/finalPass turns with dead reasoning tokens.
       const assistant: ChatMessage = { role: "assistant", content: text };
-      if (thinking.length > 0) {
+      if (thinking.length > 0 && (calls.length > 0 || text.trim() !== "")) {
         assistant.thinking = thinking;
         assistant.reasoning_content = thinking;
       }

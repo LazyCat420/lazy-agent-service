@@ -185,8 +185,37 @@ const shouldFinalizeOf =
         : "TOKEN_BUDGET"
       : null;
 
+/**
+ * Ensures the initial `role: "user"` message (whose SHA-256 digest is pinned by
+ * `TradingLearningBoundary`) is never followed by another non-system `role: "user"`
+ * message that `normalizeRoleAlternation` would `.join("\n\n")` into it.
+ */
+export function protectInitialUserBriefFromMerge(
+  messages: ConversationMessage[],
+): ConversationMessage[] {
+  const firstUserIdx = messages.findIndex((m) => m.role === "user");
+  if (firstUserIdx === -1) return messages;
+
+  let nextNonSystemIdx = -1;
+  for (let i = firstUserIdx + 1; i < messages.length; i++) {
+    if (messages[i]?.role !== "system") {
+      nextNonSystemIdx = i;
+      break;
+    }
+  }
+
+  if (nextNonSystemIdx !== -1 && messages[nextNonSystemIdx]?.role === "user") {
+    return [
+      ...messages.slice(0, firstUserIdx + 1),
+      { role: "assistant", content: "(continuing)" } as ConversationMessage,
+      ...messages.slice(firstUserIdx + 1),
+    ];
+  }
+  return messages;
+}
+
 const coreModelForAgent = (context: AgentRouteAdapterContext): CoreModel => {
-  const baseOptions = {
+  const baseOptions: Record<string, unknown> = {
     ...(typeof context.options.systemPrompt === "string" &&
     context.options.systemPrompt
       ? { systemPrompt: context.options.systemPrompt }
@@ -197,6 +226,33 @@ const coreModelForAgent = (context: AgentRouteAdapterContext): CoreModel => {
     ...(typeof context.options.reasoningEffort === "string"
       ? { reasoningEffort: context.options.reasoningEffort }
       : {}),
+    ...(typeof context.options.thinkingEnabled === "boolean"
+      ? { thinkingEnabled: context.options.thinkingEnabled }
+      : {}),
+    ...(typeof context.options.topP === "number"
+      ? { topP: context.options.topP }
+      : {}),
+    ...(typeof context.options.topK === "number"
+      ? { topK: context.options.topK }
+      : {}),
+    ...(typeof context.options.minP === "number"
+      ? { minP: context.options.minP }
+      : {}),
+    ...(typeof context.options.repeatPenalty === "number"
+      ? { repeatPenalty: context.options.repeatPenalty }
+      : {}),
+    ...(Array.isArray(context.options.stopSequences)
+      ? { stopSequences: context.options.stopSequences }
+      : {}),
+    ...(typeof context.options.seed === "number"
+      ? { seed: context.options.seed }
+      : {}),
+    ...(typeof context.options.presencePenalty === "number"
+      ? { presencePenalty: context.options.presencePenalty }
+      : {}),
+    ...(typeof context.options.frequencyPenalty === "number"
+      ? { frequencyPenalty: context.options.frequencyPenalty }
+      : {}),
   };
 
   return (request: CoreModelRequest): AsyncIterable<StreamChunk> =>
@@ -206,7 +262,9 @@ const coreModelForAgent = (context: AgentRouteAdapterContext): CoreModel => {
       for (let attempt = 0; ; attempt++) {
         const internalMessages: ConversationMessage[] =
           request.messages as unknown as ConversationMessage[];
-        const normalized = normalizeRoleAlternation(internalMessages);
+        const guardedMessages =
+          protectInitialUserBriefFromMerge(internalMessages);
+        const normalized = normalizeRoleAlternation(guardedMessages);
         const expandedMessages = expandMessagesForFunctionCall(
           normalized.messages as unknown as AdminChatMessage[],
           {
@@ -217,6 +275,12 @@ const coreModelForAgent = (context: AgentRouteAdapterContext): CoreModel => {
           expandedMessages as unknown as ChatMessage[];
 
         if (context.sessionState) {
+          if (expanded[expanded.length - 1]?.role === "user") {
+            expanded.push({
+              role: "assistant",
+              content: "(continuing)",
+            });
+          }
           expanded.push({
             role: "user",
             content: sessionStateContextBlock(context.sessionState),

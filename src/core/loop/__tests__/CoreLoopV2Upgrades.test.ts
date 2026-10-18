@@ -2,7 +2,11 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { runCoreLoop } from "../CoreLoop.ts";
 import { SpillBuffer } from "../SpillBuffer.ts";
 import { RunawayStreamWatch, RUNAWAY_RECOVERY_NUDGE } from "../RunawayStreamWatch.ts";
-import { compactMessages, verifyToolPairAtomicity } from "../MessageCompactor.ts";
+import {
+  compactMessages,
+  estimateSingleMessageChars,
+  verifyToolPairAtomicity,
+} from "../MessageCompactor.ts";
 import {
   substituteToolBatchPlaceholders,
   substituteToolOutputTokens,
@@ -11,15 +15,24 @@ import { stripHistoricalReasoning, formatToolLoadoutDelta, shouldSkipTradingLear
 import { computeToolCallFingerprint } from "../ToolRunner.ts";
 import { normalizeLocalModelId } from "../../../services/DynamicModelResolver.ts";
 import { prepareTradingAgentRequest, shouldSkipLearningForProject } from "../../../services/TradingAgentRequest.ts";
+import {
+  prepareTradingRequest,
+  filterTradingPayload,
+} from "../../../services/learning/TradingLearningBoundary.ts";
 import { GlobalCapabilityExecutor } from "../../../services/GlobalCapabilityExecutor.ts";
 import AgenticLoopService from "../../../services/AgenticLoopService.ts";
 import {
   shouldUseCoreLoopForAgent,
   runCoreLoopForAgent,
   dispatchAgentRouteWithRollback,
+  protectInitialUserBriefFromMerge,
 } from "../AgentRouteAdapter.ts";
 import { expandMessagesForFunctionCall } from "../../../utils/FunctionCallingUtilities.ts";
-import { prepareOpenAICompatMessages } from "../../../utils/openai-compat.ts";
+import {
+  prepareOpenAICompatMessages,
+  prependIdentitySystemMessage,
+  rewriteNonLeadingSystemMessages,
+} from "../../../utils/openai-compat.ts";
 import { scriptedModel } from "./fakes.ts";
 import type {
   ChatMessage,
@@ -834,6 +847,135 @@ describe("CoreLoop v2 Upgrades (H1-H10) & Reliability Fixes", () => {
         if (prevEnv === undefined) delete process.env.LAS_AGENT_LOOP;
         else process.env.LAS_AGENT_LOOP = prevEnv;
       }
+    });
+
+    it("Dependency-Chain Regression (cycle-v3-1792361754): forwards thinkingEnabled:false on every turn and preserves TradingLearningBoundary user brief hash across empty-reply nudges, compaction, and finalPass", async () => {
+      // 1. Verify estimateSingleMessageChars does not double-count identical thinking + reasoning_content
+      const thinkingStr = "T".repeat(32_000);
+      const singleCount = estimateSingleMessageChars({
+        role: "assistant",
+        content: "ok",
+        thinking: thinkingStr,
+        reasoning_content: thinkingStr,
+      });
+      expect(singleCount).toBe(2 + 32_000 + 16);
+
+      // 2. Stamp a realistic 24KB trading brief via prepareTradingRequest (TradingLearningBoundary)
+      const originalBrief =
+        "## Cycle: cycle-v3-test\n## Ticker: AXP\n## Trace Parent: 0123456789abcdef\n" +
+        "Evidence line for AXP quant analysis.\n".repeat(600);
+      const stamped = prepareTradingRequest({
+        project: "vllm-trading-bot",
+        provider: "vllm",
+        agent: "CUSTOM_V3_QUANT_ANALYST",
+        conversationId: "conv_axp_quant",
+        systemPrompt: "You are the V3 Quant Analyst.",
+        messages: [{ role: "user", content: originalBrief }],
+      });
+
+      const recordedProviderOptions: Array<Record<string, unknown>> = [];
+      const recordedReceipts: Array<Record<string, unknown> | null> = [];
+      let turnIndex = 0;
+
+      // 3. Wire runCoreLoopForAgent through the exact vllm.ts message preparation + filterTradingPayload boundary
+      const coreOut = await runCoreLoopForAgent({
+        project: "vllm-trading-bot",
+        agent: "CUSTOM_V3_QUANT_ANALYST",
+        conversationId: "conv_axp_quant",
+        options: {
+          systemPrompt: stamped.systemPrompt,
+          thinkingEnabled: false,
+          temperature: 0.2,
+          topP: 0.9,
+          topK: 40,
+          minP: 0.05,
+          repeatPenalty: 1.05,
+          maxIterations: 4,
+          compactionBudgetTokens: 7000, // Tight budget to force mid-run compaction if bloated
+        },
+        messages: stamped.messages,
+        provider: {
+          async *generateTextStream(msgs, model, opts) {
+            recordedProviderOptions.push({ ...opts });
+
+            // Replicate vllm.ts lines 189-231 -> VllmShimService.ts:845 filterTradingPayload
+            const rewritten = rewriteNonLeadingSystemMessages(
+              prependIdentitySystemMessage(msgs as any, opts.systemPrompt as string),
+              model,
+            );
+            const compatMsgs = await prepareOpenAICompatMessages(rewritten as any);
+            const vllmPayload: Record<string, unknown> = {
+              model,
+              messages: compatMsgs,
+              ...(opts.thinkingEnabled !== undefined
+                ? {
+                    enable_thinking: opts.thinkingEnabled,
+                    chat_template_kwargs: { enable_thinking: opts.thinkingEnabled },
+                  }
+                : {}),
+            };
+
+            // Must NOT throw "Trading task delivery failed: original user brief is missing or changed"
+            const filtered = filterTradingPayload(vllmPayload);
+            recordedReceipts.push(filtered.receipt);
+
+            turnIndex += 1;
+            if (turnIndex <= 2) {
+              // Simulate a model that emitted 32KB of thinking and 0 chars of text (finish_reason=length)
+              yield { type: "thinking", content: "R".repeat(32_000) };
+              return;
+            }
+            // Turn 3 (finalPass): emit valid JSON artifact
+            yield '{"thesis_direction":"BULLISH","signal_strength":0.72}';
+          },
+        },
+        resolvedModel: "local-dspark/GLM-5.3-Flash-EXL3-TF",
+        signal: defaultSignal,
+        runtimeTools: { finalTools: [] },
+        emit: () => {},
+      });
+
+      expect(coreOut.result.status).toBe("completed");
+      expect(coreOut.result.text).toBe('{"thesis_direction":"BULLISH","signal_strength":0.72}');
+      expect(recordedProviderOptions).toHaveLength(3);
+
+      // Every single turn (Turn 1, Turn 2 retry, Turn 3 finalPass) MUST have thinkingEnabled: false
+      for (const opts of recordedProviderOptions) {
+        expect(opts.thinkingEnabled).toBe(false);
+        expect(opts.temperature).toBe(0.2);
+        expect(opts.topP).toBe(0.9);
+        expect(opts.topK).toBe(40);
+        expect(opts.minP).toBe(0.05);
+        expect(opts.repeatPenalty).toBe(1.05);
+      }
+
+      // Every single turn MUST pass TradingLearningBoundary with exact task_delivery
+      for (const receipt of recordedReceipts) {
+        expect(receipt).not.toBeNull();
+        expect(receipt?.task_delivery).toBe("exact");
+      }
+
+      // Also verify direct compaction + protectInitialUserBriefFromMerge when middle tool turns are evicted
+      const compactedWithFinalPass = compactMessages(
+        [
+          { role: "system", content: stamped.systemPrompt },
+          { role: "user", content: originalBrief },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [{ id: "tc1", name: "t", args: {} }],
+          },
+          { role: "tool", tool_call_id: "tc1", name: "t", content: "X".repeat(40_000) },
+          { role: "user", content: "Final pass instruction" },
+        ],
+        { budgetTokens: 7000, keepRecentGroups: 1 },
+      );
+      const guarded = protectInitialUserBriefFromMerge(compactedWithFinalPass as any);
+      const checkPayload = filterTradingPayload({
+        model: "local-dspark/GLM-5.3-Flash-EXL3-TF",
+        messages: guarded,
+      });
+      expect(checkPayload.receipt?.task_delivery).toBe("exact");
     });
   });
 });

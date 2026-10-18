@@ -20,9 +20,20 @@ export interface AtomicMessageGroup {
 
 export function estimateSingleMessageChars(msg: ChatMessage): number {
   let chars = typeof msg.content === "string" ? msg.content.length : 0;
-  if (typeof msg.thinking === "string") chars += msg.thinking.length;
-  if (typeof msg.reasoning_content === "string") {
-    chars += msg.reasoning_content.length;
+  const thinkingLen =
+    typeof msg.thinking === "string" ? msg.thinking.length : 0;
+  const reasoningLen =
+    typeof msg.reasoning_content === "string"
+      ? msg.reasoning_content.length
+      : 0;
+  if (
+    thinkingLen > 0 &&
+    reasoningLen > 0 &&
+    msg.thinking === msg.reasoning_content
+  ) {
+    chars += thinkingLen;
+  } else {
+    chars += thinkingLen + reasoningLen;
   }
   if (Array.isArray(msg.toolCalls)) {
     for (const tc of msg.toolCalls) {
@@ -272,9 +283,15 @@ export function compactMessages(
   }
 
   if (evictedCount > 0 && insertCompactionMarker) {
+    const markerContent = `[Context compacted: ${evictedMessages} earlier messages across ${evictedCount} tool/turn group(s) were removed to fit the context window.]`;
+    const lastHead = result[result.length - 1];
+    const firstKept = keptMiddle[0]?.messages[0];
     result.push({
-      role: "system",
-      content: `[Context compacted: ${evictedMessages} earlier messages across ${evictedCount} tool/turn group(s) were removed to fit the context window.]`,
+      role:
+        lastHead?.role === "user" && firstKept?.role === "user"
+          ? "assistant"
+          : "system",
+      content: markerContent,
     });
   }
 
