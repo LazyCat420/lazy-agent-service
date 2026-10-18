@@ -38,6 +38,7 @@ export interface RunsAdapterContext {
     maxTokens?: number;
     temperature?: number;
     reasoningEffort?: string;
+    systemPrompt?: string;
   };
   messages: ChatMessage[];
   provider: {
@@ -77,6 +78,9 @@ const shouldFinalizeOf = (context: RunsAdapterContext): (() => CoreFinalizeReaso
 /** The CoreModel adapter: one provider stream per CoreModelRequest. */
 const coreModelFor = (context: RunsAdapterContext): CoreModel => {
   const baseOptions = {
+    ...(typeof context.options.systemPrompt === "string" && context.options.systemPrompt
+      ? { systemPrompt: context.options.systemPrompt }
+      : {}),
     ...(typeof context.options.temperature === "number"
       ? { temperature: context.options.temperature }
       : {}),

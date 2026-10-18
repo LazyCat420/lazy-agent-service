@@ -237,4 +237,26 @@ describe("runCoreLoopForRun", () => {
     expect(final.options.thinkingEnabled).toBe(false);
     expect("thinkingEnabled" in first).toBe(false);
   });
+
+  it("8: every provider call carries the run system prompt", async () => {
+    const context = makeContext(
+      [
+        { chunks: [{ type: "toolCall", id: "t1", name: "global.web.search", args: { query: "q" } }] },
+        { throw: Object.assign(new Error("budget"), { code: "TOKEN_BUDGET_FINALIZE" }) },
+        { chunks: ["Answer."] },
+      ],
+      {
+        options: { maxIterations: 10, maxTokens: 2048, temperature: 0.4, systemPrompt: "SYS-RULES" },
+      },
+    );
+    const { result } = await collect(context);
+
+    expect(result.status).toBe("completed");
+    expect(context.calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of context.calls) {
+      expect(call.options.systemPrompt).toBe("SYS-RULES");
+    }
+    const final = context.calls.find((c) => c.options.toolChoice === "none")!;
+    expect(final.options.systemPrompt).toBe("SYS-RULES");
+  });
 });
