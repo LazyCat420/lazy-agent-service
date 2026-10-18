@@ -12,6 +12,7 @@ import type { CoreLoopEvent, CoreLoopOptions, CoreLoopResult, CoreModel, CoreToo
 import type { ChatMessage } from "../../../types/ProviderTypes.ts";
 import type { StreamChunk } from "../../../types/provider.ts";
 import {
+  alwaysThrowingModel,
   countingTool,
   deafHangingTool,
   hangingTool,
@@ -91,12 +92,12 @@ describe("core loop stress (S1–S18)", () => {
   });
 
   it("S2: per-tool timeout fires via injected timeoutSignalFor, run completes", async () => {
-    const controllers: Record<string, AbortController> = {};
+    const controllers = new Map<string, AbortController>();
     const deaf: CoreTool = {
       ...deafHangingTool("deaf"),
       timeoutMs: 50,
       execute: async () => {
-        controllers.deaf?.abort();
+        controllers.get("deaf")?.abort();
         const { promise } = Promise.withResolvers<void>();
         await promise;
       },
@@ -170,12 +171,13 @@ describe("core loop stress (S1–S18)", () => {
       [toolCall("c2", "search", { __raw: '{query:' })],
       ["both handled"],
     ]);
-    const { result } = await collect(optionsWith({ model, tools: [counter] }));
+    const { events, result } = await collect(optionsWith({ model, tools: [counter] }));
 
     expect(result.status).toBe("completed");
     expect(counter.calls[0]?.args).toEqual({ query: "x" });
     const bad = toolMessages(result.messages).find((m) => m.tool_call_id === "c2");
-    expect(bad?.isError).toBe(true);
+    expect(String(bad?.content)).toMatch(/TOOL_BAD_ARGS|invalid|arguments/i);
+    expect(events.some((e) => e.type === "tool.end" && e.call.id === "c2" && e.result.isError)).toBe(true);
     expectToolPairing(result.messages);
   });
 
@@ -335,7 +337,7 @@ describe("core loop stress (S1–S18)", () => {
     process.on("unhandledRejection", onUnhandled);
     let result: CoreLoopResult;
     try {
-      ({ result } = await collect(optionsWith({ model })));
+      ({ result } = await collect(optionsWith({ model, signal: controller.signal })));
       await new Promise((resolve) => setImmediate(resolve));
     } finally {
       process.off("unhandledRejection", onUnhandled);
@@ -346,7 +348,7 @@ describe("core loop stress (S1–S18)", () => {
   });
 
   it("S13: empty final pass synthesizes an answer from tool results", async () => {
-    const counter = countingTool("report");
+    const counter = countingTool("report", "quarterly widget output: 42 units");
     const model = scriptedModel([
       [toolCall("c1", "report")],
       [],
@@ -357,9 +359,7 @@ describe("core loop stress (S1–S18)", () => {
       [],
       [],
     ]);
-    const { result } = await collect(
-      optionsWith({ model, tools: [okTool("report", "quarterly widget output: 42 units")] }),
-    );
+    const { result } = await collect(optionsWith({ model, tools: [counter] }));
 
     expect(result.status).toBe("completed");
     expect(result.answerSource).toBe("synthetic");
@@ -379,11 +379,12 @@ describe("core loop stress (S1–S18)", () => {
   });
 
   it("S14b: persistent provider failure ends in status failed with an error code", async () => {
-    const model = scriptedModel([{ throw: new Error("500") }]);
+    const model = alwaysThrowingModel(new Error("500"));
     const { result } = await collect(optionsWith({ model }));
 
     expect(result.status).toBe("failed");
     expect(result.error?.code).toBeTruthy();
+    expect(model.calls.length).toBeGreaterThanOrEqual(2);
     expectToolPairing(result.messages);
   });
 

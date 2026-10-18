@@ -97,7 +97,7 @@ export function hugeTool(name: string, size: number): CoreTool {
   };
 }
 
-export function countingTool(name: string): CountingTool {
+export function countingTool(name: string, result?: string): CountingTool {
   const calls: Array<{ id: string; args: Record<string, unknown> }> = [];
   const tool: CountingTool = {
     name,
@@ -106,8 +106,24 @@ export function countingTool(name: string): CountingTool {
     calls,
     execute: async (args, context) => {
       calls.push({ id: context.toolCallId, args });
-      return `count-ok:${name}`;
+      return result ?? `count-ok:${name}`;
     },
   };
   return tool;
+}
+
+export function alwaysThrowingModel(error: Error): CoreModel & { calls: CoreModelRequest[] } {
+  const calls: CoreModelRequest[] = [];
+  const model = ((request: CoreModelRequest): AsyncIterable<StreamChunk> => {
+    calls.push({
+      ...request,
+      messages: structuredClone(request.messages) as ChatMessage[],
+      tools: structuredClone(request.tools),
+    });
+    return (async function* () {
+      throw error;
+    })();
+  }) as CoreModel & { calls: CoreModelRequest[] };
+  model.calls = calls;
+  return model;
 }
