@@ -214,6 +214,10 @@ Status 2026-10-17: `src/core/loop/{CoreLoop,ToolRunner,RunsAdapter,types}.ts`, t
 
 **C1f live eval (deploy `d850a63`, RunStore fix + chaos tools, `.scratch/harness-plan/eval-C1f/`):** trading 5 / 2 / 1, html-notes 7 / 1 / 0, no `DEADLINE_EXCEEDED`, slowest run 278 s, RestartCount unchanged. trading q2 completed with an empty answer: the final pass threw `TOKEN_BUDGET_FINALIZE` because CoreLoop never called `allowFinalPass()` (only legacy ReActHarness did), and the synthetic fallback was returned but never streamed. Fixed in C1g (`1138c81`). **Chaos eval** (`eval-chaos1/`, 10 parallel runs of throw/hang/huge/slow): 9 completed with correct answers, 0 restarts; 1 failed on a model-id transient (backlog 13). The hang tool's timeout never reached the tool (leak, no `tool.failed`); fixed in C1h.
 
+**C1h live eval (deploy `c2c082d`, `eval-C1h/`, `eval-chaos2/`):** chaos 10/10, 0 restarts. Gate: trading 6 / 2 / 0, html-notes 4 / 3 / 1. Two root causes found:
+- html-notes q2 (run-a36970c3): timers on time (soft 211.6 s), but the final pass streamed no text for 89 s and the hard deadline failed the run. CoreLoop never sent `thinkingEnabled`, so GLM reasoned through the final pass. C1i (`b1e5d6c`): final pass sends `thinkingEnabled: false` and has its own timeout (reserve − 10 s); on expiry it returns streamed partial text or the streamed synthetic answer.
+- 0 of 15 answers had a `Sources:` line (all WEAKs are "no source named"). CONFIRMED by code: `RunsAdapter.coreModelFor` passed only `temperature`/`reasoningEffort`, while providers prepend `options.systemPrompt` as the system message. Since C1, every `/v1/runs` request reached the model with no system prompt: no profile prefix, date line, callable tool list or Sources rule. C1j passes `systemPrompt` on every call.
+
 - [x] **B1 Loop skeleton (trait 1).**
   - Ref: pi `.scratch/harness-research/pi/packages/agent/dist/agent-loop.js` (675 lines, whole file); prism `ReActHarness.run:256`; LAS bakeoff loop.
   - LAS: `src/core/loop/CoreLoop.ts`. `run({messages, tools, provider, hooks, budget, signal})` → async iterator of events:
