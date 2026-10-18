@@ -16,6 +16,7 @@ import { DecisionService } from "../decision-fabric/DecisionService.ts";
 import { CanonicalProviderBudget } from "./CanonicalProviderBudget.ts";
 import { LocalToolContinuation } from "./LocalToolContinuation.ts";
 import AgenticLoopService from "./AgenticLoopService.ts";
+import { runCoreLoopForRun } from "../core/loop/RunsAdapter.ts";
 import { ProfileRegistry } from "./ProfileRegistry.ts";
 import { CapabilityRegistry } from "./CapabilityRegistry.ts";
 import { GlobalCapabilityExecutor } from "./GlobalCapabilityExecutor.ts";
@@ -745,7 +746,10 @@ export class RunExecutionEngine {
       if (options.maxTokens === 0) throw Object.assign(new Error("Token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
 
       // 9. Execute Agentic Loop Façade
-      const result = await AgenticLoopService.runAgenticLoop(context);
+      // Rollback switch for the CoreLoop cutover; removed with the legacy loops in Phase D.
+      const result = process.env.LAS_RUNS_LOOP === "legacy"
+        ? await AgenticLoopService.runAgenticLoop(context)
+        : await runCoreLoopForRun(context);
       abortController.signal.throwIfAborted();
       if (!result.messages?.some((m: any) => !messages.includes(m) && m.role === "assistant" && typeof m.content === "string" && m.content.trim())) {
         throw Object.assign(new Error("Run ended without an assistant answer"), { code: "INCOMPLETE_RUN" });

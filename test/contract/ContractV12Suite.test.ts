@@ -14,7 +14,11 @@ import { RunExecutionEngine } from "../../src/services/RunExecutionEngine.ts";
 import { RunStore } from "../../src/services/RunStore.ts";
 import { RunStateMachine } from "../../src/services/RunStateMachine.ts";
 import { RunEvidenceStore } from "../../src/platform/verify/RunEvidenceStore.ts";
-import AgenticLoopService from "../../src/services/AgenticLoopService.ts";
+
+const runsLoop = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock("../../src/core/loop/RunsAdapter.ts", () => ({
+  runCoreLoopForRun: (...args: unknown[]) => runsLoop.run(...args),
+}));
 
 describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
   const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -279,7 +283,7 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
   it("startRun emits signed local calls through the harness executor and forwards text", async () => {
     const events: any[] = [];
     const legacy = vi.spyOn(ToolOrchestratorService, "executeTool");
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (context) => {
+    runsLoop.run.mockImplementation(async (context) => {
       expect(context.runtimeTools?.finalTools.map(t => t.name)).toContain("html_notes.notes.create");
       expect(context.runtimeTools?.finalTools.map(t => t.name)).not.toContain("forbidden.tool");
       context.emit({ type: "chunk", content: "Preparing your note" });
@@ -309,7 +313,7 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
   });
 
   it("test_cancellation_transitions_once", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (ctx) => {
+    runsLoop.run.mockImplementation(async (ctx) => {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => resolve({ messages: [] } as any), 2000);
         ctx.signal?.addEventListener("abort", () => {
@@ -349,7 +353,7 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
   });
 
   it("test_timeout_transitions_once", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (ctx) => {
+    runsLoop.run.mockImplementation(async (ctx) => {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => resolve({ messages: [] } as any), 1000);
         ctx.signal?.addEventListener("abort", () => {
@@ -378,7 +382,7 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
   });
 
   it("test_receipt_contains_contract_and_profile_version", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockResolvedValue({
+    runsLoop.run.mockResolvedValue({
       messages: [{ role: "assistant", content: "Analysis complete." }],
     } as any);
 
@@ -400,7 +404,7 @@ describe("Developer 1 — Shared Runtime & Contract v1.2 Test Suite", () => {
   });
 
   it("test_duplicate_event_replay_is_idempotent", async () => {
-    const loopSpy = vi.spyOn(AgenticLoopService, "runAgenticLoop").mockResolvedValue({
+    const loopSpy = runsLoop.run.mockClear().mockResolvedValue({
       messages: [{ role: "assistant", content: "Idempotent result." }],
     } as any);
 

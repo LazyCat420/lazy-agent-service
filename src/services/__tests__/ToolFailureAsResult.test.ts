@@ -29,7 +29,7 @@ type LoopContext = {
   runtimeToolExecutor?: (call: { name: string; args?: Record<string, unknown> }) => Promise<unknown>;
 };
 let executorObservation: { value?: unknown; error?: unknown } = {};
-const runAgenticLoop = vi.fn(async (context: LoopContext) => {
+const runCoreLoopForRun = vi.fn(async (context: LoopContext) => {
   try {
     executorObservation.value = await context.runtimeToolExecutor?.({
       name: "global.web.read_page",
@@ -40,8 +40,8 @@ const runAgenticLoop = vi.fn(async (context: LoopContext) => {
   }
   return { messages: [{ role: "assistant", content: "done" }] };
 });
-vi.mock("../AgenticLoopService.ts", () => ({
-  default: { runAgenticLoop: (...args: Parameters<typeof runAgenticLoop>) => runAgenticLoop(...args) },
+vi.mock("../../core/loop/RunsAdapter.ts", () => ({
+  runCoreLoopForRun: (...args: Parameters<typeof runCoreLoopForRun>) => runCoreLoopForRun(...args),
 }));
 
 import { RunExecutionEngine } from "../RunExecutionEngine.ts";

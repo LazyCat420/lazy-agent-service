@@ -38,12 +38,12 @@ type LoopContext = {
   runtimeTools?: { finalTools: Array<{ name: string }>; resolvedEnabledTools: string[] };
 };
 let capturedContext: LoopContext | undefined;
-const runAgenticLoop = vi.fn(async (context: LoopContext) => {
+const runCoreLoopForRun = vi.fn(async (context: LoopContext) => {
   capturedContext = context;
   return { messages: [{ role: "assistant", content: "done" }] };
 });
-vi.mock("../AgenticLoopService.ts", () => ({
-  default: { runAgenticLoop: (...args: Parameters<typeof runAgenticLoop>) => runAgenticLoop(...args) },
+vi.mock("../../core/loop/RunsAdapter.ts", () => ({
+  runCoreLoopForRun: (...args: Parameters<typeof runCoreLoopForRun>) => runCoreLoopForRun(...args),
 }));
 
 import { RunExecutionEngine } from "../RunExecutionEngine.ts";

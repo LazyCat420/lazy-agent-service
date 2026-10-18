@@ -3,7 +3,11 @@ import { RunExecutionEngine } from "../../src/services/RunExecutionEngine.ts";
 import { ProfileRegistry } from "../../src/services/ProfileRegistry.ts";
 import { RunStore } from "../../src/services/RunStore.ts";
 import { RunStateMachine } from "../../src/services/RunStateMachine.ts";
-import AgenticLoopService from "../../src/services/AgenticLoopService.ts";
+
+const runsLoop = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock("../../src/core/loop/RunsAdapter.ts", () => ({
+  runCoreLoopForRun: (...args: unknown[]) => runsLoop.run(...args),
+}));
 import { RunEvidenceStore } from "../../src/platform/verify/RunEvidenceStore.ts";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "node:path";
@@ -28,7 +32,7 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
   });
 
   it("isolates execution requests across concurrent runs", async () => {
-    const loopSpy = vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (ctx) => {
+    const loopSpy = runsLoop.run.mockClear().mockImplementation(async (ctx) => {
       return {
         messages: [{ role: "assistant", content: `Response for conversation ${ctx.conversationId}` }],
       } as any;
@@ -68,7 +72,7 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
   });
 
   it("handles explicit cancellation propagation to active loop", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (ctx) => {
+    runsLoop.run.mockImplementation(async (ctx) => {
       if (ctx.signal?.aborted) {
         throw new Error("Aborted");
       }
@@ -110,7 +114,7 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
   });
 
   it("enforces deadline timeout and transitions to timed_out", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (ctx) => {
+    runsLoop.run.mockImplementation(async (ctx) => {
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           resolve({ messages: [{ role: "assistant", content: "Finished too late" }] } as any);
@@ -146,7 +150,7 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
   });
 
   it("proves concurrent duplicate idempotency-key test executes exactly once and signals conflict", async () => {
-    const loopSpy = vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async () => {
+    const loopSpy = runsLoop.run.mockClear().mockImplementation(async () => {
       // Simulate 50ms execution delay to create race window
       await new Promise((resolve) => setTimeout(resolve, 50));
       return {
@@ -186,7 +190,7 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
   });
 
   it("survives service restart/reload and returns cached idempotency result", async () => {
-    const loopSpy = vi.spyOn(AgenticLoopService, "runAgenticLoop").mockResolvedValue({
+    const loopSpy = runsLoop.run.mockClear().mockResolvedValue({
       messages: [{ role: "assistant", content: "Durable result preserved" }],
     } as any);
 
@@ -219,7 +223,7 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
   });
 
   it("seals context receipt, usage, and evidence records into authoritative RunRecord", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (ctx) => {
+    runsLoop.run.mockImplementation(async (ctx) => {
       // Simulate span creation into RunEvidenceStore
       RunEvidenceStore.getGlobalInstance().record({
         trace_id: "tr-001",
@@ -380,7 +384,7 @@ describe("Authoritative Run API Contract & State Machine Tests", () => {
   });
 
   it("accepts valid v1.1.0 contract_version in CreateRunRequest", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockResolvedValue({
+    runsLoop.run.mockResolvedValue({
       messages: [{ role: "assistant", content: "Contract v1.1.0 accepted" }],
     } as any);
 

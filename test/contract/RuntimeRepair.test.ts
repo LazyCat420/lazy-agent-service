@@ -5,7 +5,11 @@ import { LocalToolContinuation } from "../../src/services/LocalToolContinuation.
 import { ProfileRegistry } from "../../src/services/ProfileRegistry.ts";
 import { RunStore } from "../../src/services/RunStore.ts";
 import { RuntimeExtensions } from "../../src/services/RuntimeExtensions.ts";
-import AgenticLoopService from "../../src/services/AgenticLoopService.ts";
+
+const runsLoop = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock("../../src/core/loop/RunsAdapter.ts", () => ({
+  runCoreLoopForRun: (...args: unknown[]) => runsLoop.run(...args),
+}));
 
 const profile = "html-notes-canvas-v1";
 const schema = { name: "html_notes.notes.get", description: "Read a note", parameters: { type: "object" } };
@@ -19,20 +23,20 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe("Canonical repair regressions", () => {
   it("rejects an exact unknown version, then permits a corrected admission with the same key", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockResolvedValue({ messages: [{ role: "assistant", content: "Ready" }] });
+    runsLoop.run.mockResolvedValue({ messages: [{ role: "assistant", content: "Ready" }] });
     const request = { profile_id: profile, profile_version: "99.0.0", input: "news", idempotency_key: crypto.randomUUID() };
     expect((await Engine.startRun("invalid", request, () => {})).error?.code).toBe("PROFILE_NOT_FOUND");
     expect((await Engine.startRun("valid", { ...request, profile_version: "1.2.0" }, () => {})).status).toBe("completed");
   });
 
   it("validates the top-level model actually executed", async () => {
-    const loop = vi.spyOn(AgenticLoopService, "runAgenticLoop");
+    const loop = runsLoop.run.mockClear();
     expect((await Engine.startRun("bad-model", { profile_id: profile, model: "outside-policy", input: "news" }, () => {})).error?.code).toBe("INVALID_RUN_REQUEST");
     expect(loop).not.toHaveBeenCalled();
   });
 
   it("preserves zero tool calls and replays the original failed terminal outcome", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+    runsLoop.run.mockImplementation(async context => {
       await context.runtimeToolExecutor!({ id: "call", name: schema.name, args: {} });
       return { messages: [] };
     });
@@ -45,7 +49,7 @@ describe("Canonical repair regressions", () => {
   });
 
   it("softly caps tool calls when budget is exceeded for non-zero budget, prompting model to synthesize", async () => {
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+    runsLoop.run.mockImplementation(async context => {
       // First call (within budget)
       await context.runtimeToolExecutor!({ id: "call1", name: "global.time.now", args: {} });
       // Second call (exceeds budget)
@@ -66,7 +70,7 @@ describe("Canonical repair regressions", () => {
     let admission: any;
     let notify!: () => void;
     const pending = new Promise<void>(resolve => { notify = resolve; });
-    vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+    runsLoop.run.mockImplementation(async context => {
       expect(context.messages[0].content).toContain("canvas fixture");
       const observation = await context.runtimeToolExecutor!({ id: "call", name: schema.name, args: {} });
       expect(observation).toEqual({ links: ["https://example.com/news"] });
@@ -90,13 +94,13 @@ describe("Canonical repair regressions", () => {
 });
 
 it("fails readiness when a required guard is not installed", async () => {
-  const loop = vi.spyOn(AgenticLoopService, "runAgenticLoop");
+  const loop = runsLoop.run.mockClear();
   const result = await Engine.startRun("guard", { profile_id: "trading-analyst-v1", input: "Analyze" }, () => {});
   expect(result.error?.code).toBe("PROFILE_NOT_READY");
   expect(loop).not.toHaveBeenCalled();
 });
 it("zero duration expires before generation and stays timed out on replay", async () => {
-  const loop = vi.spyOn(AgenticLoopService, "runAgenticLoop");
+  const loop = runsLoop.run.mockClear();
   const request = { profile_id: profile, input: "news", budget: { max_duration_ms: 0 }, idempotency_key: crypto.randomUUID() };
   expect((await Engine.startRun("expired", request, () => {})).status).toBe("timed_out");
   expect((await Engine.startRun("expired-replay", request, () => {})).status).toBe("timed_out");
@@ -123,7 +127,7 @@ it("accepts an unversioned effective tool only at the registered version", async
 
 it("does not promote the user task or history into the shared system prompt", async () => {
   const content = `user-task-${crypto.randomUUID()}`;
-  vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+  runsLoop.run.mockImplementation(async context => {
     expect(context.options.systemPrompt).not.toContain(content);
     expect(context.messages.filter(message => message.role === "user" && message.content === content)).toHaveLength(1);
     return { messages: [{ role: "assistant", content: "Done" }] };
@@ -158,7 +162,7 @@ it("executes required context, before-tool, result, and final-validator hooks in
   let admission: any;
   let notify!: () => void;
   const pending = new Promise<void>(resolve => { notify = resolve; });
-  vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+  runsLoop.run.mockImplementation(async context => {
     expect(context.options.systemPrompt).toContain("trusted application context");
     const observation = await context.runtimeToolExecutor!({ id: "hook-call", name: schema.name, args: {} });
     expect(observation).toEqual({ title: "fixture note" });
@@ -209,7 +213,7 @@ it("executes declared workers inside the parent budget and contributes their evi
     profile_id: profileId,
     plugins: { worker_plugins: [workerName] },
   });
-  vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async context => {
+  runsLoop.run.mockImplementation(async context => {
     expect(context.options.systemPrompt).toContain("bounded evidence");
     return { messages: [{ role: "assistant", content: "Synthesized" }] };
   });
@@ -243,7 +247,7 @@ it("fails closed when a worker exceeds its allocated token budget", async () => 
   });
   const base = await ProfileRegistry.loadProfile(profile);
   ProfileRegistry.registerProfile({ ...base!, profile_id: profileId, plugins: { worker_plugins: [workerName] } });
-  const loop = vi.spyOn(AgenticLoopService, "runAgenticLoop");
+  const loop = runsLoop.run.mockClear();
   const result = await Engine.startRun("worker-over-budget", { profile_id: profileId, input: "Research" }, () => {});
   expect(result.error?.code).toBe("WORKER_BUDGET_EXHAUSTED");
   expect(loop).not.toHaveBeenCalled();

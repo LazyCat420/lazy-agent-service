@@ -7,7 +7,11 @@ import { CreateRunRequest, RunEvent } from "../../src/types/run.ts";
 import { RunExecutionEngine } from "../../src/services/RunExecutionEngine.ts";
 import { ProfileRegistry } from "../../src/services/ProfileRegistry.ts";
 import { RunEvidenceStore } from "../../src/platform/verify/RunEvidenceStore.ts";
-import AgenticLoopService from "../../src/services/AgenticLoopService.ts";
+
+const runsLoop = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock("../../src/core/loop/RunsAdapter.ts", () => ({
+  runCoreLoopForRun: (...args: unknown[]) => runsLoop.run(...args),
+}));
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +33,7 @@ describe("local tool schema missing warning", () => {
 	});
 
 	function makeLoopMock(shouldContain: boolean) {
-		return vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (ctx) => {
+		return runsLoop.run.mockImplementation(async (ctx) => {
 			// Assert the loop received the expected local schema state for
 			// obsidian.read_note — absent when schemaless, present otherwise.
 			const runtimeTools = (ctx as { runtimeTools?: { finalTools: Array<{ name: string }> } }).runtimeTools;
@@ -106,7 +110,7 @@ describe("local tool schema missing warning", () => {
 
 	it("does not warn for global capabilities (schemaless by design)", async () => {
 		const seenFinalTools: string[] = [];
-		vi.spyOn(AgenticLoopService, "runAgenticLoop").mockImplementation(async (ctx) => {
+		runsLoop.run.mockImplementation(async (ctx) => {
 			const rt = (ctx as { runtimeTools?: { finalTools: Array<{ name: string }> } }).runtimeTools;
 			seenFinalTools.push(...(rt?.finalTools ?? []).map((t) => t.name));
 			return { messages: [{ role: "assistant", content: "done" }] } as never;
