@@ -267,7 +267,10 @@ Status 2026-10-17: `src/core/loop/{CoreLoop,ToolRunner,RunsAdapter,types}.ts`, t
 
 ### Phase C: move the routes onto CoreLoop
 
-- [ ] **C1** `/v1/runs` (`RunExecutionEngine`) runs CoreLoop. Gate: 8-question probe, both profiles ≥ 7/8, no `run.failed` except true infra errors; container RestartCount unchanged.
+- [x] **C1** `/v1/runs` (`RunExecutionEngine`) runs CoreLoop. Gate: 8-question probe, both profiles ≥ 7/8, no `run.failed` except true infra errors; container RestartCount unchanged.
+  - **Gate passed 2026-10-18** (deploy `6640a23`, `.scratch/harness-plan/eval-C1k/`): trading 7/8 PASS, html-notes 8/8 PASS, 0 WEAK, 0 `run.failed`, RestartCount 0. The one FAIL (trading q6) was the eval judge timing out; LAS returned a full answer from the final pass at 265 s. Chaos (`eval-chaos4/`, 10 parallel throw/hang/huge/slow runs): 10/10 answered, 0 restarts.
+  - Fixes needed to get there after `43552d3`: C1b/C1d (soft cut reaches in-flight model and tools), RunStore coalesced flushes (`e9c68bc`), C1g (final pass may spend the reserve; synthetic answer streamed), C1h (tool timeout reaches global tools), C1i (final pass thinking-off + own timeout), C1j (system prompt reaches CoreLoop calls), C1k (budget never refuses the final pass).
+  - Score history (trading / html-notes PASS of 8): baseline 2/1 → Phase A 4/5 → C1 5/6 → C1e 5/5 → C1f 5/7 → C1h 6/4 → C1j 5/8 → **C1k 7/8**.
 - [ ] **C2** Obsidian vault proxy (`src/services/ObsidianCompletionJobs.ts`) and ChatRoutes FC loop (`src/routes/ChatRoutes.ts` ~1229-1244) run CoreLoop.
 - [ ] **C3** LLMSortObsidian plugin: `useSharedRuntime:true`; vault tools become client tools via `LocalToolContinuation`; plugin's own `run_agent` loop deleted. Live check in Obsidian.
 - [ ] **C4** html-notes news goes through `/v1/runs` instead of one-shot nemotron. First re-verify `routes/message.py:924-953`, `config_builders.py:856`, `canvas_manager.py:698` (reported, not re-checked).
