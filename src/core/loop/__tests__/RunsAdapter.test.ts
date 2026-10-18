@@ -221,4 +221,20 @@ describe("runCoreLoopForRun", () => {
     expect(second).toBe(Math.min(Math.floor(first / 2), 90000 - 31919 - 1024));
     expect(second).toBeLessThan(first);
   });
+
+  it("7: the final pass asks the provider for thinking off", async () => {
+    const context = makeContext([
+      { chunks: [{ type: "toolCall", id: "t1", name: "global.web.search", args: { query: "q" } }] },
+      { throw: Object.assign(new Error("budget"), { code: "TOKEN_BUDGET_FINALIZE" }) },
+      { chunks: ["Answer."] },
+    ]);
+    const { result } = await collect(context);
+
+    expect(result.status).toBe("completed");
+    expect(context.calls).toHaveLength(3);
+    const first = context.calls[0]!.options;
+    const final = context.calls.find((c) => c.options.toolChoice === "none")!;
+    expect(final.options.thinkingEnabled).toBe(false);
+    expect("thinkingEnabled" in first).toBe(false);
+  });
 });

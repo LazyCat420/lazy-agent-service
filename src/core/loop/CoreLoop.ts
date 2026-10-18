@@ -285,6 +285,12 @@ export async function* runCoreLoop(
   modelCalls++;
   let finalText = "";
   let finalError: unknown;
+  const finalTimeout =
+    options.finalPassTimeoutMs === undefined
+      ? undefined
+      : (options.finalPassSignalFor ?? ((ms: number) => AbortSignal.timeout(ms)))(options.finalPassTimeoutMs);
+  const finalSignal = finalTimeout ? AbortSignal.any([options.signal, finalTimeout]) : options.signal;
+  let finalTimedOut = false;
   for (let attempt = 0; attempt < 2; attempt++) {
     let stream: AsyncIterable<StreamChunk> | undefined;
     try {
@@ -292,8 +298,8 @@ export async function* runCoreLoop(
         messages: hooked,
         tools: schemas,
         toolChoice: "none",
-        signal: options.signal,
         finalPass: true,
+        signal: finalSignal,
       });
       for await (const chunk of stream) {
         if (typeof chunk === "string") {
@@ -312,7 +318,16 @@ export async function* runCoreLoop(
       await closeStream(stream);
       finalError = error;
       if (options.signal.aborted) return makeCancelled();
+      if (finalTimeout?.aborted) {
+        finalTimedOut = true;
+        break;
+      }
     }
+  }
+
+  if (finalTimedOut) {
+    yield { type: "warning", code: "FINAL_PASS_TIMEOUT", message: "The final answer pass ran out of time." };
+    finalError = undefined;
   }
 
   const synthetic =

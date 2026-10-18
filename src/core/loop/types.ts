@@ -122,6 +122,10 @@ export interface CoreLoopOptions {
   maxConsecutiveToolErrors?: number;
   /** Injected clock for durations; default Date.now. */
   now?: () => number;
+  /** Max time for the toolless final pass; on expiry the loop answers with streamed partial text or the synthetic fallback. Undefined = no limit. */
+  finalPassTimeoutMs?: number;
+  /** Test seam: builds the final-pass timeout signal; default `AbortSignal.timeout(ms)`. */
+  finalPassSignalFor?: (ms: number) => AbortSignal;
   /** Builds each tool's timeout signal; default `AbortSignal.timeout(ms)`. Tests inject controllable signals. */
   timeoutSignalFor?: (toolName: string, ms: number) => AbortSignal;
 }

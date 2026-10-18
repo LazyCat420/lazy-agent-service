@@ -278,9 +278,10 @@ export class RunExecutionEngine {
       }, deadlineMs);
     }
 
+    const finalReserveMs = deadlineMs > 0 ? Math.min(90000, Math.floor(deadlineMs * 0.3)) : 0;
     if (deadlineMs > 0) {
       // Final-pass reserve: GLM at ~13 tok/s needed >56 s to write a full answer (eval 2026-10-17), so 45 s was too short.
-      const softMs = deadlineMs - Math.min(90000, Math.floor(deadlineMs * 0.3));
+      const softMs = deadlineMs - finalReserveMs;
       if (softMs > 0) {
         softDeadlineTimer = setTimeout(() => {
           if (finalizeRequest) return;
@@ -603,6 +604,7 @@ export class RunExecutionEngine {
       runContext = context;
       if (finalizeRequest) context.finalizeRequested = finalizeRequest;
       context.finalizeSignal = finalizeController.signal;
+      if (finalReserveMs > 0) context.finalPassTimeoutMs = Math.max(5000, finalReserveMs - 10000);
       // The harness reads the canonical budget to request a final reserve pass.
       context.canonicalBudget = accounting;
       context.emit = (event: any) => {

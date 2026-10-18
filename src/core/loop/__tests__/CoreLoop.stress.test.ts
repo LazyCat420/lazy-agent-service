@@ -679,4 +679,73 @@ describe("finalize signal", () => {
     const postFinalizeDeltas = events.slice(finalizeIndex + 1).filter(isDelta).map((e) => e.text);
     expect(postFinalizeDeltas.join("")).toBe(result.text);
   });
+
+  it("S26: a silent final pass times out into the streamed synthetic answer", async () => {
+    const budgetError = Object.assign(new Error("budget"), { code: "TOKEN_BUDGET_FINALIZE" });
+    const scripted = scriptedModel([[toolCall("c1", "widgets")], { throw: budgetError }]);
+    const ctrl = new AbortController();
+    const calls: CoreModelRequest[] = [];
+    const model: CoreModel = (request) => {
+      calls.push(request);
+      if (request.finalPass) {
+        return (async function* () {
+          queueMicrotask(() => ctrl.abort());
+          const { promise, reject } = Promise.withResolvers<never>();
+          request.signal.addEventListener("abort", () => reject(new Error("final pass aborted")));
+          await promise;
+        })();
+      }
+      return scripted(request);
+    };
+    const { events, result } = await collect(
+      optionsWith({
+        model,
+        tools: [okTool("widgets", "quarterly widget output: 42 units")],
+        finalPassTimeoutMs: 1000,
+        finalPassSignalFor: () => ctrl.signal,
+      }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.answerSource).toBe("synthetic");
+    const isDelta = (e: CoreLoopEvent): e is Extract<CoreLoopEvent, { type: "text.delta" }> => e.type === "text.delta";
+    expect(events.filter(isDelta).map((e) => e.text).join("")).toContain("42 units");
+    expect(events.some((e) => e.type === "warning" && e.code === "FINAL_PASS_TIMEOUT")).toBe(true);
+    expect(calls.filter((c) => c.finalPass)).toHaveLength(1);
+  });
+
+  it("S27: a final pass that times out after streaming keeps its text", async () => {
+    const budgetError = Object.assign(new Error("budget"), { code: "TOKEN_BUDGET_FINALIZE" });
+    const scripted = scriptedModel([[toolCall("c1", "widgets")], { throw: budgetError }]);
+    const ctrl = new AbortController();
+    const model: CoreModel = (request) => {
+      if (request.finalPass) {
+        return (async function* () {
+          const { promise, reject } = Promise.withResolvers<never>();
+          request.signal.addEventListener("abort", () => reject(new Error("final pass aborted")));
+          queueMicrotask(() => ctrl.abort());
+          yield "Partial answer. ";
+          await promise;
+        })();
+      }
+      return scripted(request);
+    };
+    const { events, result } = await collect(
+      optionsWith({
+        model,
+        tools: [okTool("widgets", "quarterly widget output: 42 units")],
+        finalPassTimeoutMs: 1000,
+        finalPassSignalFor: () => ctrl.signal,
+      }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.answerSource).toBe("model");
+    expect(result.text).toContain("Partial answer.");
+    expect(events.some((e) => e.type === "warning" && e.code === "FINAL_PASS_TIMEOUT")).toBe(true);
+    const isDelta = (e: CoreLoopEvent): e is Extract<CoreLoopEvent, { type: "text.delta" }> => e.type === "text.delta";
+    const finalizeIndex = events.findIndex((e) => e.type === "finalize");
+    const postFinalizeDeltas = events.slice(finalizeIndex + 1).filter(isDelta).map((e) => e.text);
+    expect(postFinalizeDeltas.join("")).not.toContain("I couldn't finish");
+  });
 });

@@ -53,6 +53,8 @@ export interface RunsAdapterContext {
   runtimeToolExecutor(call: { id: string; name: string; args: Record<string, unknown> }, signal?: AbortSignal): Promise<unknown>;
   finalizeRequested?: { reason: string };
   finalizeSignal?: AbortSignal;
+  /** Final-pass time limit (ms); see CoreLoopOptions.finalPassTimeoutMs. */
+  finalPassTimeoutMs?: number;
   /** Test seam: builds each tool's timeout signal (forwarded to CoreLoop's timeoutSignalFor). */
   timeoutSignalFor?: (toolName: string, ms: number) => AbortSignal;
   /** Run token budget; the final pass must be allowed to spend its reserve. */
@@ -115,6 +117,7 @@ const coreModelFor = (context: RunsAdapterContext): CoreModel => {
             maxTokens,
             tools: request.tools,
             toolChoice: request.toolChoice,
+            ...(request.finalPass ? { thinkingEnabled: false } : {}),
             signal: request.signal,
           });
           for await (const chunk of stream) {
@@ -181,6 +184,7 @@ export async function runCoreLoopForRun(
     messages: context.messages,
     signal: context.signal,
     finalizeSignal: context.finalizeSignal,
+    finalPassTimeoutMs: context.finalPassTimeoutMs,
     timeoutSignalFor: context.timeoutSignalFor,
     // B8 compaction: blocked — manageContextPressure requires a full AgenticContext
     // (AgentHooks, modelDefinition, AgenticLoopState, emit) plus a harness label;
