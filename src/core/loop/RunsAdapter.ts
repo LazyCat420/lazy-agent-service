@@ -53,6 +53,8 @@ export interface RunsAdapterContext {
   runtimeToolExecutor(call: { id: string; name: string; args: Record<string, unknown> }): Promise<unknown>;
   finalizeRequested?: { reason: string };
   finalizeSignal?: AbortSignal;
+  /** Run token budget; the final pass must be allowed to spend its reserve. */
+  canonicalBudget?: { allowFinalPass(): void };
   emit(event: { type: string; content?: string; data?: unknown }): void;
   sessionState?: SessionState;
 }
@@ -81,6 +83,7 @@ const coreModelFor = (context: RunsAdapterContext): CoreModel => {
 
   return (request: CoreModelRequest): AsyncIterable<StreamChunk> =>
     (async function* () {
+      if (request.finalPass) context.canonicalBudget?.allowFinalPass();
       let maxTokens = context.options.maxTokens;
       for (let attempt = 0; ; attempt++) {
         // Role alternation first (internal format), then function-call expansion —

@@ -337,7 +337,8 @@ export async function* runCoreLoop(
         answerSource: "model",
       };
     }
-    messages.push({ role: "assistant", content: synthetic });
+    yield { type: "text.delta", text: synthetic };
+  messages.push({ role: "assistant", content: synthetic });
     return {
       status: "completed",
       text: synthetic,
@@ -402,6 +403,7 @@ export async function* runCoreLoop(
     };
   }
 
+  yield { type: "text.delta", text: synthetic };
   messages.push({ role: "assistant", content: synthetic });
   return {
     status: "completed",

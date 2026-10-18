@@ -656,4 +656,27 @@ describe("finalize signal", () => {
     expect(result.status).toBe("completed");
     expect(result.text).toBe("Part one. ");
   });
+
+  it("S25: a synthetic fallback answer is streamed as text.delta", async () => {
+    const budgetError = Object.assign(new Error("budget"), { code: "TOKEN_BUDGET_FINALIZE" });
+    const scripted = scriptedModel([[toolCall("c1", "widgets")], { throw: budgetError }]);
+    const model: CoreModel = (request) => {
+      if (request.finalPass) {
+        return (async function* () {
+          throw budgetError;
+        })();
+      }
+      return scripted(request);
+    };
+    const { events, result } = await collect(optionsWith({ model, tools: [okTool("widgets", "quarterly widget output: 42 units")] }));
+
+    expect(result.status).toBe("completed");
+    expect(result.answerSource).toBe("synthetic");
+    const isDelta = (e: CoreLoopEvent): e is Extract<CoreLoopEvent, { type: "text.delta" }> => e.type === "text.delta";
+    const deltas = events.filter(isDelta).map((e) => e.text);
+    expect(deltas.join("")).toContain("quarterly widget output: 42 units");
+    const finalizeIndex = events.findIndex((e) => e.type === "finalize");
+    const postFinalizeDeltas = events.slice(finalizeIndex + 1).filter(isDelta).map((e) => e.text);
+    expect(postFinalizeDeltas.join("")).toBe(result.text);
+  });
 });

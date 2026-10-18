@@ -3,7 +3,7 @@
  * adapter; the fake provider records every call. No real timers — tools
  * settle immediately and the abort signal is always created fresh.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "../../../types/ProviderTypes.ts";
 import type { StreamChunk } from "../../../types/provider.ts";
 import { runCoreLoopForRun, type RunsAdapterContext } from "../RunsAdapter.ts";
@@ -31,6 +31,7 @@ const TOOL = {
 const makeContext = (
   turns: ProviderTurn[],
   overrides: Partial<RunsAdapterContext> = {},
+  order?: string[],
 ): TestContext => {
   const calls: RecordedCall[] = [];
   const toolCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
@@ -40,6 +41,7 @@ const makeContext = (
       model: string,
       options: Record<string, unknown>,
     ): AsyncIterable<StreamChunk> {
+      order?.push("providerCall");
       calls.push({ messages: structuredClone(messages), model, options: structuredClone(options) });
       const turn = turns[calls.length - 1];
       if (!turn) throw new Error("no scripted turn for call " + calls.length);
@@ -132,6 +134,27 @@ describe("runCoreLoopForRun", () => {
     expect(result.status).toBe("completed");
     expect(result.text).toBe("Answering from what I have.");
     expect(context.calls.length).toBe(3);
+  });
+
+  it("5: the final pass calls canonicalBudget.allowFinalPass before the provider call", async () => {
+    const order: string[] = [];
+    const allowFinalPass = vi.fn(() => {
+      order.push("allowFinalPass");
+    });
+    const context = makeContext(
+      [
+        { chunks: [{ type: "toolCall", id: "t1", name: "global.web.search", args: { query: "q" } }] },
+        { throw: Object.assign(new Error("budget"), { code: "TOKEN_BUDGET_FINALIZE" }) },
+        { chunks: ["Answering from what I have."] },
+      ],
+      { canonicalBudget: { allowFinalPass } },
+      order,
+    );
+    const { result } = await collect(context);
+
+    expect(result.status).toBe("completed");
+    expect(allowFinalPass).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["providerCall", "providerCall", "allowFinalPass", "providerCall"]);
   });
 
   it("5: every provider call receives a byte-identical tools option", async () => {
