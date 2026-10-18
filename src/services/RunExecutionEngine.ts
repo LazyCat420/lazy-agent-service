@@ -623,6 +623,7 @@ export class RunExecutionEngine {
       const planApproved = !!(context as any).planApproved || !!((request.runtime_overrides as any)?.planApproved);
       const executeAdmittedTool = async (
         call: ToolCall & { arguments?: Record<string, unknown> },
+        toolSignal?: AbortSignal,
       ): Promise<{ observation: unknown; dispatched: boolean }> => {
         abortController.signal.throwIfAborted();
         if (++actualToolCalls > maxToolCalls) {
@@ -686,7 +687,7 @@ export class RunExecutionEngine {
         }
         const processed = await this.processToolCall(runId, call, {
           approval_id: approvalId,
-          signal: abortController.signal,
+          signal: toolSignal ? AbortSignal.any([abortController.signal, toolSignal]) : abortController.signal,
           profile_id: profile.profile_id,
           profile_version: profile.version,
           app_id: scopeAppId,
@@ -733,13 +734,14 @@ export class RunExecutionEngine {
       // updates session state.
       context.runtimeToolExecutor = async (
         call: ToolCall & { arguments?: Record<string, unknown> },
+        toolSignal?: AbortSignal,
       ) => {
         const localPolicy = profile.local_tool_policy?.[call.name];
         const writeCapture = captureWriteSyntaxGuard(
           (call.args || call.arguments || {}) as Record<string, unknown>,
           localPolicy?.effect,
         );
-        const { observation, dispatched } = await executeAdmittedTool(call);
+        const { observation, dispatched } = await executeAdmittedTool(call, toolSignal);
         const guarded = dispatched
           ? enforceWriteSyntaxGuard(writeCapture, observation)
           : observation;

@@ -50,9 +50,11 @@ export interface RunsAdapterContext {
   resolvedModel: string;
   signal: AbortSignal;
   runtimeTools: { finalTools: Array<{ name: string; description: string; parameters: Record<string, unknown> }> };
-  runtimeToolExecutor(call: { id: string; name: string; args: Record<string, unknown> }): Promise<unknown>;
+  runtimeToolExecutor(call: { id: string; name: string; args: Record<string, unknown> }, signal?: AbortSignal): Promise<unknown>;
   finalizeRequested?: { reason: string };
   finalizeSignal?: AbortSignal;
+  /** Test seam: builds each tool's timeout signal (forwarded to CoreLoop's timeoutSignalFor). */
+  timeoutSignalFor?: (toolName: string, ms: number) => AbortSignal;
   /** Run token budget; the final pass must be allowed to spend its reserve. */
   canonicalBudget?: { allowFinalPass(): void };
   emit(event: { type: string; content?: string; data?: unknown }): void;
@@ -167,7 +169,7 @@ const toCoreTools = (context: RunsAdapterContext): CoreTool[] =>
     parameters: schema.parameters,
     execute: async (args: Record<string, unknown>, toolContext: CoreToolContext) =>
       // ToolRunner stringifies and caps the observation; return it raw.
-      context.runtimeToolExecutor({ id: toolContext.toolCallId, name: schema.name, args }),
+      context.runtimeToolExecutor({ id: toolContext.toolCallId, name: schema.name, args }, toolContext.signal),
   }));
 
 export async function runCoreLoopForRun(
@@ -179,6 +181,7 @@ export async function runCoreLoopForRun(
     messages: context.messages,
     signal: context.signal,
     finalizeSignal: context.finalizeSignal,
+    timeoutSignalFor: context.timeoutSignalFor,
     // B8 compaction: blocked — manageContextPressure requires a full AgenticContext
     // (AgentHooks, modelDefinition, AgenticLoopState, emit) plus a harness label;
     // the adapter has only messages and cannot build a harness.

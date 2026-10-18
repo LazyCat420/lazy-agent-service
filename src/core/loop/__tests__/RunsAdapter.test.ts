@@ -107,6 +107,37 @@ describe("runCoreLoopForRun", () => {
     expect(toolIndex).toBeLessThan(messages.length - 1);
   });
 
+  it("6: a tool timeout aborts the signal the runtime tool executor received", async () => {
+    const timeout = new AbortController();
+    let received: AbortSignal | undefined;
+    const context = makeContext(
+      [
+        { chunks: [{ type: "toolCall", id: "t1", name: "global.web.search", args: { query: "q" } }] },
+        { chunks: ["Answer without the tool."] },
+      ],
+      {
+        timeoutSignalFor: () => timeout.signal,
+        runtimeToolExecutor: (call, signal) => {
+          void call;
+          received = signal;
+          const { promise, reject } = Promise.withResolvers<unknown>();
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          queueMicrotask(() => timeout.abort(new Error("tool timeout")));
+          return promise;
+        },
+      },
+    );
+    const { messages, result } = await collect(context);
+
+    expect(received).toBeDefined();
+    expect(received?.aborted).toBe(true);
+    expect(result.status).toBe("completed");
+    expect(result.text).toContain("Answer without the tool.");
+    const toolIndex = messages.findIndex((message) => message.role === "tool");
+    expect(toolIndex).toBeGreaterThan(-1);
+    expect(messages[toolIndex].content).toContain("timed out after");
+  });
+
   it("3: DEADLINE_SOFT finalize forces exactly one provider call with toolChoice none and the FINALIZE warning", async () => {
     const context = makeContext([{ chunks: ["Final answer."] }], {
       finalizeRequested: { reason: "DEADLINE_SOFT" },
