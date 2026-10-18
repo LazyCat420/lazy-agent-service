@@ -52,6 +52,7 @@ export interface RunsAdapterContext {
   runtimeTools: { finalTools: Array<{ name: string; description: string; parameters: Record<string, unknown> }> };
   runtimeToolExecutor(call: { id: string; name: string; args: Record<string, unknown> }): Promise<unknown>;
   finalizeRequested?: { reason: string };
+  finalizeSignal?: AbortSignal;
   emit(event: { type: string; content?: string; data?: unknown }): void;
   sessionState?: SessionState;
 }
@@ -174,6 +175,7 @@ export async function runCoreLoopForRun(
     tools: toCoreTools(context),
     messages: context.messages,
     signal: context.signal,
+    finalizeSignal: context.finalizeSignal,
     // B8 compaction: blocked — manageContextPressure requires a full AgenticContext
     // (AgentHooks, modelDefinition, AgenticLoopState, emit) plus a harness label;
     // the adapter has only messages and cannot build a harness.

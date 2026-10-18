@@ -256,6 +256,7 @@ export class RunExecutionEngine {
 
     // 4. Cancellation & Deadline Setup
     const abortController = new AbortController();
+    const finalizeController = new AbortController();
     let isDeadlineTimeout = false;
     let deadlineTimer: NodeJS.Timeout | undefined;
     let softDeadlineTimer: NodeJS.Timeout | undefined;
@@ -284,6 +285,7 @@ export class RunExecutionEngine {
           if (finalizeRequest) return;
           finalizeRequest = { reason: "DEADLINE_SOFT" };
           if (runContext) runContext.finalizeRequested = finalizeRequest;
+          finalizeController.abort(new Error("DEADLINE_SOFT"));
           emitEvent({
             run_id: runId,
             runId,
@@ -599,6 +601,7 @@ export class RunExecutionEngine {
       // Soft-deadline flag set before context creation reaches the harness here.
       runContext = context;
       if (finalizeRequest) context.finalizeRequested = finalizeRequest;
+      context.finalizeSignal = finalizeController.signal;
       // The harness reads the canonical budget to request a final reserve pass.
       context.canonicalBudget = accounting;
       context.emit = (event: any) => {

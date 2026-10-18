@@ -103,6 +103,8 @@ export interface CoreLoopOptions {
   tools: CoreTool[];
   messages: ChatMessage[];
   signal: AbortSignal;
+  /** Aborted when the run should stop working and answer now (e.g. soft deadline). Cuts the in-flight non-final model turn and tool batch; the loop then runs the final pass. The final pass uses only `signal`. */
+  finalizeSignal?: AbortSignal;
   hooks?: CoreLoopHooks;
   /** Model calls before forcing the final pass (the final pass itself is extra). */
   maxSteps: number;

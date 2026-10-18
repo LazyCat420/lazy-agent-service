@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { runCoreLoop } from "../CoreLoop.ts";
-import type { CoreLoopEvent, CoreLoopOptions, CoreLoopResult, CoreModel, CoreTool } from "../types.ts";
+import type { CoreLoopEvent, CoreLoopOptions, CoreLoopResult, CoreModel, CoreModelRequest, CoreTool } from "../types.ts";
 import type { ChatMessage } from "../../../types/ProviderTypes.ts";
 import type { StreamChunk } from "../../../types/provider.ts";
 import {
@@ -477,5 +477,115 @@ describe("core loop stress (S1–S18)", () => {
       }
       expectToolPairing(run.result.messages);
     }
+  });
+});
+
+describe("finalize signal", () => {
+  /** Model whose first turn streams one chunk, then hangs until its request signal aborts. */
+  const cutTurnModel = (
+    finalizeController: AbortController,
+    finalText: string,
+  ): CoreModel & { calls: CoreModelRequest[] } => {
+    const calls: CoreModelRequest[] = [];
+    const model = ((request: CoreModelRequest): AsyncIterable<StreamChunk> => {
+      calls.push({ ...request, messages: [...request.messages] });
+      if (request.finalPass) {
+        return (async function* () {
+          yield finalText;
+        })();
+      }
+      return (async function* () {
+        yield "partial thinking out loud";
+        finalizeController.abort(new Error("DEADLINE_SOFT"));
+        await new Promise<void>((resolve) => {
+          if (request.signal.aborted) resolve();
+          else request.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        request.signal.throwIfAborted();
+      })();
+    }) as CoreModel & { calls: CoreModelRequest[] };
+    model.calls = calls;
+    return model;
+  };
+
+  it("S19: cuts the in-flight model turn and runs the final pass", async () => {
+    const finalizeController = new AbortController();
+    const model = cutTurnModel(finalizeController, "final answer");
+    const { events, result } = await collect(optionsWith({ model, finalizeSignal: finalizeController.signal }));
+
+    expect(result.status).toBe("completed");
+    expect(result.text).toBe("final answer");
+    expect(result.finalizeReason).toBe("DEADLINE_SOFT");
+    const finalCall = model.calls.at(-1)!;
+    expect(finalCall.finalPass).toBe(true);
+    expect(finalCall.toolChoice).toBe("none");
+    const finalInstructionIndex = result.messages.findIndex(
+      (m) => m.role === "user" && String(m.content).includes("Answer the user now"),
+    );
+    expect(finalInstructionIndex).toBeGreaterThan(0);
+    for (const message of result.messages.slice(0, finalInstructionIndex)) {
+      expect(message.role).not.toBe("assistant");
+    }
+    expect(events.some((e) => e.type === "finalize" && e.reason === "DEADLINE_SOFT")).toBe(true);
+  });
+
+  it("S20: cuts the in-flight tool batch and runs the final pass", async () => {
+    const finalizeController = new AbortController();
+    const cancellable: CoreTool = {
+      name: "slow",
+      description: "slow tool",
+      parameters: { type: "object", properties: {} },
+      execute: async (_args, { signal }) => {
+        finalizeController.abort(new Error("DEADLINE_SOFT"));
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return "tool finished anyway";
+      },
+    };
+    const model = scriptedModel([[toolCall("c1", "slow")], ["final answer"]]);
+    const { events, result } = await collect(
+      optionsWith({ model, tools: [cancellable], finalizeSignal: finalizeController.signal }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.text).toBe("final answer");
+    expect(result.finalizeReason).toBe("DEADLINE_SOFT");
+    const toolEnd = events.find((e) => e.type === "tool.end" && e.call.id === "c1");
+    expect(toolEnd && toolEnd.type === "tool.end" && toolEnd.result.isError).toBe(true);
+    expect(model.calls.filter((r) => r.finalPass)).toHaveLength(1);
+    expect(model.calls.filter((r) => !r.finalPass)).toHaveLength(1);
+    expectToolPairing(result.messages);
+  });
+
+  it("S21: hard cancel still wins over the finalize signal", async () => {
+    const runController = new AbortController();
+    const finalizeController = new AbortController();
+    const calls: CoreModelRequest[] = [];
+    const model = ((request: CoreModelRequest): AsyncIterable<StreamChunk> => {
+      calls.push({ ...request, messages: [...request.messages] });
+      return (async function* () {
+        yield "partial";
+        runController.abort(new Error("cancelled"));
+        await new Promise<void>((resolve) => {
+          if (request.signal.aborted) resolve();
+          else request.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        request.signal.throwIfAborted();
+      })();
+    }) as CoreModel;
+    const generator = runCoreLoop(
+      optionsWith({ model, finalizeSignal: finalizeController.signal, signal: runController.signal }),
+    );
+    let step = await generator.next();
+    while (!step.done) {
+      step = await generator.next();
+    }
+    const result = step.value;
+
+    expect(result.status).toBe("cancelled");
+    expect(result.error?.code).toBe("RUN_CANCELLED");
+    expect(calls.filter((r) => r.finalPass)).toHaveLength(0);
   });
 });

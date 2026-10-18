@@ -51,6 +51,9 @@ export async function* runCoreLoop(
   const maxConsecutiveToolErrors = options.maxConsecutiveToolErrors ?? 3;
   const now = options.now ?? Date.now;
 
+  const workSignal = options.finalizeSignal ? AbortSignal.any([options.signal, options.finalizeSignal]) : options.signal;
+  const finalizeCut = (): boolean => options.finalizeSignal?.aborted === true && !options.signal.aborted;
+
   const messages: ChatMessage[] = [...options.messages];
   const toolMap = new Map(options.tools.map((tool) => [tool.name, tool]));
   const schemas: CoreToolSchema[] = options.tools
@@ -98,6 +101,9 @@ export async function* runCoreLoop(
     if (options.signal.aborted) return makeCancelled();
 
     if (finalizeReason === undefined) {
+      if (finalizeCut()) finalizeReason = (options.shouldFinalize?.() ?? null) ?? "DEADLINE_SOFT";
+    }
+    if (finalizeReason === undefined) {
       const fromHook = options.shouldFinalize?.() ?? null;
       if (fromHook !== null) finalizeReason = fromHook;
       else if (modelCalls >= options.maxSteps) finalizeReason = "STEP_LIMIT";
@@ -136,7 +142,7 @@ export async function* runCoreLoop(
           messages: hooked,
           tools: schemas,
           toolChoice: "auto",
-          signal: options.signal,
+          signal: workSignal,
           finalPass: false,
         });
         for await (const chunk of stream) {
@@ -163,6 +169,10 @@ export async function* runCoreLoop(
           finalizeReason = "TOKEN_BUDGET";
           break;
         }
+        if (finalizeCut()) {
+          finalizeReason = options.shouldFinalize?.() ?? "DEADLINE_SOFT";
+          break;
+        }
         if (options.signal.aborted) return makeCancelled();
         if (attempt === providerRetries) {
           const failure = errorOf(caught);
@@ -173,6 +183,7 @@ export async function* runCoreLoop(
         yield { type: "warning", code: "PROVIDER_RETRY", message: errorOf(caught).message };
       }
     }
+    if (finalizeReason === undefined && finalizeCut()) finalizeReason = options.shouldFinalize?.() ?? "DEADLINE_SOFT";
     if (finalizeReason !== undefined) continue;
 
     const assistant: ChatMessage = { role: "assistant", content: text };
@@ -221,7 +232,7 @@ export async function* runCoreLoop(
     const results = await runToolBatch(calls, {
       tools: toolMap,
       hooks: options.hooks,
-      signal: options.signal,
+      signal: workSignal,
       defaultToolTimeoutMs,
       toolOutputCap,
       toolErrorCap,
