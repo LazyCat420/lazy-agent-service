@@ -16,7 +16,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "rewriteRelativeImportExtensions": true,
-    "lib": ["ES2022"]
+    "lib": ["ES2024"]
   },
   "include": [
     "src/**/*.ts",
