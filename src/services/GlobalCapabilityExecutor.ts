@@ -376,13 +376,10 @@ export class GlobalCapabilityExecutor {
 
       if (!res.ok) {
         return {
-          success: true,
-          result: {
-            url,
-            title: `HTTP ${res.status}`,
-            content: `Failed to fetch page content: HTTP ${res.status} ${res.statusText || ""}. The website blocked automated access or the page was not found. Please rely on the search snippet or alternative sources to answer.`,
-            character_count: 0,
-            status: res.status,
+          success: false,
+          error: {
+            code: "HTTP_ERROR",
+            message: `HTTP ${res.status} ${res.statusText}: the site blocked automated access or the page was not found. Use the search snippet or another source.`,
           },
         };
       }
@@ -397,6 +394,15 @@ export class GlobalCapabilityExecutor {
         .trim();
 
       const bounded = stripped.slice(0, maxChars);
+      if (bounded.trim().length < 200) {
+        return {
+          success: false,
+          error: {
+            code: "EMPTY_CONTENT",
+            message: `The page returned no readable text (${bounded.trim().length} chars). It may need JavaScript. Use the search snippet or another source.`,
+          },
+        };
+      }
       return {
         success: true,
         result: {
@@ -410,17 +416,17 @@ export class GlobalCapabilityExecutor {
       if (err instanceof UnsafeUrlError || err?.cause instanceof UnsafeUrlError) {
         return { success: false, error: { code: "URL_BLOCKED", message: `blocked: ${(err.cause ?? err).message} (SSRF guard)` } };
       }
-      if (signal?.aborted || err?.name === "AbortError") {
+      if (signal?.aborted) {
         return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Page read was cancelled" } };
       }
+      if (err?.name === "AbortError") {
+        return { success: false, error: { code: "TIMEOUT", message: "Page read timed out after 15 s. Use the search snippet or another source." } };
+      }
       return {
-        success: true,
-        result: {
-          url,
-          title: "Page Read Error",
-          content: `Failed to read page content: ${err.message || "Network error"}. Please rely on the search snippet or alternative sources to answer.`,
-          character_count: 0,
-          error: err.message,
+        success: false,
+        error: {
+          code: "FETCH_FAILED",
+          message: `Failed to read page: ${err?.message || "network error"}. Use the search snippet or another source.`,
         },
       };
     }

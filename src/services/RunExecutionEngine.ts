@@ -654,7 +654,10 @@ export class RunExecutionEngine {
               : { ...authorization, unattended: true });
             const denied = authorizationError(call.name, unanswered);
             emitEvent({ run_id: runId, type: "tool.failed", data: { tool_call_id: call.id, tool_name: call.name, error: denied } });
-            throw Object.assign(new Error(denied.message), { code: denied.code });
+            return {
+              observation: { error: denied.code, message: denied.message, retryable: false },
+              dispatched: false,
+            };
           }
         }
         const processed = await this.processToolCall(runId, call, {
@@ -667,7 +670,14 @@ export class RunExecutionEngine {
           planApproved,
         });
         if (processed.status !== "admitted_local") emitEvent(processed.event);
-        if (processed.status === "denied") throw Object.assign(new Error(processed.error?.message || "Tool denied"), { code: processed.error?.code });
+        if (processed.status === "denied") {
+          // processToolCall already emitted tool.failed for this call; hand the
+          // failure back to the model as an observation instead of aborting the run.
+          return {
+            observation: { error: processed.error?.code || "TOOL_DENIED", message: processed.error?.message || "Tool denied", retryable: false },
+            dispatched: false,
+          };
+        }
         if (processed.status === "admitted_local") {
           const observation = await LocalToolContinuation.wait(runId, processed.event, abortController.signal, () => emitEvent(processed.event));
           const failed = !!(observation && typeof observation === "object" && (observation as any).is_error);
