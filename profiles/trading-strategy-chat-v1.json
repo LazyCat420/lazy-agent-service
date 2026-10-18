@@ -34,7 +34,7 @@
     "max_tokens": 49152,
     "max_tool_calls": 20,
     "max_retries": 0,
-    "max_duration_ms": 180000
+    "max_duration_ms": 300000
   },
   "retention_class": "AUDITED_SESSION",
   "decision_policy": {

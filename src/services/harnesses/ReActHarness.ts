@@ -18,6 +18,7 @@ import {
   trackToolErrors,
 } from "./lifecycle/PostExecutionEmitter.ts";
 import { runExhaustionRecoveryPass } from "./lifecycle/ExhaustionRecovery.ts";
+import { CanonicalProviderBudget } from "../CanonicalProviderBudget.ts";
 import {
   blockUnauthorizedToolCalls,
   handleExitPlanMode,
@@ -83,6 +84,31 @@ const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 // inject guidance; after 5 we terminate the loop.
 const REPETITION_WARNING_THRESHOLD = 3;
 const REPETITION_TERMINATION_THRESHOLD = 5;
+
+/** Instruction appended before the final forced-answer pass. */
+const FINALIZE_NOW_NOTICE =
+  "Time or budget is up. Do not call tools. Answer the user now using only the information already gathered, and say briefly what you could not check.";
+
+/**
+ * Route a TOKEN_BUDGET_FINALIZE rejection into the final-answer path: allow
+ * the budget's final reserve, flag the run for finalization, and warn.
+ * Returns true when the error was a finalize request.
+ */
+function handleTokenBudgetFinalize(error: unknown, context: AgenticContext): boolean {
+  if ((error as { code?: string } | null)?.code !== "TOKEN_BUDGET_FINALIZE") return false;
+  const budget = context.canonicalBudget;
+  if (!(budget instanceof CanonicalProviderBudget)) return false;
+  budget.allowFinalPass();
+  context.finalizeRequested = { reason: "TOKEN_BUDGET" };
+  context.emit({
+    type: "run.warning",
+    data: {
+      code: "TOKEN_BUDGET_SOFT",
+      message: "Token budget reached; the run will answer now with the information already gathered.",
+    },
+  });
+  return true;
+}
 
 /** Deterministically stringify a value with recursively sorted object keys. */
 function stableStringify(value: unknown): string {
@@ -266,6 +292,9 @@ export default class ReActHarness extends BaseAgenticHarness {
     // "disappearing messages" bug.
     try {
       while (state.iterations < resolvedMaxIterations) {
+        // Soft deadline / token budget: stop iterating and run the final-answer
+        // pass through ExhaustionRecovery instead of issuing another tool call.
+        if (context.finalizeRequested) break;
         state.iterations++;
 
         emit({
@@ -402,6 +431,7 @@ export default class ReActHarness extends BaseAgenticHarness {
           try {
             stream = await this.createProviderStream(currentMessages, passOptions);
           } catch (setupError: unknown) {
+            if (handleTokenBudgetFinalize(setupError, context)) break;
             if (!overflowRetried && isContextWindowError(setupError)) {
               overflowRetried = true;
               logger.warn(
@@ -432,6 +462,7 @@ export default class ReActHarness extends BaseAgenticHarness {
             await this.consumeStream(stream, pass, allowedToolNames);
             break;
           } catch (streamError: unknown) {
+            if (handleTokenBudgetFinalize(streamError, context)) break;
             // Only retry when the failure happened before any output was
             // consumed — a mid-generation overflow cannot be safely replayed.
             const consumedOutput =
@@ -980,11 +1011,18 @@ export default class ReActHarness extends BaseAgenticHarness {
       // Skipped when signal is aborted (provider would reject the call).
       if (
         !hasCleanTextBreak &&
-        state.streamedToolCalls.length > 0 &&
         state.conversationOutcome !== "stuck" &&
-        !signal?.aborted
+        !signal?.aborted &&
+        (context.finalizeRequested || state.streamedToolCalls.length > 0)
       ) {
         state.conversationOutcome = "exhausted";
+        if (context.finalizeRequested) {
+          currentMessages.push({
+            role: "system",
+            _isSystemWarning: true,
+            content: FINALIZE_NOW_NOTICE,
+          });
+        }
         await runExhaustionRecoveryPass(this, context, state, currentMessages);
       }
 
