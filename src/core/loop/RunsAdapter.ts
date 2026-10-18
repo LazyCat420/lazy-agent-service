@@ -103,6 +103,7 @@ const coreModelFor = (context: RunsAdapterContext): CoreModel => {
         }
 
         let stream: AsyncIterable<StreamChunk>;
+        let yielded = false;
         try {
           stream = context.provider.generateTextStream(expanded, context.resolvedModel, {
             ...baseOptions,
@@ -111,7 +112,6 @@ const coreModelFor = (context: RunsAdapterContext): CoreModel => {
             toolChoice: request.toolChoice,
             signal: request.signal,
           });
-          let yielded = false;
           for await (const chunk of stream) {
             yielded = true;
             yield chunk;
@@ -119,7 +119,7 @@ const coreModelFor = (context: RunsAdapterContext): CoreModel => {
           return;
         } catch (error) {
           // Context overflow before any output: shrink the output budget and retry once.
-          if (attempt === 0) {
+          if (attempt === 0 && !yielded) {
             const overflow = parseContextOverflowError(error);
             const reduced = overflow
               ? reducedMaxTokensForOverflow(

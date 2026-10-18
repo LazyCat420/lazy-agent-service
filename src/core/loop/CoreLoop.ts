@@ -101,7 +101,7 @@ export async function* runCoreLoop(
     if (options.signal.aborted) return makeCancelled();
 
     if (finalizeReason === undefined) {
-      if (finalizeCut()) finalizeReason = (options.shouldFinalize?.() ?? null) ?? "DEADLINE_SOFT";
+      if (finalizeCut()) finalizeReason = options.shouldFinalize?.() ?? "DEADLINE_SOFT";
     }
     if (finalizeReason === undefined) {
       const fromHook = options.shouldFinalize?.() ?? null;
