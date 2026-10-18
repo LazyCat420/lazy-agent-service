@@ -1,0 +1,13 @@
+{
+  "rubric": "Apply literally. 'today' in any question means the date the eval runs (today's date is passed to the judge). PASS: a final answer exists, contains at least 2 concrete current facts (names, numbers or dates from within the eval month), and cites or names at least 1 source. WEAK: an answer exists but is vague, stale (facts older than 30 days presented as current) or has no sources. FAIL: no answer, an error, a timeout, a preamble only (\"I'll check…\"), or a refusal or claim of no web access.",
+  "questions": [
+    { "id": 1, "text": "what's the news today" },
+    { "id": 2, "text": "latest news on the federal reserve interest rates" },
+    { "id": 3, "text": "what is the weather in Seattle right now" },
+    { "id": 4, "text": "what is NVDA's stock price today" },
+    { "id": 5, "text": "who won the most recent F1 race" },
+    { "id": 6, "text": "summarize https://en.wikipedia.org/wiki/Large_language_model" },
+    { "id": 7, "text": "what's the latest version of Node.js" },
+    { "id": 8, "text": "what happened in tech news this week" }
+  ]
+}
