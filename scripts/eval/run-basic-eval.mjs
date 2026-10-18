@@ -35,12 +35,13 @@ if (!TOKEN) {
 
 // ── CLI ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const out = { profiles: [], questions: [], outDir: null, concurrency: 1, questionsFile: null, noJudge: false };
+  const out = { profiles: [], questions: [], outDir: null, concurrency: 1, questionsFile: null, noJudge: false, model: null };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--profiles") out.profiles = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
     else if (a === "--questions-file") out.questionsFile = argv[++i];
     else if (a === "--no-judge") out.noJudge = true;
+    else if (a === "--model") out.model = argv[++i]?.trim() || null;
     else if (a === "--questions") {
       for (const part of argv[++i].split(",")) {
         const range = part.match(/^(\d+)-(\d+)$/);
@@ -110,7 +111,7 @@ function restartChanged(before, after) {
 }
 
 // ── run one question through LAS ──────────────────────────────────────────
-async function runOne(profileName, question) {
+async function runOne(profileName, question, modelOverride = null) {
   const profile = PROFILES_ACTIVE[profileName];
   const started = Date.now();
   const body = {
@@ -121,6 +122,10 @@ async function runOne(profileName, question) {
   };
   if (profile.profile_version) body.profile_version = profile.profile_version;
   if (profile.budget) body.budget = profile.budget;
+  if (modelOverride) {
+    body.model = modelOverride;
+    body.runtime_overrides = { ...(body.runtime_overrides || {}), model: modelOverride };
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RUN_TIMEOUT_MS);
@@ -346,7 +351,7 @@ async function main() {
   async function worker() {
     while (cursor < work.length) {
       const job = work[cursor++];
-      const record = await runOne(job.profile, job.question);
+      const record = await runOne(job.profile, job.question, args.model);
       record.grade_result = args.noJudge ? noJudgeGrade(record) : await judge(record, today);
       record.grade = record.grade_result.grade;
       results.push(record);
