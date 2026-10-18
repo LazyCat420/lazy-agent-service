@@ -57,7 +57,7 @@ Every failure is in LAS layers above the loop:
 - **VF, current profile limits:** trading 180 s, html-notes 120 s. Clients cannot raise them (`src/services/ProfileRegistry.ts:375`).
 
 **Change:**
-1. **Soft deadline.** At `deadline − reserve` (reserve = 45 s, A-1), the loop stops offering tools and runs one final toolless turn: "Time is up. Answer now from what you found; say what is missing."
+1. **Soft deadline.** At `deadline − reserve` (reserve = min(90 s, 30%), was 45 s; see A-1), the loop stops offering tools and runs one final toolless turn: "Time is up. Answer now from what you found; say what is missing."
    - The hard abort stays as a backstop at the real deadline.
    - **TC-T1:** a run whose tool sleeps past the soft deadline ends `completed` with a non-empty answer and a `run.warning DEADLINE_SOFT`.
 2. **Raise profile limits** `max_duration_ms`:
@@ -68,6 +68,7 @@ Every failure is in LAS layers above the loop:
 3. **A-1:** a 45 s reserve fits one GLM final turn of ~500 tokens (13 tok/s ≈ 38 s).
    - Risk: long answers get cut off.
    - Validation: measure the final-turn time in TC-T2; set the reserve to p95 + 10 s.
+   - **Falsified 2026-10-17 (eval-C1d timelines):** html-notes q2/q8 final passes were still streaming a real answer 56 s and 41 s after the cut when the hard deadline killed them. Reserve raised to `min(90 s, 30%)` (soft cut at 210 s for 300 s profiles). Re-measure in the next eval.
 
 ## 4. The 8 core traits (plus the always-answer rule)
 

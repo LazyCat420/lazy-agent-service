@@ -279,7 +279,8 @@ export class RunExecutionEngine {
     }
 
     if (deadlineMs > 0) {
-      const softMs = deadlineMs - Math.min(45000, Math.floor(deadlineMs * 0.25));
+      // Final-pass reserve: GLM at ~13 tok/s needed >56 s to write a full answer (eval 2026-10-17), so 45 s was too short.
+      const softMs = deadlineMs - Math.min(90000, Math.floor(deadlineMs * 0.3));
       if (softMs > 0) {
         softDeadlineTimer = setTimeout(() => {
           if (finalizeRequest) return;

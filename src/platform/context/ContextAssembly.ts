@@ -247,7 +247,7 @@ export class ContextAssembly {
     projectComponents.push(`# Active Tool Schemas (${sortedTools.length})\n${toolDocLines.join("\n")}`);
     if (toolIds.some((id) => id.startsWith("global.web."))) {
       projectComponents.push(
-        "# Sources\nWhen your answer uses facts from web search or a fetched page, name where each fact came from (site name or URL) in the answer.",
+        "# Sources\nWhen your answer uses facts from web search or a fetched page, name where each fact came from (site name or URL) in the answer, and end the answer with a line starting `Sources:` that lists the sites or URLs you used.",
       );
     }
     if (options.repoMapSummary) {

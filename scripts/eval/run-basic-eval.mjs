@@ -274,6 +274,8 @@ ${answer}
 
 Respond with ONLY a JSON object: {"grade":"PASS|WEAK|FAIL","reason":"one sentence"}.`;
 
+  // The judge shares GLM with the runs under test, so one slow reply is infra noise: retry once before grading FAIL.
+  for (let attempt = 1; ; attempt++) {
   try {
     const res = await fetch(JUDGE_URL, {
       method: "POST",
@@ -283,7 +285,7 @@ Respond with ONLY a JSON object: {"grade":"PASS|WEAK|FAIL","reason":"one sentenc
         temperature: 0,
         messages: [{ role: "user", content: prompt }],
       }),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(240_000),
     });
     if (!res.ok) return { grade: "FAIL", reason: `judge http ${res.status}` };
     const body = await res.json();
@@ -294,7 +296,9 @@ Respond with ONLY a JSON object: {"grade":"PASS|WEAK|FAIL","reason":"one sentenc
     }
     return { grade: "FAIL", reason: `judge returned unparseable output: ${content.slice(0, 200)}` };
   } catch (err) {
+    if (attempt < 2) continue;
     return { grade: "FAIL", reason: `judge error: ${String(err.message || err)}` };
+  }
   }
 }
 
