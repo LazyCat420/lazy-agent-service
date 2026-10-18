@@ -4,7 +4,10 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 const script = vi.hoisted(() => ({ mode: "success", calls: 0, messages: [] as any[][] }));
 // A public IP literal: the SSRF guard resolves hostnames, and .test never resolves.
 const fixtureUrl = "https://93.184.215.14/news";
-const fixturePage = "Fixture page: semiconductor revenue grew 12 percent in the latest quarter.";
+// read_page reports pages under 200 chars of text as EMPTY_CONTENT (JS shells), so the article needs a real body.
+const fixturePage =
+  "Fixture page: semiconductor revenue grew 12 percent in the latest quarter. Memory makers led the gains as data-center " +
+  "demand stayed strong, while handset chip sales were flat. Analysts expect the trend to continue into next year.";
 
 const provider = {
   async *generateTextStream(messages: any[]) {
@@ -126,7 +129,7 @@ describe("real runtime news workflow", () => {
     expect(result.messages.at(-1)?.content).toContain("No sources were returned");
   });
 
-  it("surfaces a tool transport failure instead of claiming sourced success", async () => {
+  it("returns a tool transport failure to the model, which answers without claiming a source", async () => {
     script.mode = "failure";
     const events: any[] = [];
     const result = await RunExecutionEngine.startRun("runtime-news-failure", {
@@ -135,7 +138,9 @@ describe("real runtime news workflow", () => {
       runtime_overrides: { tools: ["global.web.search", "global.web.read_page"] },
     }, event => events.push(event));
 
-    expect(result.status).not.toBe("completed");
+    // Always-answer: a failed tool is an observation, not a run failure.
+    expect(result.status).toBe("completed");
+    expect(JSON.stringify(script.messages[1])).toContain("fixture search transport failed");
     expect(events.some(event => event.type === "tool.failed" && event.data.tool_name === "global.web.search")).toBe(true);
     expect(result.messages.at(-1)?.content ?? "").not.toContain("Source:");
   });
@@ -150,9 +155,8 @@ describe("real runtime news workflow", () => {
     }, event => events.push(event));
 
     expect(result.status).toBe("completed");
-    expect(events.filter(event => event.type === "tool.completed").map(event => event.data.tool_name)).toEqual([
-      "global.web.search", "global.web.read_page",
-    ]);
+    expect(events.filter(event => event.type === "tool.completed").map(event => event.data.tool_name)).toEqual(["global.web.search"]);
+    expect(events.some(event => event.type === "tool.failed" && event.data.tool_name === "global.web.read_page")).toBe(true);
     expect(result.messages.at(-1)?.content).toContain("Semiconductor revenue grew based on search snippet");
     expect(script.calls).toBe(3);
   });
