@@ -22,6 +22,8 @@ export class RunStore {
     "run_store_durable.json",
   );
   private static isInitialized = false;
+  private static flushTimer: NodeJS.Timeout | undefined;
+  private static readonly EVENT_FLUSH_MS = Number(process.env.RUN_EVENT_FLUSH_MS) || 1000;
 
   static setPersistenceFile(filePath: string): void {
     this.persistenceFile = filePath;
@@ -73,6 +75,7 @@ export class RunStore {
   }
 
   private static async flushToDisk(): Promise<void> {
+    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = undefined; }
     try {
       const dir = path.dirname(this.persistenceFile);
       if (!fs.existsSync(dir)) {
@@ -90,13 +93,23 @@ export class RunStore {
       const temporary = `${this.persistenceFile}.tmp`;
       fs.writeFileSync(
         temporary,
-        JSON.stringify(payload, null, 2),
+        JSON.stringify(payload),
         "utf-8",
       );
       fs.renameSync(temporary, this.persistenceFile);
     } catch (err: any) {
       throw new Error(`Run persistence failed: ${err.message}`);
     }
+  }
+
+  /** Coalesce high-frequency event writes: at most one disk flush per EVENT_FLUSH_MS. */
+  private static scheduleFlush(): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = undefined;
+      void this.flushToDisk().catch((err: Error) => logger.error(`[RunStore] scheduled flush failed: ${err.message}`));
+    }, this.EVENT_FLUSH_MS);
+    this.flushTimer.unref?.();
   }
 
   /**
@@ -119,8 +132,10 @@ export class RunStore {
 
   static async appendEvent(event: import("../types/run.ts").RunEvent): Promise<void> {
     await this.init();
-    if (!this.runs.has(event.run_id)) return; // Rejected admission has no admitted run.
-    await this.mutateRun(event.run_id, run => ({ events: [...(run.events || []), event] }));
+    const current = this.runs.get(event.run_id);
+    if (!current) return; // Rejected admission has no admitted run.
+    this.runs.set(event.run_id, { ...current, events: [...(current.events || []), event] });
+    this.scheduleFlush();
   }
 
   static async mutateRun(runId: string, mutate: (run: RunRecord) => Partial<RunRecord>): Promise<RunRecord> {
