@@ -183,11 +183,14 @@ async function runOne(profileName, question) {
             // prefer completed message text if deltas were empty
             if (!finalText) finalText = data.content;
           }
-          if (event.type === "tool.invoked" && data.name) {
-            record.tool_calls.push({ name: data.name });
-            toolNames.add(data.name);
+          // Shared (global.*) tools emit only tool.completed / tool.failed; local tools emit tool.invoked first.
+          // Count each tool_call_id once.
+          const toolName = data.tool_name || data.name;
+          if (["tool.invoked", "tool.completed", "tool.failed"].includes(event.type) && toolName
+            && !record.tool_calls.some((t) => t.id === data.tool_call_id)) {
+            record.tool_calls.push({ id: data.tool_call_id, name: toolName, outcome: event.type });
+            toolNames.add(toolName);
           }
-          if (event.type === "tool.completed" && data.name) toolNames.add(data.name);
           if (event.type === "run.completed") {
             record.status = "run.completed";
             record.usage = data.usage || null;
