@@ -52,9 +52,13 @@ export class CanonicalProviderBudget {
           let emittedBytes = 0;
           let streamCompleted = false;
           let measuredInput: number | undefined, measuredOutput: number | undefined;
+          const callSignal = options.signal ? AbortSignal.any([budget.signal, options.signal]) : budget.signal;
           try {
-            for await (const chunk of method.call(target, messages, model, { ...options, maxTokens: outputReserve, signal: budget.signal })) {
-              budget.signal.throwIfAborted();
+            for await (const chunk of method.call(target, messages, model, { ...options, maxTokens: outputReserve, signal: callSignal })) {
+              if (callSignal.aborted) {
+                if (options.signal?.aborted) options.signal.throwIfAborted();
+                else budget.signal.throwIfAborted();
+              }
               if (chunk?.type === "usage") {
                 const u = chunk.usage || {};
                 const input = u.inputTokens ?? u.promptTokens ?? u.prompt_tokens;

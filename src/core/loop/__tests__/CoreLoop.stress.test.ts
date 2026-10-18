@@ -481,7 +481,7 @@ describe("core loop stress (S1–S18)", () => {
 });
 
 describe("finalize signal", () => {
-  /** Model whose first turn streams one chunk, then hangs until its request signal aborts. */
+  /** Model whose first turn streams nothing, then hangs until its request signal aborts. */
   const cutTurnModel = (
     finalizeController: AbortController,
     finalText: string,
@@ -495,7 +495,6 @@ describe("finalize signal", () => {
         })();
       }
       return (async function* () {
-        yield "partial thinking out loud";
         finalizeController.abort(new Error("DEADLINE_SOFT"));
         await new Promise<void>((resolve) => {
           if (request.signal.aborted) resolve();
@@ -587,5 +586,74 @@ describe("finalize signal", () => {
     expect(result.status).toBe("cancelled");
     expect(result.error?.code).toBe("RUN_CANCELLED");
     expect(calls.filter((r) => r.finalPass)).toHaveLength(0);
+  });
+
+  /** Model whose first turn streams `firstChunk`, then hangs until its request signal aborts. */
+  const cutAnswerModel = (
+    finalizeController: AbortController,
+    firstChunk: string,
+    finalPass: (request: CoreModelRequest) => AsyncIterable<StreamChunk>,
+  ): CoreModel & { calls: CoreModelRequest[] } => {
+    const calls: CoreModelRequest[] = [];
+    const model = ((request: CoreModelRequest): AsyncIterable<StreamChunk> => {
+      calls.push({ ...request, messages: [...request.messages] });
+      if (request.finalPass) return finalPass(request);
+      return (async function* () {
+        yield firstChunk;
+        finalizeController.abort(new Error("DEADLINE_SOFT"));
+        await new Promise<void>((resolve) => {
+          if (request.signal.aborted) resolve();
+          else request.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        request.signal.throwIfAborted();
+      })();
+    }) as CoreModel & { calls: CoreModelRequest[] };
+    model.calls = calls;
+    return model;
+  };
+
+  it("S22: cut mid-answer continues it", async () => {
+    const finalizeController = new AbortController();
+    const model = cutAnswerModel(finalizeController, "Part one. ", function* () {
+      yield "Part two.";
+    });
+    const { result } = await collect(optionsWith({ model, finalizeSignal: finalizeController.signal }));
+
+    expect(result.status).toBe("completed");
+    expect(result.text).toBe("Part one. Part two.");
+    const finalCall = model.calls.at(-1)!;
+    expect(finalCall.finalPass).toBe(true);
+    expect(finalCall.toolChoice).toBe("none");
+    expect(finalCall.messages.at(-2)).toEqual({ role: "assistant", content: "Part one. " });
+    expect(String(finalCall.messages.at(-1)?.content)).toContain("Continue the answer");
+  });
+
+  it("S23: a turn that completes after the cut is kept", async () => {
+    const finalizeController = new AbortController();
+    const calls: CoreModelRequest[] = [];
+    const model = ((request: CoreModelRequest): AsyncIterable<StreamChunk> => {
+      calls.push({ ...request, messages: [...request.messages] });
+      return (async function* () {
+        yield "Full ";
+        finalizeController.abort(new Error("DEADLINE_SOFT"));
+        yield "answer.";
+      })();
+    }) as CoreModel & { calls: CoreModelRequest[] };
+    const { result } = await collect(optionsWith({ model, finalizeSignal: finalizeController.signal }));
+
+    expect(result.status).toBe("completed");
+    expect(result.text).toBe("Full answer.");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("S24: final pass fails after a cut answer", async () => {
+    const finalizeController = new AbortController();
+    const model = cutAnswerModel(finalizeController, "Part one. ", function* () {
+      throw new Error("final pass unavailable");
+    });
+    const { result } = await collect(optionsWith({ model, finalizeSignal: finalizeController.signal }));
+
+    expect(result.status).toBe("completed");
+    expect(result.text).toBe("Part one. ");
   });
 });

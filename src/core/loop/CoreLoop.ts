@@ -17,6 +17,8 @@ import { runToolBatch } from "./ToolRunner.ts";
 const EMPTY_REPLY_NUDGE = "Your last reply was empty. Answer the user's question now.";
 const FINAL_PASS_INSTRUCTION =
   "Time, budget or step limit reached. Do not call tools. Answer the user now using only the information already gathered, and say briefly what you could not check.";
+const CONTINUE_CUT_INSTRUCTION =
+  "Your previous reply was cut off by the time limit. Do not call tools. Continue the answer from exactly where it stopped, without repeating what you already wrote.";
 const CUT_OFF_NOTE =
   '{"error":"Your reply was cut off before the tool call was complete. Call fewer tools or use shorter arguments."}';
 
@@ -66,6 +68,7 @@ export async function* runCoreLoop(
   let nudged = false;
   let cutOffs = 0;
   let finalizeReason: CoreFinalizeReason | undefined;
+  let cutText = "";
   let lastAssistantText = "";
   /** Non-error tool results seen in the run, for the synthetic fallback summary. */
   const usableToolResults: Array<{ name: string; content: string }> = [];
@@ -170,6 +173,7 @@ export async function* runCoreLoop(
           break;
         }
         if (finalizeCut()) {
+          if (calls.length === 0) cutText = text;
           finalizeReason = options.shouldFinalize?.() ?? "DEADLINE_SOFT";
           break;
         }
@@ -183,7 +187,6 @@ export async function* runCoreLoop(
         yield { type: "warning", code: "PROVIDER_RETRY", message: errorOf(caught).message };
       }
     }
-    if (finalizeReason === undefined && finalizeCut()) finalizeReason = options.shouldFinalize?.() ?? "DEADLINE_SOFT";
     if (finalizeReason !== undefined) continue;
 
     const assistant: ChatMessage = { role: "assistant", content: text };
@@ -256,7 +259,12 @@ export async function* runCoreLoop(
 
   // Final pass: one toolless turn (runs at most once).
   yield { type: "finalize", reason: finalizeReason! };
-  messages.push({ role: "user", content: FINAL_PASS_INSTRUCTION });
+  if (cutText.trim() !== "") {
+    messages.push({ role: "assistant", content: cutText });
+    messages.push({ role: "user", content: CONTINUE_CUT_INSTRUCTION });
+  } else {
+    messages.push({ role: "user", content: FINAL_PASS_INSTRUCTION });
+  }
 
   let hooked = messages;
   if (options.hooks?.beforeModelCall) {
@@ -317,6 +325,18 @@ export async function* runCoreLoop(
   if (finalError !== undefined && usableToolResults.length > 0) {
     const failure = errorOf(finalError);
     yield { type: "warning", code: failure.code, message: failure.message };
+    if (cutText.trim() !== "") {
+      lastAssistantText = cutText;
+      return {
+        status: "completed",
+        text: cutText,
+        messages,
+        modelCalls,
+        toolCalls,
+        finalizeReason,
+        answerSource: "model",
+      };
+    }
     messages.push({ role: "assistant", content: synthetic });
     return {
       status: "completed",
@@ -330,6 +350,18 @@ export async function* runCoreLoop(
   }
 
   if (finalError !== undefined) {
+    if (cutText.trim() !== "") {
+      lastAssistantText = cutText;
+      return {
+        status: "completed",
+        text: cutText,
+        messages,
+        modelCalls,
+        toolCalls,
+        finalizeReason,
+        answerSource: "model",
+      };
+    }
     const error = errorOf(finalError);
     return {
       status: "failed",
@@ -344,11 +376,24 @@ export async function* runCoreLoop(
   }
 
   if (finalText.trim() !== "") {
-    lastAssistantText = finalText;
+    lastAssistantText = cutText + finalText;
     messages.push({ role: "assistant", content: finalText });
     return {
       status: "completed",
-      text: finalText,
+      text: cutText + finalText,
+      messages,
+      modelCalls,
+      toolCalls,
+      finalizeReason,
+      answerSource: "model",
+    };
+  }
+
+  if (cutText.trim() !== "") {
+    lastAssistantText = cutText;
+    return {
+      status: "completed",
+      text: cutText,
       messages,
       modelCalls,
       toolCalls,
