@@ -14,10 +14,11 @@ import { CanonicalProviderBudget } from "../CanonicalProviderBudget.ts";
 type UsageChunk = { type: "usage"; usage: { inputTokens: number; outputTokens: number } };
 type Chunk = string | UsageChunk;
 
-function fakeProvider(script: Chunk[][]) {
+function fakeProvider(script: Chunk[][], recorded?: Record<string, unknown>[]) {
   let call = 0;
   return {
-    generateTextStream(_messages: unknown[], _model: string, _options: Record<string, unknown>) {
+    generateTextStream(_messages: unknown[], _model: string, options: Record<string, unknown>) {
+      recorded?.push(options);
       const chunks = script[call++] ?? [];
       return (async function* () {
         for (const chunk of chunks) yield chunk;
@@ -34,8 +35,8 @@ const USAGE: UsageChunk = { type: "usage", usage: { inputTokens: 120, outputToke
 
 describe("CanonicalProviderBudget finalize reserve", () => {
   it("reserves chars/3.5 + 256, not bytes; measured usage is what is charged", async () => {
-    // 7000 chars of payload → ~2000 + 256 estimated tokens, well under 4000.
-    const message = "x".repeat(7000);
+    // 4000 chars of payload → ~1155 + 256 estimated tokens; with room for the final pass (2× prompt + 600) still under 4000.
+    const message = "x".repeat(4000);
     const budget = new CanonicalProviderBudget(4000, new AbortController().signal);
     const provider = budget.wrap(fakeProvider([[ "answer", USAGE ]]));
     await drain(provider.generateTextStream([{ role: "user", content: message }], "m", {}));
@@ -60,13 +61,28 @@ describe("CanonicalProviderBudget finalize reserve", () => {
     expect(budget.chargedTokens).toBe(3650);
   });
 
-  it("throws TOKEN_BUDGET_EXHAUSTED when even the final reserve cannot cover the call", async () => {
+  it("never refuses the final pass, even past the limit; output capped at the final reserve", async () => {
     const budget = new CanonicalProviderBudget(4000, new AbortController().signal);
     budget.chargeExternalUsage(3990, 0);
     budget.allowFinalPass();
+    const recorded: Record<string, unknown>[] = [];
+    const provider = budget.wrap(fakeProvider([["final", USAGE]], recorded));
+    await drain(provider.generateTextStream([{ role: "user", content: "hi" }], "m", { maxTokens: 9999 }));
+    expect(recorded[0].maxTokens).toBe(600);
+    expect(budget.chargedTokens).toBe(3990 + 150);
+  });
+
+  it("a normal call finalizes when it would leave no room for the final pass's prompt", async () => {
+    const budget = new CanonicalProviderBudget(4000, new AbortController().signal);
+    budget.chargeExternalUsage(2000, 0);
     const provider = budget.wrap(fakeProvider([["final", USAGE]]));
     await expect(
-      drain(provider.generateTextStream([{ role: "user", content: "hi" }], "m", {})),
-    ).rejects.toMatchObject({ code: "TOKEN_BUDGET_EXHAUSTED" });
+      drain(provider.generateTextStream([{ role: "user", content: "x".repeat(3500) }], "m", {})),
+    ).rejects.toMatchObject({ code: "TOKEN_BUDGET_FINALIZE" });
+
+    const fresh = new CanonicalProviderBudget(4000, new AbortController().signal);
+    fresh.chargeExternalUsage(0, 0);
+    const freshProvider = fresh.wrap(fakeProvider([["final", USAGE]]));
+    await drain(freshProvider.generateTextStream([{ role: "user", content: "x".repeat(3500) }], "m", {}));
   });
 });
