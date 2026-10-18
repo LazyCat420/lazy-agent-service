@@ -333,7 +333,7 @@ async function main() {
   const results = [];
   const work = [];
   for (const p of args.profiles) {
-    if (!PROFILES[p]) { console.error(`Unknown profile: ${p}`); process.exit(1); }
+    if (!PROFILES_ACTIVE[p]) { console.error(`Unknown profile: ${p}`); process.exit(1); }
     for (const qid of args.questions) {
       const q = QUESTIONS_LIST.find((x) => x.id === qid);
       if (!q) { console.error(`Unknown question id: ${qid}`); process.exit(1); }
