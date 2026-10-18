@@ -1,4 +1,5 @@
 import BaseAgenticHarness from "./BaseAgenticHarness.ts";
+import type { AgenticContext } from "./types.ts";
 import { runTreeOfThoughts } from "./strategies/TreeOfThoughtsStrategy.ts";
 import { runGraphOfThoughts } from "./strategies/GraphOfThoughtsStrategy.ts";
 import logger from "../../utils/logger.ts";

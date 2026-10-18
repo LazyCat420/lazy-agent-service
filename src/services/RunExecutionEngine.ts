@@ -296,6 +296,7 @@ export class RunExecutionEngine {
       }
     }
 
+    const steering: string[] = [];
     this.activeRuns.set(runId, { abortController, deadlineTimer, softDeadlineTimer, steering });
 
     if (request.signal) {
