@@ -386,6 +386,24 @@ export class RunExecutionEngine {
             ? request.input.map((m) => `${m.role}: ${m.content}`).join("\n")
             : JSON.stringify(request.input);
 
+      // The system prompt must list only tools the model can actually call:
+      // a whitelisted name is callable iff it is a global capability or a
+      // supplied local schema (the same source `localSchemas` is built from
+      // below). Listing a name absent from the request `tools` array makes
+      // the model emit markup for an uncallable tool, which the provider
+      // cannot parse natively.
+      const promptSuppliedSchemas: unknown = request.runtime_overrides?.local_tool_schemas;
+      const promptCallableLocalNames = new Set(
+        (Array.isArray(promptSuppliedSchemas) ? promptSuppliedSchemas : []).flatMap((s: unknown) =>
+          s && typeof s === "object" && "name" in s && typeof s.name === "string"
+          && "description" in s && typeof s.description === "string"
+          && "parameters" in s && typeof s.parameters === "object" && s.parameters !== null
+          && "type" in s.parameters && s.parameters.type === "object" ? [s.name] : []),
+      );
+      const callableToolSchemas = profile.tool_policy.whitelist
+        .filter((name: string) => name.startsWith("global.") || promptCallableLocalNames.has(name))
+        .map((name: string) => ({ name }));
+
       const assembled = assembly.assemble({
         agentRole: profile.role,
         project: identity.project,
@@ -393,7 +411,7 @@ export class RunExecutionEngine {
         artifactExcerpts: contributedContext,
         outputContract: "Adhere to structured tool results and verifiable claims.",
         toolProtocol: "Execute enabled tools according to whitelist policy.",
-        selectedToolSchemas: profile.tool_policy.whitelist.map((name) => ({ name })),
+        selectedToolSchemas: callableToolSchemas,
         userTask,
       });
 
