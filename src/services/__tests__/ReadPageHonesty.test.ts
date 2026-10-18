@@ -44,6 +44,21 @@ describe("global.web.read_page honesty", () => {
     expect(executed.error?.code).toBe("EMPTY_CONTENT");
   });
 
+  it("returns TIMEOUT when the internal 15s abort fires without a run signal", async () => {
+    const abortErr = Object.assign(new Error("aborted"), { name: "AbortError" });
+    mockFetch.mockRejectedValue(abortErr);
+    const executed = await GlobalCapabilityExecutor.execute("global.web.read_page", { url: "https://example.com" }, undefined);
+    expect(executed.success).toBe(false);
+    expect(executed.error?.code).toBe("TIMEOUT");
+  });
+
+  it("returns FETCH_FAILED on a network error", async () => {
+    mockFetch.mockRejectedValue(new Error("ECONNRESET"));
+    const executed = await GlobalCapabilityExecutor.execute("global.web.read_page", { url: "https://example.com" }, undefined);
+    expect(executed.success).toBe(false);
+    expect(executed.error?.code).toBe("FETCH_FAILED");
+  });
+
   it("returns success with content for a real text page", async () => {
     const paragraph = "A".repeat(1000);
     const result: SafeFetchResult = { ok: true, status: 200, statusText: "OK", url: "https://example.com", headers: new Headers(), text: `<html><body><p>${paragraph}</p></body></html>`, truncated: false };
