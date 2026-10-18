@@ -662,7 +662,77 @@ export function processNonStreamingResponse(
   return { text, thinking, usage, toolCalls };
 }
 
-// ── SSE Stream Parsing ──────────────────────────────────────
+// ── Text-markup tool call recovery ──────────────────────────
+
+/**
+ * Extract complete `<tool_call>…</tool_call>` tool call blocks from streamed text.
+ *
+ * Some models emit a tool call as plain content when the named tool is not
+ * in the request `tools` array (vLLM cannot parse such a call natively), or
+ * when a template renders the call as text. The strip regex in
+ * StreamChunkDispatcher allows the `<|tool_call|>` variants mirrored here.
+ *
+ * Body formats:
+ *   GLM:  `NAME<arg_key>K</arg_key><arg_value>V<arg_key>K2</arg_key>…`
+ *         — values JSON-parsed, string fallback.
+ *   JSON: `{"name": "...", "arguments": {...} | "..."}`.
+ * Unparseable bodies are skipped (left as text).
+ */
+export interface MarkupToolCall {
+  name: string;
+  args: Record<string, unknown>;
+  argsParseError?: boolean;
+  rawArgs?: string;
+}
+
+const MARKUP_TOOL_CALL_BLOCK = /<\|?tool_call\|?>([\s\S]*?)<\/?\|?tool_call\|?>/gi;
+const MARKUP_ARG_PAIR = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)(?:<\/arg_value>|(?=<arg_key>)|$)/g;
+
+const parseMarkupValue = (value: string): unknown => {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+};
+
+export function extractMarkupToolCalls(text: string): MarkupToolCall[] {
+  const calls: MarkupToolCall[] = [];
+  for (const match of text.matchAll(MARKUP_TOOL_CALL_BLOCK)) {
+    const body = match[1].trim();
+    if (body.startsWith("{")) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        continue;
+      }
+      if (!parsed || typeof parsed !== "object" || !("name" in parsed) || typeof parsed.name !== "string" || !parsed.name) continue;
+      const raw = "arguments" in parsed ? parsed.arguments : undefined;
+      if (typeof raw === "string") {
+        const value = parseMarkupValue(raw);
+        if (value && typeof value === "object" && !Array.isArray(value)) calls.push({ name: parsed.name, args: value as Record<string, unknown> });
+        else calls.push({ name: parsed.name, args: {}, argsParseError: true, rawArgs: raw.slice(0, 2000) });
+      } else {
+        calls.push({ name: parsed.name, args: raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {} });
+      }
+      continue;
+    }
+    const firstKey = body.indexOf("<arg_key>");
+    const name = (firstKey < 0 ? body : body.slice(0, firstKey)).trim();
+    // A bare name with no args is a valid call; anything with spaces or markup is prose.
+    if (!name || /[\s<>]/.test(name)) continue;
+    const args: Record<string, unknown> = {};
+    if (firstKey >= 0) {
+      for (const pair of body.slice(firstKey).matchAll(MARKUP_ARG_PAIR)) {
+        const key = pair[1].trim();
+        if (key) args[key] = parseMarkupValue(pair[2].trim());
+      }
+    }
+    calls.push({ name, args });
+  }
+  return calls;
+}
 
 /**
  * Parse an SSE stream from an OpenAI-compatible /v1/chat/completions endpoint.
@@ -694,6 +764,11 @@ export async function* parseSSEStream(
   let partialOutputCharacters = 0;
   let partialReasoningCharacters = 0;
   let usageYielded = false;
+  // Streamed delta.content text, used to recover tool calls the model emitted
+  // as text markup (the provider cannot parse a call to a tool absent from
+  // the request `tools` array, so it arrives as plain content).
+  let markupContent = "";
+  let nativeToolCallsYielded = false;
 
   // Reactive abort: when the signal fires, cancel the reader immediately
   // so the pending reader.read() resolves with { done: true } instead of
@@ -753,6 +828,7 @@ export async function* parseSSEStream(
 
           const content = delta?.content || "";
           if (content) {
+            markupContent += content;
             partialOutputCharacters += content.length;
             if (suppressThinking) {
               // Pass through raw content without <think> tag parsing
@@ -822,6 +898,7 @@ export async function* parseSSEStream(
           }
           if (finishReason === "tool_calls" || finishReason === "tool") {
             for (const toolCall of Object.values(pendingToolCalls)) {
+              nativeToolCallsYielded = true;
               let args: Record<string, unknown> = {};
               let argsParseError = false;
               try {
@@ -875,6 +952,22 @@ export async function* parseSSEStream(
         } else {
           yield part.content;
         }
+      }
+    }
+
+    // Recover tool calls the model emitted as text markup (e.g.
+    // `<tool_call>name<arg_key>k</arg_key><arg_value>v</tool_call>`): the provider cannot parse a call to a tool that is
+    // absent from the request `tools` array, so it arrives as plain content
+    // with finish_reason "stop". Yield each complete block as a toolCall
+    // chunk; unparseable bodies stay as text.
+    if (!nativeToolCallsYielded) {
+      let markupIndex = 0;
+      for (const call of extractMarkupToolCalls(markupContent)) {
+        yield {
+          type: "toolCall",
+          id: `call_markup_${markupIndex++}`,
+          ...call,
+        };
       }
     }
 
