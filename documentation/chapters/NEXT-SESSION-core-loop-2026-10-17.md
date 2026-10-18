@@ -1,10 +1,18 @@
-# NEXT-SESSION backlog — core-loop refactor (from 2026-10-17)
+# NEXT-SESSION backlog: core-loop refactor (from 2026-10-17)
 
-Scope to agree with the user. Plan: `40-core-loop-onion-refactor-plan-2026-10-17.md`.
+Scope to agree with the user. Plan: `40-core-loop-onion-refactor-plan-2026-10-17.md` (rev 2; pi was dropped, LAS-native CoreLoop).
 
-1. Phase 0 items 0.1–0.11 (each independent; 0.5+0.6 and 0.8 fix the most bakeoff failures).
-2. Phase 1 spike (1.1) to settle A-1 (pi-ai + GLM reasoning round-trip).
-3. scraper-service Phase 4 (search engines: only bing returns results).
-4. Verify html-notes news path claims (E15) before 3.2.
-5. prism `/agent` probe had 4 infra failures (500 "terminated"/"fetch failed", 180 s timeouts) — Rod's repo; report to Rod, do not fix.
-6. Delete `.scratch/harness-research/` once the 1.1 spike no longer needs the pi clone.
+1. **Phase E rescope (needs a user decision).** Evidence 2026-10-17:
+   - E1 "only bing returns results" is by design. Per `agents/scraper-service/OPERATIONS.md` "Search engines: no DuckDuckGo (2026-10-06)", the free engines bot-block the house IP, SearXNG is pinned to bing + wikipedia, and general search goes through LAS `/execute/web_search` (Exa, SearXNG fallback). Proposal: drop E1.
+   - E2/E3: scraper-service ships trading-service's `app/scraper` (OPERATIONS.md "Which commit is running?"), so those fixes land in trading-service, which can't be deployed over a live cycle. Proposal: do them in trading-service in a session that owns it.
+   - LAS-side alternative for E2's user-visible problem (JS pages unreadable): `global.web.read_page` falls back to `WebExtractService` (scraper-service `/scrape`, engine auto = http then Chromium) on HTTP 401/403 or `EMPTY_CONTENT`. Small and LAS-only.
+2. **read_page `EMPTY_CONTENT` threshold** (< 200 chars of text) also rejects genuinely tiny pages. Revisit if the eval shows false refusals.
+3. Verify html-notes news path claims (E15) before C4.
+4. prism `/agent` probe had 4 infra failures (500 "terminated"/"fetch failed", 180 s timeouts). Rod's repo: report to Rod, don't fix.
+5. vLLM thinking-off (`chat_template_kwargs.enable_thinking:false`) doesn't reach GLM's template (the trace saw reasoning tokens with thinking off). The shim's `enable_thinking→thinking` mirror targets DeepSeek-style templates. Unverified.
+6. Remaining `await reader.cancel()` crash-pattern sites: `decision-fabric/SemIfProvider.ts:69`, `TinyModelsProvider.ts:33`.
+7. Delete `.scratch/harness-research/` (pi/omp/Hermes clones) when no longer referenced.
+8. **Phase D can't run as planned (needs a user decision).** Evidence 2026-10-17 (GLM inventory `.scratch/harness-plan/phaseD-inventory.md`, re-checked by the orchestrator): `AgenticLoopService` → `HarnessRegistry` (`AgenticLoopService.ts:4, 503`; `HarnessRegistry.ts:1-3, 46-48`) → ReAct / VisionLanguage / PromptedToolCalling. It still serves `POST /chat`, `/agent` (trading cycle agents), `/conversation` (`ChatRoutes.ts:883` via `handleAgent`), approvals/answers, `ConversationTimerService`, `ScheduledTaskService`, `DelegateTool.ts:152` and `OrchestratorService.ts:1650`. Those paths depend on approvals, ask-user, sub-agents, plan mode, skills, ToT/GoT and conversation persistence that CoreLoop doesn't have. Options: (a) keep the legacy loop for those routes and delete only what C1–C3 make dead; (b) a separate multi-session migration of `/agent` + `/chat` onto CoreLoop with middleware for each feature, scheduled between trading cycles.
+9. **B8 compaction in CoreLoop is blocked.** `manageContextPressure` (`ContextPressureManager.ts:126`) needs a full `AgenticContext` (AgentHooks, modelDefinition, AgenticLoopState, harness label, emit). `RunsAdapter` has no compaction, so a long `/v1/runs` run can overflow context. The adapter shrinks `maxTokens` once on overflow; nothing trims history. Fix: a messages-only compaction hook in `beforeModelCall`.
+10. **A4 step 3 resolved under CoreLoop (2026-10-17):** an unknown tool name becomes a `TOOL_NOT_FOUND` observation listing the available tools, with a "Did you mean" suggestion (`ToolRunner.ts:62-121`; tests `ToolRunner.test.ts:79-87`). The legacy harness path (`BaseAgenticHarness.ts` ~:1094-1120) wasn't re-checked; it only matters if option (a) in item 8 is chosen.
+11. **CoreLoop drops `thinking.delta`.** `RunsAdapter.forwardEvent` emits no reasoning events, while legacy `/v1/runs` streamed thinking through `dispatchChunk`. Check whether any client (trading-client, html-notes) renders run reasoning before Phase D.

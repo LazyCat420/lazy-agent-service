@@ -127,6 +127,9 @@ async function runOne(profileName, question) {
     question: question.text,
     wall_seconds: null,
     event_types: [],
+    run_id: null,
+    // Non-delta events with seconds since request start: shows when the soft deadline, finalize and tools happened.
+    timeline: [],
     tool_calls: [],
     status: null,
     error_code: null,
@@ -178,6 +181,16 @@ async function runOne(profileName, question) {
           try { event = JSON.parse(line.slice(6)); } catch { continue; }
           if (!record.event_types.includes(event.type)) record.event_types.push(event.type);
           const data = event.data || {};
+          record.run_id ??= event.run_id || event.runId || null;
+          if (event.type !== "message.delta") {
+            record.timeline.push({
+              t: +((Date.now() - started) / 1000).toFixed(1),
+              type: event.type,
+              ...(data.code ? { code: data.code } : {}),
+              ...(data.reason ? { reason: data.reason } : {}),
+              ...(data.tool_name || data.name ? { tool: data.tool_name || data.name } : {}),
+            });
+          }
           if (event.type === "message.delta" && typeof data.delta === "string") finalText += data.delta;
           if (event.type === "message.completed" && typeof data.content === "string" && data.content) {
             // prefer completed message text if deltas were empty

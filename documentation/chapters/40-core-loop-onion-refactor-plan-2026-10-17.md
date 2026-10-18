@@ -203,7 +203,13 @@ Each item names the reference code to read, the LAS change, and the test.
 
 ### Phase B: build `CoreLoop` with traits 1–8 (new code in LAS)
 
-- [ ] **B1 Loop skeleton (trait 1).**
+Status 2026-10-17: `src/core/loop/{CoreLoop,ToolRunner,RunsAdapter,types}.ts`, tests T1–T7 and S1–S21 (48 in `src/core/loop`), on main at `43552d3`. B8 is partial: the tool list is computed once per run (`RunsAdapter.toCoreTools`), but compaction is **blocked** because `manageContextPressure` needs a full `AgenticContext` (hooks, modelDefinition, loop state). It is tracked in NEXT-SESSION. B10: route contract tests pass, but 6 suites had their `runAgenticLoop` mock retargeted to `runCoreLoopForRun`; assertions are unchanged.
+
+**Phase A live eval (2026-10-17, `.scratch/harness-plan/eval-phaseA/`):** trading 4/8 (baseline 2/8), html-notes 5/8 (baseline 1/8), RestartCount unchanged. All 7 failures were hard `DEADLINE_EXCEEDED` on iteration 3. The soft deadline only set `finalizeRequested`, which is polled between turns, so a slow in-flight GLM turn ran past the hard limit. Fix C1b (`e604c91`): the engine aborts a `finalizeSignal` at the soft deadline; CoreLoop gives non-final turns and tools `AbortSignal.any([run, finalize])`, drops the cut turn, and runs the toolless final pass on the run signal only (S19–S21; S19/S20 red on the old loop).
+
+**C1 live eval (2026-10-17, deploy `43552d3`, `.scratch/harness-plan/eval-C1/`):** trading 5 PASS / 2 WEAK / 1 FAIL, html-notes 6 / 2 / 0, RestartCount unchanged. All 4 WEAKs were correct, current answers with no named source. C1c (`047f750`) adds a `# Sources` rule to the `/v1/runs` prompt when a `global.web.*` tool is callable. The one FAIL (trading q6) was reproduced with the new eval timeline (`eval-q6/`, run-930e32bc): a single GLM turn ran 8→279 s, the soft cut fired at 258 s, `FINALIZE` came at 279 s, and the run failed at 300 s. Root cause (code-confirmed): `CanonicalProviderBudget.wrap` overwrote the per-turn `signal` with the run signal, so the cut never reached vLLM. The completed turn was then discarded. C1d fixes the signal merge, keeps a turn that completes after the cut, and continues (rather than restarts) a cut answer.
+
+- [x] **B1 Loop skeleton (trait 1).**
   - Ref: pi `.scratch/harness-research/pi/packages/agent/dist/agent-loop.js` (675 lines, whole file); prism `ReActHarness.run:256`; LAS bakeoff loop.
   - LAS: `src/core/loop/CoreLoop.ts`. `run({messages, tools, provider, hooks, budget, signal})` → async iterator of events:
     - stream the model;
@@ -212,30 +218,30 @@ Each item names the reference code to read, the LAS change, and the test.
     - else run tools → append results → repeat.
   - Provider calls go through the existing `src/utils/openai-compat.ts` stream parser (no new provider layer).
   - TC-B1: scripted fake provider (2 tool turns, then text) → 3 model calls, final text returned, message log alternates assistant/tool correctly.
-- [ ] **B2 Tool errors are results (trait 2).**
+- [x] **B2 Tool errors are results (trait 2).**
   - Ref: Hermes `tools/registry.py:936-949, 1065` (`{"error":…}`, 2048-char cap); prism `ToolOrchestratorService.ts:474, 507`; omp `agent-loop.ts:3084`.
   - LAS: CoreLoop wraps every tool `execute` in try/catch and appends `{role:"tool", content: JSON {error, message}}` capped at 2048 chars. 3 consecutive errors from the same tool → error result "stop calling X" (prism `MAX_CONSECUTIVE_TOOL_ERRORS=3`, `constants.ts:670`).
   - TC-B2: tool that throws → the model sees the error and the run completes with an answer; `RunExecutionEngine` emits no `run.failed`.
-- [ ] **B3 Unknown tool / bad args (trait 3).**
+- [x] **B3 Unknown tool / bad args (trait 3).**
   - Ref: omp `agent-loop.ts:2891-2902` (closest-name suggestion); prism `StreamChunkRouter.ts:435`; Hermes `agent/turn_tool_validation.py:105-140` (JSON repair, then 3-strike).
   - LAS:
     - unknown name → error result `Tool "x" not found. Available: a, b, c`;
     - invalid JSON args → one repair attempt (strip fences/trailing commas), else error result;
     - schema validation against the tool's JSON schema.
   - TC-B3: call to `web_serch` → error result naming `global.web.search`; next turn succeeds.
-- [ ] **B4 Paired results (trait 4).**
+- [x] **B4 Paired results (trait 4).**
   - Ref: pi `failToolCallsFromTruncatedMessage`; omp `createSyntheticToolResultMessage`.
   - LAS: after every tool batch, assert each `tool_call_id` has exactly one result. Missing ones (abort, deny, skip) get a synthetic `{error:"cancelled"|"denied"|"skipped"}`.
   - TC-B4: abort mid-batch → message log still pairs 3 calls with 3 results, and the provider accepts the next request.
-- [ ] **B5 Cut-off replies (trait 5).**
+- [x] **B5 Cut-off replies (trait 5).**
   - Ref: pi `dist/agent-loop.js` ~L163, 486, 533.
   - LAS: when `finish_reason=length` and tool calls are present, don't execute them; append error results "your reply was cut off; call fewer tools or shorter arguments", once. A second time triggers rule F.
   - TC-B5: fake provider returns length + a half tool call → nothing executes, retry happens.
-- [ ] **B6 Parallel tools with timeout + abort (trait 6).**
+- [x] **B6 Parallel tools with timeout + abort (trait 6).**
   - Ref: prism `constants.ts:722` (`DEFAULT_TOOL_TIMEOUT_MILLISECONDS`) + `lifecycle/ToolExecutor.ts:108`; omp `agent-loop.ts:3770-3791` (shared/exclusive concurrency).
   - LAS: each tool gets `AbortSignal.any([runSignal, AbortSignal.timeout(tool.timeoutMs ?? 60000)])`; `Promise.allSettled`; results appended in call order; tools marked `exclusive` run alone.
   - TC-B6: one tool never resolves → timeout error result after its limit (fake clock / injected timeout signal, no real timers), siblings' results are kept, and the run answers.
-- [ ] **B7 One hook system (trait 7).**
+- [x] **B7 One hook system (trait 7).**
   - Ref: pi `packages/agent/src/types.ts` (`beforeToolCall` → block/rewrite, `afterToolCall` → rewrite result); Hermes `hermes_cli/plugins.py:107-198`.
   - LAS: `CoreLoopHooks { beforeModelCall, beforeToolCall, afterToolCall, onEvent }`, arrays run in order. Approvals (`RunApprovals`), profile authorization (`decideProfileToolCall`), the output cap and `RuntimeExtensions` become hook entries. Today's 3 hook systems collapse into this one.
   - TC-B7: a beforeToolCall hook that denies → denied result paired (trait 4); an afterToolCall hook that truncates → the model sees the truncated text.
@@ -243,11 +249,11 @@ Each item names the reference code to read, the LAS change, and the test.
   - Ref: prism `lifecycle/ToolSurface.ts` (sorted list fixed per turn), `ContextPressureManager.manageContextPressure:126`; pi `transformContext` / `prepareRequest`.
   - LAS: `beforeModelCall(messages) → messages` runs compaction (existing `ContextPressureManager`), date and app context. The tool list is computed once per run and sorted by name; `describe_tools` stops changing it (`ReActHarness.ts:354` behavior dropped).
   - TC-B8: 3-turn run sends byte-identical `tools` arrays on every call.
-- [ ] **B9 Always answer (rule F).**
+- [x] **B9 Always answer (rule F).**
   - Ref as A1.
   - LAS: a `Budget` object (steps, tokens, soft deadline) is checked before each model call; exhausted → one toolless final turn; empty or thinking-only reply → one nudge (Hermes `agent/turn_empty_response.py`) → else a synthetic summary from tool results (LAS `ExhaustionRecovery.ts:142`).
   - TC-B9: every budget kind, when exhausted, ends `completed` with non-empty text.
-- [ ] **B10 Events.** CoreLoop events map 1:1 to existing `RunEventType` (`src/types/run.ts:95-111`) so clients don't change.
+- [x] **B10 Events.** CoreLoop events map 1:1 to existing `RunEventType` (`src/types/run.ts:95-111`) so clients don't change.
   - TC-B10: existing route contract tests pass unchanged.
 
 ### Phase C: move the routes onto CoreLoop
