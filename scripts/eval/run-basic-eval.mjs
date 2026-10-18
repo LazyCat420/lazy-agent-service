@@ -10,9 +10,9 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const QUESTIONS = JSON.parse(readFileSync(resolve(HERE, "questions.json"), "utf8"));
-const RUBRIC = QUESTIONS.rubric;
-const QUESTIONS_LIST = QUESTIONS.questions;
+let QUESTIONS = JSON.parse(readFileSync(resolve(HERE, "questions.json"), "utf8"));
+let RUBRIC = QUESTIONS.rubric;
+let QUESTIONS_LIST = QUESTIONS.questions;
 
 const LAS_URL = process.env.LAS_URL || "http://10.0.0.16:5591";
 const JUDGE_URL = process.env.JUDGE_URL || "http://10.0.0.141:8000/v1/chat/completions";
@@ -35,10 +35,12 @@ if (!TOKEN) {
 
 // ── CLI ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const out = { profiles: [], questions: [], outDir: null, concurrency: 1 };
+  const out = { profiles: [], questions: [], outDir: null, concurrency: 1, questionsFile: null, noJudge: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--profiles") out.profiles = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
+    else if (a === "--questions-file") out.questionsFile = argv[++i];
+    else if (a === "--no-judge") out.noJudge = true;
     else if (a === "--questions") {
       for (const part of argv[++i].split(",")) {
         const range = part.match(/^(\d+)-(\d+)$/);
@@ -55,7 +57,7 @@ function parseArgs(argv) {
   return out;
 }
 
-const PROFILES = {
+const DEFAULT_PROFILES = {
   trading: {
     profile_id: "trading-strategy-chat-v1",
     profile_version: "1.2.0",
@@ -73,6 +75,7 @@ const PROFILES = {
     input: (text) => text,
   },
 };
+let PROFILES_ACTIVE = DEFAULT_PROFILES;
 
 // ── restart guard ─────────────────────────────────────────────────────────
 async function lasRestartSnapshot() {
@@ -108,7 +111,7 @@ function restartChanged(before, after) {
 
 // ── run one question through LAS ──────────────────────────────────────────
 async function runOne(profileName, question) {
-  const profile = PROFILES[profileName];
+  const profile = PROFILES_ACTIVE[profileName];
   const started = Date.now();
   const body = {
     profile_id: profile.profile_id,
@@ -302,9 +305,26 @@ Respond with ONLY a JSON object: {"grade":"PASS|WEAK|FAIL","reason":"one sentenc
   }
 }
 
+// ── no-judge grading ──────────────────────────────────────────────────────
+function noJudgeGrade(record) {
+  const answer = (record.answer || "").trim();
+  const grade = record.status === "run.completed" && answer ? "PASS" : "FAIL";
+  return { grade, reason: `no-judge: status=${record.status} answer_chars=${answer.length}` };
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 async function main() {
   const args = parseArgs(process.argv);
+  if (args.questionsFile) {
+    const data = JSON.parse(readFileSync(resolve(process.cwd(), args.questionsFile), "utf8"));
+    QUESTIONS = data; RUBRIC = data.rubric || RUBRIC; QUESTIONS_LIST = data.questions;
+    if (data.profiles) {
+      PROFILES_ACTIVE = {};
+      for (const [name, p] of Object.entries(data.profiles)) {
+        PROFILES_ACTIVE[name] = { ...p, input: p.input || ((text) => text) };
+      }
+    }
+  }
   const today = new Date().toISOString().slice(0, 10);
   mkdirSync(args.outDir, { recursive: true });
 
@@ -327,7 +347,7 @@ async function main() {
     while (cursor < work.length) {
       const job = work[cursor++];
       const record = await runOne(job.profile, job.question);
-      record.grade_result = await judge(record, today);
+      record.grade_result = args.noJudge ? noJudgeGrade(record) : await judge(record, today);
       record.grade = record.grade_result.grade;
       results.push(record);
     }

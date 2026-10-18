@@ -52,6 +52,24 @@ Each run is graded by GLM (temperature 0) with the rubric from `questions.json`;
 "today" in a question means the date the eval runs (passed to the judge). Runs
 that did not reach `run.completed` are FAIL without calling the judge.
 
+## Chaos mode
+
+Chaos questions live in `scripts/eval/chaos-questions.json` (profile `chaos`,
+`profile_id` `eval-chaos-v1`). The server must run with `LAS_EVAL_CHAOS=1`.
+
+```
+node scripts/eval/run-basic-eval.mjs --questions-file scripts/eval/chaos-questions.json --profiles chaos --questions 1-5 --no-judge --concurrency 5 --out <dir>
+```
+
+For 10-parallel (each question twice):
+
+```
+node scripts/eval/run-basic-eval.mjs --questions-file scripts/eval/chaos-questions.json --profiles chaos --questions 1,2,3,4,5,1,2,3,4,5 --no-judge --concurrency 10 --out <dir>
+```
+
+`--no-judge` skips the GLM judge: grade is `PASS` when the run completed with a
+non-empty answer, else `FAIL`.
+
 ## Baseline
 
 Baseline on **2026-10-17**: trading **3/8**, html-notes **4/8** PASS.

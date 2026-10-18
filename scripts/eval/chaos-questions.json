@@ -1,0 +1,18 @@
+{
+  "rubric": "Apply literally. 'today' in any question means the date the eval runs (today's date is passed to the judge). PASS: a final answer exists, contains at least 2 concrete current facts (names, numbers or dates from within the eval month), and cites or names at least 1 source. WEAK: an answer exists but is vague, stale (facts older than 30 days presented as current) or has no sources. FAIL: no answer, an error, a timeout, a preamble only (\"I'll check…\"), or a refusal or claim of no web access.",
+  "profiles": {
+    "chaos": {
+      "profile_id": "eval-chaos-v1",
+      "app_id": "html-notes",
+      "project": "html-notes",
+      "username": "eval"
+    }
+  },
+  "questions": [
+    { "id": 1, "text": "Call the tool global.eval_chaos.throw once, then tell me in one sentence what happened." },
+    { "id": 2, "text": "Call the tool global.eval_chaos.hang once and wait for its result, then answer: what is 2+2?" },
+    { "id": 3, "text": "Call the tool global.eval_chaos.huge once, then tell me roughly how long its output was." },
+    { "id": 4, "text": "Call the tool global.eval_chaos.slow once, then tell me what it returned." },
+    { "id": 5, "text": "Call global.eval_chaos.throw, global.eval_chaos.huge and global.eval_chaos.slow at the same time, then summarise the three results in one line each." }
+  ]
+}
