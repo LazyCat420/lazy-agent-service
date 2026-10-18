@@ -23,3 +23,9 @@ Scope to agree with the user. Plan: `40-core-loop-onion-refactor-plan-2026-10-17
 13. **Model-id transient (chaos eval 2026-10-17, run-d3d22dd7).** 1 of 10 parallel runs failed in 5 s with `PROVIDER_ERROR: The model GLM-5.3-Flash-EXL3 does not exist` (served id is `GLM-5.3-Flash-EXL3-TF`). Trace where `DynamicModelResolver` got the id without `-TF` (stale catalog or another host's list). The run correctly failed: no tool output existed to answer from.
 14. **Eval tool count for timed-out tools.** The chaos hang tool produced no `tool.*` event before C1h; after C1h deploys, confirm the eval shows `tool.failed` for it.
 15. **Flaky deploy gate: `McpGaps.test.ts:437`** ("quarantines a tool the server adds while connected") timed out at 5 s in deploy shard 3 on 2026-10-18 (deploy of `b07208f`); passed 3/3 in isolation and in the full worktree run. Live MCP server under sharded load; give it an explicit timeout or make the wait event-driven.
+
+## Session close 2026-10-18
+- C1 gate passed (trading 7/8, html-notes 8/8, chaos 10/10, 0 restarts); main `c66cab5`, deployed `6640a23`.
+- **User deferred to next session (2026-10-18):** C2/C3 (item 12), C4 (html-notes news via `/v1/runs`), Phase D (item 8; `LAS_RUNS_LOOP=legacy` switch stays), Phase E (item 1).
+- Not done in wrap-up: the eval on nemotron (`run-basic-eval.mjs` has no model override yet); live checks in the trading-client and html-notes UIs (only `/v1/runs` was exercised through the eval).
+- Keep `.scratch/harness-research/` and `.scratch/harness-plan/` (specs, eval outputs) for Phase D.
