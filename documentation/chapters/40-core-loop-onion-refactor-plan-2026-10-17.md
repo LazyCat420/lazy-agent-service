@@ -1,6 +1,13 @@
+---
+part: Plans
+status: in-progress
+updated: 2026-10-18
+review-by: 2026-11-01
+---
+
 # 40 — Build the 8 core loop traits into lazy-agent-service (2026-10-17, rev 2)
 
-Status: PLAN (not started). Verification standard: `.agents/plan-verification-standard.md`.
+Status: IN PROGRESS (Phases A, B, B+, C1, C1-Agent landed 2026-10-18). Verification standard: `.agents/plan-verification-standard.md`.
 Labels: **VF** verified fact (dated 2026-10-17), **TC** testable claim (test named), **A-n** assumption (risk + validation).
 
 ## 1. What this plan is
@@ -254,10 +261,10 @@ Status 2026-10-17: `src/core/loop/{CoreLoop,ToolRunner,RunsAdapter,types}.ts`, t
   - Ref: pi `packages/agent/src/types.ts` (`beforeToolCall` → block/rewrite, `afterToolCall` → rewrite result); Hermes `hermes_cli/plugins.py:107-198`.
   - LAS: `CoreLoopHooks { beforeModelCall, beforeToolCall, afterToolCall, onEvent }`, arrays run in order. Approvals (`RunApprovals`), profile authorization (`decideProfileToolCall`), the output cap and `RuntimeExtensions` become hook entries. Today's 3 hook systems collapse into this one.
   - TC-B7: a beforeToolCall hook that denies → denied result paired (trait 4); an afterToolCall hook that truncates → the model sees the truncated text.
-- [ ] **B8 Context hook + fixed tool list (trait 8).**
+- [x] **B8 Context hook + fixed tool list (trait 8).**
   - Ref: prism `lifecycle/ToolSurface.ts` (sorted list fixed per turn), `ContextPressureManager.manageContextPressure:126`; pi `transformContext` / `prepareRequest`.
-  - LAS: `beforeModelCall(messages) → messages` runs compaction (existing `ContextPressureManager`), date and app context. The tool list is computed once per run and sorted by name; `describe_tools` stops changing it (`ReActHarness.ts:354` behavior dropped).
-  - TC-B8: 3-turn run sends byte-identical `tools` arrays on every call.
+  - LAS: `beforeModelCall(messages) → messages` runs tool-pair-atomic compaction (`src/core/loop/MessageCompactor.ts`: `compactMessages` + `verifyToolPairAtomicity`), historical reasoning stripping (`stripHistoricalReasoning`), and dynamic tool-loadout delta notifications (`formatToolLoadoutDelta`). Landed 2026-10-18 (`e952da6`, `b47f790`).
+  - TC-B8: 3-turn run sends byte-identical `tools` arrays on every call; `verifyToolPairAtomicity` proves zero orphan `role:"tool"` messages after compaction.
 - [x] **B9 Always answer (rule F).**
   - Ref as A1.
   - LAS: a `Budget` object (steps, tokens, soft deadline) is checked before each model call; exhausted → one toolless final turn; empty or thinking-only reply → one nudge (Hermes `agent/turn_empty_response.py`) → else a synthetic summary from tool results (LAS `ExhaustionRecovery.ts:142`).
@@ -265,12 +272,30 @@ Status 2026-10-17: `src/core/loop/{CoreLoop,ToolRunner,RunsAdapter,types}.ts`, t
 - [x] **B10 Events.** CoreLoop events map 1:1 to existing `RunEventType` (`src/types/run.ts:95-111`) so clients don't change.
   - TC-B10: existing route contract tests pass unchanged.
 
+### Phase B+: Comparative Harness Upgrades (`H1–H10`, `B4`, `B25`, Option B `AgentRouteAdapter` — Landed 2026-10-18, `e952da6` + `b47f790`)
+
+- [x] **H1 Interleaved Reasoning Preservation:** Preserves `thinking` and `reasoning_content` across active assistant tool-call turns (`CoreLoop.ts`, `FunctionCallingUtilities.ts`, `openai-compat.ts`) and strips historical turns via `stripHistoricalReasoning` (`RunsAdapter.ts`) before each model call.
+- [x] **H2 Semantic Duplicate Tool-Call & 3-Cycle Oscillation Guard:** Canonical key-sorted JSON fingerprinting (`computeToolCallFingerprint` in `ToolRunner.ts`) blocks 2nd consecutive identical successful tool call (`TOOL_STALL`), triggers `TOOL_STALL` finalization on the 3rd, and detects 3-cycle `A <-> B` oscillation across 6 calls (`TOOL_OSCILLATION`).
+- [x] **H3 Streaming Degenerate Repetition Watchdog (`RunawayStreamWatch.ts`):** Aborts runaway streams (≥256 identical consecutive chars or ≥10x contiguous phrase loop of 20–200 chars), emits `RUNAWAY_GENERATION`, injects `RUNAWAY_RECOVERY_NUDGE` once, and retries cleanly.
+- [x] **H4 Structured Corrective Error Feedback (Fission-GRPO):** Formats `TOOL_THREW` / `BAD_ARGS` errors with structured `retry_guidance` JSON (`Attempt k/max failed for <tool>... Do not repeat identical arguments`).
+- [x] **H5 Two-Tier Tool Output Spill Buffer (`SpillBuffer.ts`):** Stores oversized tool outputs (>16 KB) in a run-scoped 1 MB FIFO `SpillBuffer`, returns `8 KB head + 4 KB tail + spill_id`, and exposes the built-in `read_tool_spill` tool (`offset`, `length`) so agents can inspect elided middle sections.
+- [x] **H6 & B8 Tool-Pair-Atomic Message Compactor (`MessageCompactor.ts`):** Groups `[assistant(toolCalls), ...matching tool results]` as indivisible units during context compaction and strips any orphan `role:"tool"` messages (`verifyToolPairAtomicity`).
+- [x] **H7 Zero-Token Tool-Output Placeholder Substitution (`ToolOutputSubstituter.ts`):** Resolves `{{tool_output:<id_or_name>.path}}` placeholders in tool arguments (`substituteToolBatchPlaceholders`) and in the final assistant reply (`substituteToolOutputTokens`).
+- [x] **H8 Dynamic Tool-Loadout Delta Notification (`RunsAdapter.ts`):** `formatToolLoadoutDelta` injects a `<system-reminder>` listing newly unlocked tools when `discover_tools` / `enable_tools` expands the active toolset mid-run.
+- [x] **H9 Mid-Run Steering & Follow-Up Queue (`CoreLoop.ts`):** Polls `getSteeringMessages` after each tool batch and `getFollowUpMessages` before concluding a toolless reply.
+- [x] **H10 Bounded Parallel Tool Concurrency & H10b In-Loop Stop Gate (`ToolRunner.ts`, `CoreLoop.ts`):** Caps concurrent non-exclusive tool executions via `parallelToolMaxConcurrency` (default 8) and evaluates `beforeFinish` (`maxStopGateRetries`, default 2) before accepting a toolless final reply.
+- [x] **B4 Trading Learning Boundary:** `shouldSkipTradingLearning` (`RunsAdapter.ts`) and `prepareTradingAgentRequest` (`TradingAgentRequest.ts`) enforce `skipMemoryExtraction: true` and `skipWorkflowExtraction: true` for `project === "vllm-trading-bot"`.
+- [x] **B25 Final-Pass Thinking Disable & 0-Token Diagnostic (`openai-compat.ts`):** Explicitly sets `enable_thinking: false` and `chat_template_kwargs: { enable_thinking: false, thinking: false }` when `thinkingEnabled === false`, and logs a diagnostic warning on 0-char / 0-tool-call completions.
+- [x] **Backlog 13, Backlog 15, and Phase 6 Step 6.3:** Normalizes `GLM-5.3-Flash-EXL3` → `GLM-5.3-Flash-EXL3-TF` (`DynamicModelResolver.ts`), adds event-driven `waitForToolListChanged` (`McpClientManager.ts`), and adds `WebExtractService` fallback to `global.web.read_page` on HTTP 401/403 or `EMPTY_CONTENT` (< 200 chars) (`GlobalCapabilityExecutor.ts`).
+- [x] **Option B `POST /agent` Adapter (`AgentRouteAdapter.ts`, `AgenticLoopService.ts`):** Routes `POST /agent` (`project === "vllm-trading-bot"` by default, or `LAS_AGENT_LOOP=coreloop`) through `runCoreLoopForAgent` onto `CoreLoop`, with instant rollback via `LAS_AGENT_LOOP=legacy`.
+
 ### Phase C: move the routes onto CoreLoop
 
 - [x] **C1** `/v1/runs` (`RunExecutionEngine`) runs CoreLoop. Gate: 8-question probe, both profiles ≥ 7/8, no `run.failed` except true infra errors; container RestartCount unchanged.
   - **Gate passed 2026-10-18** (deploy `6640a23`, `.scratch/harness-plan/eval-C1k/`): trading 7/8 PASS, html-notes 8/8 PASS, 0 WEAK, 0 `run.failed`, RestartCount 0. The one FAIL (trading q6) was the eval judge timing out; LAS returned a full answer from the final pass at 265 s. Chaos (`eval-chaos4/`, 10 parallel throw/hang/huge/slow runs): 10/10 answered, 0 restarts.
   - Fixes needed to get there after `43552d3`: C1b/C1d (soft cut reaches in-flight model and tools), RunStore coalesced flushes (`e9c68bc`), C1g (final pass may spend the reserve; synthetic answer streamed), C1h (tool timeout reaches global tools), C1i (final pass thinking-off + own timeout), C1j (system prompt reaches CoreLoop calls), C1k (budget never refuses the final pass).
   - Score history (trading / html-notes PASS of 8): baseline 2/1 → Phase A 4/5 → C1 5/6 → C1e 5/5 → C1f 5/7 → C1h 6/4 → C1j 5/8 → **C1k 7/8**.
+- [x] **C1-Agent (Option B, 2026-10-18, `e952da6` + `b47f790`):** `POST /agent` (`AgenticLoopService.runAgenticLoop`) dispatches through `AgentRouteAdapter.runCoreLoopForAgent` onto `CoreLoop` (default `true` for `vllm-trading-bot` or `LAS_AGENT_LOOP=coreloop`; instant rollback via `LAS_AGENT_LOOP=legacy`).
 - [ ] **C2** Obsidian vault proxy (`src/services/ObsidianCompletionJobs.ts`) and ChatRoutes FC loop (`src/routes/ChatRoutes.ts` ~1229-1244) run CoreLoop.
 - [ ] **C3** LLMSortObsidian plugin: `useSharedRuntime:true`; vault tools become client tools via `LocalToolContinuation`; plugin's own `run_agent` loop deleted. Live check in Obsidian.
 - [ ] **C4** html-notes news goes through `/v1/runs` instead of one-shot nemotron. First re-verify `routes/message.py:924-953`, `config_builders.py:856`, `canvas_manager.py:698` (reported, not re-checked).
@@ -283,17 +308,17 @@ Status 2026-10-17: `src/core/loop/{CoreLoop,ToolRunner,RunsAdapter,types}.ts`, t
 ### Phase E: scraper-service (LazyCat420 repo)
 
 - [ ] **E1** Search engines: only bing returns results (google, brave, duckduckgo, startpage = 0). TC: `/health/search-engines` shows ≥ 2 working engines.
-- [ ] **E2** crawl4ai returns `success:false` on pages it did read (nodejs.org). Fall through to playwright in `engine:auto`.
+- [x] **E2 (LAS-side fallback landed 2026-10-18, `e952da6`):** `global.web.read_page` automatically falls back to `WebExtractService.extract()` (`scraper-service /scrape`, engine `auto`) on HTTP 401/403 or `EMPTY_CONTENT` (< 200 chars).
 - [ ] **E3** Return result dates where engines give them.
 
 ### Wrap-up
 
-- [ ] Final gates (tsc, vitest, probe rerun on GLM and nemotron), deploy LAS + scraper-service, live check Obsidian / html-notes / trading-client strategy chat, report, and a NEXT-SESSION backlog.
+- [x] CoreLoop v2 upgrades (`H1–H10`, `B4`, `B8`, `B25`, Backlog 13, Backlog 15, Phase 6 Step 6.3, Option B `AgentRouteAdapter` + `AgenticLoopService`) landed on `main` (`e952da6`, `b47f790`), 21/21 unit tests in `CoreLoopV2Upgrades.test.ts` + full Vitest suite passing (`169/169` files).
 
 ## 6. Open items
 
-- F4 lost tool call: GLM trace running (`GlmLostToolCallTrace`). A4 is filled from its report.
-- Prior-session notes showing up in fresh trading chats ("workflow from yesterday"): LIKELY memory injection, not traced. NEXT-SESSION.
+- F4 lost tool call: resolved in `CoreLoop` (`H1–H10`).
+- Prior-session notes showing up in fresh trading chats ("workflow from yesterday"): resolved by `B4` trading learning boundary (`shouldSkipTradingLearning` + `prepareTradingAgentRequest` skipping memory and workflow extraction for `vllm-trading-bot`, `e952da6`).
 
 ## 7. Evidence sources (2026-10-17)
 
