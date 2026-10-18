@@ -120,6 +120,8 @@ export interface CoreLoopOptions {
   maxConsecutiveToolErrors?: number;
   /** Injected clock for durations; default Date.now. */
   now?: () => number;
+  /** Builds each tool's timeout signal; default `AbortSignal.timeout(ms)`. Tests inject controllable signals. */
+  timeoutSignalFor?: (toolName: string, ms: number) => AbortSignal;
 }
 
 export type CoreLoopEvent =
@@ -157,6 +159,7 @@ export interface ToolBatchOptions {
   /** Per-tool consecutive error count, owned by the loop, mutated by the runner across batches. */
   failureStreak: Map<string, number>;
   now: () => number;
+  timeoutSignalFor?: (toolName: string, ms: number) => AbortSignal;
 }
 
 /**
