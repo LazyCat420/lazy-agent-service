@@ -3,12 +3,16 @@ import { runCoreLoop } from "../CoreLoop.ts";
 import { SpillBuffer } from "../SpillBuffer.ts";
 import { RunawayStreamWatch, RUNAWAY_RECOVERY_NUDGE } from "../RunawayStreamWatch.ts";
 import { compactMessages, verifyToolPairAtomicity } from "../MessageCompactor.ts";
-import { substituteToolBatchPlaceholders } from "../ToolOutputSubstituter.ts";
+import {
+  substituteToolBatchPlaceholders,
+  substituteToolOutputTokens,
+} from "../ToolOutputSubstituter.ts";
 import { stripHistoricalReasoning, formatToolLoadoutDelta, shouldSkipTradingLearning } from "../RunsAdapter.ts";
 import { computeToolCallFingerprint } from "../ToolRunner.ts";
 import { normalizeLocalModelId } from "../../../services/DynamicModelResolver.ts";
 import { prepareTradingAgentRequest, shouldSkipLearningForProject } from "../../../services/TradingAgentRequest.ts";
 import { GlobalCapabilityExecutor } from "../../../services/GlobalCapabilityExecutor.ts";
+import AgenticLoopService from "../../../services/AgenticLoopService.ts";
 import {
   shouldUseCoreLoopForAgent,
   runCoreLoopForAgent,
@@ -684,6 +688,152 @@ describe("CoreLoop v2 Upgrades (H1-H10) & Reliability Fixes", () => {
         runLegacyPath: async () => "legacy-path",
       });
       expect(dispatchedCore).toEqual({ pathUsed: "coreloop", value: "coreloop-path" });
+    });
+
+    it("H7 (Final Text): substituteToolOutputTokens replaces {{tool_output:...}} tokens in final assistant text of runCoreLoop", async () => {
+      const fetchQuoteTool: CoreTool = {
+        name: "fetch_quote",
+        description: "Fetch quote",
+        parameters: { type: "object", properties: { symbol: { type: "string" } } },
+        execute: async () => ({ symbol: "NVDA", price: 142.75 }),
+      };
+
+      const model = scriptedModel([
+        [{ type: "toolCall", id: "call_q1", name: "fetch_quote", args: { symbol: "NVDA" } }],
+        ["Latest NVDA price is ${{tool_output:fetch_quote.price}} (call id {{tool_output:call_q1.symbol}})."],
+      ]);
+
+      const { result } = await runLoop(
+        baseOptions({
+          model,
+          tools: [fetchQuoteTool],
+          messages: [{ role: "user", content: "What is NVDA price?" }],
+        }),
+      );
+
+      expect(result.status).toBe("completed");
+      expect(result.text).toBe("Latest NVDA price is $142.75 (call id NVDA).");
+      expect(
+        substituteToolOutputTokens("Direct check: {{tool_output:fetch_quote.price}}", result.messages),
+      ).toBe("Direct check: 142.75");
+    });
+
+    it("H10b: beforeFinish in-loop stop gate rejects premature completion, injects retryPrompt, and accepts once required tool is called", async () => {
+      const verifyTool: CoreTool = {
+        name: "verify_order",
+        description: "Verify order",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ verified: true }),
+      };
+
+      const model = scriptedModel([
+        // Turn 1: model tries to finish prematurely without calling verify_order
+        ["Order looks fine, done!"],
+        // Turn 2: after beforeFinish rejection + retryPrompt, model calls verify_order
+        [{ type: "toolCall", id: "tc_v1", name: "verify_order", args: {} }],
+        // Turn 3: model finishes after calling verify_order
+        ["Order verified and completed."],
+      ]);
+
+      const gateAttempts: number[] = [];
+      const { result, events } = await runLoop(
+        baseOptions({
+          model,
+          tools: [verifyTool],
+          messages: [{ role: "user", content: "Process and verify order" }],
+          maxStopGateRetries: 2,
+          beforeFinish: async ({ toolsCalled, attempt }) => {
+            gateAttempts.push(attempt);
+            if (!toolsCalled.has("verify_order")) {
+              return {
+                ok: false,
+                retryPrompt: "STOP_GATE: You must call verify_order before finishing.",
+              };
+            }
+            return { ok: true };
+          },
+        }),
+      );
+
+      expect(result.status).toBe("completed");
+      expect(result.text).toBe("Order verified and completed.");
+      expect(gateAttempts).toEqual([1, 2]);
+      expect(events.some((e) => e.type === "warning" && e.code === "STOP_GATE_REJECTED")).toBe(true);
+      expect(
+        model.calls[1].messages.some(
+          (m) => m.role === "user" && m.content.includes("STOP_GATE: You must call verify_order"),
+        ),
+      ).toBe(true);
+    });
+
+    it("Option B (End-to-End AgenticLoopService): routes vllm-trading-bot to runCoreLoopForAgent by default and falls back to harness.run() when LAS_AGENT_LOOP=legacy", async () => {
+      const prevEnv = process.env.LAS_AGENT_LOOP;
+      delete process.env.LAS_AGENT_LOOP;
+
+      try {
+        const emittedEvents: Array<Record<string, unknown>> = [];
+        const baseContext = () => ({
+          options: {
+            harness: "standard",
+            topology: "single-agent",
+            thoughtStructure: "chain-of-thought",
+            enableCriticGate: false,
+            maxIterations: 3,
+          } as any,
+          agent: "macro_specialist",
+          project: "vllm-trading-bot",
+          username: "trader",
+          modelDefinition: null,
+          messages: [{ role: "user", content: "Run trading check" }] as any,
+          agentConversationId: "conv_trading_e2e_1",
+          conversationId: "conv_trading_e2e_1",
+          provider: {
+            async *generateTextStream() {
+              yield "Trading response from CoreLoop.";
+            },
+          } as any,
+          providerName: "vllm",
+          resolvedModel: "local-dspark/GLM-5.3-Flash-EXL3-TF",
+          signal: defaultSignal,
+          emit: (ev: Record<string, unknown>) => emittedEvents.push(ev),
+          runtimeTools: {
+            finalTools: [],
+            toolServiceMaps: { toolMap: new Map(), serverToolMap: new Map() },
+            resolvedEnabledTools: [],
+          } as any,
+        });
+
+        // 1. Default for vllm-trading-bot -> dispatches through CoreLoop
+        const resCore = await AgenticLoopService.runAgenticLoop(baseContext() as any);
+        const lastMsg = resCore.messages[resCore.messages.length - 1];
+        expect(lastMsg?.role).toBe("assistant");
+        expect(lastMsg?.content).toBe("Trading response from CoreLoop.");
+        expect(emittedEvents.some((e) => e.type === "done")).toBe(true);
+
+        // 2. Rollback via LAS_AGENT_LOOP=legacy -> dispatches through harness.run()
+        process.env.LAS_AGENT_LOOP = "legacy";
+        const { default: HarnessRegistry } = await import(
+          "../../../services/harnesses/HarnessRegistry.ts"
+        );
+        const StandardClass = HarnessRegistry.get("standard")!;
+        const harnessRunSpy = vi
+          .spyOn(StandardClass.prototype, "run")
+          .mockResolvedValueOnce({
+            messages: [
+              { role: "user", content: "Run trading check" },
+              { role: "assistant", content: "Legacy harness response." },
+            ] as any,
+          });
+
+        const resLegacy = await AgenticLoopService.runAgenticLoop(baseContext() as any);
+        expect(harnessRunSpy).toHaveBeenCalledTimes(1);
+        expect(resLegacy.messages[resLegacy.messages.length - 1]?.content).toBe(
+          "Legacy harness response.",
+        );
+      } finally {
+        if (prevEnv === undefined) delete process.env.LAS_AGENT_LOOP;
+        else process.env.LAS_AGENT_LOOP = prevEnv;
+      }
     });
   });
 });

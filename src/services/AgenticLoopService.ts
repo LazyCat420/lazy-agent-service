@@ -27,6 +27,7 @@ import { retrieveOffloadedContentTool } from "../platform/offload/retrieveOffloa
 import { getSharedOffloadStore } from "../platform/offload/OffloadStore.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
+import { createStandardHooks } from "./harnesses/lifecycle/HookInitializer.ts";
 import {
   shouldUseCoreLoopForAgent,
   runCoreLoopForAgent,
@@ -526,6 +527,63 @@ export default class AgenticLoopService {
           conversation_id: resolvedAgentConversationId || conversationId || undefined,
         },
         async () => {
+          if (
+            shouldUseCoreLoopForAgent(process.env, {
+              harness: harnessId,
+              thoughtStructure,
+              planFirst: options.planFirst,
+              isTrading: context.project === "vllm-trading-bot",
+              unattended: (options as Record<string, unknown>).unattended === true,
+            })
+          ) {
+            const coreOut = await runCoreLoopForAgent({
+              project: context.project,
+              username: context.username,
+              agent: context.agent,
+              conversationId: context.conversationId,
+              agentConversationId: context.agentConversationId,
+              traceId: context.traceId,
+              workspaceRoot: context.workspaceRoot,
+              skipMemoryExtraction: (context as any).skipMemoryExtraction,
+              skipWorkflowExtraction: (context as any).skipWorkflowExtraction,
+              options: options as Record<string, unknown>,
+              messages: context.messages as any,
+              provider: context.provider as any,
+              providerName: context.providerName,
+              resolvedModel: String(context.resolvedModel),
+              signal: context.signal || new AbortController().signal,
+              runtimeTools: resolvedTools as any,
+              runtimeToolExecutor: (context as any).runtimeToolExecutor,
+              finalizeRequested: context.finalizeRequested,
+              finalizeSignal: (context as any).finalizeSignal,
+              finalPassTimeoutMs: (context as any).finalPassTimeoutMs,
+              timeoutSignalFor: (context as any).timeoutSignalFor,
+              canonicalBudget: context.canonicalBudget as any,
+              emit: context.emit as any,
+              sessionState: (context as any).sessionState,
+            });
+            state.finalStreamedText = coreOut.result.text;
+            state.iterations = coreOut.result.modelCalls;
+            state.overallGenerationEnd = performance.now();
+            state.streamedToolCalls = coreOut.toolCalls.map((tc) => ({
+              id: tc.id,
+              name: tc.name,
+              args: tc.args,
+              result: tc.result,
+            })) as any;
+            const { hooks } = createStandardHooks({
+              workspaceRoot: context.workspaceRoot || undefined,
+              enableCriticGate: Boolean(options.enableCriticGate),
+              criticModel: options.criticModel as string | undefined,
+            });
+            const preFinalMessages =
+              coreOut.messages.length > 0 &&
+              coreOut.messages[coreOut.messages.length - 1]?.role === "assistant"
+                ? (coreOut.messages.slice(0, -1) as unknown as ConversationMessage[])
+                : (coreOut.messages as unknown as ConversationMessage[]);
+            await (harness as any).finalize(preFinalMessages, hooks);
+            return { messages: preFinalMessages };
+          }
           return await harness.run();
         },
       );

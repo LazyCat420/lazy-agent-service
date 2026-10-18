@@ -1,4 +1,4 @@
-import type { ToolCallSpec } from "./types.ts";
+import type { ChatMessage, ToolCallSpec } from "./types.ts";
 
 const PLACEHOLDER_REGEX = /\{\{tool_output:([^}]+)\}\}/g;
 const MAX_SUBSTITUTION_CHARS = 32_768;
@@ -109,3 +109,33 @@ export function substituteToolBatchPlaceholders(
   if (outputByRef.size === 0 || calls.length === 0) return calls;
   return calls.map((c) => substituteToolCallPlaceholders(c, outputByRef));
 }
+
+/**
+ * H7: Substitute `{{tool_output:<call_id_or_tool_name>}}` and
+ * `{{tool_output:<ref>.field.path}}` placeholders inside final assistant text.
+ */
+export function substituteToolOutputTokens(
+  text: string,
+  messagesOrOutputs: readonly ChatMessage[] | ReadonlyMap<string, string>,
+): string {
+  if (!text || !text.includes("{{tool_output:")) return text;
+
+  let outputMap: ReadonlyMap<string, string>;
+  if (messagesOrOutputs instanceof Map) {
+    outputMap = messagesOrOutputs;
+  } else {
+    const built = new Map<string, string>();
+    for (const msg of messagesOrOutputs as readonly ChatMessage[]) {
+      if (msg.role === "tool" && typeof msg.content === "string") {
+        const callId = msg.tool_call_id || msg.id;
+        if (callId) built.set(callId, msg.content);
+        if (msg.name) built.set(msg.name, msg.content);
+      }
+    }
+    outputMap = built;
+  }
+
+  if (outputMap.size === 0) return text;
+  return substituteValue(text, outputMap) as string;
+}
+

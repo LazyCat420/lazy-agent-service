@@ -44,6 +44,7 @@ import type {
   CoreModelRequest,
   CoreTool,
   CoreToolContext,
+  StopGateDecision,
 } from "./types.ts";
 
 export interface AgentRouteAdapterContext {
@@ -104,7 +105,7 @@ export interface AgentRouteAdapterContext {
     call: { id: string; name: string; args: Record<string, unknown> },
     signal?: AbortSignal,
   ): Promise<unknown>;
-  finalizeRequested?: { reason: string };
+  finalizeRequested?: { reason?: string } | null;
   finalizeSignal?: AbortSignal;
   finalPassTimeoutMs?: number;
   timeoutSignalFor?: (toolName: string, ms: number) => AbortSignal;
@@ -114,6 +115,13 @@ export interface AgentRouteAdapterContext {
   hooks?: CoreLoopHooks;
   getSteeringMessages?: () => Promise<ChatMessage[]> | ChatMessage[];
   getFollowUpMessages?: () => Promise<ChatMessage[]> | ChatMessage[];
+  beforeFinish?: (ctx: {
+    text: string;
+    messages: readonly ChatMessage[];
+    toolsCalled: ReadonlySet<string>;
+    attempt: number;
+  }) => Promise<StopGateDecision> | StopGateDecision;
+  maxStopGateRetries?: number;
   /** Optional post-response hook (e.g. MemoryExtractor / WorkflowMemoryService); skipped when B4 applies. */
   afterResponseHook?: (payload: {
     text: string;
@@ -131,7 +139,9 @@ export interface AgentRouteAdapterContext {
  * Rollback switch for `POST /agent`:
  * - Returns `false` when `LAS_AGENT_LOOP=legacy`
  * - Returns `true` when `LAS_AGENT_LOOP=coreloop`
- * - Defaults to `true` for standard single-agent ReAct turns when `LAS_AGENT_LOOP` is unset
+ * - When `options.isTrading` is provided, defaults to `true` for trading (`vllm-trading-bot`)
+ *   and `false` for non-trading unless `LAS_AGENT_LOOP=coreloop`
+ * - Defaults to `true` for standard single-agent ReAct turns when `options` is omitted
  */
 export function shouldUseCoreLoopForAgent(
   env: Record<string, string | undefined> = process.env,
@@ -139,6 +149,8 @@ export function shouldUseCoreLoopForAgent(
     harness?: string;
     thoughtStructure?: string;
     planFirst?: boolean;
+    isTrading?: boolean;
+    unattended?: boolean;
   },
 ): boolean {
   const mode = (env.LAS_AGENT_LOOP || "").trim().toLowerCase();
@@ -154,6 +166,9 @@ export function shouldUseCoreLoopForAgent(
   }
   if (options?.harness && options.harness !== "standard") {
     return false;
+  }
+  if (options && options.isTrading !== undefined) {
+    return options.isTrading === true;
   }
   return true;
 }
@@ -327,6 +342,12 @@ export interface AgentRouteCoreLoopOutput {
   messages: ChatMessage[];
   result: CoreLoopResult;
   learningSkipped: boolean;
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+    result: string;
+  }>;
 }
 
 export async function runCoreLoopForAgent(
@@ -443,6 +464,8 @@ export async function runCoreLoopForAgent(
     hooks: mergedHooks,
     getSteeringMessages: context.getSteeringMessages,
     getFollowUpMessages: context.getFollowUpMessages,
+    beforeFinish: context.beforeFinish,
+    maxStopGateRetries: context.maxStopGateRetries,
     maxSteps: resolveMaxSteps(context.options.maxIterations),
     shouldFinalize: shouldFinalizeOf(context),
   });
@@ -464,6 +487,7 @@ export async function runCoreLoopForAgent(
           messages: result.messages,
           result,
           learningSkipped,
+          toolCalls: executedToolCalls,
         };
       }
       if (result.status === "cancelled") {

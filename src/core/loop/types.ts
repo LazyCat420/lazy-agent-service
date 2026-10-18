@@ -151,6 +151,15 @@ export interface CoreLoopOptions {
   getSteeringMessages?: () => Promise<ChatMessage[]> | ChatMessage[];
   /** H9: Polled when the model attempts to stop with 0 tool calls; if non-empty, messages are appended and the loop continues. */
   getFollowUpMessages?: () => Promise<ChatMessage[]> | ChatMessage[];
+  /** H10b: In-loop stop gate (e.g. CriticGate / VerificationContract) evaluated before accepting a toolless final reply. */
+  beforeFinish?: (ctx: {
+    text: string;
+    messages: readonly ChatMessage[];
+    toolsCalled: ReadonlySet<string>;
+    attempt: number;
+  }) => Promise<StopGateDecision> | StopGateDecision;
+  /** H10b: Maximum stop-gate rejection retries before accepting the reply (default 2). */
+  maxStopGateRetries?: number;
   /** Injected clock for durations; default Date.now. */
   now?: () => number;
   /** Max time for the toolless final pass; on expiry the loop answers with streamed partial text or the synthetic fallback. Undefined = no limit. */
@@ -210,6 +219,13 @@ export interface ToolBatchOptions {
   * Non-exclusive tools run in parallel; exclusive ones run after, one at a time. Implemented in ToolRunner.ts.
   */
 export type RunToolBatch = (calls: CoreToolCall[], options: ToolBatchOptions) => Promise<CoreToolResult[]>;
+
+/** H10b: Decision returned by `beforeFinish` stop gate. Supports both `ok` and `accept` booleans. */
+export type StopGateDecision =
+  | { ok: true; accept?: true }
+  | { ok: false; accept?: false; retryPrompt: string }
+  | { accept: true; ok?: true }
+  | { accept: false; ok?: false; retryPrompt: string };
 
 /** `runCoreLoop(options)` yields events and returns the result. Implemented in CoreLoop.ts. */
 export type RunCoreLoop = (options: CoreLoopOptions) => AsyncGenerator<CoreLoopEvent, CoreLoopResult>;

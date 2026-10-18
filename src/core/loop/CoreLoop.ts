@@ -18,7 +18,10 @@ import {
   RUNAWAY_RECOVERY_NUDGE,
   RunawayStreamWatch,
 } from "./RunawayStreamWatch.ts";
-import { substituteToolBatchPlaceholders } from "./ToolOutputSubstituter.ts";
+import {
+  substituteToolBatchPlaceholders,
+  substituteToolOutputTokens,
+} from "./ToolOutputSubstituter.ts";
 
 const EMPTY_REPLY_NUDGE = "Your last reply was empty. Answer the user's question now.";
 const FINAL_PASS_INSTRUCTION =
@@ -58,6 +61,7 @@ export async function* runCoreLoop(
   const providerRetries = options.providerRetries ?? 2;
   const maxConsecutiveToolErrors = options.maxConsecutiveToolErrors ?? 3;
   const parallelToolMaxConcurrency = options.parallelToolMaxConcurrency ?? 8;
+  const maxStopGateRetries = options.maxStopGateRetries ?? 2;
   const now = options.now ?? Date.now;
 
   const workSignal = options.finalizeSignal
@@ -80,11 +84,13 @@ export async function* runCoreLoop(
   const callHistory = createToolCallHistory();
   const spillBuffer = new SpillBuffer(options.spillMaxTotalBytes);
   const completedToolOutputs = new Map<string, string>();
+  const toolsCalled = new Set<string>();
 
   let modelCalls = 0;
   let toolCalls = 0;
   let nudged = false;
   let runawayNudged = false;
+  let stopGateAttempts = 0;
   let cutOffs = 0;
   let finalizeReason: CoreFinalizeReason | undefined;
   let cutText = "";
@@ -358,9 +364,34 @@ export async function* runCoreLoop(
               continue;
             }
           }
+          // H10b: In-loop stop gate (e.g. CriticGate / VerificationContract)
+          if (options.beforeFinish && stopGateAttempts < maxStopGateRetries) {
+            stopGateAttempts += 1;
+            const gate = await options.beforeFinish({
+              text,
+              messages,
+              toolsCalled,
+              attempt: stopGateAttempts,
+            });
+            const accepted =
+              "ok" in gate && typeof gate.ok === "boolean"
+                ? gate.ok
+                : Boolean((gate as { accept?: boolean }).accept);
+            if (!accepted && "retryPrompt" in gate && gate.retryPrompt) {
+              yield {
+                type: "warning",
+                code: "STOP_GATE_REJECTED",
+                message: gate.retryPrompt,
+              };
+              messages.push({ role: "user", content: gate.retryPrompt });
+              continue;
+            }
+          }
+          const finalResolvedText = substituteToolOutputTokens(text, messages);
+          assistant.content = finalResolvedText;
           return {
             status: "completed",
-            text,
+            text: finalResolvedText,
             messages,
             modelCalls,
             toolCalls,
@@ -377,7 +408,10 @@ export async function* runCoreLoop(
         continue;
       }
 
-      for (const call of calls) yield { type: "tool.start", call };
+      for (const call of calls) {
+        toolsCalled.add(call.name);
+        yield { type: "tool.start", call };
+      }
       const results = await runToolBatch(calls, {
         tools: toolMap,
         hooks: options.hooks,
@@ -577,10 +611,12 @@ export async function* runCoreLoop(
     }
 
     if (finalText.trim() !== "") {
-      lastAssistantText = cutText + finalText;
+      const resolvedFinalOnly = substituteToolOutputTokens(finalText, messages);
+      const resolvedCombined = substituteToolOutputTokens(cutText + finalText, messages);
+      lastAssistantText = resolvedCombined;
       const finalAssistant: ChatMessage = {
         role: "assistant",
-        content: finalText,
+        content: resolvedFinalOnly,
       };
       if (finalThinking.length > 0) {
         finalAssistant.thinking = finalThinking;
@@ -589,7 +625,7 @@ export async function* runCoreLoop(
       messages.push(finalAssistant);
       return {
         status: "completed",
-        text: cutText + finalText,
+        text: resolvedCombined,
         messages,
         modelCalls,
         toolCalls,
