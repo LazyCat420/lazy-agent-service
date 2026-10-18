@@ -95,6 +95,7 @@ import { createObsidianCompletionRouter } from "./routes/ObsidianCompletionRoute
 import contractRouter from "./routes/ContractRoutes.ts";
 import openAIEmbeddingsRouter from "./routes/OpenAIEmbeddingsRoutes.ts";
 import { ProfileRegistry } from "./services/ProfileRegistry.ts";
+import { evalChaosEnabled, registerEvalChaosCapabilities, registerEvalChaosProfile } from "./services/EvalChaosCapabilities.ts";
 
 
 
@@ -684,6 +685,12 @@ setupWebSocket(wss);
       await ProfileRegistry.loadProfilesFromDisk();
     } catch (err: any) {
       logger.warn(`Failed eager profile loading at startup: ${err.message}`);
+    }
+
+    if (evalChaosEnabled()) {
+      registerEvalChaosCapabilities();
+      await registerEvalChaosProfile();
+      logger.warn("[EvalChaos] LAS_EVAL_CHAOS=1: eval-chaos-v1 profile and global.eval_chaos.* tools are enabled");
     }
 
     // Upsert the client personas our consuming apps run under, once we are

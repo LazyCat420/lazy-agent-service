@@ -1,4 +1,5 @@
 import logger from "../utils/logger.ts";
+import { evalChaosEnabled, executeEvalChaos } from "./EvalChaosCapabilities.ts";
 import { safeFetch, UnsafeUrlError, type SafeFetchResult } from "../utils/UrlSafety.ts";
 import { webSearch, type WebResult } from "./WebSearchService.ts";
 
@@ -25,6 +26,10 @@ export class GlobalCapabilityExecutor {
       return { success: false, error: { code: "CAPABILITY_UNAVAILABLE", message: "No tested executor is installed for this capability" } };
     }
     try {
+      if (capabilityId.startsWith("global.eval_chaos.")) {
+        if (!evalChaosEnabled()) return { success: false, error: { code: "UNKNOWN_CAPABILITY", message: `Unknown global capability '${capabilityId}'` } };
+        return await executeEvalChaos(capabilityId, signal);
+      }
       switch (capabilityId) {
         case "global.data.sort":
           return this.executeSort(args);
