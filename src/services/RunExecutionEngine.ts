@@ -18,7 +18,6 @@ import { LocalToolContinuation } from "./LocalToolContinuation.ts";
 import AgenticLoopService from "./AgenticLoopService.ts";
 import { ProfileRegistry } from "./ProfileRegistry.ts";
 import { CapabilityRegistry } from "./CapabilityRegistry.ts";
-import ToolOrchestratorService from "./ToolOrchestratorService.ts";
 import { GlobalCapabilityExecutor } from "./GlobalCapabilityExecutor.ts";
 import { RunStore } from "./RunStore.ts";
 import ConversationService from "./conversation/index.ts";
@@ -516,26 +515,15 @@ export class RunExecutionEngine {
       // Admit nothing silently — warn once per run with the dropped names.
       const schemaSupplied = new Set((Array.isArray(suppliedSchemas) ? suppliedSchemas : []).map((s: any) => typeof s === "object" && s?.name).filter(Boolean));
       const schemaless = options.enabledTools.filter((name: string) => !name.startsWith("global.") && !schemaSupplied.has(name));
-      // Catalog fallback: a direct API run (no trading-client shim) supplies no
-      // local_tool_schemas. For trading projects, admit the profile-enabled
-      // tools' schemas from tool_schemas.json so the model can actually call
-      // them; anything still missing keeps the warning.
-      let stillMissing = schemaless;
-      if (schemaless.length > 0 && (ToolOrchestratorService.isTradingRequest(identity.project) || request.app_id === "trading")) {
-        const catalog = ToolOrchestratorService.getTradingToolSchemas();
-        const byBare = new Map(catalog.map((t) => [t._mcpOriginalName, t]));
-        const fallback: typeof localSchemas = [];
-        stillMissing = [];
-        for (const name of schemaless) {
-          const bare = name.replace(/^mcp__[a-zA-Z0-9_-]+__/, "");
-          const hit = byBare.get(bare) || byBare.get(name) || byBare.get(bare.split(".").pop() || bare);
-          // Advertise under the ADMITTED name: the call must match the
-          // profile whitelist and local_tool_policy, which key on it.
-          if (hit) fallback.push({ name, description: hit.description, parameters: hit.parameters });
-          else stillMissing.push(name);
-        }
-        if (fallback.length > 0) localSchemas.push(...fallback);
-      }
+      // Local-execution tools are advertised only when the request signals a
+      // client executor via runtime_overrides.local_tool_schemas (any array,
+      // even empty) — above. trading-service's sdk_adapter supplies it and
+      // posts results to POST /runs/:runId/tools/:callId/result
+      // (sdk_adapter.py:345, :373); direct API clients (e.g. trading-client
+      // strategy chat) do not, so advertising from tool_schemas.json here
+      // would leave the run waiting on a result that never arrives.
+      // Un-signaled local tools keep the warning below.
+      const stillMissing = schemaless;
       if (stillMissing.length > 0) {
         emitEvent({
           run_id: runId,
