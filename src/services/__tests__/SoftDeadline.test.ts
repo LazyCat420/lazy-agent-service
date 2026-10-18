@@ -27,6 +27,7 @@ vi.mock("../platform/trace/TraceExporter.ts", () => {
 });
 
 import ReActHarness from "../harnesses/ReActHarness.ts";
+import { CanonicalProviderBudget } from "../CanonicalProviderBudget.ts";
 import AgenticLoopState from "../AgenticLoopState.ts";
 import type { AgenticContext, ConversationMessage } from "../harnesses/types.ts";
 
@@ -95,5 +96,41 @@ describe("ReActHarness honours context.finalizeRequested", () => {
     expect(state.conversationOutcome).toBe("exhausted");
     expect(messages.some((m) => m.role === "assistant" && String(m.content || "").trim().length > 0)).toBe(true);
     expect(messages.some((m) => String(m.content || "").includes("Final answer from gathered evidence."))).toBe(true);
+  });
+
+  it("a mid-loop TOKEN_BUDGET_FINALIZE exits the iteration loop and runs the final pass", async () => {
+    const calls: ProviderCall[] = [];
+    const provider = {
+      generateTextStream(messages: unknown[], model: string, options: Record<string, unknown>) {
+        calls.push({ messages, model, options });
+        if (calls.length === 2) {
+          // Real budget proxy throws on the first next() of the stream.
+          return (async function* () {
+            throw Object.assign(new Error("budget"), { code: "TOKEN_BUDGET_FINALIZE" });
+          })();
+        }
+        return (async function* () {
+          if (calls.length === 3) yield "final answer";
+          else yield { type: "toolCall", id: "t1", name: "search_web", args: { q: "news" } };
+        })();
+      },
+    };
+    const context = makeContext(provider);
+    if ("finalizeRequested" in context) delete context.finalizeRequested;
+    const budget = new CanonicalProviderBudget(4000, new AbortController().signal);
+    const allowFinalPass = vi.spyOn(budget, "allowFinalPass");
+    // Test seam: AgenticContext carries the budget on its index signature.
+    context.canonicalBudget = budget;
+    const state = new AgenticLoopState({ originalMessageCount: context.messages!.length });
+    state.loadedTools.add("search_web");
+    const harness = new ReActHarness(context, state, context.runtimeTools!);
+
+    const { messages } = await harness.run();
+
+    expect(allowFinalPass).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(3);
+    expect(calls[2].options.toolChoice).toBe("none");
+    expect(messages.some((m) => String(m.content || "").includes("Context window exhausted"))).toBe(false);
+    expect(messages.some((m) => m.role === "assistant" && String(m.content || "").includes("final answer"))).toBe(true);
   });
 });

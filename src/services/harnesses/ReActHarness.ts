@@ -486,6 +486,11 @@ export default class ReActHarness extends BaseAgenticHarness {
           }
         }
 
+        // A finalize request (token budget) caught above broke only the retry
+        // loop; exit the iteration loop so the exhaustion-recovery block below
+        // runs the final-answer pass instead of continuing this iteration.
+        if (context.finalizeRequested) break;
+
         if (stream === null) {
           logger.warn(
             `[ReActHarness] Context exhaustion guard fired on iteration ${state.iterations} — ` +
