@@ -5,6 +5,12 @@ export class CanonicalProviderBudget {
   inputTokens = 0;
   outputTokens = 0;
   chargedTokens = 0;
+  /** Set by allowFinalPass(): the next call may consume the final reserve. */
+  private finalPassAllowed = false;
+
+  allowFinalPass(): void {
+    this.finalPassAllowed = true;
+  }
   constructor(readonly limit: number, readonly signal: AbortSignal, readonly outputLimit: number = Infinity) {}
 
   chargeExternalUsage(promptTokens: number, completionTokens: number): void {
@@ -31,11 +37,15 @@ export class CanonicalProviderBudget {
         return async function* (messages: unknown[], model: string, options: any = {}) {
           budget.signal.throwIfAborted();
           // Conservative reservation is separate from measured usage. Do not invent billing data.
-          const inputReserve = Buffer.byteLength(JSON.stringify({ messages, tools: options.tools || [] }), "utf8") + 256;
-          const available = budget.limit - budget.chargedTokens - inputReserve;
-          if (available <= 0) throw Object.assign(new Error("Canonical token budget cannot cover the next prompt"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+          // Chars→tokens estimate (~3.5 chars/token), never bytes: byteLength overcounts several-fold.
+          const inputReserve = Math.ceil(JSON.stringify({ messages, tools: options.tools || [] }).length / 3.5) + 256;
+          // Reserve kept untouched by normal calls so a final tool-free answer pass always fits.
+          const finalReserve = Math.min(4096, Math.floor(budget.limit * 0.15));
+          const finalizing = budget.finalPassAllowed;
+          const available = budget.limit - budget.chargedTokens - inputReserve - (finalizing ? 0 : finalReserve);
+          if (available <= 0) throw Object.assign(new Error(finalizing ? "Canonical token budget cannot cover the final pass" : "Canonical token budget cannot cover the next prompt"), { code: finalizing ? "TOKEN_BUDGET_EXHAUSTED" : "TOKEN_BUDGET_FINALIZE" });
           const outputReserve = Math.min(options.maxTokens ?? available, available, budget.outputLimit);
-          if (outputReserve <= 0) throw Object.assign(new Error("Canonical output budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+          if (outputReserve <= 0) throw Object.assign(new Error(finalizing ? "Canonical output budget exhausted" : "Canonical output budget cannot cover the next prompt"), { code: finalizing ? "TOKEN_BUDGET_EXHAUSTED" : "TOKEN_BUDGET_FINALIZE" });
           const reservation = inputReserve + outputReserve;
           budget.chargedTokens += reservation;
           budget.calls++;

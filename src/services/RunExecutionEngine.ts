@@ -58,7 +58,7 @@ function authorizationError(toolName: string, decision: ToolAuthorization): Stru
 export class RunExecutionEngine {
   private static activeRuns: Map<
     string,
-    { abortController: AbortController; deadlineTimer?: NodeJS.Timeout; steering: string[] }
+    { abortController: AbortController; deadlineTimer?: NodeJS.Timeout; softDeadlineTimer?: NodeJS.Timeout; steering: string[] }
   > = new Map();
 
   static steerRun(runId: string, instruction: string): boolean {
@@ -70,7 +70,8 @@ export class RunExecutionEngine {
   static async cancelRun(runId: string): Promise<boolean> {
     const active = this.activeRuns.get(runId);
     if (active) {
-      if (active.deadlineTimer) clearTimeout(active.deadlineTimer);
+      clearTimeout(active.deadlineTimer);
+      clearTimeout(active.softDeadlineTimer);
       active.abortController.abort();
       this.activeRuns.delete(runId);
       try {
@@ -96,7 +97,8 @@ export class RunExecutionEngine {
 
   static reset(): void {
     for (const active of this.activeRuns.values()) {
-      if (active.deadlineTimer) clearTimeout(active.deadlineTimer);
+      clearTimeout(active.deadlineTimer);
+      clearTimeout(active.softDeadlineTimer);
       active.abortController.abort();
     }
     this.activeRuns.clear();
@@ -255,6 +257,11 @@ export class RunExecutionEngine {
     const abortController = new AbortController();
     let isDeadlineTimeout = false;
     let deadlineTimer: NodeJS.Timeout | undefined;
+    let softDeadlineTimer: NodeJS.Timeout | undefined;
+    // Soft deadline: ask the harness to finalize with evidence in hand instead
+    // of aborting the run. The hard deadline timer stays as the backstop.
+    let finalizeRequest: { reason: string } | undefined;
+    let runContext: { finalizeRequested?: { reason: string } } | undefined;
 
     const deadlineMs =
       request.deadline_ms ??
@@ -269,8 +276,27 @@ export class RunExecutionEngine {
       }, deadlineMs);
     }
 
-    const steering: string[] = [];
-    this.activeRuns.set(runId, { abortController, deadlineTimer, steering });
+    if (deadlineMs > 0) {
+      const softMs = deadlineMs - Math.min(45000, Math.floor(deadlineMs * 0.25));
+      if (softMs > 0) {
+        softDeadlineTimer = setTimeout(() => {
+          if (finalizeRequest) return;
+          finalizeRequest = { reason: "DEADLINE_SOFT" };
+          if (runContext) runContext.finalizeRequested = finalizeRequest;
+          emitEvent({
+            run_id: runId,
+            runId,
+            type: "run.warning",
+            data: {
+              code: "DEADLINE_SOFT",
+              message: "Soft deadline reached; the run will answer now with the information already gathered.",
+            },
+          });
+        }, softMs);
+      }
+    }
+
+    this.activeRuns.set(runId, { abortController, deadlineTimer, softDeadlineTimer, steering });
 
     if (request.signal) {
       request.signal.addEventListener("abort", () => {
@@ -280,7 +306,8 @@ export class RunExecutionEngine {
 
     if (deadlineMs === 0) { isDeadlineTimeout = true; abortController.abort(); }
     if (request.signal?.aborted || abortController.signal.aborted) {
-      if (deadlineTimer) clearTimeout(deadlineTimer);
+      clearTimeout(deadlineTimer);
+      clearTimeout(softDeadlineTimer);
       this.activeRuns.delete(runId);
       const cancelPayload: StructuredError = {
         code: isDeadlineTimeout ? "DEADLINE_EXCEEDED" : "RUN_CANCELLED",
@@ -549,10 +576,17 @@ export class RunExecutionEngine {
       context.agentConversationId = runId;
       context.runId = runId;
       context.traceId = runId;
+      // Soft-deadline flag set before context creation reaches the harness here.
+      runContext = context;
+      if (finalizeRequest) context.finalizeRequested = finalizeRequest;
+      // The harness reads the canonical budget to request a final reserve pass.
+      context.canonicalBudget = accounting;
       context.emit = (event: any) => {
         if (event.type === "chunk") {
           partialText += event.content || event.text || "";
           emitEvent({ run_id: runId, type: "message.delta", data: { delta: event.content || event.text || "" } });
+        } else if (event.type === "run.warning") {
+          emitEvent({ run_id: runId, runId, type: "run.warning", data: event.data ?? event });
         }
       };
       const requestContext = (request.runtime_overrides?.context || {}) as Record<string, string>;
@@ -847,7 +881,8 @@ export class RunExecutionEngine {
           await RunStore.completeIdempotency(idempotencyKey, { ...record, id: runId });
         }
       }
-      if (deadlineTimer) clearTimeout(deadlineTimer);
+      clearTimeout(deadlineTimer);
+      clearTimeout(softDeadlineTimer);
       this.activeRuns.delete(runId);
     }
   }

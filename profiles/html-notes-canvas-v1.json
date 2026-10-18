@@ -59,7 +59,7 @@
     "max_tokens": 65536,
     "max_tool_calls": 15,
     "max_retries": 3,
-    "max_duration_ms": 120000,
+    "max_duration_ms": 300000,
     "max_concurrent_workers": 4
   },
   "retention_class": "AUDITED_SESSION",
