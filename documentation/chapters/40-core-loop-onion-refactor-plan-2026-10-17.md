@@ -294,8 +294,8 @@ Status 2026-10-17: `src/core/loop/{CoreLoop,ToolRunner,RunsAdapter,types}.ts`, t
 - [x] **C1** `/v1/runs` (`RunExecutionEngine`) runs CoreLoop. Gate: 8-question probe, both profiles ≥ 7/8, no `run.failed` except true infra errors; container RestartCount unchanged.
   - **Gate passed 2026-10-18** (deploy `6640a23`, `.scratch/harness-plan/eval-C1k/`): trading 7/8 PASS, html-notes 8/8 PASS, 0 WEAK, 0 `run.failed`, RestartCount 0. The one FAIL (trading q6) was the eval judge timing out; LAS returned a full answer from the final pass at 265 s. Chaos (`eval-chaos4/`, 10 parallel throw/hang/huge/slow runs): 10/10 answered, 0 restarts.
   - Fixes needed to get there after `43552d3`: C1b/C1d (soft cut reaches in-flight model and tools), RunStore coalesced flushes (`e9c68bc`), C1g (final pass may spend the reserve; synthetic answer streamed), C1h (tool timeout reaches global tools), C1i (final pass thinking-off + own timeout), C1j (system prompt reaches CoreLoop calls), C1k (budget never refuses the final pass).
-  - Score history (trading / html-notes PASS of 8): baseline 2/1 → Phase A 4/5 → C1 5/6 → C1e 5/5 → C1f 5/7 → C1h 6/4 → C1j 5/8 → **C1k 7/8**.
-- [x] **C1-Agent (Option B, 2026-10-18, `e952da6` + `b47f790`):** `POST /agent` (`AgenticLoopService.runAgenticLoop`) dispatches through `AgentRouteAdapter.runCoreLoopForAgent` onto `CoreLoop` (default `true` for `vllm-trading-bot` or `LAS_AGENT_LOOP=coreloop`; instant rollback via `LAS_AGENT_LOOP=legacy`).
+  - Score history (trading / html-notes PASS of 8): baseline 2/1 → Phase A 4/5 → C1 5/6 → C1e 5/5 → C1f 5/7 → C1h 6/4 → C1j 5/8 → C1k 7/8 → **CoreLoop v2 (`b47f790`, 2026-10-18): GLM 8/8 trading + 8/8 html-notes (0 WEAK, 0 FAIL, 0 restarts); Nemotron (`nemotron35`) 7/8 PASS, 1 WEAK, 0 FAIL, 0 restarts**.
+- [x] **C1-Agent (Option B, 2026-10-18, `e952da6` + `b47f790`):** `POST /agent` (`AgenticLoopService.runAgenticLoop`) dispatches through `AgentRouteAdapter.runCoreLoopForAgent` onto `CoreLoop` (default `true` for `vllm-trading-bot` or `LAS_AGENT_LOOP=coreloop`; instant rollback via `LAS_AGENT_LOOP=legacy`). Verified live against deployed NAS container (`http://10.0.0.16:5591/agent?stream=false`, `project: "vllm-trading-bot"`, `agent: "CUSTOM_V3_JUNIOR_ANALYST"` → HTTP 200, `B4` learning isolation confirmed in container logs).
 - [ ] **C2** Obsidian vault proxy (`src/services/ObsidianCompletionJobs.ts`) and ChatRoutes FC loop (`src/routes/ChatRoutes.ts` ~1229-1244) run CoreLoop.
 - [ ] **C3** LLMSortObsidian plugin: `useSharedRuntime:true`; vault tools become client tools via `LocalToolContinuation`; plugin's own `run_agent` loop deleted. Live check in Obsidian.
 - [ ] **C4** html-notes news goes through `/v1/runs` instead of one-shot nemotron. First re-verify `routes/message.py:924-953`, `config_builders.py:856`, `canvas_manager.py:698` (reported, not re-checked).
@@ -313,7 +313,7 @@ Status 2026-10-17: `src/core/loop/{CoreLoop,ToolRunner,RunsAdapter,types}.ts`, t
 
 ### Wrap-up
 
-- [x] CoreLoop v2 upgrades (`H1–H10`, `B4`, `B8`, `B25`, Backlog 13, Backlog 15, Phase 6 Step 6.3, Option B `AgentRouteAdapter` + `AgenticLoopService`) landed on `main` (`e952da6`, `b47f790`), 21/21 unit tests in `CoreLoopV2Upgrades.test.ts` + full Vitest suite passing (`169/169` files).
+- [x] CoreLoop v2 upgrades (`H1–H10`, `B4`, `B8`, `B25`, Backlog 13, Backlog 15, Phase 6 Step 6.3, Option B `AgentRouteAdapter` + `AgenticLoopService`) landed on `main` (`e952da6`, `b47f790`), deployed to NAS (`main@b47f790`), verified with 21/21 unit tests in `CoreLoopV2Upgrades.test.ts`, full Vitest suite (`169/169` files), live `POST /agent` check (`HTTP 200`), and live `run-basic-eval.mjs` benchmarks (GLM: **8/8 trading PASS + 8/8 html-notes PASS**; Nemotron `nemotron35`: **7/8 trading PASS, 1 WEAK, 0 FAIL**; 0 container restarts).
 
 ## 6. Open items
 
