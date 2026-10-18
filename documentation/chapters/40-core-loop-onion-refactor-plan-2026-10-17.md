@@ -174,27 +174,29 @@ Each item names the reference code to read, the LAS change, and the test.
 
 ### Phase A: stop the failures (each independent; ship one by one, deploy after each green)
 
-- [ ] **A1 Soft deadline + always-answer** (F2, rule F).
+- [x] **A1 Soft deadline + always-answer** (F2, rule F).
   - Ref: Hermes `agent/turn_finalizer.py:130-163`, `agent/context_compressor.py:338` (toolless final call text); prism `lifecycle/ExhaustionRecovery.ts:102-103` (`tool_choice:"none"` with the same tools, keeps the cache).
   - LAS: `RunExecutionEngine.ts:262-270` adds a soft timer that sets `finalizeNow`; the harness checks it before each model call and runs `harnesses/lifecycle/ExhaustionRecovery.ts:82`.
   - Tests: TC-T1, TC-T2.
-- [ ] **A2 Token budget in real tokens** (F1).
+- [x] **A2 Token budget in real tokens** (F1).
   - Ref: Hermes `agent/context_compressor.py` (token estimate + provider usage).
-  - LAS: `CanonicalProviderBudget.ts`:
-    - reserve = estimated new input tokens (chars/4) + `maxTokens`;
-    - reconcile with provider `usage`;
-    - charge only the delta per call, not the full context;
-    - when the next call can't fit, trigger rule F instead of throwing.
-  - TC-A2: replay of the trading q1 request (6 tools) completes with an answer under `max_tokens 49152`; unit test: 3 calls on a growing context charge the sum of deltas, not 3× the full context.
-- [ ] **A3 Don't advertise tools nobody can run** (F3).
+  - LAS: `CanonicalProviderBudget.ts`. The budget stays a cap on total spend across calls (that is what `max_tokens` means to callers). Changes:
+    - the input reservation is an estimate in tokens (`ceil(chars / 3.5)` of the serialized messages + tools), not UTF-8 bytes (`:34`);
+    - a final-answer reserve (`min(4096, 15% of limit)`) is held back from normal calls;
+    - when a normal call can't fit, the budget signals "finalize", not a run-killing throw, and the harness runs the final toolless pass using the reserve;
+    - measured `usage` still replaces the estimate after each call.
+  - TC-A2: unit test: 3 calls with known sizes reserve ≈ chars/3.5, not bytes; the call that would overflow triggers finalize and the final pass succeeds. Live: trading q1 and q2 finish `completed` with an answer under `max_tokens 49152`.
+- [x] **A3 Don't advertise tools nobody can run** (F3).
   - LAS: `RunExecutionEngine.ts:520-536`. Local tools are offered only if the request carries `local_tool_schemas` (client executor present).
   - TC-A3: trading q4 and q6 rerun use global tools and PASS; unit test: profile with `allowed_local_tools` and no client schemas → tool list has no local tools.
-- [ ] **A4 Lost tool call** (F4). The fix comes from the GLM trace (§6). Red/green test from the trace report.
-- [ ] **A5 Honest read_page** (F7).
+- [x] **A4 Lost tool call** (F4). Root cause (trace 2026-10-17, live run `run-07a5e327`): the system prompt listed all 26 whitelisted names, but the request `tools` carried only the 3 callable `global.*` schemas. GLM called `html_notes.weather.get`; vLLM can't parse a call to a tool absent from `tools`, so it arrived as text markup with `finish_reason:stop`, and `stripToolCallMarkup` (`StreamChunkDispatcher.ts:116`) deleted it → `INCOMPLETE_RUN`.
+  - Fix: the prompt lists only callable tools (`RunExecutionEngine.ts` `callableToolSchemas`); `parseSSEStream` recovers complete text-markup calls (GLM `<arg_key>/<arg_value>` and JSON bodies) as `toolCall` chunks when no native call arrived (`extractMarkupToolCalls`).
+  - Tests: `ToolCallMarkupRecovery.test.ts`, `PromptListsCallableTools.test.ts` (red 4 / green 7).
+- [x] **A5 Honest read_page** (F7).
   - Ref: Hermes `tools/web_tools.py:539` (extract errors as `{error}`).
   - LAS: `GlobalCapabilityExecutor.ts:345-390` returns `success:false` + error on HTTP ≥400, timeout, empty body.
   - TC-A5: unit test with a 404 stub → `success:false`.
-- [ ] **A6 Today's date in context.** The bakeoff showed every stale-year answer came from a model without the date.
+- [x] **A6 Today's date in context.** The bakeoff showed every stale-year answer came from a model without the date.
   - Ref: omp/pi `transformContext`.
   - LAS: prompt assembler `src/services/system-prompt/index.ts` adds `Current date: YYYY-MM-DD (timezone)`.
   - TC-A6: assembled prompt contains today's date; nemotron reruns of q1, q2, q5 → no 2025 answers.
