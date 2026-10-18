@@ -526,8 +526,18 @@ export default class SystemPromptAssembler {
       }
     }
 
+    // ── 11. Current Date (A6): ground the model in today's date ──
+    const now = new Date();
+    const tz = process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const currentDateLine =
+      `Current date: ${new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now)}` +
+      ` (${new Intl.DateTimeFormat("en-CA", { timeZone: tz, weekday: "long" }).format(now)}), timezone ${tz}`;
+    // Replace any pre-existing date line instead of stacking a second one.
+    const datedSections = sections.map((s) => s.split("\n").filter((l) => !l.startsWith("Current date: ")).join("\n").trim()).filter((s) => s.length > 0);
+    datedSections.unshift(currentDateLine);
+
     return {
-      prompt: sections.join("\n\n"),
+      prompt: datedSections.join("\n\n"),
       platformContextMessage:
         platformContextSections.length > 0
           ? platformContextSections.join("\n\n")
