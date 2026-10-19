@@ -1,7 +1,7 @@
 ---
 part: Plans
 status: in-progress
-updated: 2026-10-18
+updated: 2026-10-19
 review-by: 2026-11-01
 ---
 
@@ -17,7 +17,7 @@ Scope to agree with the user. Plan: `40-core-loop-onion-refactor-plan-2026-10-17
 3. Verify html-notes news path claims (E15) before C4.
 4. prism `/agent` probe had 4 infra failures (500 "terminated"/"fetch failed", 180 s timeouts). Rod's repo: report to Rod, don't fix.
 5. vLLM thinking-off (`chat_template_kwargs.enable_thinking:false`) doesn't reach GLM's template (the trace saw reasoning tokens with thinking off). The shim's `enable_thinking→thinking` mirror targets DeepSeek-style templates. Unverified.
-6. Remaining `await reader.cancel()` crash-pattern sites: `decision-fabric/SemIfProvider.ts:69`, `TinyModelsProvider.ts:33`.
+6. ~~Remaining `await reader.cancel()` crash-pattern sites: `decision-fabric/SemIfProvider.ts:69`, `TinyModelsProvider.ts:33`.~~ Closed 2026-10-19: both files are gone. The shadow decision fabric (`src/decision-fabric/`, `POST /v1/runs/:runId/decisions`, `RuntimeClient.decide`, profile `decision_policy`, `RunRecord.decision_receipts`, wire `decision_request`/`decision_result`) was removed because its backend, Jetson TinyModels on :8002, was retired (SemIF dead since 2026-10-08). It was shadow telemetry only; no other repo consumed it. `deploy.sh` no longer writes `TINYMODELS_SHADOW_ENABLED`/`DECISION_PROVIDER`.
 7. Delete `.scratch/harness-research/` (pi/omp/Hermes clones) when no longer referenced.
 8. **Phase D Option B landed 2026-10-18 (`e952da6`, `b47f790`).** `AgentRouteAdapter` (`src/core/loop/AgentRouteAdapter.ts`) and `AgenticLoopService` (`src/services/AgenticLoopService.ts`) now route `POST /agent` onto `CoreLoop` (`runCoreLoopForAgent`) by default for `project === "vllm-trading-bot"` (and whenever `LAS_AGENT_LOOP=coreloop`), with an instant rollback switch (`LAS_AGENT_LOOP=legacy`). Legacy harnesses (`ReActHarness`, ToT/GoT, plan mode) remain available as fallback until non-trading `/chat` routes are migrated.
 9. **B8 compaction in CoreLoop — RESOLVED 2026-10-18 (`e952da6`).** Implemented `src/core/loop/MessageCompactor.ts` (`compactMessages` + `verifyToolPairAtomicity`) and wired it into `RunsAdapter.ts` and `AgentRouteAdapter.ts` `beforeModelCall` hooks. Tool-call/result groups (`[assistant(toolCalls), ...matching tool results]`) are evicted atomically, and orphan `role:"tool"` messages are stripped.

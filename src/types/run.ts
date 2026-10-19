@@ -167,7 +167,6 @@ export interface RunResult {
 
 export interface RunRecord {
   approvals?: Record<string, import("../services/RunApprovals.ts").RunApproval>;
-  decision_receipts?: import("../decision-fabric/contracts.ts").DecisionReceipt[];
   session_id?: string;
   events?: RunEvent[];
   identity?: { project: string; username: string };

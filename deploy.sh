@@ -72,7 +72,7 @@ EXTRA_SSH_SYNC() {
 
   info "Appending IMAGE_NAME and PORT to remote NAS .env..."
   ssh "$DEPLOY_SSH_HOST" "echo 'IMAGE_NAME=${IMAGE_NAME}' >> '${DEPLOY_COMPOSE_DIR}/.env' && echo 'PORT=${PORT}' >> '${DEPLOY_COMPOSE_DIR}/.env'"
-  ssh "$DEPLOY_SSH_HOST" "echo 'TINYMODELS_SHADOW_ENABLED=true' >> '${DEPLOY_COMPOSE_DIR}/.env' && echo 'DECISION_PROVIDER=semif' >> '${DEPLOY_COMPOSE_DIR}/.env' && echo 'LAS_EVAL_CHAOS=1' >> '${DEPLOY_COMPOSE_DIR}/.env'"
+  ssh "$DEPLOY_SSH_HOST" "echo 'LAS_EVAL_CHAOS=1' >> '${DEPLOY_COMPOSE_DIR}/.env'"
   # MCP OAuth tokens are encrypted with this key, so it must survive the .env
   # rewrite above: it lives in its own NAS file, created once, never printed.
   ssh "$DEPLOY_SSH_HOST" "k='${DEPLOY_COMPOSE_DIR}/mcp-oauth.key'; umask 077; [ -s \"\$k\" ] || openssl rand -base64 32 > \"\$k\"; echo \"MCP_OAUTH_ENCRYPTION_KEY=\$(cat \"\$k\")\" >> '${DEPLOY_COMPOSE_DIR}/.env'"

@@ -12,7 +12,6 @@ import { runtimeAuth, getRuntimeScope, scopeOwnsRun, issueRuntimeSession } from 
 
 import { RunEventSchema, RunResultSchema, ToolResultCommandSchema, ApprovalResolutionCommandSchema } from "../contracts/RuntimeWire.ts";
 import { RunApprovals } from "../services/RunApprovals.ts";
-import { DecisionService } from "../decision-fabric/DecisionService.ts";
 
 const router = express.Router();
 router.use(runtimeAuth);
@@ -35,15 +34,6 @@ router.post("/:runId/approvals/:approvalId", asyncHandler(async (req: Request, r
   if (!run || !scopeOwnsRun(res, run) || run.identity?.project !== req.project || run.identity?.username !== req.username) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
   try { res.json(await RunApprovals.resolve(run.run_id, String(req.params.approvalId), ApprovalResolutionCommandSchema.parse(req.body).approved)); }
   catch { res.status(409).json({ error: { code: "APPROVAL_REJECTED" } }); }
-}));
-router.post("/:runId/decisions", asyncHandler(async (req: Request, res: Response) => {
-  const run = await RunStore.getRun(String(req.params.runId));
-  if (!run || !scopeOwnsRun(res, run) || run.identity?.project !== req.project || run.identity?.username !== req.username) return res.status(404).json({ error: { code: "RUN_NOT_FOUND" } });
-  if (req.body.runId !== run.run_id) return res.status(400).json({ error: { code: "DECISION_RUN_MISMATCH" } });
-  const controller = new AbortController();
-  res.on("close", () => { if (!res.writableEnded) controller.abort(); });
-  try { res.json(await DecisionService.decide(req.body, controller.signal)); }
-  catch { res.status(400).json({ error: { code: "DECISION_REQUEST_REJECTED" } }); }
 }));
 router.post("/:runId/tools/:callId/verify", asyncHandler(async (req: Request, res: Response) => {
   try {

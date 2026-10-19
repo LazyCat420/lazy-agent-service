@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { RunRequestSchema } from "../services/RunAdmission.ts";
-import { DecisionRequestSchema, DecisionResultSchema } from "../decision-fabric/contracts.ts";
 
 /** Neutral wire contract shared by HTTP clients and the runtime boundary. */
 export const RUNTIME_WIRE_CONTRACT_VERSION = "runtime-wire.v1.0.0" as const;
@@ -57,8 +56,6 @@ export const RunResultSchema = z.object({
 export const RuntimeWireSchema = z.object({
   contract_version: z.literal(RUNTIME_WIRE_CONTRACT_VERSION),
   run_request: RunRequestSchema,
-  decision_request: DecisionRequestSchema,
-  decision_result: DecisionResultSchema,
   run_event: RunEventSchema,
   run_result: RunResultSchema,
   tool_result_command: ToolResultCommandSchema,
@@ -67,8 +64,6 @@ export const RuntimeWireSchema = z.object({
 }).strict();
 
 export type RuntimeRunRequest = z.infer<typeof RunRequestSchema>;
-export type RuntimeDecisionRequest = z.infer<typeof DecisionRequestSchema>;
-export type RuntimeDecisionResult = z.infer<typeof DecisionResultSchema>;
 export type RuntimeRunEvent = z.infer<typeof RunEventSchema>;
 export type RuntimeRunResult = z.infer<typeof RunResultSchema>;
 export type RuntimeToolResultCommand = z.infer<typeof ToolResultCommandSchema>;
