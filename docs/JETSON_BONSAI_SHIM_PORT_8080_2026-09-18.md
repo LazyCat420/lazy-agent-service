@@ -1,5 +1,12 @@
 # Jetson Bonsai Port Alignment & VLLM Shim Routing (2026-09-18)
 
+> **Superseded 2026-10-19.** The Bonsai llama.cpp server on `:8080` is gone
+> (connection refused); vLLM `nemotron35` serves on `:8000`. The shim's
+> `jetson` upstream defaults to `http://10.0.0.30:8000` again, and the
+> 8080/8000 dual-port fallback was removed — it sent every Jetson call to the
+> dead port first (957 fallbacks in trading cycle `cycle-v3-1792387891`).
+> Override with `VLLM_SHIM_JETSON_URL` if the LLM moves.
+
 ## 1. Context & Problem
 
 The Jetson Orin (`10.0.0.30`) hosts two distinct model-serving containers:

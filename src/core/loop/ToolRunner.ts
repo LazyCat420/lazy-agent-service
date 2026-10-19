@@ -8,6 +8,7 @@ import type {
   ToolCallHistory,
 } from "./types.ts";
 import { READ_TOOL_SPILL_NAME } from "./SpillBuffer.ts";
+import { stripMcpPrefix } from "../../services/McpPrefix.ts";
 
 export const DEFAULT_PARALLEL_TOOL_CONCURRENCY = 8;
 
@@ -257,8 +258,31 @@ function checkSemanticStallOrOscillation(
   return { blocked: false };
 }
 
-export const runToolBatch: RunToolBatch = async (calls, options) => {
+/**
+ * Map a bare tool name to its MCP-namespaced registration when exactly one
+ * tool in the run's map strips to it. cycle-v3-1792387891: nemotron35 called
+ * `whiteboard_read` for `mcp__lazy-agent-service__whiteboard_read` and got
+ * TOOL_NOT_FOUND, a wasted turn. Ambiguous or unknown names stay as called and
+ * still answer TOOL_NOT_FOUND. The map is already the run's whitelist, and the
+ * resolved name is what hooks, history and the result carry.
+ */
+function resolveBareToolName(tools: ReadonlyMap<string, CoreTool>, name: string): string {
+  if (tools.has(name)) return name;
+  let match: string | undefined;
+  for (const key of tools.keys()) {
+    if (key === name || stripMcpPrefix(key) !== name) continue;
+    if (match !== undefined) return name;
+    match = key;
+  }
+  return match ?? name;
+}
+
+export const runToolBatch: RunToolBatch = async (requestedCalls, options) => {
   const opts = options as ToolRunnerOptions;
+  const calls = requestedCalls.map((call) => {
+    const name = resolveBareToolName(opts.tools, call.name);
+    return name === call.name ? call : { ...call, name };
+  });
   const timeoutSignalFor =
     typeof opts.timeoutSignalFor === "function"
       ? opts.timeoutSignalFor

@@ -46,7 +46,10 @@ const UPSTREAMS: Record<string, string> = {
   // It is routed here so vision traffic passes through code we own — it is not
   // part of prism and nothing else was governing it.
   "gold-spark-vision": process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL || "http://10.0.0.141:8899",
-  "jetson": process.env.VLLM_SHIM_JETSON_URL || "http://10.0.0.30:8080",
+  // vLLM (nemotron35) on :8000. The llama.cpp Bonsai server that briefly sat
+  // on :8080 is gone (connection refused, 2026-10-19); the 8080-first,
+  // 8000-fallback dance it left behind cost 957 failed connects in one cycle.
+  "jetson": process.env.VLLM_SHIM_JETSON_URL || "http://10.0.0.30:8000",
   "jetson-2": process.env.VLLM_SHIM_JETSON_2_URL || "http://10.0.0.30:8001",
 };
 
@@ -571,29 +574,6 @@ export class VllmShimService {
     return body;
   }
 
-  private static activeJetsonUrl: string | null = null;
-
-  public static setActiveJetsonUrl(url: string | null): void {
-    this.activeJetsonUrl = url;
-  }
-
-  public static getActiveJetsonUrl(): string {
-    if (process.env.VLLM_SHIM_JETSON_URL) {
-      return process.env.VLLM_SHIM_JETSON_URL;
-    }
-    return this.activeJetsonUrl || "http://10.0.0.30:8080";
-  }
-
-  public static getAlternateJetsonUrl(currentUrl: string): string | null {
-    if (currentUrl.includes(":8080")) {
-      return currentUrl.replace(":8080", ":8000");
-    }
-    if (currentUrl.includes(":8000")) {
-      return currentUrl.replace(":8000", ":8080");
-    }
-    return null;
-  }
-
   /**
    * Resolve /vllm-shim/<name>/<rest> to its upstream. Exported for unit
    * tests; returns null for unknown upstream names.
@@ -605,8 +585,8 @@ export class VllmShimService {
     if (!match) return null;
     const upstreamName = match[1];
     let upstreamUrl = UPSTREAMS[upstreamName];
-    if (upstreamName === "jetson") {
-      upstreamUrl = this.getActiveJetsonUrl();
+    if (upstreamName === "jetson" && process.env.VLLM_SHIM_JETSON_URL) {
+      upstreamUrl = process.env.VLLM_SHIM_JETSON_URL;
     } else if (upstreamName === "gold-spark" && process.env.VLLM_SHIM_GOLD_SPARK_URL) {
       upstreamUrl = process.env.VLLM_SHIM_GOLD_SPARK_URL;
     } else if (upstreamName === "gold-spark-vision" && process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL) {
@@ -881,13 +861,13 @@ export class VllmShimService {
     }
 
     const upstreamAbortController = new AbortController();
-    const fetchOnce = async (urlToFetch: string = targetUrl): Promise<globalThis.Response> => {
+    const fetchOnce = async (): Promise<globalThis.Response> => {
       const headersTimeout = setTimeout(() => {
         logger.error(`[VllmShim] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
         upstreamAbortController.abort();
       }, UPSTREAM_HEADERS_TIMEOUT_MS);
       try {
-        return await fetch(urlToFetch, {
+        return await fetch(targetUrl, {
           method: req.method,
           headers: { "Content-Type": req.headers["content-type"] || "application/json" },
           body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(body) : undefined,
@@ -941,56 +921,26 @@ export class VllmShimService {
     }
 
     try {
-      let response: globalThis.Response;
-      try {
-        response = await fetchOnce();
-        if ((response.status === 404 || response.status === 502) && upstreamName === "jetson") {
-          const alternateUrl = VllmShimService.getAlternateJetsonUrl(upstreamUrl);
-          if (alternateUrl) {
-            try {
-              const altResponse = await fetchOnce(`${alternateUrl}${originalPath}`);
-              if (altResponse.ok) {
-                VllmShimService.setActiveJetsonUrl(alternateUrl);
-                response = altResponse;
-              }
-            } catch {
-              // keep initial response
+      let response = await fetchOnce();
+      if (response.status === 404 && basePath === "/v1/chat/completions") {
+        try {
+          const cloned = response.clone();
+          const errJson = (await cloned.json()) as Record<string, any>;
+          const errMsg = errJson?.error?.message || errJson?.message || "";
+          if (typeof errMsg === "string" && /model.*not exist|does not exist/i.test(errMsg)) {
+            const liveModel = await VllmShimService.resolveUpstreamActiveModel(upstreamUrl);
+            if (liveModel && body && typeof body === "object" && (body as Record<string, any>).model !== liveModel) {
+              const staleModel = (body as Record<string, any>).model;
+              logger.warn(
+                `[VllmShim] Upstream "${upstreamName}" rejected model "${staleModel}" (404: model does not exist). Auto-healing to live model "${liveModel}" and retrying.`,
+              );
+              (body as Record<string, any>).model = liveModel;
+              VllmShimService.setActiveModel(upstreamName, liveModel);
+              response = await fetchOnce();
             }
           }
-        }
-        if (response.status === 404 && basePath === "/v1/chat/completions") {
-          try {
-            const cloned = response.clone();
-            const errJson = (await cloned.json()) as Record<string, any>;
-            const errMsg = errJson?.error?.message || errJson?.message || "";
-            if (typeof errMsg === "string" && /model.*not exist|does not exist/i.test(errMsg)) {
-              const liveModel = await VllmShimService.resolveUpstreamActiveModel(upstreamUrl);
-              if (liveModel && body && typeof body === "object" && (body as Record<string, any>).model !== liveModel) {
-                const staleModel = (body as Record<string, any>).model;
-                logger.warn(
-                  `[VllmShim] Upstream "${upstreamName}" rejected model "${staleModel}" (404: model does not exist). Auto-healing to live model "${liveModel}" and retrying.`,
-                );
-                (body as Record<string, any>).model = liveModel;
-                VllmShimService.setActiveModel(upstreamName, liveModel);
-                response = await fetchOnce();
-              }
-            }
-          } catch (healErr: any) {
-            logger.warn(`[VllmShim] Failed to auto-heal 404 model on ${upstreamName}: ${healErr?.message || healErr}`);
-          }
-        }
-      } catch (err: any) {
-        if (upstreamName === "jetson") {
-          const alternateUrl = VllmShimService.getAlternateJetsonUrl(upstreamUrl);
-          if (alternateUrl) {
-            logger.warn(`[VllmShim] Jetson on ${upstreamUrl} failed (${err?.message || err}), falling back to ${alternateUrl}`);
-            response = await fetchOnce(`${alternateUrl}${originalPath}`);
-            VllmShimService.setActiveJetsonUrl(alternateUrl);
-          } else {
-            throw err;
-          }
-        } else {
-          throw err;
+        } catch (healErr: any) {
+          logger.warn(`[VllmShim] Failed to auto-heal 404 model on ${upstreamName}: ${healErr?.message || healErr}`);
         }
       }
 

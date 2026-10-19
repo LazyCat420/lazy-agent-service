@@ -1,4 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import type { Request as ExpressRequest, Response as ExpressResponse } from "express";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { VllmShimService } from "../vllm/VllmShimService.js";
 
 describe("VllmShimService.translateChatTemplateKwargs", () => {
@@ -46,7 +48,7 @@ describe("VllmShimService.resolveUpstream", () => {
 
   it("routes jetson and jetson-2 to their ports", () => {
     expect(VllmShimService.resolveUpstream("/vllm-shim/jetson/v1/models")?.upstreamUrl)
-      .toBe("http://10.0.0.30:8080");
+      .toBe("http://10.0.0.30:8000");
     expect(VllmShimService.resolveUpstream("/vllm-shim/jetson-2/v1/models")?.upstreamUrl)
       .toBe("http://10.0.0.30:8001");
   });
@@ -147,22 +149,49 @@ describe("VllmShimService.filterModels", () => {
     expect(output.data[0].max_model_len).toBe(1048576);
   });
 
-  it("swaps alternate ports between 8080 and 8000 for Jetson", () => {
-    expect(VllmShimService.getAlternateJetsonUrl("http://10.0.0.30:8080"))
-      .toBe("http://10.0.0.30:8000");
-    expect(VllmShimService.getAlternateJetsonUrl("http://10.0.0.30:8000"))
-      .toBe("http://10.0.0.30:8080");
+});
+
+describe("VllmShimService jetson routing (cycle-v3-1792387891)", () => {
+  // The shim tried :8080 (a llama.cpp Bonsai server that no longer exists —
+  // connection refused) before every Jetson call and fell back to :8000 where
+  // vLLM nemotron35 actually serves: 957 fallbacks in one trading cycle.
+  const shimResponse = () =>
+    Object.assign(new EventEmitter(), {
+      statusCode: 200,
+      headersSent: false,
+      output: "",
+      headers: {} as Record<string, string>,
+      status(code: number) { this.statusCode = code; return this; },
+      setHeader(k: string, v: string) { this.headers[k] = v; return this; },
+      flushHeaders() {},
+      write(value: unknown) { this.output += typeof value === "string" ? value : Buffer.from(value as Uint8Array).toString(); },
+      end(value?: unknown) { if (value) this.write(value); return this; },
+      json(value: unknown) { this.output = JSON.stringify(value); return this; },
+    });
+  const modelsRequest = { originalUrl: "/vllm-shim/jetson/v1/models", method: "GET", headers: {}, body: undefined };
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("sends the first and only call to the live :8000 endpoint", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(
+        JSON.stringify({ object: "list", data: [{ id: "nemotron35", max_model_len: 100000 }] }),
+        { headers: { "content-type": "application/json" } },
+      ));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = shimResponse();
+    // Test doubles carry only the members handle() touches.
+    await VllmShimService.handle(modelsRequest as unknown as ExpressRequest, res as unknown as ExpressResponse);
+    expect(res.statusCode).toBe(200);
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual(["http://10.0.0.30:8000/v1/models"]);
   });
 
-  it("supports dynamic activeJetsonUrl switching", () => {
-    delete process.env.VLLM_SHIM_JETSON_URL;
-    VllmShimService.setActiveJetsonUrl("http://10.0.0.30:8000");
-    expect(VllmShimService.getActiveJetsonUrl()).toBe("http://10.0.0.30:8000");
-    expect(VllmShimService.resolveUpstream("/vllm-shim/jetson")?.upstreamUrl)
-      .toBe("http://10.0.0.30:8000");
-
-    VllmShimService.setActiveJetsonUrl(null);
-    expect(VllmShimService.getActiveJetsonUrl()).toBe("http://10.0.0.30:8080");
+  it("does not retry a dead :8000 on :8080", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = shimResponse();
+    await VllmShimService.handle(modelsRequest as unknown as ExpressRequest, res as unknown as ExpressResponse);
+    expect(res.statusCode).toBe(502);
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual(["http://10.0.0.30:8000/v1/models"]);
   });
 });
 

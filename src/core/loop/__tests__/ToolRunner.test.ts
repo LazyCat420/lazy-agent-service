@@ -87,6 +87,42 @@ describe("runToolBatch", () => {
     expect(near[0].content).toContain('Did you mean "read_page"?');
   });
 
+  it("R2b: a bare name dispatches to its unique mcp__-namespaced tool (cycle-v3-1792387891)", async () => {
+    let received: unknown;
+    const whiteboardRead = makeTool("mcp__lazy-agent-service__whiteboard_read", async (args) => {
+      received = args;
+      return "market_context: ok";
+    });
+    const fundamentals = makeTool("mcp__lazy-agent-service__get_finviz_fundamentals", async () => "x");
+    const tools = new Map([
+      [whiteboardRead.name, whiteboardRead],
+      [fundamentals.name, fundamentals],
+    ] as const);
+    const results = await runToolBatch(
+      [makeCall("whiteboard_read", { section: "market_context" })],
+      baseOptions({ tools }),
+    );
+    expect(results[0]).toMatchObject({
+      isError: false,
+      content: "market_context: ok",
+      name: "mcp__lazy-agent-service__whiteboard_read",
+    });
+    expect(received).toEqual({ section: "market_context" });
+  });
+
+  it("R2c: a bare name matching two namespaced tools stays TOOL_NOT_FOUND", async () => {
+    let executed = 0;
+    const a = makeTool("mcp__lazy-agent-service__whiteboard_read", async () => { executed += 1; return "a"; });
+    const b = makeTool("mcp__lazy-tools__whiteboard_read", async () => { executed += 1; return "b"; });
+    const tools = new Map([
+      [a.name, a],
+      [b.name, b],
+    ] as const);
+    const results = await runToolBatch([makeCall("whiteboard_read")], baseOptions({ tools }));
+    expect(results[0]).toMatchObject({ isError: true, errorCode: "TOOL_NOT_FOUND", name: "whiteboard_read" });
+    expect(executed).toBe(0);
+  });
+
   it("R3: missing required arg reports TOOL_BAD_ARGS and does not run the tool", async () => {
     let executed = 0;
     const tool = makeTool(
