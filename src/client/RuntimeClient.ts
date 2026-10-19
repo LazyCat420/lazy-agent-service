@@ -24,9 +24,6 @@ export class RuntimeClient {
     return this.command(`/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`, "POST", { approved });
   }
   steerRun(runId: string, instruction: string): Promise<unknown> { return this.command(`/${encodeURIComponent(runId)}/steer`, "POST", { instruction }); }
-  decide(runId: string, request: import("../decision-fabric/contracts.ts").TypedDecisionRequest): Promise<import("../decision-fabric/contracts.ts").DecisionReceipt> {
-    return this.command(`/${encodeURIComponent(runId)}/decisions`, "POST", request);
-  }
   private async *readEvents(response: Response, expectedRunId?: string): AsyncGenerator<RunEvent> {
     if (!response.body) throw new Error("Runtime stream has no body");
     const reader = response.body.getReader();

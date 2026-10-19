@@ -47,7 +47,6 @@ export interface ObservabilityPolicy {
 }
 
 export interface AgentProfile {
-  decision_policy?: { capabilities: string[]; data_classifications: Array<"public">; max_latency_ms: number };
   profile_id: string;
   version: string;
   contract_version?: string;
@@ -115,11 +114,6 @@ export class ProfileRegistry {
 
     if (!["structured_completion", "interactive_agent", "application_workflow"].includes(data.workflow_type)) {
       throw new Error(`Invalid workflow_type '${data.workflow_type}'`);
-    }
-
-    if (data.decision_policy) {
-      const policy = data.decision_policy;
-      if (!Array.isArray(policy.capabilities) || policy.capabilities.some((c: unknown) => c !== "semantic.choice.v1") || !Array.isArray(policy.data_classifications) || policy.data_classifications.some((c: unknown) => c !== "public") || !Number.isInteger(policy.max_latency_ms) || policy.max_latency_ms < 1 || policy.max_latency_ms > 2000) throw new Error("Invalid shadow decision policy");
     }
 
     if (data.model_constraints.max_output_tokens !== undefined && (!Number.isInteger(data.model_constraints.max_output_tokens) || data.model_constraints.max_output_tokens < 0)) throw new Error("Invalid per-call output limit");

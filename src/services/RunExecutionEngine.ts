@@ -12,7 +12,6 @@ import { z } from "zod";
 import { normalizeRunRequest } from "./RunAdmission.ts";
 import { RuntimeExtensions } from "./RuntimeExtensions.ts";
 import { RunApprovals } from "./RunApprovals.ts";
-import { DecisionService } from "../decision-fabric/DecisionService.ts";
 import { CanonicalProviderBudget } from "./CanonicalProviderBudget.ts";
 import { LocalToolContinuation } from "./LocalToolContinuation.ts";
 import AgenticLoopService from "./AgenticLoopService.ts";
@@ -712,16 +711,6 @@ export class RunExecutionEngine {
           for (const extension of extensions) await extension.afterTool?.(call, observation);
           await hooks.run("afterToolCall", call, observation, context);
           return { observation: normalizeEmptyToolContent(observation), dispatched: true };
-        }
-        // Only public web observations enter the optional shadow specialist layer.
-        // Its result is retained as telemetry and never modifies policy or model context.
-        if (profile.decision_policy && ["global.web.search", "global.web.read_page"].includes(call.name)) {
-          await DecisionService.decide({
-            requestId: crypto.randomUUID(), runId, capability: "semantic.choice.v1", questionId: "agent.evidence_sufficiency.v1", policyVersion: "shadow.v1", dataClassification: "public",
-            state: JSON.stringify(processed.result).slice(0, 4096),
-            questions: { evidence: { type: "choice", instructions: "Does this public source observation contain enough source text to support a sourced summary?", criteria: { source_text_available: "Substantive source text is available", insufficient_evidence: "Only links, empty results, errors, or insufficient text are available" }, requiredAbstainOption: true } },
-            constraints: { maxLatencyMs: profile.decision_policy.max_latency_ms, shadowOnly: true, noSideEffects: true, maxAttempts: 1 },
-          }, abortController.signal);
         }
         for (const extension of extensions) await extension.afterTool?.(call, processed.result);
         await hooks.run("afterToolCall", call, processed.result, context);

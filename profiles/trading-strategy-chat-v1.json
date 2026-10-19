@@ -37,15 +37,6 @@
     "max_duration_ms": 300000
   },
   "retention_class": "AUDITED_SESSION",
-  "decision_policy": {
-    "capabilities": [
-      "semantic.choice.v1"
-    ],
-    "data_classifications": [
-      "public"
-    ],
-    "max_latency_ms": 750
-  },
   "allowed_local_tools": [
     "trading.research.web_search@1.0",
     "trading.research.scrape_url@1.0"
