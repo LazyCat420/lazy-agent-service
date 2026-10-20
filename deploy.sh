@@ -50,8 +50,6 @@ PRE_BUILD() {
   # 2026-10-10). Our exporter also fails on duplicate names across shards.
   python3 "${SCRIPT_DIR}/scripts/export_tool_schemas.py"
 
-  step "Copying projects.json from vault-service"
-  cp "${SCRIPT_DIR}/../vault-service/projects.json" "${SCRIPT_DIR}/projects.json"
 
   # NO python staging. This step used to mirror trading-service/app, its scripts,
   # requirements.txt and lazycat-sdk/lazycat into ./python — ~12MB and 549 tracked
@@ -66,8 +64,13 @@ PRE_BUILD() {
 
 
 EXTRA_SSH_SYNC() {
-  info "Syncing projects.json..."
-  cat "${SCRIPT_DIR}/projects.json" | ssh "$DEPLOY_SSH_HOST" "cat > '${DEPLOY_COMPOSE_DIR}/projects.json'"
+  # vault-service's deployed copy is the canonical projects.json (credentials
+  # rotate there). vault-service is not checked out locally, so the old local
+  # cp failed and a stale local copy got pushed (re-leaked the pre-rotation
+  # Postgres password, 2026-10-19). Copy NAS-side and fail loudly.
+  info "Syncing projects.json from vault-service on NAS..."
+  ssh "$DEPLOY_SSH_HOST" "cp '${DEPLOY_COMPOSE_DIR}/../vault-service/projects.json' '${DEPLOY_COMPOSE_DIR}/projects.json'" \
+    || { echo "projects.json sync from vault-service failed" >&2; exit 1; }
   ok "projects.json synced"
 
   info "Appending IMAGE_NAME and PORT to remote NAS .env..."
