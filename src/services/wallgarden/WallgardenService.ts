@@ -4,6 +4,12 @@ import type { InstanceEntry } from "../../types/ProviderTypes.js";
 import { handleConversation } from "../../routes/ChatRoutes.js";
 import type { SseEvent } from "../../types/SseTypes.js";
 import { getErrorMessage } from "../../utils/ErrorHelpers.js";
+import {
+  wallgardenJetsonGate,
+  WALLGARDEN_PRIORITY,
+  JetsonGateRejectedError,
+  type WallgardenPriority,
+} from "./JetsonGate.js";
 
 // ── Model Cache ─────────────────────────────────────────────
 interface VllmBoxInfo {
@@ -356,7 +362,7 @@ export function extractTopicsFromResponse(data: any): string[] {
  * EXPECTED_JETSON_MODEL is an assertion, not the source of truth.
  */
 export const JETSON_PROVIDER = "vllm";
-export const EXPECTED_JETSON_MODEL = "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit";
+export const EXPECTED_JETSON_MODEL = "nemotron35";
 
 async function resolveProviderAndModel(
   preferredModel?: string,
@@ -452,7 +458,14 @@ export async function recommendChannels(
       }),
     },
   ];
-  const data = await callChat(model, provider, messages, 0.2, 1000);
+  const data = await callChat(
+    model,
+    provider,
+    messages,
+    0.2,
+    1000,
+    WALLGARDEN_PRIORITY.BACKGROUND,
+  );
   const text = typeof data.text === "string" ? data.text.trim() : "";
   const fenced = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   let parsed: any;
@@ -499,6 +512,7 @@ async function callChat(
   messages: Array<{ role: string; content: string }>,
   temperature: number = 0.1,
   maxTokens: number = 4000,
+  priority: WallgardenPriority = WALLGARDEN_PRIORITY.USER_FACING,
 ): Promise<any> {
   const params = {
     model,
@@ -515,14 +529,19 @@ async function callChat(
 
   const events: SseEvent[] = [];
   try {
-    await handleConversation(
-      params as unknown as Record<string, unknown>,
-      (event: SseEvent) => {
-        events.push(event);
-      },
-      { signal: AbortSignal.timeout(100_000) },
+    await wallgardenJetsonGate.run(priority, () =>
+      handleConversation(
+        params as unknown as Record<string, unknown>,
+        (event: SseEvent) => {
+          events.push(event);
+        },
+        { signal: AbortSignal.timeout(100_000) },
+      ),
     );
   } catch (error) {
+    if (error instanceof JetsonGateRejectedError) {
+      throw error;
+    }
     throw new Error(
       `Chat handler failed: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -1222,6 +1241,7 @@ export async function generateTasteProfile(
         ],
         0.3,
         1200,
+        WALLGARDEN_PRIORITY.BACKGROUND,
       );
       const profile = extractProfileFromResponse(data);
       if (profile) {
@@ -1233,6 +1253,7 @@ export async function generateTasteProfile(
       }
       throw new Error("No profile parsed from response");
     } catch (err: any) {
+      if (err instanceof JetsonGateRejectedError) throw err;
       lastError = err;
       logger.warn(`[WallgardenService] Taste profile attempt ${attempt + 1} failed: ${err.message}`);
       if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
@@ -1324,6 +1345,8 @@ export async function judgeTopicGrounding(
             { role: "user", content: lines.join("\n") },
           ],
           0.1, // grading, not brainstorming
+          4000,
+          WALLGARDEN_PRIORITY.JUDGE,
         );
         const text = data?.text || "";
         const match = text.match(/\{[\s\S]*\}/);
@@ -1338,6 +1361,7 @@ export async function judgeTopicGrounding(
         }
         return out;
       } catch (err: any) {
+        if (err instanceof JetsonGateRejectedError) throw err;
         logger.warn(`[WallgardenService] Grounding judge batch attempt ${attempt + 1} failed: ${err.message}`);
         if (attempt < MAX_RETRIES) await sleep(retryDelay(attempt));
       }
@@ -1598,7 +1622,8 @@ Classify each video as ON_TOPIC, ADJACENT, NOVELTY, or OFF_TOPIC.`;
             { role: "user", content: userMessage },
           ],
           0.1, // deterministic grading
-          1200
+          1200,
+          WALLGARDEN_PRIORITY.BACKGROUND,
         );
 
         const results = extractCandidateClassificationsFromResponse(data);

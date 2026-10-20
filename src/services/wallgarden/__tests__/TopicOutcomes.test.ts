@@ -75,7 +75,7 @@ describe("buildOutcomesBlock", () => {
 });
 
 // ── The part that matters: does it reach the model? ────────────────
-const JETSON_MODEL = "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit";
+const JETSON_MODEL = "nemotron35";
 type ChatBody = Record<string, unknown> & { messages: Array<{ role: string; content: string }> };
 let chatBodies: ChatBody[];
 

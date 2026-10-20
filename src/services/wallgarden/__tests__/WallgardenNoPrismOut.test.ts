@@ -17,7 +17,7 @@ vi.mock("../../../providers/instance-registry.js", () => ({
       id: "vllm",
       nickname: "Jetson",
       baseUrl: "http://10.0.0.30:8000",
-      model: "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit",
+      model: "nemotron35",
       status: "online",
     },
   ],
@@ -52,7 +52,7 @@ vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
   // prism :7777 — must never be fetched.
   if (url.includes("10.0.0.30:8000/v1/models")) {
     return Promise.resolve(new Response(
-      JSON.stringify({ object: "list", data: [{ id: "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit" }] }),
+      JSON.stringify({ object: "list", data: [{ id: "nemotron35" }] }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     ));
   }
@@ -70,7 +70,7 @@ describe("WallgardenService — outbound chat goes in-process, never to prism :7
     expect(handleConversationCalls).toHaveLength(1);
     const params = handleConversationCalls[0];
     expect(params.provider).toBe("vllm");
-    expect(params.model).toBe("cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit");
+    expect(params.model).toBe("nemotron35");
     expect(Array.isArray(params.messages)).toBe(true);
     expect(params.skipConversation).toBe(true);
     expect(result.channels[0].name).toBe("Channel");

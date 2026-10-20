@@ -93,7 +93,7 @@ describe("planBrainstormBatches", () => {
 });
 
 // ── Outbound bodies ────────────────────────────────────────────────
-const JETSON_MODEL = "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit";
+const JETSON_MODEL = "nemotron35";
 let chatBodies: ChatBody[];
 let replyFor: (body: ChatBody) => string;
 

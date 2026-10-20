@@ -8,7 +8,6 @@ import {
   extractVideoTopics,
   generateTasteProfile,
   judgeTopicGrounding,
-  classifyCandidateVideos,
   recommendChannels,
   type BrainstormContext,
   type SimilarContext,
@@ -17,8 +16,19 @@ import {
   type ClassifyCandidatesInput,
   JETSON_PROVIDER,
 } from "../services/wallgarden/WallgardenService.js";
+import {
+  wallgardenJetsonGate,
+  JetsonGateRejectedError,
+} from "../services/wallgarden/JetsonGate.js";
 
 const router = Router();
+
+function statusForError(err: any, fallback = 500): number {
+  if (err instanceof JetsonGateRejectedError || err?.statusCode === 503) {
+    return 503;
+  }
+  return fallback;
+}
 
 // ── GET /wallgarden/models ──────────────────────────────────
 // Discovers what model is loaded on the Jetson. Only the Jetson is returned:
@@ -27,10 +37,10 @@ const router = Router();
 router.get("/models", async (_req: Request, res: Response) => {
   try {
     const boxes = (await discoverModels()).filter(b => b.id === JETSON_PROVIDER);
-    res.json({ boxes });
+    res.json({ boxes, gate: wallgardenJetsonGate.stats() });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /models error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(statusForError(err, 500)).json({ error: err.message });
   }
 });
 
@@ -45,7 +55,8 @@ router.post("/recommend-channels", async (req: Request, res: Response) => {
     res.json(result);
   } catch (err: any) {
     const message = err?.message || "Wallgarden recommendation failed";
-    const status = /stale|currently serves|refresh models/i.test(message) ? 409 : 502;
+    const fallbackStatus = /stale|currently serves|refresh models/i.test(message) ? 409 : 502;
+    const status = statusForError(err, fallbackStatus);
     logger.error(`[WallgardenRoutes] /recommend-channels error: ${message}`);
     res.status(status).json({ error: message, outcome: "failed" });
   }
@@ -131,7 +142,7 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /brainstorm error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(statusForError(err, 500)).json({ error: err.message });
   }
 });
 
@@ -161,7 +172,7 @@ router.post("/extract-topics", async (req: Request, res: Response) => {
     res.json({ extractions, count: extractions.length });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /extract-topics error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(statusForError(err, 500)).json({ error: err.message });
   }
 });
 
@@ -183,7 +194,7 @@ router.post("/taste-profile", async (req: Request, res: Response) => {
     res.json({ profile: result.profile, clusters: result.clusters, count: clean.length });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /taste-profile error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(statusForError(err, 500)).json({ error: err.message });
   }
 });
 
@@ -213,7 +224,7 @@ router.post("/judge-topics", async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /judge-topics error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(statusForError(err, 500)).json({ error: err.message });
   }
 });
 
@@ -286,23 +297,20 @@ router.post("/similar", async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /similar error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(statusForError(err, 500)).json({ error: err.message });
   }
 });
 
 // ── POST /wallgarden/classify-candidates ───────────────────
-// Classifies candidate videos against topic intent to filter out novelty/off-topic content.
+// Disabled: candidate classification spammed the 2-slot Jetson (~90 calls in
+// 20 min) while browsers aborted at 12 s. Route returns 200 immediately with no
+// LLM call so cached browser bundles remain compatible.
 router.post("/classify-candidates", async (req: Request, res: Response) => {
   try {
     const {
       topic,
-      intent,
-      includeFacets = [],
-      excludeFacets = [],
       candidates = [],
-      model,
-      provider,
-    } = req.body as ClassifyCandidatesInput;
+    } = (req.body || {}) as ClassifyCandidatesInput;
 
     if (!topic || typeof topic !== "string" || !topic.trim()) {
       return res.status(400).json({ error: "topic string is required" });
@@ -319,24 +327,15 @@ router.post("/classify-candidates", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "no valid candidates (each needs id + title)" });
     }
 
-    const result = await classifyCandidateVideos({
-      topic: topic.trim(),
-      intent,
-      includeFacets,
-      excludeFacets,
-      candidates: valid,
-      model,
-      provider,
-    });
-
     res.json({
-      classifications: result.classifications,
-      count: result.classifications.length,
-      failed: result.failed,
+      classifications: [],
+      count: 0,
+      failed: false,
+      disabled: true,
     });
   } catch (err: any) {
     logger.error(`[WallgardenRoutes] /classify-candidates error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(statusForError(err, 500)).json({ error: err.message });
   }
 });
 

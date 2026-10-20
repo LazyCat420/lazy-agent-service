@@ -29,7 +29,7 @@ vi.mock("../../../routes/ChatRoutes.js", () => ({
 
 const JETSON_URL = "http://10.0.0.30:8000";
 const GOLD_SPARK_URL = "http://10.0.0.141:8000";
-const JETSON_MODEL = "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit";
+const JETSON_MODEL = "nemotron35";
 const GOLD_SPARK_MODEL = "deepseek-v4-flash-0731";
 
 /** Minimum viable BrainstormContext — typed, so a field added to the
