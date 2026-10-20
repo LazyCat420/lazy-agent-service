@@ -703,6 +703,62 @@ describe("CoreLoop v2 Upgrades (H1-H10) & Reliability Fixes", () => {
       expect(dispatchedCore).toEqual({ pathUsed: "coreloop", value: "coreloop-path" });
     });
 
+    it("L1: CoreLoop path accumulates usage across model calls, emits usage_update SSE events, and returns cumulative totals", async () => {
+      const emitted: Array<{ type: string; [key: string]: unknown }> = [];
+      let providerCallCount = 0;
+      const screenerTool = {
+        name: "screener",
+        description: "screener tool",
+        parameters: { type: "object", properties: {}, required: [] },
+      };
+
+      const coreOut = await runCoreLoopForAgent({
+        project: "vllm-trading-bot",
+        options: { maxIterations: 4 },
+        messages: [{ role: "user", content: "Screen stocks" }],
+        provider: {
+          async *generateTextStream() {
+            if (providerCallCount === 0) {
+              providerCallCount += 1;
+              yield { type: "usage", usage: { inputTokens: 5, outputTokens: 7 } };
+              yield {
+                type: "toolCall",
+                id: "call_1",
+                name: "screener",
+                args: {},
+              };
+            } else {
+              yield { type: "usage", usage: { inputTokens: 11, outputTokens: 13 } };
+              yield "Final answer.";
+            }
+          },
+        },
+        resolvedModel: "local-dspark/GLM-5.3-Flash-EXL3-TF",
+        signal: defaultSignal,
+        runtimeTools: {
+          finalTools: [screenerTool],
+        },
+        runtimeToolExecutor: async () => "screened",
+        emit: (ev) => emitted.push(ev),
+      });
+
+      expect(coreOut.result.status).toBe("completed");
+      expect(coreOut.result.modelCalls).toBe(2);
+      expect(coreOut.usage).toMatchObject({
+        inputTokens: 16,
+        outputTokens: 20,
+        requests: 2,
+      });
+      const usageUpdates = emitted.filter((ev) => ev.type === "usage_update");
+      expect(usageUpdates).toHaveLength(2);
+      expect(usageUpdates[0]).toMatchObject({
+        usage: expect.objectContaining({ inputTokens: 5, outputTokens: 7, requests: 1 }),
+      });
+      expect(usageUpdates[1]).toMatchObject({
+        usage: expect.objectContaining({ inputTokens: 16, outputTokens: 20, requests: 2 }),
+      });
+    });
+
     it("H7 (Final Text): substituteToolOutputTokens replaces {{tool_output:...}} tokens in final assistant text of runCoreLoop", async () => {
       const fetchQuoteTool: CoreTool = {
         name: "fetch_quote",

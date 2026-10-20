@@ -85,6 +85,42 @@ const typeChecks: Record<string, (value: unknown) => boolean> = {
   object: (v) => typeof v === "object" && v !== null && !Array.isArray(v),
 };
 
+/**
+ * F1: Coerce string-encoded values to their schema types before validation.
+ * Models frequently send JSON-encoded strings for structured params
+ * (e.g. `"filters": "[{\"field\":\"pe\"}]"`, `"limit": "10"`). Only
+ * top-level properties are coerced, and only when the parse/convert result
+ * matches the schema type — anything else is left for validateArgs to reject.
+ */
+const coerceArgs = (
+  tool: CoreTool,
+  args: Record<string, unknown>,
+): Record<string, unknown> => {
+  const params = tool.parameters as {
+    properties?: Record<string, { type?: string }>;
+  };
+  const properties = params.properties ?? {};
+  const coerced: Record<string, unknown> = { ...args };
+  for (const [key, value] of Object.entries(args)) {
+    const expected = properties[key]?.type;
+    if (!expected) continue;
+    if (expected === "array" || expected === "object") {
+      if (typeof value !== "string") continue;
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (typeChecks[expected](parsed)) coerced[key] = parsed;
+      } catch {
+        // Not valid JSON — leave for validateArgs to reject.
+      }
+    } else if (expected === "integer" || expected === "number") {
+      if (typeof value !== "string" || value.trim() === "") continue;
+      const n = Number(value);
+      if (!Number.isNaN(n)) coerced[key] = n;
+    }
+  }
+  return coerced;
+};
+
 const validateArgs = (tool: CoreTool, args: Record<string, unknown>): string[] => {
   const problems: string[] = [];
   const params = tool.parameters as {
@@ -385,6 +421,7 @@ export const runToolBatch: RunToolBatch = async (requestedCalls, options) => {
     }
 
     if (result === undefined && tool !== undefined) {
+      args = coerceArgs(tool, args);
       const problems = validateArgs(tool, args);
       if (problems.length > 0) {
         result = {

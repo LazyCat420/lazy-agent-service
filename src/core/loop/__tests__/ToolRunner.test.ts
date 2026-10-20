@@ -389,4 +389,47 @@ describe("runToolBatch", () => {
     );
     expect(throwing[0]).toMatchObject({ isError: false, content: "original" });
   });
+
+  it("F1: string-encoded JSON and numeric-string args are coerced per schema before validation; invalid strings still rejected", async () => {
+    const executed: Record<string, unknown>[] = [];
+    const screener = makeTool("screener", async (args) => {
+      executed.push(args);
+      return "ok";
+    }, {
+      parameters: {
+        type: "object",
+        properties: {
+          filters: { type: "array" },
+          columns: { type: "array" },
+          limit: { type: "integer" },
+        },
+        required: ["filters", "columns", "limit"],
+      },
+    });
+    const tools = new Map([[screener.name, screener] as const]);
+
+    const results = await runToolBatch(
+      [
+        makeCall("screener", {
+          filters: '[{"field":"pe","op":"<","value":20}]',
+          columns: '["ticker"]',
+          limit: "10",
+        }),
+      ],
+      baseOptions({ tools }),
+    );
+    expect(results[0]).toMatchObject({ isError: false, content: "ok" });
+    expect(executed[0]).toEqual({
+      filters: [{ field: "pe", op: "<", value: 20 }],
+      columns: ["ticker"],
+      limit: 10,
+    });
+
+    const rejected = await runToolBatch(
+      [makeCall("screener", { filters: "[]", columns: "[]", limit: "abc" })],
+      baseOptions({ tools }),
+    );
+    expect(rejected[0]).toMatchObject({ isError: true, errorCode: "TOOL_BAD_ARGS" });
+    expect(rejected[0].content).toContain('"limit"');
+  });
 });

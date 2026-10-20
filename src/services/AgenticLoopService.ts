@@ -27,6 +27,9 @@ import { retrieveOffloadedContentTool } from "../platform/offload/retrieveOffloa
 import { getSharedOffloadStore } from "../platform/offload/OffloadStore.ts";
 
 import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
+import RequestLogger from "./RequestLogger.ts";
+import { getPricing, TYPES } from "../config.ts";
+import { calculateTextCost } from "../utils/CostCalculator.ts";
 import { createStandardHooks } from "./harnesses/lifecycle/HookInitializer.ts";
 import {
   shouldUseCoreLoopForAgent,
@@ -564,6 +567,7 @@ export default class AgenticLoopService {
             });
             state.finalStreamedText = coreOut.result.text;
             state.iterations = coreOut.result.modelCalls;
+            state.overallUsage = coreOut.usage;
             state.overallGenerationEnd = performance.now();
             state.streamedToolCalls = coreOut.toolCalls.map((tc) => ({
               id: tc.id,
@@ -581,6 +585,51 @@ export default class AgenticLoopService {
               coreOut.messages[coreOut.messages.length - 1]?.role === "assistant"
                 ? (coreOut.messages.slice(0, -1) as unknown as ConversationMessage[])
                 : (coreOut.messages as unknown as ConversationMessage[]);
+            // L7: restore the success `/agent` request row on the CoreLoop
+            // path — the legacy harness wrote `agent:iteration` rows per run
+            // (BaseAgenticHarness.legacyPayload shape); the Option B cutover
+            // (b47f790) lost them. Same document shape, aggregate usage.
+            const agentRunText = coreOut.result.text;
+            RequestLogger.logChatGeneration({
+              requestId: `${context.requestId ?? "unknown"}-${coreOut.result.modelCalls}`,
+              endpoint: "/agent",
+              operation: "agent:iteration",
+              project: context.project,
+              username: context.username,
+              clientIp: context.clientIp ?? null,
+              agent: context.agent ?? null,
+              harness: "coreloop",
+              provider: context.providerName,
+              model: String(context.resolvedModel),
+              conversationId: context.conversationId ?? null,
+              agentConversationId: context.agentConversationId ?? null,
+              parentAgentConversationId: resolvedParentAgentConversationId,
+              traceId: context.traceId ?? null,
+              success: true,
+              usage: coreOut.usage,
+              estimatedCost: calculateTextCost(
+                coreOut.usage,
+                getPricing(TYPES.TEXT, TYPES.TEXT)[
+                  String(context.resolvedModel)
+                ],
+              ),
+              tokensPerSec: coreOut.usage.tokensPerSec ?? null,
+              options: options as Record<string, unknown>,
+              messages: preFinalMessages,
+              text: agentRunText,
+              toolCalls: coreOut.toolCalls.map((tc) => ({
+                id: tc.id,
+                name: tc.name,
+                args: tc.args,
+                result: tc.result,
+              })),
+              outputCharacters: agentRunText.length,
+              agenticIteration: coreOut.result.modelCalls,
+            }).catch((error: unknown) =>
+              logger.error(
+                `[AgenticLoopService] Failed to log CoreLoop /agent request: ${error instanceof Error ? error.message : String(error)}`,
+              ),
+            );
             await (harness as any).finalize(preFinalMessages, hooks);
             return { messages: preFinalMessages };
           }

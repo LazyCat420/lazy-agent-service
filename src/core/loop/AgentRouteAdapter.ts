@@ -10,6 +10,7 @@ import type { ChatMessage } from "../../types/ProviderTypes.ts";
 import type { ChatMessage as AdminChatMessage } from "../../types/admin.ts";
 import type { StreamChunk } from "../../types/provider.ts";
 import type { ConversationMessage } from "../../services/harnesses/types.ts";
+import type { TokenUsage } from "../../types/admin.ts";
 import { normalizeRoleAlternation } from "../../services/RoleAlternation.ts";
 import { expandMessagesForFunctionCall } from "../../utils/FunctionCallingUtilities.ts";
 import {
@@ -25,6 +26,16 @@ import {
   MINIMUM_CLAMPED_OUTPUT_TOKENS,
 } from "../../constants/TokenBudgetDefaults.ts";
 import ToolOrchestratorService from "../../services/ToolOrchestratorService.ts";
+import { getPricing, TYPES } from "../../config.ts";
+import {
+  mergeUsage,
+  createUsageAccumulator,
+  calculateTextCost,
+  withTotalInputTokens,
+} from "../../utils/CostCalculator.ts";
+import {
+  SERVER_SENT_EVENT_TYPES,
+} from "@rodrigo-barraza/utilities-library/taxonomy";
 import { runCoreLoop } from "./CoreLoop.ts";
 import {
   compactMessages,
@@ -412,6 +423,8 @@ export interface AgentRouteCoreLoopOutput {
     args: Record<string, unknown>;
     result: string;
   }>;
+  /** Cumulative token usage across all model calls (L1). */
+  usage: Required<Omit<TokenUsage, "totalTokens">> & { requests: number };
 }
 
 export async function runCoreLoopForAgent(
@@ -468,9 +481,27 @@ export async function runCoreLoopForAgent(
     result: string;
   }> = [];
 
+  // Cumulative token usage across all model calls in this run (L1).
+  const usageAccumulator = createUsageAccumulator();
+  let modelCalls = 0;
+
   const forwardAgentEvent = (event: CoreLoopEvent): void => {
-    if (event.type === "text.delta") {
+    if (event.type === "model.start") {
+      modelCalls += 1;
+    } else if (event.type === "text.delta") {
       context.emit({ type: "chunk", content: event.text });
+    } else if (event.type === "usage") {
+      mergeUsage(usageAccumulator, event.usage);
+      const usage = { ...usageAccumulator, requests: modelCalls };
+      const pricing = getPricing(TYPES.TEXT, TYPES.TEXT)[
+        context.resolvedModel
+      ];
+      const estimatedCost = calculateTextCost(usage, pricing);
+      context.emit({
+        type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
+        usage: withTotalInputTokens(usage),
+        estimatedCost,
+      });
     } else if (event.type === "thinking.delta") {
       context.emit({ type: "thinking", content: event.text });
     } else if (event.type === "tool.start") {
@@ -552,6 +583,7 @@ export async function runCoreLoopForAgent(
           result,
           learningSkipped,
           toolCalls: executedToolCalls,
+          usage: { ...usageAccumulator, requests: modelCalls },
         };
       }
       if (result.status === "cancelled") {
