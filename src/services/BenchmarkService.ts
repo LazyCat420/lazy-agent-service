@@ -89,7 +89,7 @@ interface BenchmarkEvent {
   [key: string]: unknown;
 }
 
-interface ModelResult {
+export interface ModelResult {
   provider: string;
   model: string;
   label: string;
