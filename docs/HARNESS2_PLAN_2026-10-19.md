@@ -56,3 +56,23 @@ this substrate — upstream also makes the surface substrate-specific); benchmar
 - A4 smoke: `POST /harness2/run` against a live local model, k=1, produces 4 rollouts, a
   selected output, and (when the reflector writes one) a library entry on disk.
 - `npx tsc --noEmit` clean for the new files; vitest green for `src/services/harness2`.
+
+## Verification (2026-10-19, on main)
+
+- `npx tsc --noEmit`: no errors in `src/services/harness2`, `Harness2Routes.ts`, `BenchmarkService.ts`.
+- `npx vitest run src/services/harness2`: 15/15 pass (A1–A3). Mutation check: passing `libraryText: ""`
+  turns the library dependency-chain test red; restored.
+- Live smoke (throwaway script, Jetson `nemotron35` as solver + improver, k=1 parallel, two
+  bookkeeping tasks, temp library deleted afterwards): each task scheduled base1/inv1/dom1/agg1 (4
+  rollouts, 3 stages); one DOM proposal with a bad skill frontmatter was retried with the rejection,
+  then fell back; library went 0 → 1 → 2 entries; task-2 proposer prompts carried the library
+  (inv1 prompt 5,026 → 7,770 chars).
+- NOT verified: `makeExecutor`/`makeProposer` (the `runSingleModel` / `generateText` wiring) and the
+  `POST /harness2/run` route against a running service; not deployed.
+
+## Known quality limit seen in the smoke
+
+Nemotron as improver confabulated: the selector called a wrong total "the exact correct sum", and
+the reflector wrote "high confidence" lessons from differences that were sampling noise (agg1 was
+KEEP_BASE, identical to base). The method is faithful; its judgement is only as good as the
+improver model. Use a stronger `improver` (GLM 5.3 / Claude) than the solver.
