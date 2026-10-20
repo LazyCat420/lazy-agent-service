@@ -119,9 +119,12 @@ export function buildMission(
           .map((p) => {
             const d = diffTrees(opts.current, p.tree);
             const note = opts.decisions?.[p.label];
+            const same = !d.added.length && !d.removed.length && !d.modified.length;
             return [
               `## candidate ${p.label}`,
-              `changed vs current: added [${d.added.join(", ")}] removed [${d.removed.join(", ")}] modified [${d.modified.join(", ")}]`,
+              same
+                ? "IDENTICAL to the current harness: any difference between its rollout and the base rollouts is sampling noise, not an effect of an edit."
+                : `changed vs current: added [${d.added.join(", ")}] removed [${d.removed.join(", ")}] modified [${d.modified.join(", ")}]`,
               note ? `proposer notes:\n${note}` : "",
               renderTree(p.tree),
               rolloutBlock(p.rollout, p.label),

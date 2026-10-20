@@ -95,6 +95,9 @@ describe("task-level recursion", () => {
     expect(aggPrompt).toContain("## candidate inv1");
     expect(aggPrompt).toContain("## candidate dom1");
     expect(aggPrompt).toContain("total: 42 (checked)");
+    // inv1 kept base: its rollout differences must be labelled noise; dom1 edited, so it is not.
+    expect(aggPrompt).toMatch(/## candidate inv1\n\nIDENTICAL to the current harness/);
+    expect(aggPrompt).toMatch(/## candidate dom1\n\nchanged vs current: added \[skills\/totals\/SKILL\.md\]/);
   });
 });
 

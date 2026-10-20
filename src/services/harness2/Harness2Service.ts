@@ -23,6 +23,12 @@ export interface ModelRef {
   toolsEnabled?: boolean;
 }
 
+/** GLM on the DGX Spark (`vllm-2`); override with HARNESS2_IMPROVER_PROVIDER / _MODEL. */
+export const DEFAULT_IMPROVER: ModelRef = {
+  provider: process.env.HARNESS2_IMPROVER_PROVIDER || "vllm-2",
+  model: process.env.HARNESS2_IMPROVER_MODEL || "GLM-5.3-Flash-EXL3-TF",
+};
+
 export interface Harness2Request {
   taskId: string;
   /** The user request the solver runs on. */
@@ -33,7 +39,10 @@ export interface Harness2Request {
   k?: number;
   mode?: "parallel" | "sequential";
   solver: ModelRef;
-  /** Proposer/composer/selector/reflector model; defaults to the solver. */
+  /**
+   * Proposer/composer/selector/reflector model; defaults to DEFAULT_IMPROVER, not the
+   * solver: a weak improver confabulates selections and lessons (smoke, 2026-10-19).
+   */
   improver?: ModelRef;
   width?: number;
   seed?: number;
@@ -169,7 +178,7 @@ export async function runHarness2(
   const k = req.k ?? 1;
   const bp: BenchPrompts = { ...req.bench, work: req.bench?.work || req.task };
   const execute = deps.execute ?? makeExecutor(req);
-  const propose = deps.propose ?? makeProposer(req.improver ?? req.solver);
+  const propose = deps.propose ?? makeProposer(req.improver ?? DEFAULT_IMPROVER);
   const library = new Library(req.domain, req.libraryRoot);
   const libraryEntriesBefore = library.entries().length;
   const recDeps = { bp, execute, propose, baseTree: req.baseTree, libraryText: library.contextText(), width: req.width ?? 2 };
