@@ -106,7 +106,7 @@ describe("ReActHarness honours context.finalizeRequested", () => {
         if (calls.length === 2) {
           // Real budget proxy throws on the first next() of the stream.
           return (async function* () {
-            throw Object.assign(new Error("budget"), { code: "TOKEN_BUDGET_FINALIZE" });
+            yield await Promise.reject(Object.assign(new Error("budget"), { code: "TOKEN_BUDGET_FINALIZE" }));
           })();
         }
         return (async function* () {
