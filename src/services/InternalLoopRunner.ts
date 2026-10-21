@@ -118,7 +118,7 @@ export class InternalLoopRunner {
       }
       if (processed.status === "admitted_local") {
         onEvent?.({ type: processed.event.type, tool_name: call.name });
-        const observation = await LocalToolContinuation.wait(runId, processed.event, req.signal, () => onEvent?.(processed.event as unknown as Record<string, unknown>));
+        const observation = await LocalToolContinuation.wait(runId, processed.event, req.signal ?? new AbortController().signal, () => onEvent?.(processed.event as unknown as Record<string, unknown>));
         onEvent?.({ type: "tool.completed", tool_name: call.name });
         return observation;
       }
