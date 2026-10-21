@@ -62,12 +62,10 @@ router.post(
       typeof req.project === "string" ? req.project : "direct";
     const username: string =
       typeof req.username === "string" ? req.username : "system";
-    let {
+    const {
       name,
       prompt,
       agent,
-      provider,
-      model,
       scheduleType,
       scheduleTime,
       scheduleDay,
@@ -76,6 +74,7 @@ router.post(
       recurrenceRule,
       toolConfig,
     } = req.body;
+    let { provider, model } = req.body;
 
     provider = provider || PROVIDERS.ANTHROPIC;
     model = model || MODELS.SONNET_45.name;
