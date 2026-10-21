@@ -78,7 +78,7 @@ const ALWAYS_AVAILABLE_COGNITIVE_TOOLS: Record<string, true> = {
 };
 
 const PRISM_LOCAL_TOOL_NAMES = {
-  has(name: string): boolean {
+  has(_name: string): boolean {
     return false;
   },
 };
