@@ -13,7 +13,7 @@
  * Out of scope by design (P2 or later): slice metrics beyond per-case,
  * multiplicity control across gates, promotion state machine.
  */
-import BenchmarkService, { runSingleModel } from "./BenchmarkService.ts";
+import { runSingleModel } from "./BenchmarkService.ts";
 import { getModelByName } from "../config.ts";
 
 /** Mirrors the private BenchmarkDoc in BenchmarkService — same shape the loop accepts. */
