@@ -141,7 +141,7 @@ export class DynamicModelResolver {
   public static isModelAllowedForProfile(
     modelName: string,
     allowedProviders: string[],
-    role: string,
+    _role: string,
   ): { allowed: boolean; hostInstance?: string; reason?: string } {
     const normalizedModelName = normalizeLocalModelId(modelName);
     const statuses = this.getCachedLiveHosts();
