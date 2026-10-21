@@ -532,7 +532,7 @@ const RequestLogger = {
     const cacheCreationInputTokens = apiUsage?.cacheCreationInputTokens || 0;
 
     const pricing = getPricing(TYPES.TEXT, TYPES.TEXT)[model as string];
-    let estimatedCost = null;
+    let estimatedCost: number | null = null;
     if (pricing) {
       estimatedCost = calculateTextCost(
         (apiUsage || { inputTokens, outputTokens }) as Parameters<
