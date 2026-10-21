@@ -398,9 +398,8 @@ function handleWebsocketLive(
           ).default;
           const { convertToolsToGoogle } =
             await import("../providers/google.js");
-          const MongoWrapper = (await import("../wrappers/MongoWrapper.js"))
-            .default;
-          const { MONGO_DB_NAME } = await import("../../config.js");
+          await import("../wrappers/MongoWrapper.js");
+          await import("../../config.js");
 
           const SettingsService = (
             await import("../services/SettingsService.js")
