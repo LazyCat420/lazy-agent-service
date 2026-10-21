@@ -3,7 +3,7 @@ import { DEFAULT_WORKFLOW_TITLE } from "@rodrigo-barraza/utilities-library/taxon
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import { COLLECTIONS, COST_SUM_EXPR } from "../../constants.ts";
+import { COLLECTIONS } from "../../constants.ts";
 import logger from "../../utils/logger.ts";
 import { getErrorMessage } from "../../utils/ErrorHelpers.ts";
 import {
