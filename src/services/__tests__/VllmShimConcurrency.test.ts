@@ -12,7 +12,7 @@
  * promise resolves — so a limiter that releases on `await fetch()` caps
  * nothing that matters and still passes every naive test.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   UpstreamSemaphore,
   QueueTimeoutError,
