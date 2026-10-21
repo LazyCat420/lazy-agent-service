@@ -328,10 +328,10 @@ export default class CompactionService {
       let targetProviderId = compactionProvider;
 
       const baseType = getInstanceType(compactionProvider) || compactionProvider;
-      let siblings = getInstancesByType(baseType);
-      let modelRes = await resolveModelForInstances(resolvedModel, siblings);
-      let usable = modelRes.usable;
-      let modelOverrides = modelRes.modelOverrides;
+      const siblings = getInstancesByType(baseType);
+      const modelRes = await resolveModelForInstances(resolvedModel, siblings);
+      const usable = modelRes.usable;
+      const modelOverrides = modelRes.modelOverrides;
 
       if (usable.length === 0) {
         throw new Error(
