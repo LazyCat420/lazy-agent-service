@@ -557,7 +557,7 @@ export default class AgenticLoopService {
               signal: context.signal || new AbortController().signal,
               runtimeTools: resolvedTools as any,
               runtimeToolExecutor: (context as any).runtimeToolExecutor,
-              finalizeRequested: context.finalizeRequested,
+              finalizeRequested: context.finalizeRequested as { reason?: string } | null | undefined,
               finalizeSignal: (context as any).finalizeSignal,
               finalPassTimeoutMs: (context as any).finalPassTimeoutMs,
               timeoutSignalFor: (context as any).timeoutSignalFor,
