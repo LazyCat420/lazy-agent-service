@@ -1,4 +1,3 @@
-import { AGENT_IDS } from "@rodrigo-barraza/utilities-library/taxonomy";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import http from "http";
@@ -424,7 +423,7 @@ setupWebSocket(wss);
       );
 
       if (failedIndexes.length > 0) {
-        for (const [indexPosition, failedResult] of failedIndexes.entries()) {
+        for (const failedResult of failedIndexes) {
           const failedDefinition = indexDefinitions[
             indexResults.indexOf(failedResult)
           ];
