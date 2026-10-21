@@ -30,7 +30,7 @@ import { DynamicModelResolver } from "./DynamicModelResolver.ts";
 import AgentHooks from "./AgentHooks.ts";
 import { decideProfileToolCall, type ProfileToolCall } from "./ProfileAuthorization.ts";
 import { deniedToolResult, type ToolAuthorization } from "./ToolAuthorization.ts";
-import { EMPTY_TOOL_OUTPUT_MESSAGE, normalizeEmptyToolContent } from "./ToolResult.ts";
+import { normalizeEmptyToolContent } from "./ToolResult.ts";
 import { captureWriteSyntaxGuard, enforceWriteSyntaxGuard } from "./WriteSyntaxGuard.ts";
 import { applyObservation, createSessionState, sessionStateHash } from "./SessionState.ts";
 import type { ToolCall } from "./harnesses/types.ts";
@@ -928,7 +928,7 @@ export class RunExecutionEngine {
     runId: string,
     toolCall: {
       tool_call_id?: string;
-      id?: string;
+      id?: string | null;
       tool_name?: string;
       name?: string;
       arguments?: Record<string, unknown>;
