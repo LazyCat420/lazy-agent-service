@@ -125,7 +125,7 @@ export const SLOW_TOOL_TIMEOUT_MS = Number(process.env.SLOW_TOOL_TIMEOUT_MS || "
 export const MCP_TOOL_DEADLINE_MS = Number(process.env.MCP_TOOL_DEADLINE_MS || "55000");
 export const SLOW_TOOLS = new Set(
   (process.env.SLOW_TOOLS ||
-    "lazy_web_search,scrape_url,read_url,get_sec_filings,run_tool_chain,get_market_map_data,get_ticker_summary,get_finnhub_news")
+    "lazy_web_search,scrape_url,read_url,run_tool_chain,get_market_map_data,get_ticker_summary,get_finnhub_news")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)

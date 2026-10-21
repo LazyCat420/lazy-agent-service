@@ -45,8 +45,8 @@ const cache = new Map<string, CacheEntry>();
 // account state and mutable collaboration state always execute afresh.
 export const REUSABLE_READ_TOOLS = new Set([
   "get_market_data", "get_polygon_price_history", "get_finviz_fundamentals",
-  "get_sec_filings", "get_earnings_data", "get_finnhub_news", "get_options_flow",
-  "get_insider_trades", "get_institutional_holdings", "get_congress_trades",
+  "get_earnings_data", "get_finnhub_news",
+  "get_institutional_holdings",
   "get_technical_indicators", "get_upcoming_events", "lazy_web_search", "scrape_url",
 ]);
 
