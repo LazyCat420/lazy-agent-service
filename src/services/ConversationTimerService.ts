@@ -11,7 +11,7 @@ import { matchCron } from "./ScheduledTaskService.ts";
 import { InternalLoopRunner } from "./InternalLoopRunner.ts";
 import { registerCleanup } from "../utils/CleanupRegistry.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
-import type { ConversationMessage } from "./harnesses/types.ts";
+import type { ConversationMessage, ResolvedTools } from "./harnesses/types.ts";
 
 import type { SseEvent } from "../types/SseTypes.ts";
 
@@ -480,7 +480,8 @@ const ConversationTimerService = {
         messages: contextMessages,
         originalMessages: contextMessages,
         ...(admission ? {
-          runtimeTools: admission.runtimeTools,
+          // Admission builds JSON-schema tool entries (parameters typed unknown).
+          runtimeTools: admission.runtimeTools as ResolvedTools,
           runtimeToolExecutor: admission.runtimeToolExecutor,
           runId: admission.runId,
         } : {}),
