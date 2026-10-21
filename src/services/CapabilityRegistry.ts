@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-import logger from "../utils/logger.ts";
 import type { ToolEffect, ToolExecution } from "../types/run.ts";
 
 export interface CapabilityParameterSchema {
