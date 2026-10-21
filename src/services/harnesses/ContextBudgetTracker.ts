@@ -8,6 +8,7 @@ import {
 import { SERVER_SENT_EVENT_TYPES } from "@rodrigo-barraza/utilities-library/taxonomy";
 import logger from "../../utils/logger.ts";
 import type { TokenUsage } from "../../types/admin.ts";
+import type { EmitFunction } from "./types.ts";
 
 /**
  * Serializable snapshot of the context budget at a point in time.
@@ -28,8 +29,6 @@ export interface ContextBudgetSnapshot {
   lastReportedInputTokens?: number;
   calibrationRatio?: number;
 }
-
-type EmitFunction = (event: Record<string, unknown>) => void;
 
 /**
  * ContextBudgetTracker — tracks and emits context window budget data

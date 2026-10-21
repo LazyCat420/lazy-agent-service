@@ -24,7 +24,6 @@ import { STREAM_IDLE_TIMEOUT_MILLISECONDS } from "../../constants/StreamResilien
 import {
   DEFAULT_MAX_INPUT_TOKENS,
   DEFAULT_MAX_OUTPUT_TOKENS,
-  OUTPUT_TOKEN_CLAMP_SAFETY_MARGIN,
   OUTPUT_TOKEN_CLAMP_FIXED_HEADROOM_TOKENS,
   MINIMUM_CLAMPED_OUTPUT_TOKENS,
   MINIMUM_VIABLE_OUTPUT_TOKENS,
@@ -38,7 +37,6 @@ import { COLLECTIONS, FILE_CATEGORIES } from "../../constants.ts";
 import {
   finalizeTextGeneration,
   type FinalizerContext,
-  computeNewTurnMessages,
 } from "./lifecycle/Finalizer.ts";
 import logger from "../../utils/logger.ts";
 import { errorMessage } from "@rodrigo-barraza/utilities-library";
@@ -559,7 +557,7 @@ export default class BaseAgenticHarness {
     const toolSchemas = this.tools.finalTools;
 
     if (tracker) {
-      const { clampedMaxTokens, adjustedInput, availableForOutput } =
+      const { clampedMaxTokens, adjustedInput } =
         tracker.computeAndEmitEstimate(
           estimatedMessageTokens,
           systemPromptText,
@@ -1709,7 +1707,7 @@ export default class BaseAgenticHarness {
   ): Promise<ChunkAction> {
     const { emit, project, username } = this.context;
     const state = this.state;
-    let minioRef = null;
+    let minioRef: string | null = null;
     if (chunk.data) {
       try {
         const mimeType = chunk.mimeType || "image/png";
