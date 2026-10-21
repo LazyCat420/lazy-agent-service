@@ -182,7 +182,7 @@ async function extractFactsFromConversation(
   ];
   let result: { text: string; usage?: Record<string, unknown> } | undefined;
   let success = true;
-  let errorMessage = null;
+  let errorMessage: string | null = null;
   try {
     result = await provider.generateText(aiMessages, extractionModel, {
       maxTokens: 1000,
