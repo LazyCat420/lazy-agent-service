@@ -8,7 +8,7 @@ import { getModelByName } from "../config.ts";
 import { InternalLoopRunner } from "./InternalLoopRunner.ts";
 import logger from "../utils/logger.ts";
 import { SseEvent } from "../types/SseTypes.ts";
-import { ConversationMessage } from "./harnesses/types.ts";
+import { ConversationMessage, type ResolvedTools } from "./harnesses/types.ts";
 import {
   RecurrenceRule,
   matchRecurrenceRule,
@@ -315,7 +315,7 @@ const ScheduledTaskService = {
     };
 
     // 1. Resolve provider and model dynamically for vLLM providers to prevent 404s
-    let effectiveProvider = task.provider;
+    const effectiveProvider = task.provider;
     let effectiveModel = task.model;
 
     if (isVllmProvider(task.provider)) {
@@ -429,7 +429,9 @@ const ScheduledTaskService = {
         messages: [userTriggerMessage as ConversationMessage],
         originalMessages: [userTriggerMessage as ConversationMessage],
         ...(admission ? {
-          runtimeTools: admission.runtimeTools,
+          // InternalAdmission types tool parameters as unknown; they are the
+          // capability JSON schemas the loop expects as ToolSchema.
+          runtimeTools: admission.runtimeTools as ResolvedTools,
           runtimeToolExecutor: admission.runtimeToolExecutor,
           runId: admission.runId,
         } : {}),
