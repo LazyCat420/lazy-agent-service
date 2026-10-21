@@ -184,10 +184,10 @@ export default class MemoryExtractor {
 
       const baseType = getInstanceType(extractionProvider);
       if (baseType) {
-        let siblings = getInstancesByType(baseType);
-        let modelRes = await resolveModelForInstances(resolvedModel, siblings);
-        let usable = modelRes.usable;
-        let modelOverrides = modelRes.modelOverrides;
+        const siblings = getInstancesByType(baseType);
+        const modelRes = await resolveModelForInstances(resolvedModel, siblings);
+        const usable = modelRes.usable;
+        const modelOverrides = modelRes.modelOverrides;
 
         if (usable.length > 0) {
           targetProviderId = usable[0].id;
