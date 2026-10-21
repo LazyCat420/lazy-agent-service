@@ -1,6 +1,5 @@
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import express, { Request, Response, NextFunction } from "express";
-import AgenticLoopService from "../services/AgenticLoopService.ts";
 import AgentSessionRegistry from "../services/AgentSessionRegistry.ts";
 import LiveFrameService from "../services/LiveFrameService.ts";
 import { handleAgent } from "./ChatRoutes.ts";
