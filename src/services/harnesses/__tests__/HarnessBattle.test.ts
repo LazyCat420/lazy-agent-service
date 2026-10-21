@@ -36,7 +36,6 @@ vi.mock("../../../platform/trace/TraceExporter.ts", () => {
   return { TraceExporter };
 });
 
-import PromptedToolCallingHarness from "../PromptedToolCallingHarness.ts";
 import ReActHarness from "../ReActHarness.ts";
 import HarnessRegistry from "../HarnessRegistry.ts";
 import AgenticLoopState from "../../AgenticLoopState.ts";
