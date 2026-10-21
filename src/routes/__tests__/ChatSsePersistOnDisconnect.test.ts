@@ -133,7 +133,7 @@ async function readUntil(stream: ReadableStream<Uint8Array>, marker: string): Pr
 
 describe("POST /chat — server-side persistence on client disconnect", () => {
   let fakeProvider: { generateTextStream: AnyMock };
-  let servers: Server[] = [];
+  const servers: Server[] = [];
 
   beforeEach(() => {
     vi.clearAllMocks();
