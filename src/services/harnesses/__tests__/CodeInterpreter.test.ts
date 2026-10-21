@@ -382,7 +382,7 @@ describe("PromptedToolCallingHarness code_interpreter escape hatch", () => {
       calls,
     );
     const { context, executed } = makeContext(provider, TOOLS, { profileAdmitted: false });
-    const { messages } = await runHarness(context);
+    await runHarness(context);
 
     expect(executed).toEqual([]);
     const content = String(calls[1].messages.at(-1)?.content ?? "");
@@ -400,7 +400,7 @@ describe("PromptedToolCallingHarness code_interpreter escape hatch", () => {
       calls,
     );
     const { context, executed } = makeContext(provider, TOOLS, { profileAdmitted: false });
-    const { messages } = await runHarness(context);
+    await runHarness(context);
 
     expect(executed).toEqual([]);
     const content = String(calls[1].messages.at(-1)?.content ?? "");
@@ -453,7 +453,7 @@ describe("PromptedToolCallingHarness code_interpreter escape hatch", () => {
       calls,
     );
     const { context, executed } = makeContext(provider, TOOLS_WITH_CODE_INTERPRETER);
-    const { messages } = await runHarness(context);
+    await runHarness(context);
 
     expect(executed).toEqual([
       {
