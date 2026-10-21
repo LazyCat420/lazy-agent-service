@@ -27,8 +27,7 @@
   ],
   "owner_app": "trading",
   "agents": [
-   "user_chat",
-   "v3_worker_insider"
+   "user_chat"
   ]
  },
  {
@@ -59,9 +58,7 @@
   ],
   "owner_app": "trading",
   "agents": [
-   "tournament_pitch",
-   "user_chat",
-   "v3_worker_fundamental"
+   "user_chat"
   ]
  },
  {
@@ -93,13 +90,11 @@
   ],
   "owner_app": "trading",
   "agents": [
-   "tournament_pitch",
    "user_chat",
    "v3_fundamental_analyst",
    "v3_junior_analyst",
    "v3_portfolio_manager",
-   "v3_regime_engine",
-   "v3_worker_news"
+   "v3_regime_engine"
   ]
  },
  {
@@ -130,9 +125,7 @@
   ],
   "owner_app": "trading",
   "agents": [
-   "tournament_pitch",
-   "user_chat",
-   "v3_worker_fundamental"
+   "user_chat"
   ]
  },
  {
@@ -163,8 +156,7 @@
   ],
   "owner_app": "trading",
   "agents": [
-   "user_chat",
-   "v3_worker_insider"
+   "user_chat"
   ]
  },
  {
@@ -196,15 +188,12 @@
   ],
   "owner_app": "trading",
   "agents": [
-   "tournament_pitch",
    "user_chat",
    "v3_fundamental_analyst",
    "v3_junior_analyst",
    "v3_portfolio_manager",
    "v3_quant_analyst",
-   "v3_regime_engine",
-   "v3_worker_fundamental",
-   "v3_worker_quant"
+   "v3_regime_engine"
   ]
  },
  {
@@ -235,10 +224,8 @@
   ],
   "owner_app": "trading",
   "agents": [
-   "tournament_pitch",
    "user_chat",
-   "v3_quant_analyst",
-   "v3_worker_quant"
+   "v3_quant_analyst"
   ]
  },
  {
@@ -269,10 +256,8 @@
   ],
   "owner_app": "trading",
   "agents": [
-   "tournament_pitch",
    "user_chat",
-   "v3_quant_analyst",
-   "v3_worker_quant"
+   "v3_quant_analyst"
   ]
  },
  {
@@ -353,7 +338,6 @@
   "owner_app": "trading",
   "agents": [
    "user_chat",
-   "v3_worker_insider",
    "v3_junior_analyst"
   ]
  },
@@ -402,7 +386,6 @@
   "owner_app": "trading",
   "agents": [
    "user_chat",
-   "v3_worker_insider",
    "v3_junior_analyst"
   ]
  },
@@ -440,7 +423,6 @@
   "owner_app": "trading",
   "agents": [
    "user_chat",
-   "v3_worker_insider",
    "v3_junior_analyst"
   ]
  },
@@ -473,11 +455,9 @@
   ],
   "owner_app": "trading",
   "agents": [
-   "tournament_pitch",
    "user_chat",
    "v3_quant_analyst",
-   "v3_regime_engine",
-   "v3_worker_quant"
+   "v3_regime_engine"
   ]
  },
  {

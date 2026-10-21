@@ -41,11 +41,9 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "user_chat",
       "v3_fundamental_analyst",
-      "v3_junior_analyst",
-      "v3_worker_news"
+      "v3_junior_analyst"
     ]
   },
   {

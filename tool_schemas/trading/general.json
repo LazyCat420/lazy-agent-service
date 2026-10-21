@@ -1,7 +1,7 @@
 [
   {
     "name": "calculate_hrp_allocation",
-    "description": "Compute Hierarchical Risk Parity target weights over the current holdings (optionally plus a BUY candidate) using a Ledoit-Wolf shrunk covariance \u2014 covariance-aware position sizing. Optional views (simplified Black-Litterman tilt) scale weights by direction and confidence. Returns target weights, dollar allocations, diversification ratio, current-vs-target drift, and >5% drift breaches. Use as the sizing baseline instead of flat cash-percent sizing.",
+    "description": "Compute Hierarchical Risk Parity target weights over the current holdings (optionally plus a BUY candidate) using a Ledoit-Wolf shrunk covariance — covariance-aware position sizing. Optional views (simplified Black-Litterman tilt) scale weights by direction and confidence. Returns target weights, dollar allocations, diversification ratio, current-vs-target drift, and >5% drift breaches. Use as the sizing baseline instead of flat cash-percent sizing.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -11,7 +11,7 @@
         },
         "candidate_ticker": {
           "type": "string",
-          "description": "Ticker being considered for a new BUY \u2014 unioned into the universe."
+          "description": "Ticker being considered for a new BUY — unioned into the universe."
         },
         "views": {
           "type": "string",
@@ -66,7 +66,6 @@
     "labels": [],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "user_chat",
       "v3_quant_analyst"
     ]
@@ -110,7 +109,6 @@
     "labels": [],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "user_chat",
       "v3_quant_analyst"
     ]
@@ -150,14 +148,13 @@
     "labels": [],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "user_chat",
       "v3_quant_analyst"
     ]
   },
   {
     "name": "forecast_volatility_garch",
-    "description": "Fit GARCH(1,1) on the ticker's daily returns and forecast NEXT-DAY volatility \u2014 a forward-looking volatility estimate, unlike ATR which only describes the past. Returns predicted vs realized (20d) annualized vol, the prediction premium, and vol_signal: EXPANSION (widen stops, shrink size), CONTRACTION, or NEUTRAL.",
+    "description": "Fit GARCH(1,1) on the ticker's daily returns and forecast NEXT-DAY volatility — a forward-looking volatility estimate, unlike ATR which only describes the past. Returns predicted vs realized (20d) annualized vol, the prediction premium, and vol_signal: EXPANSION (widen stops, shrink size), CONTRACTION, or NEUTRAL.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -204,12 +201,9 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "user_chat",
       "v3_fundamental_analyst",
-      "v3_junior_analyst",
-      "v3_worker_fundamental",
-      "v3_worker_insider"
+      "v3_junior_analyst"
     ]
   },
   {
@@ -330,13 +324,11 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "user_chat",
       "v3_fundamental_analyst",
       "v3_junior_analyst",
       "v3_portfolio_manager",
-      "v3_regime_engine",
-      "v3_worker_news"
+      "v3_regime_engine"
     ]
   },
   {
@@ -376,7 +368,6 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "v3_quant_analyst"
     ]
   },
@@ -420,7 +411,6 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "v3_quant_analyst"
     ]
   },
@@ -466,7 +456,6 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "v3_quant_analyst"
     ]
   },
@@ -500,7 +489,6 @@
     ],
     "owner_app": "trading",
     "agents": [
-      "tournament_pitch",
       "v3_quant_analyst"
     ]
   },
@@ -557,7 +545,7 @@
         },
         "section": {
           "type": "string",
-          "description": "The exact section name to read, e.g. 'bull_argument' or 'quant_report' (NOT 'bull'/'bear' \u2014 those do not exist). Omit for the full whiteboard summary."
+          "description": "The exact section name to read, e.g. 'bull_argument' or 'quant_report' (NOT 'bull'/'bear' — those do not exist). Omit for the full whiteboard summary."
         }
       },
       "required": [
