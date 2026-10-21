@@ -1,9 +1,5 @@
 import logger from "../../../utils/logger.ts";
 import PromptLocaleService from "../../PromptLocaleService.ts";
-import {
-  SERVER_SENT_EVENT_TYPES,
-  STATUS_MESSAGES,
-} from "@rodrigo-barraza/utilities-library/taxonomy";
 import { Span } from "../../../platform/trace/Span.ts";
 import { TraceExporter } from "../../../platform/trace/TraceExporter.ts";
 import { TraceContext } from "../../../platform/trace/TraceContext.ts";
@@ -14,7 +10,6 @@ import type {
   ToolCall,
   ToolResult,
   ConversationMessage,
-  EmitFunction,
 } from "../types.ts";
 
 /**
