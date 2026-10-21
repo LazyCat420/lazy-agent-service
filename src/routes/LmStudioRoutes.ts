@@ -186,7 +186,7 @@ router.post(
       send({ type: "progress", progress: 0 });
       // Fire load in background, poll for synthetic progress
       let loadDone = false;
-      let loadError = null;
+      let loadError: Record<string, unknown> | null = null;
       const loadPromise = provider
         .loadModel(model, loadOptions)
         .then(() => {
