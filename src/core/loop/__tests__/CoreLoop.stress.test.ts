@@ -501,6 +501,7 @@ describe("finalize signal", () => {
           else request.signal.addEventListener("abort", () => resolve(), { once: true });
         });
         request.signal.throwIfAborted();
+        yield* [];
       })();
     }) as CoreModel & { calls: CoreModelRequest[] };
     model.calls = calls;
@@ -649,6 +650,7 @@ describe("finalize signal", () => {
   it("S24: final pass fails after a cut answer", async () => {
     const finalizeController = new AbortController();
     const model = cutAnswerModel(finalizeController, "Part one. ", function* () {
+      yield* [];
       throw new Error("final pass unavailable");
     });
     const { result } = await collect(optionsWith({ model, finalizeSignal: finalizeController.signal }));
@@ -663,6 +665,7 @@ describe("finalize signal", () => {
     const model: CoreModel = (request) => {
       if (request.finalPass) {
         return (async function* () {
+          yield* [];
           throw budgetError;
         })();
       }
@@ -693,6 +696,7 @@ describe("finalize signal", () => {
           const { promise, reject } = Promise.withResolvers<never>();
           request.signal.addEventListener("abort", () => reject(new Error("final pass aborted")));
           await promise;
+          yield* [];
         })();
       }
       return scripted(request);
