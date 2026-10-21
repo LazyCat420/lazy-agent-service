@@ -12,7 +12,8 @@ import {
 import { MINIMUM_CLAMPED_OUTPUT_TOKENS, OUTPUT_TOKEN_CLAMP_FIXED_HEADROOM_TOKENS } from "../../constants/TokenBudgetDefaults.ts";
 
 async function* failingStream(error: unknown): AsyncGenerator<string> {
-  throw error;
+  // Rejects on the first next() before any chunk is produced.
+  yield await Promise.reject<string>(error);
 }
 
 async function* singleChunkStream(...chunks: string[]): AsyncGenerator<string> {
