@@ -26,94 +26,6 @@
     }
   },
   {
-    "name": "calculate_position_size",
-    "description": "Calculate the number of shares to buy based on risk management rules. Uses the fixed-risk method: risk_amount = cash * risk_percent, shares = risk_amount / (entry_price - stop_loss_price).",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "cash_available": {
-          "type": "number",
-          "description": "Total cash available for trading (e.g., 100000)"
-        },
-        "risk_percent": {
-          "type": "number",
-          "description": "Max percentage of cash to risk on this trade (e.g., 0.02 for 2%)"
-        },
-        "entry_price": {
-          "type": "number",
-          "description": "Planned entry price per share (e.g., 150.50)"
-        },
-        "stop_loss_price": {
-          "type": "number",
-          "description": "Planned stop-loss price per share (e.g., 142.00)"
-        }
-      },
-      "required": [
-        "cash_available",
-        "risk_percent",
-        "entry_price",
-        "stop_loss_price"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [],
-    "owner_app": "trading",
-    "agents": [
-      "user_chat",
-      "v3_quant_analyst"
-    ]
-  },
-  {
-    "name": "calculate_risk_reward",
-    "description": "Calculate the risk-to-reward ratio for a trade setup. A ratio >= 2.0 is generally considered favorable.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "entry_price": {
-          "type": "number",
-          "description": "Planned entry price per share"
-        },
-        "target_price": {
-          "type": "number",
-          "description": "Price target for profit taking"
-        },
-        "stop_loss_price": {
-          "type": "number",
-          "description": "Stop-loss price for the trade (alias: stop_loss)"
-        },
-        "stop_loss": {
-          "type": "number",
-          "description": "Alternative key for stop-loss price"
-        }
-      },
-      "required": [
-        "entry_price",
-        "target_price"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [],
-    "owner_app": "trading",
-    "agents": [
-      "user_chat",
-      "v3_quant_analyst"
-    ]
-  },
-  {
     "name": "calculate_stop_loss",
     "description": "Calculate a stop-loss price based on ATR (Average True Range) volatility. stop_loss = entry_price - (ATR * multiplier).",
     "parameters": {
@@ -567,37 +479,6 @@
     "agents": [
       "v3_board_of_directors",
       "v3_debate_judge"
-    ]
-  },
-  {
-    "name": "whiteboard_summarize",
-    "description": "Get a full summary of all sections currently on the whiteboard. Provides a snapshot of the entire team's consensus and state.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker to summarize."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 1,
-    "source": "whiteboard",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "v3_board_of_directors"
     ]
   },
   {
