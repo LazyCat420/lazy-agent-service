@@ -1,7 +1,7 @@
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import { Router, Request, Response, NextFunction } from "express";
 import { EventEmitter } from "node:events";
-import { ObjectId, type Document, type Db } from "mongodb";
+import { ObjectId, type Db } from "mongodb";
 import logger from "../utils/logger.ts";
 import requireDb from "../middleware/RequireDbMiddleware.ts";
 import FileService from "../services/FileService.ts";
