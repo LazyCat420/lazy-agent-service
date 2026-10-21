@@ -292,7 +292,7 @@ export class ProfileRegistry {
 
     // Version prefix search: find latest matching profileId or matching prefix (e.g. trading-analyst -> trading-analyst-v1)
     let latest: AgentProfile | null = null;
-    for (const [key, profile] of this.profiles.entries()) {
+    for (const profile of this.profiles.values()) {
       if (profile.profile_id === profileId || profile.profile_id.startsWith(`${profileId}-`)) {
         if (!latest || profile.version > latest.version) {
           latest = profile;
