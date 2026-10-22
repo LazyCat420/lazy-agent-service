@@ -128,20 +128,6 @@ describe("enforceToolPairIntegrity", () => {
     const memoryFlush = vi.fn(async () => {});
     // 5 user turns: only the last 3 survive extractRecentTail, so the
     // first turn's assistant+tool pair would land in the dropped range.
-    const messages: AdminChatMessage[] = [
-      msg("system", "system prompt"),
-      msg("user", "turn 1"),
-      assistantWithToolCall("a1"),
-      toolResult("a1"),
-      msg("user", "turn 2"),
-      msg("assistant", "answer 2"),
-      msg("user", "turn 3"),
-      msg("assistant", "answer 3"),
-      msg("user", "turn 4"),
-      msg("assistant", "answer 4"),
-      msg("user", "turn 5"),
-    ];
-
     const result = await CompactionService.compactConversation(
       [
         msg("user", "turn 1"),
@@ -187,13 +173,6 @@ describe("enforceToolPairIntegrity", () => {
     const memoryFlush = vi.fn(async () => {
       throw new Error("memory backend down");
     });
-    const messages: AdminChatMessage[] = [
-      msg("user", "turn 1"),
-      msg("assistant", "answer 1"),
-      msg("user", "turn 2"),
-      msg("assistant", "answer 2"),
-      msg("user", "turn 3"),
-    ];
 
     const result = await CompactionService.compactConversation(
       [

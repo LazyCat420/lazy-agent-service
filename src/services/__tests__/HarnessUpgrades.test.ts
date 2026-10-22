@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { normalizeEmptyToolContent, EMPTY_TOOL_OUTPUT_MESSAGE } from "../ToolResult.ts";
 import { validateStrictToolSchema } from "../ToolOrchestratorService.ts";
 import {

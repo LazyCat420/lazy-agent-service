@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { prepareTradingRequest, filterTradingPayload, compactQuery, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
+import { prepareTradingRequest, filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
 vi.mock("../../wrappers/MongoWrapper.ts", () => ({default:{getDb:vi.fn()}}));
 afterEach(() => {vi.unstubAllEnvs();vi.clearAllMocks();});

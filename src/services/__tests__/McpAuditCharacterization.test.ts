@@ -1,8 +1,11 @@
 // Regression tests replacing the original audit characterizations.
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ handlers: new Map<string, Function>(), route: vi.fn() }));
+type ToolCallRequest = { params: { name: string; arguments?: Record<string, unknown> } };
+type ToolCallResult = { isError?: boolean; content: Array<{ type: string; text: string }> };
+type RequestHandler = (request: ToolCallRequest) => Promise<ToolCallResult>;
+const mocks = vi.hoisted(() => ({ handlers: new Map<string, RequestHandler>(), route: vi.fn() }));
 vi.mock("@modelcontextprotocol/sdk/server/index.js", () => ({ Server: class {
-  setRequestHandler(schema: any, handler: Function) { mocks.handlers.set(schema.shape.method.value, handler); }
+  setRequestHandler(schema: any, handler: RequestHandler) { mocks.handlers.set(schema.shape.method.value, handler); }
 } }));
 vi.mock("../LocalToolRouter.ts", () => ({ routeLocalTool: mocks.route }));
 import McpAdapter from "../McpAdapter.ts";
