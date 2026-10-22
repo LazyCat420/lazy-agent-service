@@ -14,14 +14,20 @@ globalThis.fetch = (async (input: any, init?: any) => {
   throw new Error(`external fetch blocked in audit repro: ${href}`);
 }) as typeof fetch;
 
-// Dynamic imports so the fetch stub is installed before any service module loads.
+// Point every store a service module could persist to at the temp dir (as test/isolation.ts does),
+// so a run on a shared checkout cannot write into it. Set before the dynamic imports below.
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "harness2-audit-"));
+process.env.RUNTIME_STORE_PATH = path.join(TMP, "run_store.json");
+process.env.PRISM_PROXY_SESSIONS_FILE = path.join(TMP, "prism-proxy-sessions.json");
+process.env.HARNESS2_LIBRARY_PATH = path.join(TMP, "library-default");
+
+// Dynamic imports so the fetch stub and env are in place before any service module loads.
 const mod = (name: string) => import(new URL(`../src/services/harness2/${name}.ts`, import.meta.url).href);
 const T = await mod("HarnessTree");
 const R = await mod("Recursion");
 const L = await mod("Library");
 const S = await mod("Harness2Service");
 
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "harness2-audit-"));
 const lines: string[] = [];
 const report = (id: string, title: string, confirmed: boolean, observed: string) => {
   const line = `${id} [${confirmed ? "CONFIRMED" : "NOT REPRODUCED"}] ${title} :: ${observed}`;

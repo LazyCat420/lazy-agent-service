@@ -34,8 +34,8 @@ the loop learns:
 
 **The loop is also not closed.** Nothing outside `/harness2` reads the library or an adopted
 harness (§4.B4), so no production agent improves from it. The rollouts don't run the real agent
-either: there is at most one tool, `calculate_precise` (§4.B1). The "how the agent works" (INV)
-half of the method therefore has almost nothing to optimise.
+either (§4.B1). The only domain tool is `calculate_precise`, plus the loop's own internal tools.
+The "how the agent works" (INV) half of the method therefore has almost nothing to optimise.
 
 **Exposure today is small:** the route is live on the NAS, but no library exists there yet (§2).
 That makes this the right time to fix it, before anyone relies on stored lessons.
@@ -63,7 +63,7 @@ the route have no test).
  Propose: INV + DOM candidates      ← ours: empty/cut reply = KEEP_BASE            [A5]
       │   (2 attempts, validate)    ← ours: no transport retry, retry is blind,
       │                                     first error only, no auto-trigger      [A6]
- Probe: roll each candidate once    ← ours: solver has ≤1 tool, extra prompt layers [B1, B2]
+ Probe: roll each candidate once    ← ours: 1 domain tool, extra prompt layers     [B1, B2]
       │
  Compose (agg / c_t)                ← evidence clipped; prompt grows unbounded     [A9]
       │
@@ -238,20 +238,36 @@ whole run.** CONFIRMED (R7).
 ### B. How rollouts run through our agentic harness
 
 **B1 — Rollouts do not exercise the real agent.** CONFIRMED (code).
-- **The executor:** `runSingleModel` (`BenchmarkService.ts:323`). With `toolsEnabled` it calls
-  `handleAgent` with `autoApprove: true`, `maxIterations: 10` and
-  `enabledTools: [CALCULATE_PRECISE]` (`:383-392`). Without it there are no tools at all.
+- **The executor:** `runSingleModel` (`BenchmarkService.ts:323`). Without `toolsEnabled` there
+  are no tools at all. With it, it calls `handleAgent` with `autoApprove: true`,
+  `maxIterations: 10` and `enabledTools: [CALCULATE_PRECISE]` (`:383-392`).
+- **What the solver can call:** the agentic loop adds its internal tools to every run:
+  `take_note`, `ask_user` and `retrieve_offloaded_content` always, plus `skill_read` when repo
+  skills exist (`AgenticLoopService.ts:361-378`). So `calculate_precise` is the only domain tool.
 - **No real agent:** `makeExecutor` never passes `model.agent` (`Harness2Service.ts:144-155`), so
   a rollout cannot run as a real custom agent (trading, lupos, …) with its own tools and policies.
 - **Effect:** `tool_guidance.md` and the INV dimension have no real tool use to adapt. Harnesses
   learned here are not evidence about production agents.
+- **`ask_user` can stall a rollout and the whole run:**
+  - `ask_user` parks the turn until someone answers over `POST /agent/answer`, or until the
+    turn's abort signal fires (`harnesses/lifecycle/AskUserTool.ts:142-185`). It also stores a
+    pending question first.
+  - harness2 passes no signal, and the loop then substitutes one that never aborts
+    (`AgenticLoopService.ts:557`).
+  - Neither the loop nor `ChatRoutes.ts` has an overall timeout.
+  - Result: a tools-enabled rollout whose model asks a question waits indefinitely, and so does
+    the synchronous `POST /harness2/run`. A proposer writing "ask the user when unsure" into
+    `guardrails.md` would trigger exactly this.
+- **Side note:** `take_note` writes `data/notes/<runId>.md`. That path is not on a container
+  volume and is not gitignored in a checkout.
 
 **B2 — Tools-enabled rollouts run under prompt layers the proposer never sees.** CONFIRMED (code).
 - **What `/agent` adds:** `handleAgent` routes through `AgenticLoopService` and
   `SystemPromptAssembler`. With no `agent`, the assembler adds:
   - a direct-mode identity;
-  - tool docs, with the orchestrator-only tools grafted onto the enabled set
-    (`system-prompt/index.ts:95`);
+  - tool docs, built after the orchestrator-only tools are grafted onto the assembler's
+    enabled set (`system-prompt/index.ts:88-97`). Whether that graft also changes the tool
+    schemas actually offered was not traced (REPORTED);
   - project skills, conversation memories and workflow memories, by embedding match
     (`:440`, `:468`, `:501`);
   - a local-time system message (`:600`).
@@ -286,8 +302,8 @@ whole run.** CONFIRMED (R7).
 **C1 — An open, expensive endpoint.** CONFIRMED (code).
 - **No authentication:** `authMiddleware` only copies the project and username headers
   (`AuthMiddleware.ts:12-58`). This is service-wide, so Rod's repos can call without keys.
-- **Cost:** one `POST /harness2/run` can start 16 rollouts plus 12 improver calls, plus selection
-  and reflection, at k=4.
+- **Cost:** at k=4, one `POST /harness2/run` can start 16 rollouts and up to 24 improver calls
+  (12 stages × 2 attempts), plus selection and reflection.
 - **Load on the Spark:** the default improver is GLM on the DGX Spark (`vllm-2`), the same box
   that serves the trading cycle. Nothing queues or prioritises these calls, and nothing stops two
   runs at once.
@@ -412,6 +428,8 @@ audit script check named in brackets turns into NOT REPRODUCED.
    - Allow one run at a time per domain.
    - Default to local providers only.
    - Validate the `bench` slots.
+9. **Rollouts always end** [B1]. Pass an `AbortSignal` with a per-rollout deadline into
+   `runSingleModel`, and leave `ask_user` out of harness2 rollouts, since no user is attached.
 
 **Phase 2 — needs the user's decision before building.**
 
@@ -438,8 +456,10 @@ testrun --mem 2G -- npx tsx scripts/audit-harness2-loop.ts
 ```
 
 The script imports the real `src/services/harness2` modules with fake executor and proposer
-functions. It makes no network or model calls. Library writes go to an OS temp directory, which
-is removed on every exit path. Each line reads `R<n> [CONFIRMED|NOT REPRODUCED] <claim> ::
+functions. It makes no network or model calls. Before any import, it points the run store, the
+proxy-session store and the library root at an OS temp directory (as `test/isolation.ts` does),
+and it removes that directory on every exit path. A run on 2026-10-22 left the primary checkout's
+`git status` unchanged. Each line reads `R<n> [CONFIRMED|NOT REPRODUCED] <claim> ::
 <observed>`. Output on 2026-10-22 (R16 was dropped while drafting; the ids match the script):
 
 | Id | Finding | Observed |
