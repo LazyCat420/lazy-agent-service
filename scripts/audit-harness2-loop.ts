@@ -281,7 +281,7 @@ await check("R20", "k=4 parallel aggregator prompt size with 20 tool calls per r
   const traj = [`thinking (excerpt): ${"t".repeat(1500)}`, ...Array.from({ length: 20 }, (_, i) => `tool search_${i}(${"a".repeat(400)}) -> success: ${"r".repeat(800)}`), `final output:\n${"o".repeat(6000)}`].join("\n");
   let maxAgg = 0;
   const d = deps(async (p: string, label: string) => { if (label.startsWith("agg")) maxAgg = Math.max(maxAgg, p.length); return editReply; },
-    async (tree: Record<string, string>) => ({ ok: true, delivered: true, output: "o".repeat(6000), trajectory: traj, error: "" }));
+    async (_tree: Record<string, string>) => ({ ok: true, delivered: true, output: "o".repeat(6000), trajectory: traj, error: "" }));
   await R.runParallel(4, await R.rollBase(d, 4), d);
   return [maxAgg > 300_000, `per-rollout trajectory=${traj.length} chars; largest aggregator prompt=${maxAgg.toLocaleString("en-US")} chars (~${Math.round(maxAgg / 4).toLocaleString("en-US")} tokens) before any library text`];
 });
