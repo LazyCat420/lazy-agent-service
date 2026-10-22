@@ -7,10 +7,17 @@ review-by: 2026-11-05
 
 # Harness² Self-Improving Loop — Deep Audit (2026-10-22)
 
-Mode: Assess. **Nothing in `src/` was changed.** This chapter audits the Harness² port
-(`src/services/harness2/`, `POST /harness2/run`; commits `8e242aa` + `430d150`, 2026-10-19)
-against Google's reference code, traces how its rollouts run through this service's agentic
-harness, and lists what is missing, unfinished, or duplicated. It ends with an ordered fix plan.
+This chapter audits the Harness² port (`src/services/harness2/`, `POST /harness2/run`; commits
+`8e242aa` + `430d150`, 2026-10-19) against Google's reference code, traces how its rollouts run
+through this service's agentic harness, and lists what is missing, unfinished, or duplicated. It
+ends with an ordered fix plan. The audit itself changed nothing in `src/` (landed `1b3c000`).
+
+**Fix status.** The Phase 1 fixes in §6 are landing in three chunks:
+- (a) learning gates, selection and run status;
+- (b) the proposer contract, library hygiene and prompts;
+- (c) the route and the executor.
+
+Each fixed finding below carries a **Status** line. §9 records how each chunk was verified.
 
 - **Upstream:** <https://github.com/google-research/harness2> at `1cfe254` (2026-10-13). That
   commit is the latest, so the 10-19 port and this audit read the same code. Paper: arXiv 2610.14224.
@@ -28,9 +35,10 @@ The **task-level schedule is faithful**. The details are listed in §5 so nobody
 **The decision points around the schedule are not faithful.** These are what gets selected, what
 gets stored, what evidence the improver sees, and what a skill costs. Three of them corrupt what
 the loop learns:
-1. Failed runs still write library lessons (R4, R5).
+1. Failed runs still write library lessons (R4, R5). **Fixed in `94883af`.**
 2. Empty or cut-off improver replies are recorded as deliberate "keep the base" decisions (R2, R3).
-3. A re-run task reads its own earlier answer (R6).
+   Open, chunk (b).
+3. A re-run task reads its own earlier answer (R6). Open, chunk (b).
 
 **The loop is also not closed.** Nothing outside `/harness2` reads the library or an adopted
 harness (§4.B4), so no production agent improves from it. The rollouts don't run the real agent
@@ -103,6 +111,12 @@ the route have no test).
   improver call, and a base output can be "adopted", which then stores the base tree as a lesson.
   The mixed pool does have a real argument (it lets an unadapted answer win when adaptation hurt).
   That makes this a **decision for the user** (§6 Q1), not a silent default.
+- **Status: default changed to upstream's in `94883af`; Q1 is still open for the user.**
+  - The pool is now the k finals. At k=1 the single final is delivered with no selector call
+    (`selection.trivial`).
+  - `selectionPool: "mixed"` keeps the old pool as an opt-in.
+  - **Consequence at k=1:** if `agg1` delivers nothing, the run returns status `no-output` and
+    no output, even when `base1` delivered. Every rollout's output stays in `result.rollouts`.
 
 **A2 — The "blind, shuffled" order is the same for every task.** CONFIRMED (R1).
 - **Ours:** the seed defaults to `0` (`Harness2Service.ts:188`), so a 2-candidate pool always
@@ -110,6 +124,8 @@ the route have no test).
 - **Effect:** in the repro, a selector that always answers `a1` picked `agg1` on 12 of 12
   different tasks. LLM selectors do lean toward one position, so this turns position bias into a
   systematic pro-adaptation bias.
+- **Status: fixed in `94883af`.** `selectionSeed` hashes `task|k|mode` (plus the caller's `seed`
+  when given) and shuffles a canonical sort, as upstream's `assign_ids` does.
 
 **A3 — Failed selections still write library lessons.** CONFIRMED (R4, R5).
 - **Ours:** reflection and `library.add` run unconditionally (`Harness2Service.ts:193-207`).
@@ -119,12 +135,19 @@ the route have no test).
 - **Upstream:** reflection runs only `if mode_lib and sel.ok`, and the library add requires
   `sel.ok` plus a complete experience (`schedule.py:529`, `:555`). A fallback pick delivers an
   output but never teaches.
+- **Status: fixed in `94883af`.**
+  - Reflection and `library.add` run only when the status is `ok` and the chosen run delivered.
+  - A selector failure delivers upstream's neutral fallback and sets `selection.fallback`, with
+    status `selection-fallback`. Nothing is learned from it.
+  - `selection.ok` is false and `chosenLabel` is `""` when nothing delivered.
 
 **A4 — No stop when every base rollout failed.** CONFIRMED (R12).
 - **Ours:** with the solver down, the run still made 4 improver calls (`inv1`, `dom1`, `agg1`,
   `experience`) and 4 doomed rollouts.
 - **Upstream:** stops with status `base-failed` (`schedule.py:629`). It also refuses to build
   evidence when no trajectory renders ("the proposer would be adapting on nothing").
+- **Status: fixed in `94883af`.** With no base rollout `ok`, the run returns `base-failed`
+  after zero improver calls, and `errors[0]` carries each base error.
 
 **A5 — An empty or cut-off improver reply looks like a deliberate KEEP_BASE.** CONFIRMED (R2, R3).
 - **Empty reply:** `makeProposer` returns `res.text || ""` (`Harness2Service.ts:166`). `applyReply`
@@ -191,7 +214,10 @@ CONFIRMED (R19, R20) and code.
   tokens) before any library text** (R20).
 - **ASSUMPTION:** whether that overflows GLM-5.3-Flash depends on the served context length,
   which this audit did not check. An overflow surfaces as "proposer failed", which means a
-  silent fallback.
+  silent fallback. (Later check: the deployed `vllm-2` no longer serves GLM at all; see A14.
+  The Jetson's `nemotron35` serves `max_model_len=100000` tokens.)
+- **Status:** the selector's truncation-marker sentence is fixed in `94883af` (R19). The
+  evidence caps and the mission size budget are open, chunk (b).
 
 **A10 — The cost of skills is misrepresented, and nothing caps always-on text.** CONFIRMED (R14, R15).
 - **What we do:** `materialize` puts **every** skill body into every rollout's system prompt
@@ -219,6 +245,13 @@ whole run.** CONFIRMED (R7).
 - **Crash:** when a reflected lesson trips the check, `Library.add` throws out of `runHarness2`
   (R7). The route answers 500 and every rollout result is lost, because there is no run record
   (C2).
+- **Status: fixed in `94883af`.**
+  - The tripwire uses upstream's `GRADER_VERDICT_MARKERS` (machine markers, checked in both file
+    names and file text). "graded as BBB-" now passes.
+  - A failed `library.add` goes into `errors[]`, and the run still returns.
+  - A second bug was found while fixing this. `Library.add` checked `JSON.stringify(lesson)`, and
+    JSON escaping turns `"pass_rate"` into `\"pass_rate\"`, so a quoted marker slipped through.
+    It now checks the raw lesson text, as upstream does.
 
 **A12 — Smaller prompt and input gaps.** CONFIRMED (prompt diff).
 - **Library re-verify rule dropped:** GENERALIZE (`Prompts.ts:118`) lost the rule that protects
@@ -229,11 +262,27 @@ whole run.** CONFIRMED (R7).
   (`prompts.py:47`).
 - **Unchecked caller text:** the request's `bench` prompt slots are not checked for
   rubric/score/grader words. Upstream refuses them (`spec.py:121`).
+- **Status:** `ANSWER_FREE_SELECT` is fixed in `94883af`. The re-verify rule is open, chunk (b).
+  The `bench` word check is open, chunk (c).
 
 **A13 — The diversity metric is not upstream's.** CONFIRMED (R11). Low impact.
 - **Ours:** `diversity` compares whole-file text, so a one-line edit to a 50-line file scores
   0.0. Upstream's line-Jaccard (`tree.py:407`) would score 0.961.
 - It is reported only and drives no decision, but its comment calls it upstream's.
+
+**A14 — The default improver model is no longer served, and a dead improver looked like a clean
+run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
+- **The default:** `DEFAULT_IMPROVER` is `vllm-2` / `GLM-5.3-Flash-EXL3-TF`
+  (`Harness2Service.ts:27-30`).
+- **What is served:** on the NAS, `GET :5591/config-local` lists `vllm-2` serving only
+  `DeepSeek-V4.1-Flash-1017`, and `vllm` serving `nemotron35`.
+- **Effect before the fix:** with no override, every proposer call fails. Every stage falls back
+  to the base tree, the k=1 final is a re-roll of the base, and the run still read as a normal
+  KEEP_BASE result.
+- **Status:** detection fixed in `94883af`. When every stage falls back on a proposer failure, the
+  run returns status `improver-failed`, `errors[0]` names the cause, and nothing is learned.
+  Open, chunk (c): a route preflight that the named models are served, and a default that follows
+  the served model.
 
 ### B. How rollouts run through our agentic harness
 
@@ -400,8 +449,9 @@ audit script check named in brackets turns into NOT REPRODUCED.
 
 1. **Gate learning on success** [R4, R5]. Reflect and `library.add` only when selection
    succeeded and the chosen run delivered. Record the fallback pick as delivered-not-learned.
+   **Done in `94883af`.**
 2. **Base-failure stop** [R12]. If no base rollout is `ok`, return status `base-failed` without
-   proposer calls.
+   proposer calls. **Done in `94883af`.**
 3. **Proposer contract** [R2, R3, R13, R21, R8].
    - An empty reply, `finish_reason: length` or zero usage is an error, never KEEP_BASE.
    - Make 2 transport attempts with backoff.
@@ -413,12 +463,13 @@ audit script check named in brackets turns into NOT REPRODUCED.
    - Evict by stored time, not name.
    - Refuse `.`/`..` and leading-dot slugs.
    - Add a per-domain lock and a `DELETE /harness2/library/:domain/:taskId`.
-5. **Per-task selection seed** [R1]. Default to a hash of `taskId|k|mode`.
+5. **Per-task selection seed** [R1]. Default to a hash of `taskId|k|mode`. **Done in `94883af`.**
 6. **Reflection input** [R18].
    - Pass the id→label map and drop the duplicate base render.
    - Restore upstream's experience lines, the GENERALIZE re-verify rule, `ANSWER_FREE_SELECT`
-     and the truncation disclaimer [R19].
-7. **No run-killing checks** [R7].
+     and the truncation disclaimer [R19]. (`ANSWER_FREE_SELECT` and the selector's truncation
+     sentence: done in `94883af`.)
+7. **No run-killing checks** [R7]. **Done in `94883af`.**
    - Swap `GRADER_RE` for upstream's machine-marker list, or keep the phrases as a warning only.
    - Catch per-stage and library failures into the result instead of throwing.
 8. **Route** [C1–C4].
@@ -430,6 +481,9 @@ audit script check named in brackets turns into NOT REPRODUCED.
    - Validate the `bench` slots.
 9. **Rollouts always end** [B1]. Pass an `AbortSignal` with a per-rollout deadline into
    `runSingleModel`, and leave `ask_user` out of harness2 rollouts, since no user is attached.
+10. **Served models** [A14]. Return `improver-failed` when every stage fell back on a proposer
+    failure (done in `94883af`). Preflight in the route that the solver and improver models are
+    served. Make the default improver follow the model `vllm-2` actually serves.
 
 **Phase 2 — needs the user's decision before building.**
 
@@ -460,30 +514,35 @@ functions. It makes no network or model calls. Before any import, it points the 
 proxy-session store and the library root at an OS temp directory (as `test/isolation.ts` does),
 and it removes that directory on every exit path. A run on 2026-10-22 left the primary checkout's
 `git status` unchanged. Each line reads `R<n> [CONFIRMED|NOT REPRODUCED] <claim> ::
-<observed>`. Output on 2026-10-22 (R16 was dropped while drafting; the ids match the script):
+<observed>`. Output on 2026-10-22 (R16 was dropped while drafting; the ids match the script).
+"Now" is the latest run (§9).
 
-| Id | Finding | Observed |
-|---|---|---|
-| R1 | A2 fixed order | 12 tasks, selector answers `a1` → `{"agg1":12}`; `shuffle([base1,agg1],0)=[agg1,base1]` |
-| R2 | A5 empty reply | `inv1/dom1/agg1: keptBase=true, fellBack=false, notes=""` |
-| R3 | A5 cut reply | accepted tree names the `totals` skill, `skills=[]` |
-| R4 | A3 nothing delivered | `selection.error="no candidate delivered an output"`, entry written |
-| R5 | A3 selector failed | `error="selector returned no valid id (none); took agg1"`, entry written |
-| R6 | A7 self-read | 2nd run of `t-rerun` prompt contains `## Entry t-rerun` |
-| R7 | A11 grader regex | "graded as BBB-" rejected; "graded by" lesson → `runHarness2` threw |
-| R8 | A6 first error | 4 problems, message names only template braces |
-| R9 | A7 eviction | newer `alpha-newer` dropped, older `zeta-older` kept |
-| R10 | C3 traversal | `Library("..").dir` = `root/..`; `entryDir("..")` = domain dir |
-| R11 | A13 metric | ours 0; line-Jaccard 0.961 |
-| R12 | A4 base failed | improver calls `inv1.a1, dom1.a1, agg1.a1, experience` |
-| R13 | A6 transport | `fellBack=true attempts=1 calls=1 error="proposer failed: ECONNRESET"` |
-| R14 | A10 skills inline | 53 + 5,048 chars → 5,173-char system prompt |
-| R15 | A10 no cap | 200,000-char `systemprompt.md` validates |
-| R17 | A1 pool | k=1: 1 selector call; pool `{"a1":"agg1","a2":"base1"}` |
-| R18 | A8 reflection | why cites `a2`; no id→label map; base shown as CURRENT and BASE |
-| R19 | A9 truncation | marker shown, no disclaimer, FINISH rule present |
-| R20 | A9 size | k=4, 20 tool calls/rollout → 394,106-char aggregator prompt |
-| R21 | A6 blind retry | 2nd attempt has the rejection notice but not its own 1st reply |
+Since the finals-only default, a k=1 pool holds one final and is delivered without a selector.
+So R1, R5, R18 and R19 pass `selectionPool: "mixed"` to keep their selector call. Their
+claims are unchanged:
+
+| Id | Finding | Observed at audit time | Now |
+|---|---|---|---|
+| R1 | A2 fixed order | 12 tasks, selector answers `a1` → `{"agg1":12}`; `shuffle([base1,agg1],0)=[agg1,base1]` | NOT REPRODUCED (`94883af`) |
+| R2 | A5 empty reply | `inv1/dom1/agg1: keptBase=true, fellBack=false, notes=""` | CONFIRMED, open |
+| R3 | A5 cut reply | accepted tree names the `totals` skill, `skills=[]` | CONFIRMED, open |
+| R4 | A3 nothing delivered | `selection.error="no candidate delivered an output"`, entry written | NOT REPRODUCED (`94883af`) |
+| R5 | A3 selector failed | `error="selector returned no valid id (none); took agg1"`, entry written | NOT REPRODUCED (`94883af`) |
+| R6 | A7 self-read | 2nd run of `t-rerun` prompt contains `## Entry t-rerun` | CONFIRMED, open |
+| R7 | A11 grader regex | "graded as BBB-" rejected; "graded by" lesson → `runHarness2` threw | NOT REPRODUCED (`94883af`) |
+| R8 | A6 first error | 4 problems, message names only template braces | CONFIRMED, open |
+| R9 | A7 eviction | newer `alpha-newer` dropped, older `zeta-older` kept | CONFIRMED, open |
+| R10 | C3 traversal | `Library("..").dir` = `root/..`; `entryDir("..")` = domain dir | CONFIRMED, open |
+| R11 | A13 metric | ours 0; line-Jaccard 0.961 | CONFIRMED, open |
+| R12 | A4 base failed | improver calls `inv1.a1, dom1.a1, agg1.a1, experience` | NOT REPRODUCED (`94883af`) |
+| R13 | A6 transport | `fellBack=true attempts=1 calls=1 error="proposer failed: ECONNRESET"` | CONFIRMED, open |
+| R14 | A10 skills inline | 53 + 5,048 chars → 5,173-char system prompt | CONFIRMED, open |
+| R15 | A10 no cap | 200,000-char `systemprompt.md` validates | CONFIRMED, open |
+| R17 | A1 pool | k=1: 1 selector call; pool `{"a1":"agg1","a2":"base1"}` | NOT REPRODUCED (`94883af`) |
+| R18 | A8 reflection | why cites `a2`; no id→label map; base shown as CURRENT and BASE | CONFIRMED, open |
+| R19 | A9 truncation | marker shown, no disclaimer, FINISH rule present | NOT REPRODUCED (`94883af`) |
+| R20 | A9 size | k=4, 20 tool calls/rollout → 394,106-char aggregator prompt | CONFIRMED, open |
+| R21 | A6 blind retry | 2nd attempt has the rejection notice but not its own 1st reply | CONFIRMED, open |
 
 ## 8. Ledger
 
@@ -491,4 +550,34 @@ and it removes that directory on every exit path. A run on 2026-10-22 left the p
 |---|---|---|
 | 2026-10-19 | Harness² port + `POST /harness2/run` | `8e242aa` |
 | 2026-10-19 | unchanged-candidate noise label; GLM default improver | `430d150` |
-| 2026-10-22 | this audit, `scripts/audit-harness2-loop.ts`, plan banner | this chapter's commit |
+| 2026-10-22 | this audit, `scripts/audit-harness2-loop.ts`, plan banner | `05d49ea`, `1b3c000` |
+| 2026-10-22 | Phase 1 chunk (a): learning gates, finals-only pool, per-task seed, base-failed stop, marker tripwire, run status (A1–A4, A11, A14 detection) | `94883af` |
+
+## 9. Fixes and verification
+
+### Chunk (a) — learning gates, selection, run status (`94883af`)
+
+**What changed.**
+- **Run result:** `runHarness2` now returns:
+  - `status`: `ok`, `base-failed`, `improver-failed`, `no-output` or `selection-fallback`;
+  - `errors[]`, for run-level problems;
+  - `learned`, true when this run stored a library entry;
+  - `chosenTreeIsBase`.
+- **`selection`:** carries `ok`, `trivial`, `fallback` and `pool`.
+- **Gates:** reflection and the library write happen only when the status is `ok` and the chosen
+  run delivered.
+- **Selection pool:** the k finals by default; `selectionPool: "mixed"` is the opt-in.
+- **Selector prompt:** ports upstream's two pool texts, `ANSWER_FREE_SELECT`,
+  `EVIDENCE_BOUNDARY_SELECT` and the FINISH rule's truncation-marker sentence.
+
+**Evidence.**
+
+| Check | Result |
+|---|---|
+| `vitest run src/services/harness2` on `main` @ `94883af` (testrun) | 2 files, **29/29 pass** (15 kept, one rewritten for the marker tripwire, 14 new in `Harness2Selection.test.ts`) |
+| Revert check: each fix undone alone in a scratch copy, new test file rerun | **9/9 reverts turn their test red** (learning gate ×2, base-failed, seed, finals default, improver-failed, marker tripwire, library catch, raw-text check) |
+| `tsc --noEmit` on `main` @ `94883af` (testrun) | 0 errors |
+| `eslint src/services/harness2 src/routes/Harness2Routes.ts` | clean |
+| `scripts/audit-harness2-loop.ts` on `main` @ `94883af` (testrun) | **13/20 confirmed**; R1, R4, R5, R7, R12, R17 and R19 now read NOT REPRODUCED; temp dir removed |
+| `git status` of the primary checkout after the tests | unchanged (only another agent's ` M tool_schemas.json` and an untracked `.checks/` folder) |
+
