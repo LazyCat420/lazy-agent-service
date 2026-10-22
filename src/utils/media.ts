@@ -175,7 +175,7 @@ async function compressGifWithFfmpeg(base64Data: string, maxBytes: number) {
     return compressWithSharp(base64Data, maxBytes);
   }
 
-  let temporaryDirectory = null;
+  let temporaryDirectory: string | null = null;
   try {
     temporaryDirectory = await mkdtemp(join(tmpdir(), "prism-gif-"));
     const inputPath = join(temporaryDirectory, "input.gif");
@@ -409,7 +409,7 @@ export async function extractVideoFrames(
     );
   }
 
-  let temporaryDirectory = null;
+  let temporaryDirectory: string | null = null;
 
   try {
     // Decode video data URL to a temp file.

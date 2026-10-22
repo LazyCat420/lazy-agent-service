@@ -36,10 +36,6 @@ import {
 /** Default overhead for tool schemas, internal formatting, etc. */
 const TOOL_SCHEMA_OVERHEAD_TOKENS = 2000;
 
-/** Fraction of context window to target (leave headroom for output + safety) */
-const TARGET_UTILIZATION = 0.8;
-
-
 
 /** When truncating tool results aggressively, cap at this many chars */
 const AGGRESSIVE_TOOL_RESULT_CAP = 3000;
