@@ -37,8 +37,8 @@ gets stored, what evidence the improver sees, and what a skill costs. Three of t
 the loop learns:
 1. Failed runs still write library lessons (R4, R5). **Fixed in `94883af`.**
 2. Empty or cut-off improver replies are recorded as deliberate "keep the base" decisions (R2, R3).
-   Open, chunk (b).
-3. A re-run task reads its own earlier answer (R6). Open, chunk (b).
+   **Fixed in `a3993ea`.**
+3. A re-run task reads its own earlier answer (R6). **Fixed in `a3993ea`.**
 
 **The loop is also not closed.** Nothing outside `/harness2` reads the library or an adopted
 harness (§4.B4), so no production agent improves from it. The rollouts don't run the real agent
@@ -158,6 +158,15 @@ the route have no test).
   that skill does not exist.
 - Nothing checks `finish_reason` or zero usage. Compare memory
   `zero-reported-token-usage-marks-a-truncated-generation`.
+- **Status: fixed in `a3993ea`.**
+  - `makeProposer` throws a `ProposerError` on empty text or all-zero usage. An empty string
+    from any proposer is a failed transport attempt.
+  - After 2 attempts the stage falls back with `proposer failed: empty reply (after 2 transport
+    attempts)`, never `keptBase`.
+  - A reply that leaves a `<file>` block open is rejected with "cut off inside the `<file>`
+    block" and retried.
+  - `generateText` exposes no `finish_reason`, so a cap hit that still closes every block is
+    accepted. A cut-off selector or reflector reply fails its own parse and falls back.
 
 **A6 — Stage retries are weaker than upstream's.** CONFIRMED (R13, R21, R8).
 - **No transport retry:** a single `ECONNRESET` ends the stage on the first attempt
@@ -171,6 +180,13 @@ the route have no test).
 - **No `autotrigger`:** upstream repairs a missing skill trigger line before validating
   (`recursion.py:116`, `tree.py:192`). That is the exact failure the 10-19 smoke run hit (a DOM
   proposal retried, then fell back).
+- **Status: fixed in `a3993ea`.**
+  - **Transport:** 2 attempts with backoff of 10 s × (attempt − 1). A deadline is not retried,
+    because `generateText` takes no abort signal and the timed-out call keeps generating.
+  - **Retry:** it edits the rejected tree, and its prompt shows that tree and the rejected notes.
+  - **Validation:** `collectTreeErrors` reports every problem in one message.
+  - **`autotrigger`:** appends ``- When <description>, use the `<name>` skill.`` to
+    `guardrails.md`, unless that would break the cap (`stage.repaired` lists the skills it fixed).
 
 **A7 — Library scoping and retention.** CONFIRMED (R6, R9) and code.
 - **Self-read:** a re-run task reads its own earlier entry as "earlier tasks in this domain" (R6).
@@ -183,6 +199,15 @@ the route have no test).
   starts every domain empty" (`library.py:23`).
 - **No way to remove a bad lesson:** there is no `forget`/`retain` and no delete endpoint.
 - **Caller-chosen task ids overwrite:** a reused `taskId` replaces an unrelated earlier entry.
+- **Status:**
+  - **Fixed in `a3993ea`:**
+    - Self-read: `contextText({ exclude: [taskId] })` drops the task's own block and its
+      index row.
+    - Eviction: each entry gets a `- stored:` time; `entriesByAge` evicts the oldest first, and
+      the context says how many entries it left out.
+    - `Library.forget()` exists.
+  - **Open:** the `DELETE` route (chunk (c)) and library scope (Q5).
+  - **Unchanged:** a reused `taskId` still overwrites its entry, as upstream's `add` does.
 
 **A8 — The reflector cannot read the selector's reasoning, and its prompt lost the
 anti-confabulation rules.** CONFIRMED (R18) and prompt diff.
@@ -197,6 +222,12 @@ anti-confabulation rules.** CONFIRMED (R18) and prompt diff.
 - **HYPOTHESIS:** the 10-19 smoke run's "high confidence lessons from sampling noise" is partly
   caused by these cuts, not only by the weak improver model. Testable: A/B the two prompt texts
   on the same recorded evidence.
+- **Status: fixed in `a3993ea`.** The reflection mission is now:
+  - the BASE HARNESS, shown once;
+  - every candidate, diffed against the base;
+  - an ADOPTION block: the submitted label, how it was selected, the `a<n> → label` map, and the
+    selector's reason.
+  - `experience()` restores the dropped lines. The hypothesis is still untested.
 
 **A9 — Evidence is clipped below upstream's floor, and the prompt grows without bound.**
 CONFIRMED (R19, R20) and code.
@@ -216,8 +247,15 @@ CONFIRMED (R19, R20) and code.
   which this audit did not check. An overflow surfaces as "proposer failed", which means a
   silent fallback. (Later check: the deployed `vllm-2` no longer serves GLM at all; see A14.
   The Jetson's `nemotron35` serves `max_model_len=100000` tokens.)
-- **Status:** the selector's truncation-marker sentence is fixed in `94883af` (R19). The
-  evidence caps and the mission size budget are open, chunk (b).
+- **Status:** the selector's truncation-marker sentence is fixed in `94883af` (R19). The rest
+  is fixed in `a3993ea`:
+  - **Caps:** thinking 4,000, tool args 2,000, tool results 10,000 (upstream's floor), final
+    output 20,000.
+  - **Truncation note:** every mission states that truncation markers are ours.
+  - **Budget:** past a 240,000-char mission budget (`HARNESS2_MISSION_CHAR_BUDGET`), trajectories
+    are compacted. Each keeps its start and end, behind an explicit COMPACTED note. R20 now builds
+    a 239,332-char prompt.
+  - **Selector:** each candidate gets min(40,000, budget / n).
 
 **A10 — The cost of skills is misrepresented, and nothing caps always-on text.** CONFIRMED (R14, R15).
 - **What we do:** `materialize` puts **every** skill body into every rollout's system prompt
@@ -232,6 +270,11 @@ CONFIRMED (R19, R20) and code.
   24,000 chars (OpenCode, `substrate/opencode.py:50`) or 8,000 (Codex, `codex.py:42`).
 - **We already have on-demand skills:** `SkillRegistry` plus the `skill_read` tool, using the
   same `skills/<name>/SKILL.md` layout (`AgenticLoopService.ts:361-378`). See §6 Q2 and D5.
+- **Status: Q2 default applied in `a3993ea`; Q2 itself is still open for the user.**
+  - Skills stay inlined.
+  - The surface table now says skills are always on here and cost the same as always-on prose.
+  - `ALWAYS_ON_MAX` caps the **materialized** prompt at 24,000 chars, skill bodies included.
+  - **R14 stays CONFIRMED by design:** it measures inlining, which this default keeps.
 
 **A11 — The "grader verdict" check is invented, misfires on finance text, and can crash the
 whole run.** CONFIRMED (R7).
@@ -262,13 +305,14 @@ whole run.** CONFIRMED (R7).
   (`prompts.py:47`).
 - **Unchecked caller text:** the request's `bench` prompt slots are not checked for
   rubric/score/grader words. Upstream refuses them (`spec.py:121`).
-- **Status:** `ANSWER_FREE_SELECT` is fixed in `94883af`. The re-verify rule is open, chunk (b).
-  The `bench` word check is open, chunk (c).
+- **Status:** `ANSWER_FREE_SELECT` is fixed in `94883af`, and the GENERALIZE re-verify rule in
+  `a3993ea`. The `bench` word check is open, chunk (c).
 
 **A13 — The diversity metric is not upstream's.** CONFIRMED (R11). Low impact.
 - **Ours:** `diversity` compares whole-file text, so a one-line edit to a 50-line file scores
   0.0. Upstream's line-Jaccard (`tree.py:407`) would score 0.961.
 - It is reported only and drives no decision, but its comment calls it upstream's.
+- **Status: fixed in `a3993ea`.** `diversity` is upstream's line-Jaccard (`meanJaccard`, `n`, `nDistinct`).
 
 **A14 — The default improver model is no longer served, and a dead improver looked like a clean
 run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
@@ -373,6 +417,8 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
   root, and `taskId: ".."` resolves to the domain directory itself. Both GET and POST accept
   them.
 - Reach is one directory level, because slashes are replaced.
+- **Status:** `slug` replaces leading dots, so `..`, `.` and `.x` stay inside the root (fixed in
+  `a3993ea`). The route's id pattern is chunk (c).
 
 **C4 — Concurrent runs in one domain race.** CONFIRMED (code).
 - Two runs in the same domain race on the `INDEX.md` rebuild. Two runs with the same `taskId`
@@ -398,6 +444,7 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
   - "Tree unchanged" exists twice (`isUnchanged` and the inline `same` in `buildMission`).
   - The `decisions` map is built in three places.
   - `Library.contextText` re-implements `renderTree` inline.
+  - **Status: all four fixed in `a3993ea`** (`hasExperience`, `isUnchanged`, `decisionsOf`, `renderTree`).
 - **D4 — Overlapping mechanisms elsewhere.** REPORTED.
   - `WorkflowMemoryService` already stores successful trajectories and injects them into
     `/agent`. It is the closest twin of `Library`.
@@ -452,19 +499,20 @@ audit script check named in brackets turns into NOT REPRODUCED.
    **Done in `94883af`.**
 2. **Base-failure stop** [R12]. If no base rollout is `ok`, return status `base-failed` without
    proposer calls. **Done in `94883af`.**
-3. **Proposer contract** [R2, R3, R13, R21, R8].
+3. **Proposer contract** [R2, R3, R13, R21, R8]. **Done in `a3993ea`.**
    - An empty reply, `finish_reason: length` or zero usage is an error, never KEEP_BASE.
    - Make 2 transport attempts with backoff.
    - Put the rejected reply (or its parsed tree) into the retry prompt.
    - Have `validateTree` collect all errors, and add `autotrigger` before validation.
    - Reject replies with an unterminated `<file>` block.
-4. **Library hygiene** [R6, R9, R10].
+4. **Library hygiene** [R6, R9, R10]. **Done in `a3993ea`, except the lock and the `DELETE`
+   route (chunk (c)).**
    - Exclude the current `taskId` from `contextText`.
    - Evict by stored time, not name.
    - Refuse `.`/`..` and leading-dot slugs.
    - Add a per-domain lock and a `DELETE /harness2/library/:domain/:taskId`.
 5. **Per-task selection seed** [R1]. Default to a hash of `taskId|k|mode`. **Done in `94883af`.**
-6. **Reflection input** [R18].
+6. **Reflection input** [R18]. **Done in `a3993ea`.**
    - Pass the id→label map and drop the duplicate base render.
    - Restore upstream's experience lines, the GENERALIZE re-verify rule, `ANSWER_FREE_SELECT`
      and the truncation disclaimer [R19]. (`ANSWER_FREE_SELECT` and the selector's truncation
@@ -524,25 +572,25 @@ claims are unchanged:
 | Id | Finding | Observed at audit time | Now |
 |---|---|---|---|
 | R1 | A2 fixed order | 12 tasks, selector answers `a1` → `{"agg1":12}`; `shuffle([base1,agg1],0)=[agg1,base1]` | NOT REPRODUCED (`94883af`) |
-| R2 | A5 empty reply | `inv1/dom1/agg1: keptBase=true, fellBack=false, notes=""` | CONFIRMED, open |
-| R3 | A5 cut reply | accepted tree names the `totals` skill, `skills=[]` | CONFIRMED, open |
+| R2 | A5 empty reply | `inv1/dom1/agg1: keptBase=true, fellBack=false, notes=""` | NOT REPRODUCED (`a3993ea`) |
+| R3 | A5 cut reply | accepted tree names the `totals` skill, `skills=[]` | NOT REPRODUCED (`a3993ea`) |
 | R4 | A3 nothing delivered | `selection.error="no candidate delivered an output"`, entry written | NOT REPRODUCED (`94883af`) |
 | R5 | A3 selector failed | `error="selector returned no valid id (none); took agg1"`, entry written | NOT REPRODUCED (`94883af`) |
-| R6 | A7 self-read | 2nd run of `t-rerun` prompt contains `## Entry t-rerun` | CONFIRMED, open |
+| R6 | A7 self-read | 2nd run of `t-rerun` prompt contains `## Entry t-rerun` | NOT REPRODUCED (`a3993ea`) |
 | R7 | A11 grader regex | "graded as BBB-" rejected; "graded by" lesson → `runHarness2` threw | NOT REPRODUCED (`94883af`) |
-| R8 | A6 first error | 4 problems, message names only template braces | CONFIRMED, open |
-| R9 | A7 eviction | newer `alpha-newer` dropped, older `zeta-older` kept | CONFIRMED, open |
-| R10 | C3 traversal | `Library("..").dir` = `root/..`; `entryDir("..")` = domain dir | CONFIRMED, open |
-| R11 | A13 metric | ours 0; line-Jaccard 0.961 | CONFIRMED, open |
+| R8 | A6 first error | 4 problems, message names only template braces | NOT REPRODUCED (`a3993ea`) |
+| R9 | A7 eviction | newer `alpha-newer` dropped, older `zeta-older` kept | NOT REPRODUCED (`a3993ea`) |
+| R10 | C3 traversal | `Library("..").dir` = `root/..`; `entryDir("..")` = domain dir | NOT REPRODUCED (`a3993ea`) |
+| R11 | A13 metric | ours 0; line-Jaccard 0.961 | NOT REPRODUCED (`a3993ea`) |
 | R12 | A4 base failed | improver calls `inv1.a1, dom1.a1, agg1.a1, experience` | NOT REPRODUCED (`94883af`) |
-| R13 | A6 transport | `fellBack=true attempts=1 calls=1 error="proposer failed: ECONNRESET"` | CONFIRMED, open |
-| R14 | A10 skills inline | 53 + 5,048 chars → 5,173-char system prompt | CONFIRMED, open |
-| R15 | A10 no cap | 200,000-char `systemprompt.md` validates | CONFIRMED, open |
+| R13 | A6 transport | `fellBack=true attempts=1 calls=1 error="proposer failed: ECONNRESET"` | NOT REPRODUCED (`a3993ea`) |
+| R14 | A10 skills inline | 53 + 5,048 chars → 5,173-char system prompt | CONFIRMED, by design (Q2 default keeps skills inlined) |
+| R15 | A10 no cap | 200,000-char `systemprompt.md` validates | NOT REPRODUCED (`a3993ea`) |
 | R17 | A1 pool | k=1: 1 selector call; pool `{"a1":"agg1","a2":"base1"}` | NOT REPRODUCED (`94883af`) |
-| R18 | A8 reflection | why cites `a2`; no id→label map; base shown as CURRENT and BASE | CONFIRMED, open |
+| R18 | A8 reflection | why cites `a2`; no id→label map; base shown as CURRENT and BASE | NOT REPRODUCED (`a3993ea`) |
 | R19 | A9 truncation | marker shown, no disclaimer, FINISH rule present | NOT REPRODUCED (`94883af`) |
-| R20 | A9 size | k=4, 20 tool calls/rollout → 394,106-char aggregator prompt | CONFIRMED, open |
-| R21 | A6 blind retry | 2nd attempt has the rejection notice but not its own 1st reply | CONFIRMED, open |
+| R20 | A9 size | k=4, 20 tool calls/rollout → 394,106-char aggregator prompt | NOT REPRODUCED (`a3993ea`) |
+| R21 | A6 blind retry | 2nd attempt has the rejection notice but not its own 1st reply | NOT REPRODUCED (`a3993ea`) |
 
 ## 8. Ledger
 
@@ -552,6 +600,7 @@ claims are unchanged:
 | 2026-10-19 | unchanged-candidate noise label; GLM default improver | `430d150` |
 | 2026-10-22 | this audit, `scripts/audit-harness2-loop.ts`, plan banner | `05d49ea`, `1b3c000` |
 | 2026-10-22 | Phase 1 chunk (a): learning gates, finals-only pool, per-task seed, base-failed stop, marker tripwire, run status (A1–A4, A11, A14 detection) | `94883af` |
+| 2026-10-22 | Phase 1 chunk (b): proposer contract, retries, autotrigger, 24k cap, evidence budget, library scope/eviction/slugs, reflection input, prompts (A5–A10, A12, A13, C3, D3) | `a3993ea` |
 
 ## 9. Fixes and verification
 
@@ -580,4 +629,34 @@ claims are unchanged:
 | `eslint src/services/harness2 src/routes/Harness2Routes.ts` | clean |
 | `scripts/audit-harness2-loop.ts` on `main` @ `94883af` (testrun) | **13/20 confirmed**; R1, R4, R5, R7, R12, R17 and R19 now read NOT REPRODUCED; temp dir removed |
 | `git status` of the primary checkout after the tests | unchanged (only another agent's ` M tool_schemas.json` and an untracked `.checks/` folder) |
+
+### Chunk (b) — proposer contract, library hygiene, reflection input (`a3993ea`)
+
+**What changed.**
+- **Proposer contract:** transport retries, and empty or cut-off replies count as failures.
+- **Retry:** edits the rejected tree.
+- **Validation:** `autotrigger`, then `collectTreeErrors`.
+- **Cap:** the Q2 default 24,000-char cap on the materialized prompt.
+- **Evidence:** larger caps, plus a mission budget that compacts trajectories.
+- **Library:** excludes the current task, evicts by stored time, uses safe slugs, gains `forget()`.
+- **Reflection:** a new mission with the base once and the id map.
+- **Prompts:** upstream's experience text and re-verify rule are back.
+
+**Evidence.**
+
+| Check | Result |
+|---|---|
+| `vitest run src/services/harness2` on `main` @ `a3993ea` (testrun) | 4 files, **62/62 pass** (two older tests narrowed; 33 new across `Harness2Proposer.test.ts`, `Harness2Library.test.ts`, and the selector-budget test) |
+| Revert check: each fix undone alone in a scratch copy | **20/20 reverts turn their test red** |
+| `tsc --noEmit` on `main` @ `a3993ea` (testrun) | 0 errors |
+| `eslint src/services/harness2` | clean |
+| `scripts/audit-harness2-loop.ts` on `main` @ `a3993ea` (testrun) | **1/20 confirmed**: only R14, by design; temp dir removed |
+| `git status` of the primary checkout after the tests | unchanged |
+
+**Two older tests changed, and why.**
+- The "falls back after one retry" test used a skill with no trigger line. `autotrigger` now
+  repairs that case, so the test uses a frontmatter name mismatch instead.
+- The cross-domain test checked that the legal prompt held no "LIBRARY" anywhere. The restored
+  re-verify rule names "the LIBRARY section" in every proposer prompt. The test now checks the
+  section heading.
 
