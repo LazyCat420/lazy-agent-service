@@ -6,13 +6,14 @@
  * Executor: `runSingleModel` (the benchmark trial path) with the materialized harness as
  * the system prompt. Proposer/selector/reflector: `provider.generateText`.
  */
+import { createHash } from "node:crypto";
 import { runSingleModel, type ModelResult } from "../BenchmarkService.ts";
 import { getProvider } from "../../providers/index.ts";
 import logger from "../../utils/logger.ts";
-import { materialize, renderTree, type Tree } from "./HarnessTree.ts";
+import { isUnchanged, materialize, renderTree, type Tree } from "./HarnessTree.ts";
 import { Library, type Experience } from "./Library.ts";
 import * as prompts from "./Prompts.ts";
-import type { BenchPrompts } from "./Prompts.ts";
+import type { BenchPrompts, SelectionPool } from "./Prompts.ts";
 import { buildMission, rollBase, runParallel, runSequential, type Executor, type ModeResult, type Proposer, type RunView } from "./Recursion.ts";
 
 export interface ModelRef {
@@ -45,6 +46,13 @@ export interface Harness2Request {
    */
   improver?: ModelRef;
   width?: number;
+  /**
+   * Who competes in blind selection. "finals" (default, upstream): the k finals only, and at
+   * k=1 the single final is delivered with no selector call. "mixed": the base rollouts compete
+   * too, so an unadapted answer can win when adaptation hurt.
+   */
+  selectionPool?: SelectionPool;
+  /** Mixed into the per-task selection seed; the order is already task-specific without it. */
   seed?: number;
   libraryRoot?: string;
   project?: string;
@@ -52,19 +60,41 @@ export interface Harness2Request {
 }
 
 export interface Selection {
+  /** The pick came from a selector answer or a one-candidate pool, never from a fallback. */
+  ok: boolean;
+  /** "" when no candidate delivered anything. */
   chosenLabel: string;
   why: string;
   /** Anonymous id → label, for audit. */
   ids: Record<string, string>;
+  pool: SelectionPool;
+  /** Delivered without a selector call (k=1 finals-only, or one delivered candidate). */
+  trivial: boolean;
+  /** The selector failed and a neutral stand-in was delivered; a fallback is never learned from. */
+  fallback: boolean;
   error?: string;
 }
+
+/**
+ * ok: selection succeeded. base-failed: no base rollout ran, so nothing was proposed.
+ * improver-failed: every stage fell back on a proposer failure. no-output: no candidate in the
+ * pool delivered. selection-fallback: the selector failed and a neutral output was delivered.
+ */
+export type Harness2Status = "ok" | "base-failed" | "improver-failed" | "no-output" | "selection-fallback";
 
 export interface Harness2Result {
   taskId: string;
   domain: string;
+  status: Harness2Status;
+  /** This run stored a library entry. */
+  learned: boolean;
+  /** Run-level problems; per-stage outcomes stay on `result.stages`. */
+  errors: string[];
   result: ModeResult;
   selection: Selection;
   adoptedTree: Tree;
+  /** The adopted tree is identical to the base harness (a KEEP_BASE final, or a base pick). */
+  chosenTreeIsBase: boolean;
   output: string;
   experience: { edits: string; entry: Experience | null; raw: string };
   libraryEntry: string | null;
@@ -72,6 +102,7 @@ export interface Harness2Result {
 }
 
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n…[truncated ${s.length - n} chars]` : s);
+const errText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** Deterministic shuffle (mulberry32) so a seed reproduces the selection order. */
 export function shuffle<T>(items: T[], seed: number): T[] {
@@ -106,15 +137,47 @@ export function parseExperience(reply: string): { edits: string; entry: Experien
   return { edits, entry: entry.cue.trim() && entry.lesson.trim() && entry.evidence.trim() ? entry : null };
 }
 
-/** Blind selection over the base rollouts and the finals (upstream "mixed" pool). */
-export async function selectOutput(bp: BenchPrompts, result: ModeResult, propose: Proposer, seed: number): Promise<Selection> {
-  const labels = [...result.ledger.filter((l) => l.startsWith("base")), ...result.finals].filter((l) => result.rollouts[l]?.delivered);
-  if (!labels.length) return { chosenLabel: "base1", why: "", ids: {}, error: "no candidate delivered an output" };
-  if (labels.length === 1) return { chosenLabel: labels[0], why: "only one candidate delivered", ids: { a1: labels[0] } };
-  const order = shuffle(labels, seed);
+/**
+ * Upstream `assign_ids` seed: sha1(task|k|mode), so the shuffled order differs per task and a
+ * rerun of the same task repeats it. A caller seed is mixed in when given.
+ */
+export function selectionSeed(taskId: string, k: number, mode: string, seed?: number): number {
+  const key = `${taskId}|${k}|${mode}` + (seed === undefined ? "" : `|${seed}`);
+  return parseInt(createHash("sha1").update(key).digest("hex").slice(0, 8), 16);
+}
+
+/**
+ * Upstream `_fallback`: after a selector failure deliver a delivered base output, else (finals
+ * pool) the first final by name. The pick is delivered but `ok` stays false, so it never teaches.
+ */
+function fallbackPick(sel: Selection, labels: string[], error: string): Selection {
+  const chosenLabel = labels.filter((l) => l.startsWith("base")).sort()[0] ?? (sel.pool === "finals" ? [...labels].sort()[0] : "");
+  if (!chosenLabel) return { ...sel, error: `${error}; no delivered base output was available for a neutral fallback` };
+  return { ...sel, chosenLabel, fallback: true, error: `${error}; delivered ${chosenLabel} as a neutral fallback` };
+}
+
+/** Blind selection over the pool: the k finals (default), or base rollouts plus finals ("mixed"). */
+export async function selectOutput(
+  bp: BenchPrompts,
+  result: ModeResult,
+  propose: Proposer,
+  opts: { taskId: string; pool?: SelectionPool; seed?: number },
+): Promise<Selection> {
+  const pool = opts.pool ?? "finals";
+  const entrants = pool === "mixed" ? [...result.ledger.filter((l) => l.startsWith("base")), ...result.finals] : result.finals;
+  const labels = entrants.filter((l) => result.rollouts[l]?.delivered);
+  const sel: Selection = { ok: false, chosenLabel: "", why: "", ids: {}, pool, trivial: false, fallback: false };
+  if (!labels.length) {
+    return { ...sel, error: pool === "finals" ? "no final delivered an output (the finals-only pool has no base fallback)" : "no candidate delivered an output" };
+  }
+  if (labels.length === 1) {
+    const why = pool === "finals" && result.k === 1 ? "trivial pool: single final at k=1; delivered without a selector call" : "only one candidate delivered";
+    return { ...sel, ok: true, trivial: true, chosenLabel: labels[0], why, ids: { a1: labels[0] } };
+  }
+  const order = shuffle([...labels].sort(), selectionSeed(opts.taskId, result.k, result.mode, opts.seed));
   const ids = Object.fromEntries(order.map((l, i) => [`a${i + 1}`, l]));
   const body =
-    prompts.select(bp, order.length) +
+    prompts.select(bp, order.length, pool) +
     "\n\n# THE REQUEST\n\n" +
     bp.work +
     "\n\n# CANDIDATES\n\n" +
@@ -123,10 +186,10 @@ export async function selectOutput(bp: BenchPrompts, result: ModeResult, propose
     const reply = await propose(body, "select");
     const id = /```choice\s*\n?\s*([A-Za-z0-9_-]+)\s*\n?```/.exec(reply)?.[1];
     const why = /<why>([\s\S]*?)<\/why>/.exec(reply)?.[1].trim() ?? "";
-    if (id && ids[id]) return { chosenLabel: ids[id], why, ids };
-    return { chosenLabel: order[0], why, ids, error: `selector returned no valid id (${id ?? "none"}); took ${order[0]}` };
+    if (id && ids[id]) return { ...sel, ok: true, chosenLabel: ids[id], why, ids };
+    return fallbackPick({ ...sel, why, ids }, labels, `selector returned no valid id (${id ?? "none"})`);
   } catch (error) {
-    return { chosenLabel: order[0], why: "", ids, error: `selector failed: ${error instanceof Error ? error.message : String(error)}` };
+    return fallbackPick({ ...sel, ids }, labels, `selector failed: ${errText(error)}`);
   }
 }
 
@@ -176,22 +239,74 @@ export async function runHarness2(
   deps: { execute?: Executor; propose?: Proposer } = {},
 ): Promise<Harness2Result> {
   const k = req.k ?? 1;
+  const pool = req.selectionPool ?? "finals";
   const bp: BenchPrompts = { ...req.bench, work: req.bench?.work || req.task };
   const execute = deps.execute ?? makeExecutor(req);
   const propose = deps.propose ?? makeProposer(req.improver ?? DEFAULT_IMPROVER);
+  const errors: string[] = [];
   const library = new Library(req.domain, req.libraryRoot);
-  const libraryEntriesBefore = library.entries().length;
-  const recDeps = { bp, execute, propose, baseTree: req.baseTree, libraryText: library.contextText(), width: req.width ?? 2 };
+  let libraryEntriesBefore = 0;
+  let libraryText = "";
+  try {
+    libraryEntriesBefore = library.entries().length;
+    libraryText = library.contextText();
+  } catch (error) {
+    errors.push(`library read failed, running without it: ${errText(error)}`);
+  }
+  const recDeps = { bp, execute, propose, baseTree: req.baseTree, libraryText, width: req.width ?? 2 };
+  const finish = (status: Harness2Status, result: ModeResult, selection: Selection, rest: Partial<Harness2Result> = {}): Harness2Result => ({
+    taskId: req.taskId,
+    domain: req.domain,
+    status,
+    learned: false,
+    errors,
+    result,
+    selection,
+    adoptedTree: req.baseTree,
+    chosenTreeIsBase: true,
+    output: "",
+    experience: { edits: "", entry: null, raw: "" },
+    libraryEntry: null,
+    libraryEntriesBefore,
+    ...rest,
+  });
 
   const base = await rollBase(recDeps, k);
-  const result = req.mode === "sequential" ? await runSequential(k, base, recDeps) : await runParallel(k, base, recDeps);
-  const selection = await selectOutput(bp, result, propose, req.seed ?? 0);
-  const adoptedTree = selection.chosenLabel.startsWith("base") ? req.baseTree : result.trees[selection.chosenLabel];
+  if (!base.some((b) => b.ok)) {
+    // Upstream schedule.py: with no base trajectory the proposers would adapt on nothing.
+    errors.push(`no base rollout produced anything: ${base.map((b) => `${b.label}: ${b.error || "failed"}`).join("; ")}`);
+    const empty: ModeResult = {
+      mode: req.mode === "sequential" ? "seq" : "agg",
+      k,
+      stages: [],
+      trees: {},
+      rollouts: Object.fromEntries(base.map((b) => [b.label, b])),
+      finals: [],
+      ledger: base.map((b) => b.label),
+      similarity: null,
+    };
+    return finish("base-failed", empty, { ok: false, chosenLabel: "", why: "", ids: {}, pool, trivial: false, fallback: false, error: "base-failed" });
+  }
 
-  const pool = result.stages.map((s) => ({ label: s.label, tree: s.tree, rollout: result.rollouts[s.label] }));
+  const result = req.mode === "sequential" ? await runSequential(k, base, recDeps) : await runParallel(k, base, recDeps);
+  const proposerDown = result.stages.filter((s) => s.fellBack && s.error.startsWith("proposer failed"));
+  const improverFailed = proposerDown.length > 0 && proposerDown.length === result.stages.length;
+  if (improverFailed) errors.push(`every stage fell back on a proposer failure, so no harness was adapted: ${proposerDown[0].error}`);
+  else for (const s of proposerDown) errors.push(`${s.label} fell back on a proposer failure: ${s.error}`);
+
+  const selection = await selectOutput(bp, result, propose, { taskId: req.taskId, pool, seed: req.seed });
+  if (selection.error) errors.push(`selection: ${selection.error}`);
+  const chosen = selection.chosenLabel ? result.rollouts[selection.chosenLabel] : undefined;
+  const adoptedTree = !chosen || selection.chosenLabel.startsWith("base") ? req.baseTree : result.trees[selection.chosenLabel];
+  const status: Harness2Status = improverFailed ? "improver-failed" : !chosen ? "no-output" : selection.ok ? "ok" : "selection-fallback";
+  const outcome = { adoptedTree, chosenTreeIsBase: isUnchanged(req.baseTree, adoptedTree), output: chosen?.output ?? "" };
+  // Upstream schedule.py: reflect and store only after a successful selection of a delivered run.
+  if (status !== "ok" || !chosen?.delivered) return finish(status, result, selection, outcome);
+
+  const candidates = result.stages.map((s) => ({ label: s.label, tree: s.tree, rollout: result.rollouts[s.label] }));
   const decisions = Object.fromEntries(result.stages.map((s) => [s.label, s.notes || s.error]));
   const reflection =
-    buildMission(prompts.experience(bp), { current: req.baseTree, base, pool, decisions }) +
+    buildMission(prompts.experience(bp), { current: req.baseTree, base, pool: candidates, decisions }) +
     `\n\n# SUBMITTED\n\nThe submitted output came from \`${selection.chosenLabel}\`.` +
     (selection.why ? `\nSelector's reason:\n${selection.why}` : "") +
     `\n\n# BASE HARNESS (context/base_harness)\n\n${renderTree(req.baseTree)}`;
@@ -199,24 +314,19 @@ export async function runHarness2(
   try {
     raw = await propose(reflection, "experience");
   } catch (error) {
-    logger.warn(`[harness2] experience reflection failed: ${error instanceof Error ? error.message : String(error)}`);
+    errors.push(`experience reflection failed: ${errText(error)}`);
+    logger.warn(`[harness2] experience reflection failed: ${errText(error)}`);
   }
   const exp = parseExperience(raw);
-  const libraryEntry = exp.entry
-    ? library.add(req.taskId, adoptedTree, { why: selection.why, label: selection.chosenLabel, experience: exp.entry })
-    : null;
-
-  return {
-    taskId: req.taskId,
-    domain: req.domain,
-    result,
-    selection,
-    adoptedTree,
-    output: result.rollouts[selection.chosenLabel]?.output ?? "",
-    experience: { ...exp, raw },
-    libraryEntry,
-    libraryEntriesBefore,
-  };
+  let libraryEntry: string | null = null;
+  if (exp.entry) {
+    try {
+      libraryEntry = library.add(req.taskId, adoptedTree, { why: selection.why, label: selection.chosenLabel, experience: exp.entry });
+    } catch (error) {
+      errors.push(`library entry not stored: ${errText(error)}`);
+    }
+  }
+  return finish(status, result, selection, { ...outcome, learned: libraryEntry !== null, experience: { ...exp, raw }, libraryEntry });
 }
 
 export type { RunView };

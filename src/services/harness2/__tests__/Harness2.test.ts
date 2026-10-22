@@ -38,7 +38,7 @@ describe("harness tree validation (upstream discard rules)", () => {
     ["skill with no trigger", { ...BASE, "skills/totals/SKILL.md": SKILL("totals") }, /no trigger line/],
     ["skill name mismatch", { "systemprompt.md": "use totals", "skills/totals/SKILL.md": SKILL("other") }, /name: totals/],
     ["off surface", { ...BASE, "scripts/x.py": "print(1)" }, /off the editable surface/],
-    ["grader leak", { "systemprompt.md": "Do what the grader expects." }, /grader verdict/],
+    ["grader verdict marker", { "systemprompt.md": 'Last run reported {"pass_rate": 0.4}.' }, /grader-verdict marker "pass_rate"/],
   ])("rejects %s", (_name, tree, msg) => {
     expect(() => validateTree(tree as Tree)).toThrow(msg);
   });

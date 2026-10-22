@@ -39,12 +39,30 @@ export function skillDescription(tree: Tree, name: string): string {
   return frontmatter(tree[`skills/${name}/SKILL.md`] || "").description || "";
 }
 
-/** Phrases that would mean a grader's verdict leaked into a harness (upstream context.py). */
-const GRADER_RE = /\b(the grader (expects|wants|checks)|rubric (says|requires)|answer key|reference solution|graded (as|by))\b/i;
+/**
+ * Machine markers of a grader's own output (upstream context.py GRADER_VERDICT_MARKERS). A
+ * tripwire for a leaked verdict file, not a phrase filter: ordinary domain text ("graded as
+ * BBB-") must pass.
+ */
+export const GRADER_VERDICT_MARKERS = [
+  "deterministic_eval_summary",
+  "deterministic_eval_result",
+  "judge_scope_and_deterministic_status",
+  "Judge findings on the rendered result",
+  '"passed_count"',
+  '"pass_rate"',
+  '"test_pass_rate"',
+] as const;
 
 export function assertNoGraderVerdicts(tree: Tree): void {
-  for (const [rel, text] of Object.entries(tree)) {
-    if (GRADER_RE.test(text)) throw new Error(`${rel} carries a grader verdict; harnesses must be answer-free`);
+  for (const rel of Object.keys(tree).sort()) {
+    for (const m of GRADER_VERDICT_MARKERS) {
+      if (rel.includes(m)) throw new Error(`harness file ${rel} has grader-verdict marker ${m} in its NAME; rename it`);
+      const at = tree[rel].indexOf(m);
+      if (at >= 0) {
+        throw new Error(`harness file ${rel} contains grader-verdict marker ${m} at offset ${at}; remove that string`);
+      }
+    }
   }
 }
 

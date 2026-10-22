@@ -83,7 +83,9 @@ export class Library {
     const exp = opts.experience;
     if (!hasExperience(exp)) return null;
     assertNoGraderVerdicts(harness);
-    assertNoGraderVerdicts({ "EXPERIENCE.md": JSON.stringify(exp) + (opts.why || "") });
+    // Raw text, not JSON: JSON.stringify escapes the quotes inside a marker such as "pass_rate".
+    const text = [exp.cue, exp.lesson, exp.evidence, exp.confidence, exp.edits, opts.why].filter(Boolean).join("\n");
+    assertNoGraderVerdicts({ "EXPERIENCE.md": text });
     const d = this.entryDir(taskId);
     fs.rmSync(path.join(d, "harness"), { recursive: true, force: true });
     for (const [rel, text] of Object.entries(harness)) {

@@ -28,6 +28,8 @@ const R = await mod("Recursion");
 const L = await mod("Library");
 const S = await mod("Harness2Service");
 
+// Checks whose claim needs a selector call at k=1 (R1, R5, R18, R19) pass selectionPool "mixed": since
+// the finals-only default (ch.13 §6 Q1) a k=1 pool holds one final and is delivered without a selector.
 const lines: string[] = [];
 const report = (id: string, title: string, confirmed: boolean, observed: string) => {
   const line = `${id} [${confirmed ? "CONFIRMED" : "NOT REPRODUCED"}] ${title} :: ${observed}`;
@@ -71,7 +73,7 @@ try {
 await check("R1", "blind-selection order is identical for every task (seed defaults to 0)", async () => {
   const picks: Record<string, number> = {};
   for (let i = 0; i < 12; i++) {
-    const r = await S.runHarness2(req({ taskId: `task-${i}` }), {
+    const r = await S.runHarness2(req({ taskId: `task-${i}`, selectionPool: "mixed" }), {
       execute: execOK,
       propose: async (_p: string, label: string) =>
         label === "select" ? "<why>first one</why>\n```choice\na1\n```" : label === "experience" ? "NO_ENTRY" : label.startsWith("dom") || label.startsWith("agg") ? editReply : "<notes>KEEP_BASE</notes>",
@@ -111,7 +113,7 @@ await check("R4", "library entry is written when no candidate delivered anything
 
 // R5 — selector failure: an arbitrary candidate is adopted and still becomes a library lesson.
 await check("R5", "library entry is written when the selector failed", async () => {
-  const r = await S.runHarness2(req({ taskId: "t-badselect" }), {
+  const r = await S.runHarness2(req({ taskId: "t-badselect", selectionPool: "mixed" }), {
     execute: execOK,
     propose: async (_p: string, label: string) =>
       label === "select" ? "I could not decide." : label === "experience" ? EXP_OK : label.startsWith("dom") || label.startsWith("agg") ? editReply : "<notes>KEEP_BASE</notes>",
@@ -239,7 +241,7 @@ await check("R17", "k=1 runs a selector over base1+agg1 (upstream: no selector, 
 // and the base harness is rendered twice.
 await check("R18", "reflection prompt lacks the anonymous-id map and repeats the base tree", async () => {
   let expPrompt = "";
-  const r = await S.runHarness2(req({ taskId: "t-reflect" }), {
+  const r = await S.runHarness2(req({ taskId: "t-reflect", selectionPool: "mixed" }), {
     execute: execOK,
     propose: async (p: string, label: string) => {
       if (label === "experience") { expPrompt = p; return "NO_ENTRY"; }
@@ -258,7 +260,7 @@ await check("R18", "reflection prompt lacks the anonymous-id map and repeats the
 // incomplete sections; there is no "truncation markers are ours" disclaimer.
 await check("R19", "selector sees our truncation marker with no disclaimer", async () => {
   let sel = "";
-  await S.runHarness2(req({ taskId: "t-long" }), {
+  await S.runHarness2(req({ taskId: "t-long", selectionPool: "mixed" }), {
     execute: async (tree: Record<string, string>) => {
       const output = (T.materialize(tree).includes("Add the rows") ? "checked " : "plain ") + "row\n".repeat(5000);
       return { ok: true, delivered: true, output, trajectory: "final output: (long)", error: "" };
