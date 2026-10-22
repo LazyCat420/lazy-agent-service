@@ -1,4 +1,3 @@
-import logger from "../utils/logger.ts";
 import { evalChaosEnabled, executeEvalChaos } from "./EvalChaosCapabilities.ts";
 import { safeFetch, UnsafeUrlError, type SafeFetchResult } from "../utils/UrlSafety.ts";
 import { webSearch, type WebResult } from "./WebSearchService.ts";

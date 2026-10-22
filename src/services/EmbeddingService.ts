@@ -14,7 +14,6 @@ import SettingsService from "./SettingsService.ts";
 import { EmbeddingGemma2Client, EMBEDDING_PROVIDER, EMBEDDING_MODEL, embeddingSpace } from "./EmbeddingGemma2Client.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import type {
-  EmbeddingMultimodalPart,
   EmbeddingContent,
 } from "../types/provider.ts";
 /** Resolve the current embedding provider + model from settings. */
@@ -83,7 +82,7 @@ const EmbeddingService = {
     let result: { embedding: number[]; dimensions: number } | undefined =
       undefined;
     let success = true;
-    let errorMessage = null;
+    let errorMessage: string | null = null;
     try {
       const provider = getProvider(providerName);
       if (!provider.generateEmbedding) {
@@ -112,7 +111,7 @@ const EmbeddingService = {
       const pricing = getPricing(TYPES.TEXT, TYPES.EMBEDDING)[resolvedModel];
       const approxInputTokens =
         typeof content === "string" ? estimateTokens(content) : 100;
-      let estimatedCost = null;
+      let estimatedCost: number | null = null;
       if (pricing?.inputPerMillion) {
         estimatedCost =
           (approxInputTokens / 1_000_000) * pricing.inputPerMillion;
@@ -220,7 +219,7 @@ const EmbeddingService = {
     }
     const target = await resolveTarget(options);
     if (!target.useGemma) {
-      const results = [];
+      const results: { embedding: number[]; dimensions: number; provider: string; model: string; space: string }[] = [];
       for (const text of texts) results.push(await this.generate(text, options));
       const { dimensions, provider, model, space } = results[0];
       return { embeddings: results.map(result => result.embedding), dimensions, provider, model, space };

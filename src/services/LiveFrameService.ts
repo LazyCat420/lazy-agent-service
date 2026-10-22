@@ -1,5 +1,3 @@
-import logger from "../utils/logger.ts";
-
 export default class LiveFrameService {
   // Map of agentConversationId -> array of base64 frames (oldest to newest)
   private static readonly frameBuffers = new Map<string, string[]>();

@@ -11,14 +11,6 @@ export const EVAL_CHAOS_IDS = [
   "global.eval_chaos.slow",
 ] as const;
 
-const CHAOS_PARAMETERS = {
-  type: "object",
-  properties: {
-    note: { type: "string" },
-  },
-  additionalProperties: false,
-} as const;
-
 function chaosDefinition(id: string, description: string): CapabilityDefinition {
   return {
     id,

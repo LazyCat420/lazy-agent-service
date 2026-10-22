@@ -32,7 +32,6 @@ const BudgetPauseRegistry = {
     return new Promise<BudgetPauseOutcome>((resolve) => {
       // One pause per conversation: a stale waiter is over.
       waiters.get(conversationId)?.settle("stopped");
-      let timer: ReturnType<typeof setTimeout> | undefined;
       const onAbort = () => settle("stopped");
       const settle = (outcome: BudgetPauseOutcome) => {
         if (timer) clearTimeout(timer);
@@ -42,7 +41,7 @@ const BudgetPauseRegistry = {
       };
       const waiter: Waiter = { settle };
       waiters.set(conversationId, waiter);
-      timer = setTimeout(() => settle("timeout"), timeoutMs);
+      const timer = setTimeout(() => settle("timeout"), timeoutMs);
       if (signal?.aborted) settle("stopped");
       else signal?.addEventListener("abort", onAbort, { once: true });
     });
