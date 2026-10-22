@@ -1,5 +1,11 @@
 # Harness² (recursive agent harnessing) port — plan, 2026-10-19
 
+> **Audited 2026-10-22:** see `documentation/chapters/13-harness2-audit-2026-10-22.md`. The schedule
+> below is faithful, but selection, library retention, failure handling and the evidence the
+> improver sees differ from upstream; that chapter lists 20 reproduced defects and the fix plan.
+> Corrections applied in place below: there is no `Selection.ts`, the selection pool is not
+> upstream's, and the route is deployed.
+
 Source: https://github.com/google-research/harness2 (`harness2/core/recursion.py`,
 `prompts.py`, `library.py`, read 2026-10-19). Paper: arXiv 2610.14224.
 
@@ -30,7 +36,9 @@ faithful to upstream structure:
    compositions) and `runSequential` (k rounds of INV+DOM then compose). Each stage gets 2
    attempts; an invalid proposal falls back to the current harness. Both schedule 4k
    rollouts and 3k stages including k base rollouts.
-4. **Selection** (`harness2/Selection.ts`): blind, shuffled pick over base + final outputs.
+4. **Selection** (`selectOutput` in `harness2/Harness2Service.ts`; no separate file): blind, shuffled
+   pick over base + final outputs. This is NOT upstream's pool: upstream selects among the k finals
+   only and skips the selector at k=1 (audit ch.13, A1).
 5. **Library** (`harness2/Library.ts`): per-domain, on disk under
    `runtime-data/harness2/<domain>/` (`HARNESS2_LIBRARY_PATH` override). Stores the full
    adopted tree + `EXPERIENCE.md`; refuses an entry without cue/lesson/evidence; rebuilds
@@ -68,7 +76,9 @@ this substrate — upstream also makes the surface substrate-specific); benchmar
   then fell back; library went 0 → 1 → 2 entries; task-2 proposer prompts carried the library
   (inv1 prompt 5,026 → 7,770 chars).
 - NOT verified: `makeExecutor`/`makeProposer` (the `runSingleModel` / `generateText` wiring) and the
-  `POST /harness2/run` route against a running service; not deployed.
+  `POST /harness2/run` route against a running service. The route has since been deployed with a later
+  service deploy: `GET /harness2/library/<domain>` answers 200 on the NAS (2026-10-22), and no library
+  has been written there yet.
 
 ## Known quality limit seen in the smoke
 

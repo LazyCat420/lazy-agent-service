@@ -1,0 +1,474 @@
+---
+part: Plans
+status: in-progress
+updated: 2026-10-22
+review-by: 2026-11-05
+---
+
+# Harness² Self-Improving Loop — Deep Audit (2026-10-22)
+
+Mode: Assess. **Nothing in `src/` was changed.** This chapter audits the Harness² port
+(`src/services/harness2/`, `POST /harness2/run`; commits `8e242aa` + `430d150`, 2026-10-19)
+against Google's reference code, traces how its rollouts run through this service's agentic
+harness, and lists what is missing, unfinished, or duplicated. It ends with an ordered fix plan.
+
+- **Upstream:** <https://github.com/google-research/harness2> at `1cfe254` (2026-10-13). That
+  commit is the latest, so the 10-19 port and this audit read the same code. Paper: arXiv 2610.14224.
+- **Ours:** `main` @ `a4ae118`. The harness2 files are byte-identical on the primary checkout.
+- **Labels:** **CONFIRMED** means reproduced by `scripts/audit-harness2-loop.ts` (check id `R<n>`)
+  or read in code at the cited line. **REPORTED** means found by a code sweep and spot-checked.
+  **HYPOTHESIS** means plausible but not proven; nothing else in this chapter builds on one.
+
+## 1. Verdict: REQUEST CHANGES
+
+The **task-level schedule is faithful**. The details are listed in §5 so nobody "fixes" them:
+- the 4k-rollout / 3k-stage budget, the INV/DOM split, one retry then fallback, KEEP_BASE;
+- sequential checkpoints, and the parallel compose.
+
+**The decision points around the schedule are not faithful.** These are what gets selected, what
+gets stored, what evidence the improver sees, and what a skill costs. Three of them corrupt what
+the loop learns:
+1. Failed runs still write library lessons (R4, R5).
+2. Empty or cut-off improver replies are recorded as deliberate "keep the base" decisions (R2, R3).
+3. A re-run task reads its own earlier answer (R6).
+
+**The loop is also not closed.** Nothing outside `/harness2` reads the library or an adopted
+harness (§4.B4), so no production agent improves from it. The rollouts don't run the real agent
+either: there is at most one tool, `calculate_precise` (§4.B1). The "how the agent works" (INV)
+half of the method therefore has almost nothing to optimise.
+
+**Exposure today is small:** the route is live on the NAS, but no library exists there yet (§2).
+That makes this the right time to fix it, before anyone relies on stored lessons.
+
+## 2. Measured baseline
+
+| Check | Result | Label |
+|---|---|---|
+| `vitest run src/services/harness2` (testrun, primary checkout @ `a4ae118`) | 1 file, **15/15 pass** | CONFIRMED |
+| `scripts/audit-harness2-loop.ts` (testrun, fake deps, no network) | **20/20 defects reproduce** (§7) | CONFIRMED |
+| NAS `GET :5591/harness2/library/audit-probe-x` | `200 {"entries":[],"context":""}`, so the route is deployed | CONFIRMED |
+| NAS `/volume1/docker/lazy-agent-service/runtime-data/` | no `harness2/` directory: the endpoint has never stored an entry | CONFIRMED |
+| Library persistence across deploys | `docker-compose.yml:33` bind-mounts `./runtime-data`, so it survives redeploys | CONFIRMED |
+
+**The green suite covers none of the defects below.** The tests exercise the schedule, the
+validation rules, and the library's happy path. They never reach the failure branches,
+selection, retention, or the executor and proposer wiring (`makeExecutor` / `makeProposer` and
+the route have no test).
+
+## 3. How the loop works, and where ours departs
+
+```
+ base rollouts (k)                  ← ours: no "all bases failed" stop            [A4]
+      │
+ Propose: INV + DOM candidates      ← ours: empty/cut reply = KEEP_BASE            [A5]
+      │   (2 attempts, validate)    ← ours: no transport retry, retry is blind,
+      │                                     first error only, no auto-trigger      [A6]
+ Probe: roll each candidate once    ← ours: solver has ≤1 tool, extra prompt layers [B1, B2]
+      │
+ Compose (agg / c_t)                ← evidence clipped; prompt grows unbounded     [A9]
+      │
+ Select (blind)                     ← ours: base runs in the pool, selector at k=1,
+      │                                     same order every task                  [A1, A2]
+ Reflect → EXPERIENCE               ← ours: runs even when selection failed;
+      │                                     no id→label map                        [A3, A8]
+ Library (per domain)               ← ours: reads own entry on re-run, evicts by name,
+                                            one library forever, '..' escapes      [A7, C3]
+      ╳  nothing feeds an adopted harness back into production agents             [B4]
+```
+
+| Upstream module (`harness2/core/`) | Ours | State |
+|---|---|---|
+| `recursion.py` (`run_parallel`, `run_sequential`, `_run_stage`) | `Recursion.ts` | Schedule faithful. Stage acceptance is not: no `autotrigger` (`recursion.py:116`), the rejected tree is not handed back (`:228`), the empty-tree check is gone (`:214`) |
+| `schedule.py` (`run_task`, `run_domain`, resume, `summary.json`) | `runHarness2` | Gates missing: base-failed (`:629`), reflect and store only on `sel.ok` (`:529`, `:555`), trivial k=1 selection (`:514`), `lib.retain` (`:701`). No run record or resume |
+| `selection.py` | `selectOutput` in `Harness2Service.ts` | Pool and seeding differ (A1, A2); the reflection gets no id map (A8) |
+| `library.py` | `Library.ts` | No `retain`/`forget` (`:90`, `:101`); one library forever instead of one per run and mode (`:23`) |
+| `context.py` (evidence written as files, no clipping) | `buildMission` (everything inlined into one prompt) | A substrate adaptation, but its clipping is below upstream's floor (A9) |
+| `tree.py` | `HarnessTree.ts` | No always-on cap, first error only, no `autotrigger`, different diversity metric |
+| `proposer.py` (an agent session with file access, retries, audit trail) | `makeProposer`: one `generateText` call | Empty reply returns `""` (`Harness2Service.ts:166`); upstream: "Never swallowed into an empty string" (`proposer.py:62`) |
+| `prompts.py` (66 KB) | `Prompts.ts` (16 KB) | Stage prompts condensed but faithful; surface, GENERALIZE, select and experience lost rules that matter (A10, A12, A8) |
+| `ledger.py`, `judge.py`, `report.py`, `runmark.py` | not ported | Budget identity is covered by unit tests only; no judge (by design) |
+
+## 4. Findings
+
+### A. The loop's decision points
+
+**A1 — The selection pool includes the base runs, and k=1 still runs a selector.** CONFIRMED (R17).
+- **Ours:** `selectOutput` builds the pool from the base rollouts plus the finals
+  (`Harness2Service.ts:111`). Its comment calls this the upstream "mixed" pool.
+- **Upstream:** `selection_pool` is "exactly the k finals… the reference executions are not in
+  the pool… the only pool this release builds" (`selection.py:93`). `run_task` refuses any other
+  policy. At k=1, upstream delivers the single final with **no selector call**
+  (`trivial_selection`, `schedule.py:514`).
+- **Effect:** our method is not the one the paper measured. Every k=1 run spends an extra
+  improver call, and a base output can be "adopted", which then stores the base tree as a lesson.
+  The mixed pool does have a real argument (it lets an unadapted answer win when adaptation hurt).
+  That makes this a **decision for the user** (§6 Q1), not a silent default.
+
+**A2 — The "blind, shuffled" order is the same for every task.** CONFIRMED (R1).
+- **Ours:** the seed defaults to `0` (`Harness2Service.ts:188`), so a 2-candidate pool always
+  comes out `[agg1, base1]`. Upstream seeds per task: `sha1(task|k|mode)` (`selection.py:71`).
+- **Effect:** in the repro, a selector that always answers `a1` picked `agg1` on 12 of 12
+  different tasks. LLM selectors do lean toward one position, so this turns position bias into a
+  systematic pro-adaptation bias.
+
+**A3 — Failed selections still write library lessons.** CONFIRMED (R4, R5).
+- **Ours:** reflection and `library.add` run unconditionally (`Harness2Service.ts:193-207`).
+  - If nothing delivered, `selectOutput` returns `base1` with an error, and an entry is still
+    stored (R4).
+  - If the selector fails, the first shuffled candidate is "adopted" and stored (R5).
+- **Upstream:** reflection runs only `if mode_lib and sel.ok`, and the library add requires
+  `sel.ok` plus a complete experience (`schedule.py:529`, `:555`). A fallback pick delivers an
+  output but never teaches.
+
+**A4 — No stop when every base rollout failed.** CONFIRMED (R12).
+- **Ours:** with the solver down, the run still made 4 improver calls (`inv1`, `dom1`, `agg1`,
+  `experience`) and 4 doomed rollouts.
+- **Upstream:** stops with status `base-failed` (`schedule.py:629`). It also refuses to build
+  evidence when no trajectory renders ("the proposer would be adapting on nothing").
+
+**A5 — An empty or cut-off improver reply looks like a deliberate KEEP_BASE.** CONFIRMED (R2, R3).
+- **Empty reply:** `makeProposer` returns `res.text || ""` (`Harness2Service.ts:166`). `applyReply`
+  then keeps the current tree, so the stage records `keptBase=true, fellBack=false` with empty
+  notes (R2). Downstream stages and the reflector read that as an evidence-based "no change".
+- **Cut-off reply:** a reply truncated inside a second `<file>` block is half-applied, and it
+  passes validation. In R3 the accepted tree tells the agent to "use the `totals` skill", but
+  that skill does not exist.
+- Nothing checks `finish_reason` or zero usage. Compare memory
+  `zero-reported-token-usage-marks-a-truncated-generation`.
+
+**A6 — Stage retries are weaker than upstream's.** CONFIRMED (R13, R21, R8).
+- **No transport retry:** a single `ECONNRESET` ends the stage on the first attempt
+  (`Recursion.ts:170-173`). Upstream makes 2 transport attempts with backoff
+  (`config.py:177`, `proposer.py`).
+- **The retry is blind:** it appends "YOUR PREVIOUS ATTEMPT WAS REJECTED… Fix it", but the
+  proposer call is stateless and never sees what it sent (R21). Upstream writes the rejected tree
+  back into the session's workspace, so the retry edits it (`recursion.py:228`).
+- **First error only:** `validateTree` throws at the first problem. A reply with 4 problems
+  reported only one (R8). Upstream collects every error into one message (`tree.py:377`).
+- **No `autotrigger`:** upstream repairs a missing skill trigger line before validating
+  (`recursion.py:116`, `tree.py:192`). That is the exact failure the 10-19 smoke run hit (a DOM
+  proposal retried, then fell back).
+
+**A7 — Library scoping and retention.** CONFIRMED (R6, R9) and code.
+- **Self-read:** a re-run task reads its own earlier entry as "earlier tasks in this domain" (R6).
+  Upstream keeps only the entries before the current task (`library.py:101`, `schedule.py:701`).
+- **Eviction is alphabetical:** past the 60,000-char cap, `contextText` drops "the oldest", but
+  `entries()` sorts by name (`Library.ts:142`). R9 added `zeta-older` and then `alpha-newer`;
+  the newer one was evicted.
+- **One library forever:** there is one library per domain, shared across mode, k, solver and
+  improver, and it grows without end. Upstream scopes roots per run and mode, "so each sweep
+  starts every domain empty" (`library.py:23`).
+- **No way to remove a bad lesson:** there is no `forget`/`retain` and no delete endpoint.
+- **Caller-chosen task ids overwrite:** a reused `taskId` replaces an unrelated earlier entry.
+
+**A8 — The reflector cannot read the selector's reasoning, and its prompt lost the
+anti-confabulation rules.** CONFIRMED (R18) and prompt diff.
+- **No id map:** the selector writes its `<why>` in anonymous ids ("a2 reconciles the total").
+  The reflection prompt carries that text but not the `a1/a2 → label` map. Upstream writes
+  `adoption.json` for exactly this (`selection.py:432`, `:471`).
+- **Base tree twice:** the base tree is rendered as CURRENT HARNESS and again as BASE HARNESS.
+- **Dropped sentences:** `experience()` (`Prompts.ts:264`) dropped upstream's strongest lines,
+  including "an invented attribution poisons the library for every later task"
+  (`prompts.py:1130`) and "Adoption alone never establishes that an edit helped or will
+  transfer" (`prompts.py:1145`).
+- **HYPOTHESIS:** the 10-19 smoke run's "high confidence lessons from sampling noise" is partly
+  caused by these cuts, not only by the weak improver model. Testable: A/B the two prompt texts
+  on the same recorded evidence.
+
+**A9 — Evidence is clipped below upstream's floor, and the prompt grows without bound.**
+CONFIRMED (R19, R20) and code.
+- **What the improver sees:** each tool result is cut at 800 chars, args at 400, thinking at
+  1,500 and the final output at 6,000 (`Harness2Service.ts:135-140`). Selector candidates are cut
+  at 12,000 (`:121`).
+- **Upstream's floor:** an observation limit under 10,000 is "in the range that fabricates
+  defects" and is refused (`spec.py:163`). Trajectories are never clipped as a whole, and the
+  model is told that truncation markers "are ours, not behavior by the solver" (`context.py:534`).
+  Our selector has a FINISH rule against "visibly incomplete sections" and gets no such
+  disclaimer (R19). Upstream's has one (`prompts.py:1087`). This biases selection against long
+  answers.
+- **Size:** everything is inlined, and there is no cap on tool-call count or total mission size.
+  At k=4, with 20 tool calls per rollout, the aggregator prompt was **394,106 chars (about 98k
+  tokens) before any library text** (R20).
+- **ASSUMPTION:** whether that overflows GLM-5.3-Flash depends on the served context length,
+  which this audit did not check. An overflow surfaces as "proposer failed", which means a
+  silent fallback.
+
+**A10 — The cost of skills is misrepresented, and nothing caps always-on text.** CONFIRMED (R14, R15).
+- **What we do:** `materialize` puts **every** skill body into every rollout's system prompt
+  (`HarnessTree.ts:98-108`). In R14, a 53-char system prompt plus a 5,048-char skill gave a
+  5,173-char system prompt.
+- **What we tell the proposer:** the surface table says skills are "used only when its trigger
+  fires" (`Prompts.ts:49`). It also says "ALWAYS-ON PROSE IS THE EXPENSIVE OPTION; prefer a
+  SKILL" (`:51`).
+- **Effect:** on this substrate that advice is false. The proposer is steered to grow the prompt
+  and cannot see the cost.
+- **No cap:** a 200,000-char `systemprompt.md` validates (R15). Upstream caps always-on text at
+  24,000 chars (OpenCode, `substrate/opencode.py:50`) or 8,000 (Codex, `codex.py:42`).
+- **We already have on-demand skills:** `SkillRegistry` plus the `skill_read` tool, using the
+  same `skills/<name>/SKILL.md` layout (`AgenticLoopService.ts:361-378`). See §6 Q2 and D5.
+
+**A11 — The "grader verdict" check is invented, misfires on finance text, and can crash the
+whole run.** CONFIRMED (R7).
+- **Ours:** `GRADER_RE` (`HarnessTree.ts:43`) matches English phrases such as `graded as`,
+  `graded by`, `answer key` and `reference solution`. Its comment credits upstream
+  `context.py`.
+- **Upstream:** checks machine markers from benchmark graders, such as `"pass_rate"` and
+  `deterministic_eval_summary` (`context.py:419`).
+- **Misfire:** "Treat any bond graded as BBB- or better as investment grade" is rejected as a
+  grader leak.
+- **Crash:** when a reflected lesson trips the check, `Library.add` throws out of `runHarness2`
+  (R7). The route answers 500 and every rollout result is lost, because there is no run record
+  (C2).
+
+**A12 — Smaller prompt and input gaps.** CONFIRMED (prompt diff).
+- **Library re-verify rule dropped:** GENERALIZE (`Prompts.ts:118`) lost the rule that protects
+  the cross-task loop. A component copied from the library must have its facts **re-verified**:
+  "an earlier task's mapping or threshold is a hypothesis here, not a fact" (`prompts.py:323`).
+- **Wrong "answer-free" variant:** the selector uses the proposer's version, which mentions
+  trajectories the selector never sees. Upstream has a separate `ANSWER_FREE_SELECT`
+  (`prompts.py:47`).
+- **Unchecked caller text:** the request's `bench` prompt slots are not checked for
+  rubric/score/grader words. Upstream refuses them (`spec.py:121`).
+
+**A13 — The diversity metric is not upstream's.** CONFIRMED (R11). Low impact.
+- **Ours:** `diversity` compares whole-file text, so a one-line edit to a 50-line file scores
+  0.0. Upstream's line-Jaccard (`tree.py:407`) would score 0.961.
+- It is reported only and drives no decision, but its comment calls it upstream's.
+
+### B. How rollouts run through our agentic harness
+
+**B1 — Rollouts do not exercise the real agent.** CONFIRMED (code).
+- **The executor:** `runSingleModel` (`BenchmarkService.ts:323`). With `toolsEnabled` it calls
+  `handleAgent` with `autoApprove: true`, `maxIterations: 10` and
+  `enabledTools: [CALCULATE_PRECISE]` (`:383-392`). Without it there are no tools at all.
+- **No real agent:** `makeExecutor` never passes `model.agent` (`Harness2Service.ts:144-155`), so
+  a rollout cannot run as a real custom agent (trading, lupos, …) with its own tools and policies.
+- **Effect:** `tool_guidance.md` and the INV dimension have no real tool use to adapt. Harnesses
+  learned here are not evidence about production agents.
+
+**B2 — Tools-enabled rollouts run under prompt layers the proposer never sees.** CONFIRMED (code).
+- **What `/agent` adds:** `handleAgent` routes through `AgenticLoopService` and
+  `SystemPromptAssembler`. With no `agent`, the assembler adds:
+  - a direct-mode identity;
+  - tool docs, with the orchestrator-only tools grafted onto the enabled set
+    (`system-prompt/index.ts:95`);
+  - project skills, conversation memories and workflow memories, by embedding match
+    (`:440`, `:468`, `:501`);
+  - a local-time system message (`:600`).
+- **How it is wired:** the assembler runs as a `beforePrompt` hook registered by
+  `createStandardHooks` (`harnesses/lifecycle/HookInitializer.ts:51-59`, called from
+  `AgenticLoopService.ts:578`).
+- **Effect:** the proposer diffs only the harness2 tree, so behaviour caused by those layers is
+  credited to tree edits (confounded evidence).
+- **HYPOTHESIS — rollouts may not be independent:** the same hook set registers MemoryExtractor
+  and WorkflowMemory as `afterResponse` hooks. WorkflowMemory skips only the trading project
+  (`WorkflowMemoryService.ts`, `createHook`: needs a conversation id, a completed run and ≥ 4
+  messages). So a completed tools-enabled rollout can store a workflow memory under project
+  `harness2`, and a later candidate's rollout can retrieve it in step 10. Not reproduced here
+  (needs Mongo and embeddings). Check: run a k=1 task with `toolsEnabled`, then query
+  `workflow_memories` for project `harness2`.
+
+**B3 — Tools-enabled rollouts leave an agent-conversation document each.** CONFIRMED (code).
+- `runSingleModel` passes `skipConversation: true`, but `handleAgent` ignores it. It mints a UUID
+  (`ChatRoutes.ts:852`) and upserts a conversation stub (`:859`; `ConversationService.ts:236`).
+- One k=1 task makes 4 of them. This is inherited from the benchmark path and also affects
+  `/benchmark` agent runs.
+
+**B4 — The loop is not closed.** REPORTED (sweep), spot-checked.
+- Outside `Harness2Routes.ts`, nothing reads `runtime-data/harness2`, `HARNESS2_LIBRARY_PATH`,
+  `contextText()` or an adopted tree.
+- The 10-19 plan scoped this out on purpose, so trading prompts stay untouched.
+- The result: "self-improving" currently means only that later `/harness2/run` calls in the same
+  domain read earlier lessons. See §6 Q4.
+
+### C. Route and operational safety
+
+**C1 — An open, expensive endpoint.** CONFIRMED (code).
+- **No authentication:** `authMiddleware` only copies the project and username headers
+  (`AuthMiddleware.ts:12-58`). This is service-wide, so Rod's repos can call without keys.
+- **Cost:** one `POST /harness2/run` can start 16 rollouts plus 12 improver calls, plus selection
+  and reflection, at k=4.
+- **Load on the Spark:** the default improver is GLM on the DGX Spark (`vllm-2`), the same box
+  that serves the trading cycle. Nothing queues or prioritises these calls, and nothing stops two
+  runs at once.
+- **Any model:** the body may name any provider/model as solver or improver, including paid
+  cloud models.
+
+**C2 — A synchronous request with no run record.** CONFIRMED (code).
+- **Results live only in the HTTP response.** The response is returned after the whole run.
+  Nothing aborts on client disconnect, and nothing persists stage notes, selection, raw
+  reflection or proposer prompts.
+- **Upstream keeps a full record:** `summary.json` (with resume), `selection.json`, `edits.md`,
+  per-stage evidence directories and a proposer audit trail.
+- **Effect:** when a run dies late (A11), or the client times out, everything except a possible
+  library entry is gone.
+
+**C3 — `..` escapes the library directory.** CONFIRMED (R10; path computation only).
+- `slug` keeps dots (`Library.ts:29`). So `domain: ".."` resolves to the parent of the library
+  root, and `taskId: ".."` resolves to the domain directory itself. Both GET and POST accept
+  them.
+- Reach is one directory level, because slashes are replaced.
+
+**C4 — Concurrent runs in one domain race.** CONFIRMED (code).
+- Two runs in the same domain race on the `INDEX.md` rebuild. Two runs with the same `taskId`
+  race on `rmSync` of its harness directory (`Library.ts:88`).
+
+### D. Duplicates and cleanup
+
+- **D1 — Frontmatter parsing, 4th copy.** REPORTED, spot-checked. `HarnessTree.frontmatter` is
+  the weakest of four hand-rolled parsers. The others are `SkillRegistry.parseSkillFrontmatter`
+  (`platform/skills/SkillRegistry.ts:38`, handles lists and quotes, same `SKILL.md` layout),
+  `RuleLoader.parseFrontmatter` (`platform/rules/RuleLoader.ts:81`) and
+  `SubagentRegistry.parseSubagentMarkdown` (`SubagentRegistry.ts:64`). Reuse SkillRegistry's.
+- **D2 — Other helper copies.** REPORTED, spot-checked.
+  - `mapLimit` repeats the shared-cursor worker pool written inline in
+    `RunExecutionEngine.ts:359-409`.
+  - The local `truncate` is about the seventh ad-hoc copy. There are four identical copies in
+    `orchestrator/routers/`, plus `ContextWindowManager.ts:177`, which uses the same marker
+    format.
+  - None of them is shared.
+- **D3 — Duplication inside harness2.**
+  - The cue/lesson/evidence completeness check exists twice (`parseExperience` and
+    `Library.hasExperience`).
+  - "Tree unchanged" exists twice (`isUnchanged` and the inline `same` in `buildMission`).
+  - The `decisions` map is built in three places.
+  - `Library.contextText` re-implements `renderTree` inline.
+- **D4 — Overlapping mechanisms elsewhere.** REPORTED.
+  - `WorkflowMemoryService` already stores successful trajectories and injects them into
+    `/agent`. It is the closest twin of `Library`.
+  - `MemoryExtractor` stores "feedback" memories, which work roughly like lessons.
+  - `ExperimentService` is a compare step.
+  - `PromotionController` (shadow → canary → active) is an adopt step with **no caller**.
+  - `TournamentRouter` is a non-blind best-of-N judge, an output-level twin of `selectOutput`.
+  - Before growing a fourth "lessons" store, decide which of these is the home (§6 Q4).
+- **D5 — Dead or unwired harness components found along the way.** CONFIRMED (code).
+  - `SkillService.ts` has no importers.
+  - `PromotionController` and `RuleLoader` have no production caller.
+  - The runtime image copies only `node_modules`, `dist`, `package.json`, `tool_schemas.json`,
+    `profiles`, `contracts` and `public` (`Dockerfile:36-48`). So `skills/`, `memory/`, `rules/`
+    and `subagents/` do not exist in the container. `/agent` never injects `skill_read` in
+    production (`AgenticLoopService.ts:367`), and when it does, it never lists the skill names
+    (only `/v1/runs`' `ContextAssembly.ts:239` does).
+- **D6 — Docs drift.** `docs/HARNESS2_PLAN_2026-10-19.md`:
+  - cites a `harness2/Selection.ts` that never existed (selection lives in `Harness2Service.ts`);
+  - says the route is "not deployed" (it is);
+  - presents the mixed selection pool as upstream's.
+  - It had no documentation chapter until this one. The plan now carries a banner pointing here.
+- **D7 — Leftovers.**
+  - `/tmp/h2up/` holds 25 flattened upstream files written 2026-10-21 by another session. They
+    are not used by anything and were **not deleted** by this audit; the user may delete them.
+  - `runtime-data/` is not in `.gitignore`, so a local harness2 run leaves untracked files in a
+    checkout.
+- **D8 — Test gaps.** No test reaches A1–A13, `makeExecutor`, `makeProposer` or the route.
+  Upstream's own suite has two tests ours lacks: "complete evidence and library prefix" and
+  "failed selection is never judged".
+
+## 5. What is faithful (keep it)
+
+- **Budget and schedule:** 4k rollouts / 3k stages including the k shared base rollouts; INV and
+  DOM per round; parallel = 2k candidates, then k independent compositions; sequential = k
+  rounds editing the previous checkpoint, with KEEP_BASE meaning "keep the current checkpoint".
+- **Stage handling:** `STAGE_ATTEMPTS = 2`, with fallback to the stage's current harness. The
+  decisions map carries `notes || error`.
+- **Labelling unchanged candidates:** an unchanged candidate is labelled "IDENTICAL… sampling
+  noise" (`430d150`).
+- **Library format:** stores the whole adopted tree plus `EXPERIENCE.md`, and refuses an entry
+  without cue/lesson/evidence. `NO_ENTRY` means no entry. Domains are isolated.
+- **Stage prompts:** propose, aggregate and composeRound keep upstream's structure and
+  KEEP_BASE language.
+
+## 6. Fix plan
+
+**Phase 1 — clear bugs, no design decision needed.** Each item lands with a test that the
+audit script check named in brackets turns into NOT REPRODUCED.
+
+1. **Gate learning on success** [R4, R5]. Reflect and `library.add` only when selection
+   succeeded and the chosen run delivered. Record the fallback pick as delivered-not-learned.
+2. **Base-failure stop** [R12]. If no base rollout is `ok`, return status `base-failed` without
+   proposer calls.
+3. **Proposer contract** [R2, R3, R13, R21, R8].
+   - An empty reply, `finish_reason: length` or zero usage is an error, never KEEP_BASE.
+   - Make 2 transport attempts with backoff.
+   - Put the rejected reply (or its parsed tree) into the retry prompt.
+   - Have `validateTree` collect all errors, and add `autotrigger` before validation.
+   - Reject replies with an unterminated `<file>` block.
+4. **Library hygiene** [R6, R9, R10].
+   - Exclude the current `taskId` from `contextText`.
+   - Evict by stored time, not name.
+   - Refuse `.`/`..` and leading-dot slugs.
+   - Add a per-domain lock and a `DELETE /harness2/library/:domain/:taskId`.
+5. **Per-task selection seed** [R1]. Default to a hash of `taskId|k|mode`.
+6. **Reflection input** [R18].
+   - Pass the id→label map and drop the duplicate base render.
+   - Restore upstream's experience lines, the GENERALIZE re-verify rule, `ANSWER_FREE_SELECT`
+     and the truncation disclaimer [R19].
+7. **No run-killing checks** [R7].
+   - Swap `GRADER_RE` for upstream's machine-marker list, or keep the phrases as a warning only.
+   - Catch per-stage and library failures into the result instead of throwing.
+8. **Route** [C1–C4].
+   - Persist a run record (`runtime-data/harness2/<domain>/runs/<taskId>.json`: stages, notes,
+     selection, raw reflection).
+   - Turn the route into an async job with a poll endpoint, and abort on disconnect.
+   - Allow one run at a time per domain.
+   - Default to local providers only.
+   - Validate the `bench` slots.
+
+**Phase 2 — needs the user's decision before building.**
+
+- **Q1 Selection pool:** finals-only (upstream, matches the paper, no selector at k=1) or mixed
+  (current; the base can win when adaptation hurts)?
+- **Q2 Skills:** keep them inline, or load them on demand?
+  - Inline: then tell the proposer skills cost the same as always-on text, and count them
+    toward an always-on cap of about 24k chars.
+  - On demand: install the harness's skills through `skill_read`. That matches upstream, but it
+    needs skills shipped into the image and their names listed (D5).
+- **Q3 Executor realism:** run rollouts as a real custom agent (`model.agent`) with its own
+  tools, and show the proposer the full system prompt the solver actually received (B1, B2)?
+- **Q4 Closing the loop:** how does an adopted harness reach production? For example, through
+  `PromotionController` shadow → canary with an `ExperimentService` verdict, or through workflow
+  memory, with trading excluded as today.
+- **Q5 Library scope:** per domain only (current), or per domain × solver model (minimum), or
+  per run and mode (upstream)?
+
+## 7. Reproduce
+
+```
+cd agents/lazy-agent-service            # the primary checkout, never a .worktrees/ copy
+testrun --mem 2G -- npx tsx scripts/audit-harness2-loop.ts
+```
+
+The script imports the real `src/services/harness2` modules with fake executor and proposer
+functions. It makes no network or model calls. Library writes go to an OS temp directory, which
+is removed on every exit path. Each line reads `R<n> [CONFIRMED|NOT REPRODUCED] <claim> ::
+<observed>`. Output on 2026-10-22 (R16 was dropped while drafting; the ids match the script):
+
+| Id | Finding | Observed |
+|---|---|---|
+| R1 | A2 fixed order | 12 tasks, selector answers `a1` → `{"agg1":12}`; `shuffle([base1,agg1],0)=[agg1,base1]` |
+| R2 | A5 empty reply | `inv1/dom1/agg1: keptBase=true, fellBack=false, notes=""` |
+| R3 | A5 cut reply | accepted tree names the `totals` skill, `skills=[]` |
+| R4 | A3 nothing delivered | `selection.error="no candidate delivered an output"`, entry written |
+| R5 | A3 selector failed | `error="selector returned no valid id (none); took agg1"`, entry written |
+| R6 | A7 self-read | 2nd run of `t-rerun` prompt contains `## Entry t-rerun` |
+| R7 | A11 grader regex | "graded as BBB-" rejected; "graded by" lesson → `runHarness2` threw |
+| R8 | A6 first error | 4 problems, message names only template braces |
+| R9 | A7 eviction | newer `alpha-newer` dropped, older `zeta-older` kept |
+| R10 | C3 traversal | `Library("..").dir` = `root/..`; `entryDir("..")` = domain dir |
+| R11 | A13 metric | ours 0; line-Jaccard 0.961 |
+| R12 | A4 base failed | improver calls `inv1.a1, dom1.a1, agg1.a1, experience` |
+| R13 | A6 transport | `fellBack=true attempts=1 calls=1 error="proposer failed: ECONNRESET"` |
+| R14 | A10 skills inline | 53 + 5,048 chars → 5,173-char system prompt |
+| R15 | A10 no cap | 200,000-char `systemprompt.md` validates |
+| R17 | A1 pool | k=1: 1 selector call; pool `{"a1":"agg1","a2":"base1"}` |
+| R18 | A8 reflection | why cites `a2`; no id→label map; base shown as CURRENT and BASE |
+| R19 | A9 truncation | marker shown, no disclaimer, FINISH rule present |
+| R20 | A9 size | k=4, 20 tool calls/rollout → 394,106-char aggregator prompt |
+| R21 | A6 blind retry | 2nd attempt has the rejection notice but not its own 1st reply |
+
+## 8. Ledger
+
+| Date | Item | Commit |
+|---|---|---|
+| 2026-10-19 | Harness² port + `POST /harness2/run` | `8e242aa` |
+| 2026-10-19 | unchanged-candidate noise label; GLM default improver | `430d150` |
+| 2026-10-22 | this audit, `scripts/audit-harness2-loop.ts`, plan banner | this chapter's commit |
