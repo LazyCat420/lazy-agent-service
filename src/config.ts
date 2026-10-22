@@ -7,7 +7,7 @@ import { PROVIDERS, PROVIDER_LIST, TYPES, MODEL_TYPES } from "./constants.ts";
 // Helper functions below derive defaults, options, and pricing.
 
 import { MODELS } from "./config/models.ts";
-import { OPENAI_VOICES, GOOGLE_VOICES, ELEVENLABS_VOICES, INWORLD_VOICES, VOICES, DEFAULT_VOICES } from "./config/voices.ts";
+import { VOICES, DEFAULT_VOICES } from "./config/voices.ts";
 
 // ─── Model Type ─────────────────────────────────────────────
 

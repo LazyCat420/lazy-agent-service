@@ -1,9 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import crypto from "node:crypto";
 import { LifecycleMemoryEngine } from "../memory/LifecycleMemory.ts";
 import { ContextAssembly } from "../context/ContextAssembly.ts";
-import { ContextBudget } from "../context/ContextBudget.ts";
-import { RepositoryMapService } from "../context/RepositoryMapService.ts";
 import { HarnessInstrumenter } from "../trace/HarnessInstrumenter.ts";
 import { TraceExporter } from "../trace/TraceExporter.ts";
 import { Span } from "../trace/Span.ts";
@@ -243,7 +241,7 @@ describe("Platform Architecture Subsystem", () => {
     it("detects and stops tool repeat loops", () => {
       const hashes = ["hash_abc", "hash_abc", "hash_abc", "hash_abc", "hash_abc"];
       // 6th repeat exceeds threshold of 5
-      const res = DeterministicVerifiers.verifyToolRepeatLoop("fetch_data", { id: 1 }, hashes, 5);
+      DeterministicVerifiers.verifyToolRepeatLoop("fetch_data", { id: 1 }, hashes, 5);
       // Wait: hash for { toolName: "fetch_data", args: { id: 1 } } will be different from "hash_abc"
       // Let's test with exact matching hash
       const currentHash = crypto

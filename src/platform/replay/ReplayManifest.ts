@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { ReplayManifest, ContextReceipt, CachedToolResult } from "../contracts/manifest.ts";
+import type { ReplayManifest, ContextReceipt } from "../contracts/manifest.ts";
 import type { SpanData } from "../contracts/telemetry.ts";
 
 export class ReplayManifestBuilder {

@@ -237,7 +237,7 @@ function longestArraySlot(value: Json): ArraySlot | null {
  * null when nothing can give way — the caller falls back to a text preview.
  */
 function fitJson(root: Json, budget: number): Json | null {
-  let value = root;
+  const value = root;
   for (;;) {
     const size = pretty(value).length;
     if (size <= budget) return value;

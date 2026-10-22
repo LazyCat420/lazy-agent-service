@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ContextBudget } from "./ContextBudget.ts";
-import type { ContextReceipt, LayerBudgetSummary, ReplayManifest } from "../contracts/manifest.ts";
+import type { ContextReceipt, ReplayManifest } from "../contracts/manifest.ts";
 import type { DurableMemoryRecord } from "../memory/LifecycleMemory.ts";
 import { LifecycleMemoryEngine } from "../memory/LifecycleMemory.ts";
 import { SkillRegistry } from "../skills/SkillRegistry.ts";

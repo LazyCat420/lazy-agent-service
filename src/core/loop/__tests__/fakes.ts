@@ -121,6 +121,7 @@ export function alwaysThrowingModel(error: Error): CoreModel & { calls: CoreMode
       tools: structuredClone(request.tools),
     });
     return (async function* () {
+      yield* [];
       throw error;
     })();
   }) as CoreModel & { calls: CoreModelRequest[] };
