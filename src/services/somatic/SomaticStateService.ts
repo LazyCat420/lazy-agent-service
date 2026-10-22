@@ -3,10 +3,8 @@ import PromptLocaleService from "../PromptLocaleService.ts";
 import SettingsService from "../SettingsService.ts";
 import StatFactory, { type StatInstance } from "./StatFactory.ts";
 import {
-  ALCOHOL_DESCRIPTIONS,
   SOMATIC_KEYWORDS,
   VALID_EMOTIONS,
-  EMOTION_BEHAVIOR_PROMPTS,
   EMOTION_CLASSIFICATION_PROMPT,
   getEmotionBehaviorPrompt,
   type PrimaryEmotion,
@@ -430,7 +428,7 @@ async function analyzeEmotionFromText(
 
   let result: { text: string; usage?: Record<string, unknown> } | undefined;
   let success = true;
-  let errorMessage = null;
+  let errorMessage: string | null = null;
 
   try {
     result = await provider.generateText(aiMessages, modelName, {
