@@ -1,5 +1,3 @@
-import { InstanceEntry } from "../../types/ProviderTypes.ts";
-
 export interface ModelEntry {
   name: string;
   label: string;

@@ -90,7 +90,7 @@ export class SubAgentTelemetryEmitter {
   /** Build the generation_progress payload for the frontend. */
   private buildProgress() {
     const burstTokens = estimateTokens(this.burstOutputCharacters);
-    let subAgentTokensPerSecond = null;
+    let subAgentTokensPerSecond: number | null = null;
     if (burstTokens > 1 && this.burstFirstChunkTime && this.lastChunkTime) {
       const elapsedSeconds =
         (this.lastChunkTime - this.burstFirstChunkTime) / 1000;

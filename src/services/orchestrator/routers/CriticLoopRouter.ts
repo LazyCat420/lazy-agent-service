@@ -259,7 +259,6 @@ export class CriticLoopRouter implements TopologyRouter {
     continueSubAgent?: ContinueSubAgentCallback,
     topologyConfig?: TopologyConfig,
   ): Promise<(SubAgentResult | { error: string })[]> {
-    const { providerName, resolvedModel } = orchestratorContext;
     const actorCount = Math.max(1, Number(topologyConfig?.actorCount) || DEFAULT_ACTOR_COUNT);
     const maximumRounds = Math.max(1, Number(topologyConfig?.maxRounds) || DEFAULT_MAXIMUM_ROUNDS);
 

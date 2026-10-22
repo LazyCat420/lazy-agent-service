@@ -73,12 +73,6 @@ const ENGLISH_REQUIRED_LABEL = "(required)";
 const CAVEMAN_CREATE_TEAM_MARKER = "spawn sub-agent in isolated worktree";
 const ENGLISH_CREATE_TEAM_MARKER = "Spawn one or more sub-agents, each in an isolated git worktree";
 
-const CAVEMAN_SEND_MESSAGE_MARKER = "follow-up to running/completed sub-agent";
-const ENGLISH_SEND_MESSAGE_MARKER = "Send a follow-up message to a running or completed sub-agent";
-
-const CAVEMAN_STOP_AGENT_MARKER = "stop running sub-agent";
-const ENGLISH_STOP_AGENT_MARKER = "Stop a running sub-agent";
-
 // System prompt structural sections
 const CAVEMAN_TOOL_HEADER = "Enabled Tool";
 const ENGLISH_TOOL_HEADER = "Enabled Tools";
