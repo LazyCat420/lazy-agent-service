@@ -28,6 +28,24 @@ import {
 import type { ToolSchema } from "../services/harnesses/types.ts";
 
 /**
+ * Rate-limit snapshot returned by extractOpenAIRateLimits() — mirrors the
+ * header-derived shape (provider tag plus per-window request/token quotas).
+ */
+type OpenAIRateLimits = {
+  provider: string;
+  requests: {
+    limit: number | null;
+    remaining: number | null;
+    reset: string | null;
+  };
+  tokens: {
+    limit: number | null;
+    remaining: number | null;
+    reset: string | null;
+  };
+};
+
+/**
  * OpenAI Chat Completions API enforces a hard maximum of 128 tools.
  * When the Omni agent sends all tools (currently 276+), this limit
  * is exceeded. We truncate to 128, prioritizing tool-discovery tools
@@ -1220,7 +1238,7 @@ const openaiProvider = {
       })
       .withResponse();
     const rateLimits = extractOpenAIRateLimits(rawStreamResponse, model);
-    let usage = null;
+    let usage: TokenUsage | null = null;
     // Track function names from output_item.added events; the arguments.done
     // event may not include the name property (known OpenAI SDK issue).
     const pendingFunctions: Record<
@@ -1475,7 +1493,7 @@ const openaiProvider = {
     }
 
     let stream: Stream<OpenAI.Chat.ChatCompletionChunk>;
-    let rateLimits = null;
+    let rateLimits: OpenAIRateLimits | null = null;
     try {
       const { data: streamData, response: rawStreamResponse } =
         await getClient()
@@ -1530,7 +1548,7 @@ const openaiProvider = {
       }
     }
 
-    let usage = null;
+    let usage: TokenUsage | null = null;
     let lastFinishReason: string | null = null;
     // Accumulate tool calls across chunks
     const pendingToolCalls: Record<

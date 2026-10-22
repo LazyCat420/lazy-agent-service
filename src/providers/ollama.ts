@@ -219,7 +219,11 @@ export function createOllamaProvider(
         ).getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let usage = null;
+        let usage: {
+          inputTokens: number;
+          outputTokens: number;
+          tokensPerSec?: number;
+        } | null = null;
 
         while (true) {
           if (options.signal?.aborted) {
@@ -274,7 +278,7 @@ export function createOllamaProvider(
                   evalDurationSec > 0 &&
                   usage.outputTokens > 0
                 ) {
-                  (usage as Record<string, unknown>).tokensPerSec = parseFloat(
+                  usage.tokensPerSec = parseFloat(
                     (usage.outputTokens / evalDurationSec).toFixed(1),
                   );
                 }
