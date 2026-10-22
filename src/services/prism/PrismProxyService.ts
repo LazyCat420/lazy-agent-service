@@ -3,7 +3,6 @@ import path from "node:path";
 import { prepareTradingAgentRequest } from "../TradingAgentRequest.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
-import { getToolSchemas } from "../ToolSchemaService.js";
 import { rewriteNonLeadingSystemMessages } from "../../utils/openai-compat.ts";
 import { prismAttributionHeaders } from "../../utils/PrismAttribution.ts";
 
