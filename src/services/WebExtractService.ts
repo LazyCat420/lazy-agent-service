@@ -440,7 +440,7 @@ const qaStats: { llmAnswered: number; degraded: number; lastProvider: string | n
 };
 
 /** For health endpoints: what the shared extractor has been doing. */
-export function webExtractStatus(now = Date.now()): Record<string, unknown> {
+export function webExtractStatus(_now = Date.now()): Record<string, unknown> {
   return {
     scraperUrl: SCRAPER_URL,
     defaultCharLimit: DEFAULT_CHAR_LIMIT,

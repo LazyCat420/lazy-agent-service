@@ -39,8 +39,6 @@ import {
 import { SubAgentTelemetryEmitter } from "./orchestrator/SubAgentTelemetryEmitter.ts";
 import { evictIdleSecondaryModel } from "./orchestrator/VramEvictionPolicy.ts";
 import type { TopologyRouter } from "./orchestrator/TopologyRouter.ts";
-import { Span } from "../platform/trace/Span.ts";
-import { TraceExporter } from "../platform/trace/TraceExporter.ts";
 import { HarnessInstrumenter } from "../platform/trace/HarnessInstrumenter.ts";
 import { TraceContext } from "../platform/trace/TraceContext.ts";
 
@@ -53,7 +51,12 @@ import type {
   SubAgentResult,
 } from "../types/orchestrator.ts";
 
-import type { ConversationMessage, LLMProvider } from "./harnesses/types.ts";
+import type {
+  ConversationMessage,
+  EmitFunction,
+  LLMProvider,
+  ResolvedTools,
+} from "./harnesses/types.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 
 type AgenticLoopServiceModule = typeof import("./AgenticLoopService.ts");
@@ -408,7 +411,7 @@ export default class OrchestratorService {
 
     // Attempt git worktree creation — best-effort
     // Non-git workspaces gracefully degrade to shared directory mode
-    let worktreePath = null;
+    let worktreePath: string | null = null;
     const worktreeResult = await GitWorktreeHelper.createWorktree(
       repositoryPath,
       branchName,
@@ -913,7 +916,7 @@ export default class OrchestratorService {
   }
 
   static cleanupConversation(parentAgentConversationId: string): void {
-    const keys = [];
+    const keys: string[] = [];
     const conversationIdsToClean = new Set<string>();
     for (const [key, subAgentState] of activeSubAgents.entries()) {
       if (subAgentState.parentAgentConversationId === parentAgentConversationId) {
@@ -1638,7 +1641,10 @@ export default class OrchestratorService {
             traceId: effectiveTraceId,
             agentConversationId: subAgent.parentAgentConversationId,
             conversationId: subAgent.parentConversationId,
-            emit: subAgentEmit,
+            // DelegateContext types emit loosely; DelegateTool hands it to the
+            // agentic loop, which only emits EmitFunction events.
+            emit: (event: unknown) =>
+              subAgentEmit(event as Parameters<EmitFunction>[0]),
             policies: subAgent.policies,
           });
         }
@@ -1654,7 +1660,9 @@ export default class OrchestratorService {
         modelDefinition: subAgentModelDefinition,
         messages: subAgentMessages,
         ...(admission ? {
-          runtimeTools: admission.runtimeTools,
+          // InternalAdmission types tool parameters as unknown; they are the
+          // capability JSON schemas the loop expects as ToolSchema.
+          runtimeTools: admission.runtimeTools as ResolvedTools,
           runtimeToolExecutor: admission.runtimeToolExecutor,
           runId: admission.runId,
         } : {}),

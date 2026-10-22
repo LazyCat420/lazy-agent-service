@@ -1185,16 +1185,8 @@ export default class ToolOrchestratorService {
         }),
       }));
 
-      const mcpClient = ToolOrchestratorService.getMCPToolSchemas().map(
-        (tool) => ({
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-          domain: tool.domain || `Model Context Protocol: ${tool._mcpServer}`,
-          domainKey: "mcp",
-          system: false,
-        }),
-      );
+      // Kept for its side effect: loads and caches the local MCP tool schemas.
+      ToolOrchestratorService.getMCPToolSchemas();
 
       return [
         ...clientSchemasEnriched,
@@ -2337,7 +2329,7 @@ export default class ToolOrchestratorService {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let finalResult = null;
+      let finalResult: Record<string, unknown> | null = null;
       const stdoutChunks: string[] = [];
       const stderrChunks: string[] = [];
 

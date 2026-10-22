@@ -1,5 +1,3 @@
-import crypto from "node:crypto";
-
 export interface WidgetTemplate {
   type: string;
   defaultTitle: string;
