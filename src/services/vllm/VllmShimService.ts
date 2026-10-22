@@ -297,7 +297,7 @@ export class VllmShimService {
 
       modified = true;
       // Clean content by removing <｜tool calls｜> and all <｜tool_call｜>...<｜end of tool call｜> blocks
-      let cleanedContent = content
+      const cleanedContent = content
         .replace(/<[｜|]tool calls[｜|]>/gi, "")
         .replace(VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE, "")
         .trim();
