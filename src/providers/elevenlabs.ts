@@ -96,7 +96,7 @@ const elevenlabsProvider = {
     const messageQueue: { audio?: string; isFinal?: boolean }[] = [];
     let resolveMessage: (() => void) | null = null;
     let ended = false;
-    let error = null;
+    let error: Error | null = null;
 
     websocket.on("message", (data: WebSocket.RawData) => {
       const response = JSON.parse(data.toString());
