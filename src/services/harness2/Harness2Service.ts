@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { runSingleModel, type ModelResult } from "../BenchmarkService.ts";
 import { getProvider } from "../../providers/index.ts";
 import logger from "../../utils/logger.ts";
+import { ASK_USER_TOOL_SCHEMA } from "../harnesses/lifecycle/AskUserTool.ts";
 import { isUnchanged, materialize, type Tree } from "./HarnessTree.ts";
 import { Library, hasExperience, type Experience } from "./Library.ts";
 import * as prompts from "./Prompts.ts";
@@ -37,10 +38,14 @@ export interface ModelRef {
   toolsEnabled?: boolean;
 }
 
-/** GLM on the DGX Spark (`vllm-2`); override with HARNESS2_IMPROVER_PROVIDER / _MODEL. */
+/**
+ * The DGX Spark (`vllm-2`); override with HARNESS2_IMPROVER_PROVIDER / _MODEL. With no model
+ * override the route uses whatever model the provider serves: a pinned name went stale when the
+ * Spark switched from GLM-5.3-Flash to DeepSeek-V4.1-Flash (ch.13 A14).
+ */
 export const DEFAULT_IMPROVER: ModelRef = {
   provider: process.env.HARNESS2_IMPROVER_PROVIDER || "vllm-2",
-  model: process.env.HARNESS2_IMPROVER_MODEL || "GLM-5.3-Flash-EXL3-TF",
+  model: process.env.HARNESS2_IMPROVER_MODEL || "",
 };
 
 export interface Harness2Request {
@@ -92,8 +97,9 @@ export interface Selection {
  * ok: selection succeeded. base-failed: no base rollout ran, so nothing was proposed.
  * improver-failed: every stage fell back on a proposer failure. no-output: no candidate in the
  * pool delivered. selection-fallback: the selector failed and a neutral output was delivered.
+ * cancelled: the run's signal aborted; nothing after that point ran.
  */
-export type Harness2Status = "ok" | "base-failed" | "improver-failed" | "no-output" | "selection-fallback";
+export type Harness2Status = "ok" | "base-failed" | "improver-failed" | "no-output" | "selection-fallback" | "cancelled";
 
 export interface Harness2Result {
   taskId: string;
@@ -228,16 +234,64 @@ function trajectoryOf(r: ModelResult): string {
   return lines.join("\n");
 }
 
-export function makeExecutor(req: Harness2Request): Executor {
+/**
+ * The solver rollout. Every rollout ends: it gets its own AbortSignal with a deadline
+ * (HARNESS2_ROLLOUT_TIMEOUT_MS, default 20 min), follows the run's cancellation, and is stopped at
+ * its first `ask_user` call, because no user is attached to a harness2 rollout (the loop would
+ * park the turn until an answer that never comes). A rollout that ignores its abort is abandoned
+ * after `abortGraceMs`.
+ */
+export function makeExecutor(
+  req: Harness2Request,
+  opts: { signal?: AbortSignal; timeoutMs?: number; abortGraceMs?: number; runModel?: typeof runSingleModel } = {},
+): Executor {
+  const timeoutMs = opts.timeoutMs ?? (Number(process.env.HARNESS2_ROLLOUT_TIMEOUT_MS) || 20 * 60_000);
+  const graceMs = opts.abortGraceMs ?? 30_000;
+  const runModel = opts.runModel ?? runSingleModel;
   return async (tree, label) => {
-    const r = await runSingleModel(
-      { id: `harness2-${req.taskId}-${label}`, name: `harness2 ${label}`, prompt: req.task, systemPrompt: materialize(tree), temperature: 0.7, maxTokens: 8192 },
-      { provider: req.solver.provider, model: req.solver.model, label, thinkingEnabled: Boolean(req.solver.thinkingEnabled), toolsEnabled: Boolean(req.solver.toolsEnabled) },
-      req.project || "harness2",
-      req.username || "harness2",
-    );
-    const output = r.response || "";
-    return { ok: !r.error, delivered: !r.error && output.trim().length > 0, output, trajectory: trajectoryOf(r), error: r.error || "" };
+    const failed = (error: string, output = "", trajectory = "") => ({ ok: false, delivered: false, output, trajectory, error });
+    if (opts.signal?.aborted) return failed("run cancelled");
+    const controller = new AbortController();
+    let reason = "";
+    let graceTimer: NodeJS.Timeout | undefined;
+    let abandon: () => void = () => {};
+    const abandoned = new Promise<null>((resolve) => (abandon = () => resolve(null)));
+    const stop = (why: string) => {
+      if (controller.signal.aborted) return;
+      reason = why;
+      controller.abort(new Error(why));
+      graceTimer = setTimeout(abandon, graceMs);
+    };
+    const deadline = setTimeout(() => stop(`rollout exceeded its ${Math.round(timeoutMs / 1000)} s deadline`), timeoutMs);
+    const onCancel = () => stop("run cancelled");
+    opts.signal?.addEventListener("abort", onCancel, { once: true });
+    try {
+      const r = await Promise.race([
+        runModel(
+          { id: `harness2-${req.taskId}-${label}`, name: `harness2 ${label}`, prompt: req.task, systemPrompt: materialize(tree), temperature: 0.7, maxTokens: 8192 },
+          { provider: req.solver.provider, model: req.solver.model, label, thinkingEnabled: Boolean(req.solver.thinkingEnabled), toolsEnabled: Boolean(req.solver.toolsEnabled) },
+          req.project || "harness2",
+          req.username || "harness2",
+          {
+            signal: controller.signal,
+            onEvent: (event) => {
+              if (event.type === "tool_execution" && event.tool?.name === ASK_USER_TOOL_SCHEMA.name) {
+                stop("the solver called ask_user, but no user is attached to a harness2 rollout");
+              }
+            },
+          },
+        ),
+        abandoned,
+      ]);
+      if (!r) return failed(`${reason} (the rollout did not stop within ${Math.round(graceMs / 1000)} s and was abandoned)`);
+      if (reason) return failed(reason, r.response || "", trajectoryOf(r));
+      const output = r.response || "";
+      return { ok: !r.error, delivered: !r.error && output.trim().length > 0, output, trajectory: trajectoryOf(r), error: r.error || "" };
+    } finally {
+      clearTimeout(deadline);
+      clearTimeout(graceTimer);
+      opts.signal?.removeEventListener("abort", onCancel);
+    }
   };
 }
 
@@ -250,16 +304,24 @@ const PROPOSER_MAX_TOKENS = 16_384;
  */
 export function makeProposer(
   model: ModelRef,
-  opts: { timeoutMs?: number; providerOf?: (name: string) => Pick<ReturnType<typeof getProvider>, "generateText"> } = {},
+  opts: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    providerOf?: (name: string) => Pick<ReturnType<typeof getProvider>, "generateText">;
+  } = {},
 ): Proposer {
   const timeoutMs = opts.timeoutMs ?? (Number(process.env.HARNESS2_PROPOSER_TIMEOUT_MS) || 20 * 60_000);
   const providerOf = opts.providerOf ?? getProvider;
   return async (prompt, label) => {
+    if (opts.signal?.aborted) throw new ProposerError("run cancelled", false);
     const provider = providerOf(model.provider);
     logger.info(`[harness2] proposer ${label} → ${model.provider}/${model.model} (${prompt.length} chars)`);
     let timer: NodeJS.Timeout | undefined;
+    let onCancel: () => void = () => {};
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new ProposerError(`no reply within ${Math.round(timeoutMs / 1000)} s`, false)), timeoutMs);
+      onCancel = () => reject(new ProposerError("run cancelled", false));
+      opts.signal?.addEventListener("abort", onCancel, { once: true });
     });
     try {
       const res = await Promise.race([
@@ -275,6 +337,7 @@ export function makeProposer(
       return res.text;
     } finally {
       clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onCancel);
     }
   };
 }
@@ -303,13 +366,14 @@ function adoptionBlock(selection: Selection, chosenTreeIsBase: boolean): string 
  */
 export async function runHarness2(
   req: Harness2Request,
-  deps: { execute?: Executor; propose?: Proposer } & Pick<RecursionDeps, "transportBackoffMs" | "missionCharBudget"> = {},
+  deps: { execute?: Executor; propose?: Proposer; signal?: AbortSignal } & Pick<RecursionDeps, "transportBackoffMs" | "missionCharBudget"> = {},
 ): Promise<Harness2Result> {
   const k = req.k ?? 1;
   const pool = req.selectionPool ?? "finals";
   const bp: BenchPrompts = { ...req.bench, work: req.bench?.work || req.task };
-  const execute = deps.execute ?? makeExecutor(req);
-  const propose = deps.propose ?? makeProposer(req.improver ?? DEFAULT_IMPROVER);
+  const signal = deps.signal;
+  const execute = deps.execute ?? makeExecutor(req, { signal });
+  const propose = deps.propose ?? makeProposer(req.improver ?? DEFAULT_IMPROVER, { signal });
   const errors: string[] = [];
   const library = new Library(req.domain, req.libraryRoot);
   let libraryEntriesBefore = 0;
@@ -350,23 +414,32 @@ export async function runHarness2(
   });
 
   const base = await rollBase(recDeps, k);
+  const emptyResult = (): ModeResult => ({
+    mode: req.mode === "sequential" ? "seq" : "agg",
+    k,
+    stages: [],
+    trees: {},
+    rollouts: Object.fromEntries(base.map((b) => [b.label, b])),
+    finals: [],
+    ledger: base.map((b) => b.label),
+    similarity: null,
+  });
+  const noSelection: Selection = { ok: false, chosenLabel: "", why: "", ids: {}, pool, trivial: false, fallback: false };
+  if (signal?.aborted) {
+    errors.push("cancelled after the base rollouts");
+    return finish("cancelled", emptyResult(), { ...noSelection, error: "cancelled" });
+  }
   if (!base.some((b) => b.ok)) {
     // Upstream schedule.py: with no base trajectory the proposers would adapt on nothing.
     errors.push(`no base rollout produced anything: ${base.map((b) => `${b.label}: ${b.error || "failed"}`).join("; ")}`);
-    const empty: ModeResult = {
-      mode: req.mode === "sequential" ? "seq" : "agg",
-      k,
-      stages: [],
-      trees: {},
-      rollouts: Object.fromEntries(base.map((b) => [b.label, b])),
-      finals: [],
-      ledger: base.map((b) => b.label),
-      similarity: null,
-    };
-    return finish("base-failed", empty, { ok: false, chosenLabel: "", why: "", ids: {}, pool, trivial: false, fallback: false, error: "base-failed" });
+    return finish("base-failed", emptyResult(), { ...noSelection, error: "base-failed" });
   }
 
   const result = req.mode === "sequential" ? await runSequential(k, base, recDeps) : await runParallel(k, base, recDeps);
+  if (signal?.aborted) {
+    errors.push("cancelled during the recursion; no selection or reflection ran");
+    return finish("cancelled", result, { ...noSelection, error: "cancelled" });
+  }
   const proposerDown = result.stages.filter((s) => s.fellBack && s.error.startsWith("proposer failed"));
   const improverFailed = proposerDown.length > 0 && proposerDown.length === result.stages.length;
   if (improverFailed) errors.push(`every stage fell back on a proposer failure, so no harness was adapted: ${proposerDown[0].error}`);

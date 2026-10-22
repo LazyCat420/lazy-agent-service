@@ -22,6 +22,9 @@ export interface Experience {
 
 export const DEFAULT_LIBRARY_ROOT = path.resolve(process.cwd(), "runtime-data", "harness2");
 
+/** The library root: the caller's, else HARNESS2_LIBRARY_PATH, else runtime-data/harness2. */
+export const libraryRootOf = (root?: string) => root || process.env.HARNESS2_LIBRARY_PATH || DEFAULT_LIBRARY_ROOT;
+
 export function hasExperience(exp: Partial<Experience> | null | undefined): exp is Experience {
   return Boolean(exp) && (["cue", "lesson", "evidence"] as const).every((key) => typeof exp![key] === "string" && exp![key]!.trim());
 }
@@ -59,8 +62,8 @@ function readTree(dir: string): Tree {
 export class Library {
   readonly dir: string;
 
-  constructor(readonly domain: string, root: string = process.env.HARNESS2_LIBRARY_PATH || DEFAULT_LIBRARY_ROOT) {
-    this.dir = path.join(root, slug(domain));
+  constructor(readonly domain: string, root?: string) {
+    this.dir = path.join(libraryRootOf(root), slug(domain));
   }
 
   get index(): string {
