@@ -490,8 +490,8 @@ function buildTools(options: ProviderOptions) {
 }
 function extractResponseContent(contentBlocks: AnthropicBlock[]) {
   let text = "";
-  let thinking = null;
-  let thinkingSignature = null;
+  let thinking: string | null = null;
+  let thinkingSignature: string | null = null;
   const citations: Array<{ url?: string; title?: string; citedText?: string }> =
     [];
   const toolCalls: Array<{
@@ -516,7 +516,7 @@ function extractResponseContent(contentBlocks: AnthropicBlock[]) {
         }
       }
     } else if (block.type === "thinking") {
-      thinking = block.thinking;
+      thinking = block.thinking ?? null;
       if (block.signature) thinkingSignature = block.signature;
     } else if (block.type === "tool_use") {
       toolCalls.push({
