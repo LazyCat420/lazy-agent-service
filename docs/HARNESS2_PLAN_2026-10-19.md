@@ -1,10 +1,12 @@
 # Harness² (recursive agent harnessing) port — plan, 2026-10-19
 
-> **Audited 2026-10-22:** see `documentation/chapters/13-harness2-audit-2026-10-22.md`. The schedule
-> below is faithful, but selection, library retention, failure handling and the evidence the
-> improver sees differ from upstream; that chapter lists 20 reproduced defects and the fix plan.
-> Corrections applied in place below: there is no `Selection.ts`, the selection pool is not
-> upstream's, and the route is deployed.
+> **Audited and fixed 2026-10-22:** see `documentation/chapters/13-harness2-audit-2026-10-22.md`.
+> The audit found 20 reproduced defects in selection, library retention, failure handling and
+> the evidence the improver sees. Its Phase 1 fixes landed in `94883af`, `a3993ea` and `2ad3f48`
+> (19/20 repro checks now NOT REPRODUCED; R14 stays by design). That chapter, not this plan,
+> describes the current behaviour: finals-only selection by default, async `POST /harness2/run`
+> jobs with run records, local models only. Corrections applied in place below: there is no
+> `Selection.ts`, the selection pool is not upstream's, and the route is deployed.
 
 Source: https://github.com/google-research/harness2 (`harness2/core/recursion.py`,
 `prompts.py`, `library.py`, read 2026-10-19). Paper: arXiv 2610.14224.

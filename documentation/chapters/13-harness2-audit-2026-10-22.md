@@ -206,7 +206,8 @@ the route have no test).
     - Eviction: each entry gets a `- stored:` time; `entriesByAge` evicts the oldest first, and
       the context says how many entries it left out.
     - `Library.forget()` exists.
-  - **Open:** the `DELETE` route (chunk (c)) and library scope (Q5).
+  - **Fixed in `2ad3f48`:** `DELETE /harness2/library/:domain/:taskId`.
+  - **Open:** library scope (Q5).
   - **Unchanged:** a reused `taskId` still overwrites its entry, as upstream's `add` does.
 
 **A8 — The reflector cannot read the selector's reasoning, and its prompt lost the
@@ -305,8 +306,12 @@ whole run.** CONFIRMED (R7).
   (`prompts.py:47`).
 - **Unchecked caller text:** the request's `bench` prompt slots are not checked for
   rubric/score/grader words. Upstream refuses them (`spec.py:121`).
-- **Status:** `ANSWER_FREE_SELECT` is fixed in `94883af`, and the GENERALIZE re-verify rule in
-  `a3993ea`. The `bench` word check is open, chunk (c).
+- **Status: fixed.**
+  - `ANSWER_FREE_SELECT`: `94883af`.
+  - The GENERALIZE re-verify rule: `a3993ea`.
+  - The `bench` checks: `2ad3f48`. Slots must be known keys, and every slot except `work` refuses
+    upstream's words (benchmark, evaluation, grader, rubric, score). `work` restates the task,
+    and a real task may say "credit score".
 
 **A13 — The diversity metric is not upstream's.** CONFIRMED (R11). Low impact.
 - **Ours:** `diversity` compares whole-file text, so a one-line edit to a 50-line file scores
@@ -325,8 +330,11 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
   KEEP_BASE result.
 - **Status:** detection fixed in `94883af`. When every stage falls back on a proposer failure, the
   run returns status `improver-failed`, `errors[0]` names the cause, and nothing is learned.
-  Open, chunk (c): a route preflight that the named models are served, and a default that follows
-  the served model.
+  Fixed in `2ad3f48`:
+  - **Preflight:** the route lists what each local provider serves and refuses a model that is not
+    served (400), an unknown instance (400), or an unreachable provider (502).
+  - **Default improver:** `DEFAULT_IMPROVER.model` is empty unless `HARNESS2_IMPROVER_MODEL` is
+    set, and the route fills in the model `vllm-2` serves.
 
 ### B. How rollouts run through our agentic harness
 
@@ -351,6 +359,13 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
   - Result: a tools-enabled rollout whose model asks a question waits indefinitely, and so does
     the synchronous `POST /harness2/run`. A proposer writing "ask the user when unsure" into
     `guardrails.md` would trigger exactly this.
+  - **Status: fixed in `2ad3f48`.** Every rollout now ends:
+    - it gets its own AbortSignal with a deadline (`HARNESS2_ROLLOUT_TIMEOUT_MS`, default
+      20 min) and follows the run's cancellation;
+    - its first `ask_user` call aborts it, recorded as "no user is attached";
+    - if it ignores its abort, it is abandoned after 30 s.
+    - The `ask_user` schema is still offered to the solver. Removing it means changing
+      `AgenticLoopService.ts`, which two other worktrees are editing.
 - **Side note:** `take_note` writes `data/notes/<runId>.md`. That path is not on a container
   volume and is not gitignored in a checkout.
 
@@ -402,6 +417,12 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
   runs at once.
 - **Any model:** the body may name any provider/model as solver or improver, including paid
   cloud models.
+- **Status: partly fixed in `2ad3f48`.**
+  - Solver and improver must be local providers unless `HARNESS2_ALLOW_CLOUD=1`.
+  - A preflight confirms each local model is served before any rollout (A14).
+  - Only one run per domain can be active.
+  - **Unchanged:** there is still no authentication (it is service-wide, and Rod's repos call
+    without keys), and the Spark still has no queue or priority.
 
 **C2 — A synchronous request with no run record.** CONFIRMED (code).
 - **Results live only in the HTTP response.** The response is returned after the whole run.
@@ -411,18 +432,32 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
   per-stage evidence directories and a proposer audit trail.
 - **Effect:** when a run dies late (A11), or the client times out, everything except a possible
   library entry is gone.
+- **Status: fixed in `2ad3f48`.**
+  - `POST /harness2/run` answers 202 with a `runId`.
+  - `GET /harness2/runs/:runId` polls, and `POST /harness2/runs/:runId/cancel` aborts.
+  - `wait: true` keeps a synchronous answer, and cancels the run when the client disconnects.
+  - Every run writes `<libraryRoot>/<domain>/runs/<runId>.json`: the request at start, then the
+    whole result or the error. A record still `running` with no live job reads `interrupted`.
+  - Proposer prompts are not stored, and there is no resume (upstream has both).
 
 **C3 — `..` escapes the library directory.** CONFIRMED (R10; path computation only).
 - `slug` keeps dots (`Library.ts:29`). So `domain: ".."` resolves to the parent of the library
   root, and `taskId: ".."` resolves to the domain directory itself. Both GET and POST accept
   them.
 - Reach is one directory level, because slashes are replaced.
-- **Status:** `slug` replaces leading dots, so `..`, `.` and `.x` stay inside the root (fixed in
-  `a3993ea`). The route's id pattern is chunk (c).
+- **Status: fixed.**
+  - `slug` replaces leading dots, so `..`, `.` and `.x` stay inside the root (`a3993ea`).
+  - The route refuses any `taskId` or `domain` outside `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`
+    (`2ad3f48`).
 
 **C4 — Concurrent runs in one domain race.** CONFIRMED (code).
 - Two runs in the same domain race on the `INDEX.md` rebuild. Two runs with the same `taskId`
   race on `rmSync` of its harness directory (`Library.ts:88`).
+- **Status: fixed in `2ad3f48`.**
+  - One active run per domain: a second `POST` answers 409 with the holder's `runId`.
+  - `DELETE` of a lesson also waits while the domain runs.
+  - The library writes are synchronous, so within one process this guard is the whole fix. Two
+    service processes sharing one library would still need a file lock.
 
 ### D. Duplicates and cleanup
 
@@ -470,7 +505,7 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
   - `/tmp/h2up/` holds 25 flattened upstream files written 2026-10-21 by another session. They
     are not used by anything and were **not deleted** by this audit; the user may delete them.
   - `runtime-data/` is not in `.gitignore`, so a local harness2 run leaves untracked files in a
-    checkout.
+    checkout. **Fixed in `2ad3f48`.**
 - **D8 — Test gaps.** No test reaches A1–A13, `makeExecutor`, `makeProposer` or the route.
   Upstream's own suite has two tests ours lacks: "complete evidence and library prefix" and
   "failed selection is never judged".
@@ -520,18 +555,19 @@ audit script check named in brackets turns into NOT REPRODUCED.
 7. **No run-killing checks** [R7]. **Done in `94883af`.**
    - Swap `GRADER_RE` for upstream's machine-marker list, or keep the phrases as a warning only.
    - Catch per-stage and library failures into the result instead of throwing.
-8. **Route** [C1–C4].
+8. **Route** [C1–C4]. **Done in `2ad3f48`, except authentication (service-wide, unchanged).**
    - Persist a run record (`runtime-data/harness2/<domain>/runs/<taskId>.json`: stages, notes,
      selection, raw reflection).
    - Turn the route into an async job with a poll endpoint, and abort on disconnect.
    - Allow one run at a time per domain.
    - Default to local providers only.
    - Validate the `bench` slots.
-9. **Rollouts always end** [B1]. Pass an `AbortSignal` with a per-rollout deadline into
+9. **Rollouts always end** [B1]. **Done in `2ad3f48`; the `ask_user` schema is still offered.** Pass an `AbortSignal` with a per-rollout deadline into
    `runSingleModel`, and leave `ask_user` out of harness2 rollouts, since no user is attached.
 10. **Served models** [A14]. Return `improver-failed` when every stage fell back on a proposer
     failure (done in `94883af`). Preflight in the route that the solver and improver models are
-    served. Make the default improver follow the model `vllm-2` actually serves.
+    served. Make the default improver follow the model `vllm-2` actually serves. **Done in
+    `2ad3f48`.**
 
 **Phase 2 — needs the user's decision before building.**
 
@@ -601,6 +637,7 @@ claims are unchanged:
 | 2026-10-22 | this audit, `scripts/audit-harness2-loop.ts`, plan banner | `05d49ea`, `1b3c000` |
 | 2026-10-22 | Phase 1 chunk (a): learning gates, finals-only pool, per-task seed, base-failed stop, marker tripwire, run status (A1–A4, A11, A14 detection) | `94883af` |
 | 2026-10-22 | Phase 1 chunk (b): proposer contract, retries, autotrigger, 24k cap, evidence budget, library scope/eviction/slugs, reflection input, prompts (A5–A10, A12, A13, C3, D3) | `a3993ea` |
+| 2026-10-22 | Phase 1 chunk (c): async run jobs + records, cancel, one run per domain, request checks, model preflight, rollout deadline + ask_user stop, `.gitignore runtime-data/` (B1, C1–C4, A12, A14, D7) | `2ad3f48` |
 
 ## 9. Fixes and verification
 
@@ -659,4 +696,31 @@ claims are unchanged:
 - The cross-domain test checked that the legal prompt held no "LIBRARY" anywhere. The restored
   re-verify rule names "the LIBRARY section" in every proposer prompt. The test now checks the
   section heading.
+
+### Chunk (c) — route, run records, rollouts that end (`2ad3f48`)
+
+**API after this chunk.**
+
+| Call | Answer |
+|---|---|
+| `POST /harness2/run` | 202 `{runId, status: "running", poll, cancel}`; 400 on a bad request; 409 if the domain is busy; 502 if a provider cannot be listed |
+| `POST /harness2/run` with `wait: true` | 200 with the finished run record; a client disconnect cancels the run |
+| `GET /harness2/runs/:runId` | the run record: `running`, `done`, `cancelled`, `error` or `interrupted` |
+| `POST /harness2/runs/:runId/cancel` | 202 while running; 409 after it finished; 404 if unknown |
+| `GET /harness2/library/:domain` | `{domain, entries (oldest first), context}` |
+| `DELETE /harness2/library/:domain/:taskId` | 200 `{removed}`; 404 if unknown; 409 while the domain runs |
+
+New request fields: `selectionPool` (`finals` | `mixed`), `width` (1..4), `preflight` (default
+on), `wait`.
+
+**Evidence.**
+
+| Check | Result |
+|---|---|
+| `vitest run src/services/harness2 src/routes/__tests__/Harness2Routes.test.ts` on `main` @ `2ad3f48` (testrun) | 6 files, **95/95 pass** (33 new: executor and cancellation, async job, records, validation, preflight, DELETE) |
+| Revert check: each fix undone alone in a scratch copy | **16/16 reverts turn their test red** |
+| `tsc --noEmit` on `main` @ `2ad3f48` (testrun) | 0 errors |
+| `eslint` on the harness2 files, the route and its test | clean |
+| **Full suite** `vitest run --maxWorkers=4` on `main` @ `2ad3f48` (testrun) | **174 files, 1,878/1,878 pass**, 34 s, peak 1.0 GB |
+| `git status` of the primary checkout after the tests | unchanged |
 
