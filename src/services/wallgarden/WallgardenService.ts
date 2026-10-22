@@ -3,7 +3,6 @@ import { getInstancesByType } from "../../providers/instance-registry.js";
 import type { InstanceEntry } from "../../types/ProviderTypes.js";
 import { handleConversation } from "../../routes/ChatRoutes.js";
 import type { SseEvent } from "../../types/SseTypes.js";
-import { getErrorMessage } from "../../utils/ErrorHelpers.js";
 import {
   wallgardenJetsonGate,
   WALLGARDEN_PRIORITY,
@@ -23,29 +22,6 @@ interface VllmBoxInfo {
 let modelCache: VllmBoxInfo[] = [];
 let modelCacheTimestamp = 0;
 const MODEL_CACHE_TTL_MS = 60_000;
-
-// ── Tool Definition ─────────────────────────────────────────
-const TOPIC_TOOL_DEFINITION = {
-  name: "suggest_topics",
-  description:
-    "Suggest new topics related to the user's interest graph. Each topic should be 1-3 words.",
-  parameters: {
-    type: "object",
-    properties: {
-      topics: {
-        type: "array",
-        items: {
-          type: "string",
-          description:
-            "A 1-3 word topic phrase, representing a broader genre, theme, or tangential subject.",
-        },
-        minItems: 5,
-        maxItems: 100,
-      },
-    },
-    required: ["topics"],
-  },
-};
 
 // ── System Prompts ──────────────────────────────────────────
 // Shared across brainstorm/extract so the quality bar can't drift apart.
@@ -169,7 +145,7 @@ export function buildOutcomesBlock(outcomes?: TopicOutcomes): string {
   if (proven.length) {
     const lines = proven
       .map(p => {
-        const bits = [];
+        const bits: string[] = [];
         if (p.likes) bits.push(`${p.likes} liked`);
         if (p.plays) bits.push(`${p.plays} played`);
         return `  - "${p.t}"${bits.length ? ` (${bits.join(", ")})` : ""}`;
