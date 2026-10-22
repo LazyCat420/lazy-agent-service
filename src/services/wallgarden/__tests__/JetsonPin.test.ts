@@ -52,7 +52,7 @@ function installFetchStub() {
   chatBodies = chatState.bodies;
   chatBodies.length = 0;
   chatState.reply = '{"topics": ["wood ash glaze"]}';
-  vi.stubGlobal("fetch", async (url: any, init?: any) => {
+  vi.stubGlobal("fetch", async (url: unknown, _init?: unknown) => {
     const u = String(url);
 
     if (u.endsWith("/v1/models")) {
