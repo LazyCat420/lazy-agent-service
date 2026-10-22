@@ -1041,7 +1041,7 @@ async function handleImageAPIModel(
       formatCostTag(estimatedCost),
   );
   // Upload generated image to MinIO
-  let minioRef = null;
+  let minioRef: string | null = null;
   if (result.imageData) {
     try {
       const mimeType = result.mimeType || "image/png";
@@ -1586,7 +1586,7 @@ async function handleNonStreamingText(context: GenerationContext) {
   const images: string[] = [];
   if (genResult.images && genResult.images.length > 0) {
     for (const image of genResult.images) {
-      let minioRef = null;
+      let minioRef: string | null = null;
       if (image.data) {
         try {
           const mimeType = image.mimeType || "image/png";

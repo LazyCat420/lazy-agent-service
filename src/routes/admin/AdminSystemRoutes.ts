@@ -24,7 +24,8 @@ router.get(
     const db = MongoWrapper.getDb(MONGO_DB_NAME);
     const mongoStatus = db ? "connected" : "disconnected";
 
-    let dbStats = null;
+    let dbStats: { requestCount: number; conversationCount: number } | null =
+      null;
     if (db) {
       try {
         const [requestCount, conversationCount] = await Promise.all([
@@ -152,7 +153,7 @@ router.get(
         (record: Record<string, unknown>) => {
           const msgs = (record.messages || []) as Record<string, unknown>[];
           const lastMessage = msgs.length > 0 ? msgs[msgs.length - 1] : null;
-          let lastMessageText = null;
+          let lastMessageText: string | null = null;
           if (lastMessage) {
             const content = lastMessage.content;
             if (typeof content === "string") {

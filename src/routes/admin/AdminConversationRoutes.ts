@@ -46,7 +46,6 @@ router.get(
         from,
         to,
         sort = "updatedAt",
-        order = "desc",
         agent,
         type,
         workspace,

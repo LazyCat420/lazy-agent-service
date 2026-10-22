@@ -23,7 +23,7 @@ import path from "path";
 import logger from "../utils/logger.ts";
 import { guardStats } from "../services/ToolCallGuard.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
-import { stripMcpPrefix, ACCEPTED_MCP_PREFIXES } from "../services/McpPrefix.ts";
+import { stripMcpPrefix } from "../services/McpPrefix.ts";
 import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { TRADING_MONGO_DB } from "../../config.ts";
 

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { ExperimentService, type ExperimentRequest } from "../services/ExperimentService.ts";
+import { ExperimentService } from "../services/ExperimentService.ts";
 import { AttributionAnalyzer, type PairedTrial } from "../services/AttributionAnalyzer.ts";
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 

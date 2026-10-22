@@ -1,6 +1,6 @@
 import { TOOL_CONTEXT_ARG, verifyToolContext } from "../services/TradingToolContext.ts";
 import { classifyToolResult } from "../services/ToolResult.ts";
-import { Router, Request, Response, RequestHandler } from "express";
+import { Router, RequestHandler } from "express";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -194,7 +194,7 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
     try {
       const deadLetterQueueEntry = JSON.stringify({ timestamp: new Date().toISOString(), toolName, args: toolArguments, error: errorMsg, durationMs }) + "\n";
       fs.promises.appendFile(path.join(dataDir, "dlq.jsonl"), deadLetterQueueEntry).catch(() => {});
-    } catch (fsErr) {
+    } catch {
       // Ignore DLQ append errors silently
     }
 
