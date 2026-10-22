@@ -21,7 +21,6 @@ import { ProviderError } from "../utils/errors.ts";
 import logger from "../utils/logger.ts";
 import { resolveArchParams } from "../utils/gguf-arch.ts";
 import {
-  TOOLS_SERVICE_URL,
   LAZY_AGENT_SERVICE_URL,
   LM_STUDIO_EVAL_BATCH_SIZE,
   LM_STUDIO_DEFAULT_MAX_CONTEXT,
@@ -61,13 +60,22 @@ async function* parseNativeSSEStream(
 ) {
   const decoder = new TextDecoder();
   let buffer = "";
-  let usage = null;
+  let usage: {
+    inputTokens: number;
+    outputTokens: number;
+    tokensPerSec?: number;
+    timeToFirstToken?: number;
+    reasoningOutputTokens?: number;
+  } | null = null;
   // Track partial output tokens from content/reasoning deltas as a fallback
   // when the stream terminates before chat.end delivers final stats.
   let partialOutputCharacters = 0;
   let partialReasoningCharacters = 0;
   // Accumulate tool call arguments for streaming tool events
-  let currentToolCall = null;
+  let currentToolCall: {
+    tool: string;
+    arguments: Record<string, unknown>;
+  } | null = null;
   let usageYielded = false;
   // Reactive abort: when the signal fires, cancel the reader immediately
   // so the pending reader.read() resolves with { done: true } instead of
@@ -1035,7 +1043,7 @@ export function createLmStudioProvider(
             options.repeatPenalty;
         // Reasoning toggle — may be rejected by models that don't support it.
         // We'll try first, and retry without reasoning if it fails.
-        let useReasoning = null;
+        let useReasoning: string | null = null;
         if (options.thinkingEnabled === false) {
           useReasoning = "off";
         } else if (options.thinkingEnabled === true) {
