@@ -5,6 +5,8 @@
  * cannot edit files on disk, so it replies with file blocks instead.
  */
 
+import { ALWAYS_ON_MAX } from "./HarnessTree.ts";
+
 export const VERSION = "harness2-1/lazy-agent-service";
 
 export interface BenchPrompts {
@@ -79,11 +81,12 @@ The harness is a tree of components:
 | \`guardrails.md\` | standing rules | ALWAYS ON -- same cost |
 | \`memory.md\` | durable domain facts | ALWAYS ON -- same cost |
 | \`tool_guidance.md\` | how to use the tools | ALWAYS ON -- same cost |
-| \`skills/<name>/SKILL.md\` | a reusable workflow with a trigger | in context under a SKILLS heading; used only when its trigger fires |
+| \`skills/<name>/SKILL.md\` | a reusable workflow with a trigger | ALSO ALWAYS ON here -- every skill body is inlined after the always-on files, under a SKILLS heading |
 
-Change only what a trajectory shows needs changing. ALWAYS-ON PROSE IS THE EXPENSIVE OPTION;
-prefer a SKILL for anything with a recognisable trigger, and if you add always-on text, cut
-something else to pay for it.
+Change only what a trajectory shows needs changing. ON THIS SUBSTRATE EVERY COMPONENT IS PAID FOR
+ON EVERY RUN: a skill costs the same context as always-on prose. A skill's value is structure -- a
+named, triggered procedure that the next task in this area can find and reuse -- not a lower cost.
+If you add text anywhere, cut something else to pay for it.
 
 RULES THAT DISCARD THE WHOLE PROPOSAL (validated before any rollout):
 
@@ -93,6 +96,8 @@ RULES THAT DISCARD THE WHOLE PROPOSAL (validated before any rollout):
 2. NO TEMPLATE BRACES (\`{{\` or \`{%\`) IN ALWAYS-ON TEXT.
 3. \`systemprompt.md\` MUST NEVER BE EMPTY OR DELETED.
 4. Paths outside the table are off the surface. Names: lowercase letters, digits, \`_\`, \`-\`.
+5. THE WHOLE MATERIALIZED PROMPT -- the always-on files plus every skill body -- MUST STAY UNDER
+   ${ALWAYS_ON_MAX.toLocaleString("en-US")} CHARS.
 
 THE DELIVERABLE'S SHAPE BELONGS TO THE REQUEST, NOT TO YOU. A harness changes HOW the agent
 works; it must never change WHAT SHAPE it delivers.
@@ -152,7 +157,13 @@ const GENERALIZE = `# GROUND IT IN THIS TASK, SHAPE IT FOR THE {DOMAIN_UPPER}
 
 The harness you produce runs on THIS task, and if adopted it is carried to later tasks in this
 {domain}. Verified facts about this task belong in a component that names them as facts about
-this task; procedures and practitioner checks belong in reusable form.`;
+this task; procedures and practitioner checks belong in reusable form.
+
+The LIBRARY section, when present, HOLDS FINISHED HARNESSES FROM EARLIER TASKS. They are examples
+to read and learn from -- they are NOT part of the harness you are editing. If you want a component
+from one, COPY IT into your reply as a file block -- and when you do, RE-VERIFY its facts against
+the evidence in front of you: an earlier task's mapping or threshold is a hypothesis here, not a
+fact.`;
 
 function work(bp: BenchPrompts): string {
   const lens = (bp.domainGuidance || "").trim();
@@ -301,16 +312,29 @@ export function experience(bp: BenchPrompts): string {
         "things for a library that future work in this area reads before it makes its own edits.",
       work(bp),
       "# THE ADOPTED CANDIDATE IS NOT THE ONLY EVIDENCE\n\nSelection compared DELIVERABLES with the harnesses " +
-        "hidden, so the choice says which output read best -- not which edit worked. Read the trajectories, not the verdict.",
-      "# WHAT EACH EDIT DID\n\nDiff every candidate harness against the base harness. For each component any " +
-        "candidate changed, write one row: the component, what the edit changed, the observed difference in " +
-        "execution, and a verdict: `helped`, `hurt`, `no observed effect` or `confounded`. Prefer `confounded` " +
-        "whenever several components changed at once or a single rollout is all that stands behind the difference.",
-      "# THE ONE LESSON THAT TRANSFERS\n\nWrite at most one durable entry, and only if the edit rows support it. " +
-        "The `cue` is the SHAPE OF SITUATION it applies to (not this task's facts). The `lesson` is the operation " +
-        "to perform on a harness, naming the component. The `evidence` cites the edit rows. A lesson resting only " +
-        "on `confounded` rows is a guess: narrow it or decline. If there is no concrete, reusable execution " +
-        "contrast, write the single line NO_ENTRY in place of the <experience> block.",
+        "hidden, so the choice says which output read best -- not which edit worked. Treat every candidate as " +
+        "evidence. An edit that appeared only in a rejected candidate may still be the one that changed behavior " +
+        "for the better, and an edit inside the adopted candidate may have contributed nothing to why it was " +
+        "adopted. Read the trajectories, not the verdict.",
+      "# WHAT EACH EDIT DID\n\nEach candidate below is diffed against the BASE HARNESS. For each component any " +
+        "candidate changed, write one row: the component, what the edit actually changed, the observed difference " +
+        "in execution it produced, and a verdict.\n\nVerdicts are `helped`, `hurt`, `no observed effect` and " +
+        "`confounded`. Use `confounded` -- and prefer it -- whenever a candidate changed several components at " +
+        "once and no execution isolates one of them, or when a single rollout is all that stands behind the " +
+        "difference. A confounded row is a useful record; an invented attribution poisons the library for every " +
+        "later task. Cite the run and the point in the trajectory where behavior diverges. If two candidates " +
+        "changed the same component in different ways, say which forms were tried and what each produced.",
+      "# THE ONE LESSON THAT TRANSFERS\n\nNow write at most one durable entry, and only if the edit rows support " +
+        "it.\n\nThe `cue` describes the SHAPE OF SITUATION the lesson applies to, so it can fire on a different " +
+        "matter. Not this task's facts -- the pattern. The `lesson` is the operation to perform on a harness, " +
+        "stated so it can be applied and checked, and it must name the component it concerns.\n\nToo generic is " +
+        "useless ('be thorough'); too specific never fires again ('the fee rose to 250 on Jan 1'). Aim between: " +
+        "'when an instrument performs several sequential acts and one of them terminates the actor's own " +
+        "authority, order them so the terminating act comes last'.\n\nThe `evidence` field cites the edit rows " +
+        "the lesson rests on. A lesson resting only on `confounded` rows is a guess: narrow it to what the record " +
+        "does show, or decline. Adoption alone never establishes that an edit helped or will transfer. If the " +
+        "record shows no concrete, reusable execution contrast, write the single line NO_ENTRY in place of the " +
+        "<experience> block -- the edit rows are still worth writing.",
       ANSWER_FREE,
       EVIDENCE_BOUNDARY,
       "# OUTPUT FORMAT\n\n<edits>\ncomponent: <name>\ncandidates: <labels>\nchange: <what>\nobserved: <where>\n" +

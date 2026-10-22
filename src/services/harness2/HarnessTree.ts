@@ -10,6 +10,14 @@ export type Tree = Record<string, string>;
 
 export const ALWAYS_ON = ["systemprompt.md", "guardrails.md", "memory.md", "tool_guidance.md"] as const;
 const TRIGGER_FILES = ["systemprompt.md", "guardrails.md"];
+/** Where `autotrigger` writes a missing trigger line (upstream opencode surface). */
+const AUTOTRIGGER_FILE = "guardrails.md";
+
+/**
+ * Cap on the materialized system prompt (upstream opencode: 24,000 always-on chars). Skills
+ * count too: this substrate inlines every skill body (see `materialize`).
+ */
+export const ALWAYS_ON_MAX = 24_000;
 const SKILL_RE = /^skills\/([a-z0-9_-]+)\/SKILL\.md$/;
 
 /** True when `rel` is on the editable surface. */
@@ -66,28 +74,65 @@ export function assertNoGraderVerdicts(tree: Tree): void {
   }
 }
 
+const triggerText = (tree: Tree) => TRIGGER_FILES.map((rel) => tree[rel] || "").join("\n");
+
 /**
- * Upstream's three discard rules plus the always-on invariant. Throws on the first
- * violation with a message the proposer can act on.
+ * Every problem in the tree: upstream's discard rules, the always-on invariant and the size cap.
+ * Upstream `validate` collects all of them, so one retry can fix them all.
  */
-export function validateTree(tree: Tree): void {
+export function collectTreeErrors(tree: Tree, cap: number = ALWAYS_ON_MAX): string[] {
+  const errs: string[] = [];
   const off = Object.keys(tree).filter((rel) => !onSurface(rel));
-  if (off.length) throw new Error(`off the editable surface: ${off.join(", ")}`);
-  if (!(tree["systemprompt.md"] || "").trim()) throw new Error("systemprompt.md must not be empty or deleted");
+  if (off.length) errs.push(`off the editable surface: ${off.join(", ")}`);
+  if (!(tree["systemprompt.md"] || "").trim()) errs.push("systemprompt.md must not be empty or deleted");
   for (const rel of ALWAYS_ON) {
     const text = tree[rel] || "";
-    if (text.includes("{{") || text.includes("{%")) throw new Error(`${rel} contains template braces ({{ or {%)`);
+    if (text.includes("{{") || text.includes("{%")) errs.push(`${rel} contains template braces ({{ or {%)`);
   }
-  const triggerText = TRIGGER_FILES.map((rel) => tree[rel] || "").join("\n");
+  const size = materialize(tree).length;
+  if (size > cap) {
+    errs.push(
+      `the materialized system prompt is ${size} chars, over the ${cap} cap: always-on files plus every skill body ` +
+        "(skills are inlined on this substrate); every token here competes with the agent's own output budget",
+    );
+  }
+  const triggers = triggerText(tree);
   for (const name of skillNames(tree)) {
     const fm = frontmatter(tree[`skills/${name}/SKILL.md`]);
-    if (fm.name !== name) throw new Error(`skills/${name}/SKILL.md frontmatter needs name: ${name}`);
-    if (!fm.description) throw new Error(`skills/${name}/SKILL.md frontmatter needs a description:`);
-    if (!triggerText.includes(name)) {
-      throw new Error(`skill '${name}' has no trigger line: name it verbatim in systemprompt.md or guardrails.md`);
-    }
+    if (fm.name !== name) errs.push(`skills/${name}/SKILL.md frontmatter needs name: ${name}`);
+    if (!fm.description) errs.push(`skills/${name}/SKILL.md frontmatter needs a description:`);
+    if (!triggers.includes(name)) errs.push(`skill '${name}' has no trigger line: name it verbatim in systemprompt.md or guardrails.md`);
   }
-  assertNoGraderVerdicts(tree);
+  try {
+    assertNoGraderVerdicts(tree);
+  } catch (error) {
+    errs.push(error instanceof Error ? error.message : String(error));
+  }
+  return errs;
+}
+
+/** Throws one error listing every problem, with messages the proposer can act on. */
+export function validateTree(tree: Tree, cap: number = ALWAYS_ON_MAX): void {
+  const errs = collectTreeErrors(tree, cap);
+  if (errs.length) throw new Error(errs.join(" | "));
+}
+
+/**
+ * Upstream `autotrigger`: give every skill without a trigger line one in guardrails.md, unless the
+ * line would push the materialized prompt over the cap. Mutates `tree`; returns the names repaired.
+ */
+export function autotrigger(tree: Tree, cap: number = ALWAYS_ON_MAX): string[] {
+  const fixed: string[] = [];
+  for (const name of skillNames(tree)) {
+    if (triggerText(tree).includes(name)) continue;
+    const desc = (frontmatter(tree[`skills/${name}/SKILL.md`]).description || `the ${name} workflow applies`).replace(/\.$/, "");
+    const line = `- When ${desc}, use the \`${name}\` skill.`;
+    if (materialize(tree).length + line.length + 2 > cap) continue;
+    const cur = tree[AUTOTRIGGER_FILE] || "";
+    tree[AUTOTRIGGER_FILE] = cur.trim() ? `${cur.trimEnd()}\n${line}\n` : `${line}\n`;
+    fixed.push(name);
+  }
+  return fixed;
 }
 
 export interface TreeDiff { added: string[]; removed: string[]; modified: string[] }
@@ -132,10 +177,11 @@ export function renderTree(tree: Tree): string {
   return rels.map((rel) => `<file path="${rel}">\n${tree[rel]}\n</file>`).join("\n\n");
 }
 
-/** Pairwise Jaccard similarity over (path, text) pairs — upstream `diversity`. */
-export function diversity(trees: Record<string, Tree>): { meanJaccard: number | null } {
-  const labels = Object.keys(trees);
-  const sets = labels.map((l) => new Set(Object.entries(trees[l]).map(([p, t]) => `${p}\u0000${t}`)));
+/** Pairwise line-Jaccard over candidate trees, so collapse to one body is visible — upstream `diversity`. */
+export function diversity(trees: Record<string, Tree>): { meanJaccard: number | null; n: number; nDistinct: number } {
+  const labels = Object.keys(trees).sort();
+  const lines = (t: Tree) => new Set(Object.entries(t).flatMap(([rel, text]) => text.split("\n").filter((l) => l.trim()).map((l) => `${rel}:${l}`)));
+  const sets = labels.map((l) => lines(trees[l]));
   let total = 0;
   let pairs = 0;
   for (let i = 0; i < sets.length; i++) {
@@ -146,5 +192,6 @@ export function diversity(trees: Record<string, Tree>): { meanJaccard: number | 
       pairs++;
     }
   }
-  return { meanJaccard: pairs ? total / pairs : null };
+  const nDistinct = new Set(labels.map((l) => JSON.stringify(Object.entries(trees[l]).sort()))).size;
+  return { meanJaccard: pairs ? total / pairs : null, n: labels.length, nDistinct };
 }

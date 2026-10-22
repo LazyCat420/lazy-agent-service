@@ -61,7 +61,8 @@ const execOK = async (tree: Record<string, string>) => {
   const output = T.materialize(tree).includes("Add the rows") ? "total: 42 (checked)" : "total: 41";
   return { ok: true, delivered: true, output, trajectory: `final output:\n${output}`, error: "" };
 };
-const deps = (propose: any, execute: any = execOK) => ({ bp: { work: "Sum the rows." }, execute, propose, baseTree: BASE, width: 2 });
+// transportBackoffMs 0: the transport retry (ch.13 §6 item 3) would otherwise sleep 10 s per failed call.
+const deps = (propose: any, execute: any = execOK) => ({ bp: { work: "Sum the rows." }, execute, propose, baseTree: BASE, width: 2, transportBackoffMs: 0 });
 const req = (over: Record<string, unknown> = {}) => ({
   taskId: "t1", task: "Sum the rows.", domain: "finance", baseTree: BASE, solver: { provider: "x", model: "y" }, k: 1,
   libraryRoot: path.join(TMP, `lib-${Math.random().toString(36).slice(2)}`), ...over,
@@ -288,7 +289,8 @@ await check("R20", "k=4 parallel aggregator prompt size with 20 tool calls per r
 // R21 — the retry says "Fix it" but the stateless proposer never sees what it sent the first time.
 await check("R21", "retry prompt omits the rejected reply it asks the model to fix", async () => {
   const prompts: string[] = [];
-  const rejected = `<file path="skills/totals/SKILL.md">${SKILL("totals")}</file><notes>UNIQUE-MARKER-42</notes>`;
+  // A frontmatter name mismatch: still rejected after autotrigger repairs missing trigger lines.
+  const rejected = `<file path="skills/totals/SKILL.md">${SKILL("other")}</file><notes>UNIQUE-MARKER-42</notes>`;
   const st = await R.runStage({ label: "dom1", dim: "DOM", job: "job", fallback: BASE, base: [], deps: deps(async (p: string) => (prompts.push(p), rejected)) });
   const second = prompts[1] || "";
   return [second.includes("YOUR PREVIOUS ATTEMPT WAS REJECTED") && !second.includes("UNIQUE-MARKER-42"),

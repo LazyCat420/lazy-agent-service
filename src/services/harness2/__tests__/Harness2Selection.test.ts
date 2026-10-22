@@ -89,6 +89,22 @@ describe("selection pool (Q1 default: finals only, upstream)", () => {
   });
 });
 
+describe("selector candidates share the mission budget", () => {
+  it("8 long candidates are each cut to budget / n, with upstream's truncation-marker sentence [R19]", async () => {
+    let selectPrompt = "";
+    const long: Executor = async () => ({ ok: true, delivered: true, output: "row\n".repeat(12_500), trajectory: "final output: (long)", error: "" });
+    const propose: Proposer = async (p, label) => {
+      if (label === "select") return (selectPrompt = p), "<why>ok</why>\n```choice\na1\n```";
+      return label === "experience" ? "NO_ENTRY" : "<notes>KEEP_BASE</notes>";
+    };
+    await runHarness2(req({ k: 4, selectionPool: "mixed" }), { execute: long, propose, missionCharBudget: 240_000 });
+    expect(selectPrompt.match(/^## a\d+$/gm)).toHaveLength(8);
+    expect(selectPrompt.length).toBeLessThan(240_000 + 8_000);
+    expect(selectPrompt).toMatch(/…\[truncated 20000 chars\]/);
+    expect(selectPrompt).toMatch(/renderer-truncation marker\s+inserted for this comparison is not a defect/);
+  });
+});
+
 describe("per-task selection seed [R1]", () => {
   it("is sha1(task|k|mode)-derived: stable for a task, different across tasks", () => {
     expect(selectionSeed("t1", 1, "agg")).toBe(selectionSeed("t1", 1, "agg"));
@@ -168,7 +184,7 @@ describe("run status", () => {
       calls.push(label);
       throw new Error("model GLM-5.3-Flash-EXL3-TF does not exist");
     };
-    const r = await runHarness2(req(), { execute, propose });
+    const r = await runHarness2(req(), { execute, propose, transportBackoffMs: 0 });
     expect(r.status).toBe("improver-failed");
     expect(r.learned).toBe(false);
     expect(calls).not.toContain("experience");

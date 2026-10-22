@@ -2,13 +2,23 @@
  * Parallel and sequential task-level recursion — port of harness2/core/recursion.py.
  *
  * Each mode schedules 4k rollouts and 3k improvement stages, including the k shared base
- * rollouts. An invalid proposal receives one retry before inheriting the current harness.
+ * rollouts. An invalid proposal receives one retry, editing what it sent, before inheriting the
+ * current harness. A proposer call gets 2 transport attempts; a reply that never arrives is a
+ * failure, never a KEEP_BASE.
  */
 import * as prompts from "./Prompts.ts";
 import type { BenchPrompts } from "./Prompts.ts";
-import { diffTrees, diversity, isUnchanged, onSurface, renderTree, validateTree, type Tree } from "./HarnessTree.ts";
+import { autotrigger, diffTrees, diversity, isUnchanged, onSurface, renderTree, validateTree, type Tree } from "./HarnessTree.ts";
 
 export const STAGE_ATTEMPTS = 2;
+/** Upstream config.TRANSPORT_ATTEMPTS: calls per proposal before the stage falls back. */
+export const TRANSPORT_ATTEMPTS = 2;
+/** Default mission size (≈ 60–80k tokens): the Jetson's nemotron35 serves 100k tokens of context. */
+export const DEFAULT_MISSION_CHAR_BUDGET = 240_000;
+/** Smallest trajectory slice compaction keeps per rollout. */
+const MIN_TRAJECTORY_CHARS = 2_000;
+/** Cap on the rejected harness echoed back into a retry prompt. */
+const RETRY_TREE_CHARS = 30_000;
 
 /** One rollout of one harness on the task. A dead rollout is recorded, never raised. */
 export interface RunView {
@@ -25,6 +35,17 @@ export interface RunView {
 export type Executor = (tree: Tree, label: string) => Promise<Omit<RunView, "label">>;
 export type Proposer = (prompt: string, label: string) => Promise<string>;
 
+/** A proposer call that produced no usable reply. `retryable: false` skips the second transport attempt. */
+export class ProposerError extends Error {
+  constructor(
+    message: string,
+    readonly retryable = true,
+  ) {
+    super(message);
+    this.name = "ProposerError";
+  }
+}
+
 export interface Stage {
   label: string;
   dim: "INV" | "DOM" | "AGG" | "COMPOSE";
@@ -34,6 +55,8 @@ export interface Stage {
   error: string;
   attempts: number;
   notes: string;
+  /** Skills that `autotrigger` gave a trigger line before validation. */
+  repaired: string[];
 }
 
 export interface ModeResult {
@@ -45,7 +68,7 @@ export interface ModeResult {
   finals: string[];
   /** Rollout labels in schedule order (upstream Ledger). */
   ledger: string[];
-  similarity: { meanJaccard: number | null } | null;
+  similarity: ReturnType<typeof diversity> | null;
 }
 
 export interface RecursionDeps {
@@ -56,7 +79,14 @@ export interface RecursionDeps {
   /** Library evidence (harnessing-level recursion); "" when the domain is empty. */
   libraryText?: string;
   width?: number;
+  /** Wait before transport attempt n is backoff × (n - 1); upstream uses 10 s. */
+  transportBackoffMs?: number;
+  /** Mission size above which rollout trajectories are compacted. */
+  missionCharBudget?: number;
 }
+
+const errText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Bounded-concurrency map that keeps input order. */
 async function mapLimit<T, R>(items: T[], width: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -72,71 +102,159 @@ async function mapLimit<T, R>(items: T[], width: number, fn: (item: T) => Promis
   return out;
 }
 
+/** Stage label → its notes, or its error when it fell back (what later stages read as decisions). */
+export function decisionsOf(stages: Stage[]): Record<string, string> {
+  return Object.fromEntries(stages.map((s) => [s.label, s.notes || s.error]));
+}
+
+const relOf = (raw: string) => raw.trim().replace(/^\.?\//, "").replace(/^context\/harness\//, "");
+const FILE_OPEN = /<file\s+path="([^"]+)"\s*>/g;
+const FILE_BLOCK = /<file\s+path="([^"]+)"\s*>\n?([\s\S]*?)<\/file>/g;
+
 /**
  * Apply a proposer reply to `fallback`: `<file path>` writes, `<delete path/>` removals.
- * Off-surface paths are collected in `rejected`, never applied.
+ * Off-surface paths are collected in `rejected`, never applied. `unterminated` names the first
+ * `<file>` block that never closes (a reply cut off mid-file).
  */
-export function applyReply(fallback: Tree, reply: string): { tree: Tree; rejected: string[]; notes: string } {
+export function applyReply(fallback: Tree, reply: string): { tree: Tree; rejected: string[]; notes: string; unterminated: string | null } {
   const tree: Tree = { ...fallback };
   const rejected: string[] = [];
-  for (const m of reply.matchAll(/<file\s+path="([^"]+)"\s*>\n?([\s\S]*?)<\/file>/g)) {
-    const rel = m[1].trim().replace(/^\.?\//, "").replace(/^context\/harness\//, "");
+  const complete = new Set<number>();
+  for (const m of reply.matchAll(FILE_BLOCK)) {
+    complete.add(m.index);
+    const rel = relOf(m[1]);
     if (onSurface(rel)) tree[rel] = m[2].replace(/\n$/, "") + "\n";
     else rejected.push(rel);
   }
+  const open = [...reply.matchAll(FILE_OPEN)].find((m) => !complete.has(m.index));
   for (const m of reply.matchAll(/<delete\s+path="([^"]+)"\s*\/?>/g)) {
-    const rel = m[1].trim().replace(/^\.?\//, "").replace(/^context\/harness\//, "");
+    const rel = relOf(m[1]);
     if (onSurface(rel)) delete tree[rel];
     else rejected.push(rel);
   }
   const notes = /<notes>([\s\S]*?)<\/notes>/.exec(reply)?.[1].trim() ?? reply.trim();
-  return { tree, rejected, notes };
+  return { tree, rejected, notes, unterminated: open ? relOf(open[1]) : null };
 }
 
-function rolloutBlock(rv: RunView | undefined, label: string): string {
+/** Keep the start and end of `text` within `limit` chars, marking the cut as ours. */
+function compact(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const head = Math.floor(limit * 0.6);
+  const tail = limit - head;
+  return `${text.slice(0, head)}\n…[compacted: ${text.length - limit} chars of this trajectory omitted to fit the mission budget]…\n${text.slice(-tail)}`;
+}
+
+function rolloutBlock(rv: RunView | undefined, label: string, limit = Infinity): string {
   if (!rv) return `### rollout ${label}\n\n_(no rollout)_`;
   const status = !rv.ok ? `FAILED: ${rv.error}` : rv.delivered ? "delivered" : "PRODUCED NOTHING";
-  return `### rollout ${rv.label} — ${status}\n\n${rv.trajectory}`;
+  return `### rollout ${rv.label} — ${status}\n\n${compact(rv.trajectory, limit)}`;
+}
+
+const TRUNCATION_NOTE =
+  "Markers such as `…[truncated N chars]` or `…[compacted …]…` inside this evidence were inserted by this " +
+  "mission's renderer, not by the solver. Do not diagnose them as a solver failure.";
+
+export interface MissionOptions {
+  current: Tree;
+  /** Heading for `current` (default "CURRENT HARNESS"). */
+  currentTitle?: string;
+  base: RunView[];
+  libraryText?: string;
+  pool?: Array<{ label: string; tree: Tree; rollout?: RunView }>;
+  decisions?: Record<string, string>;
+  /** What candidate diffs are measured against (default: `current`, named "current"). */
+  diffBase?: { name: string; tree: Tree };
+  /** Compact rollout trajectories when the mission would exceed this many chars. */
+  budget?: number;
 }
 
 /** Upstream context.build + mission: the job, then the evidence the job reads. */
-export function buildMission(
-  job: string,
-  opts: {
-    current: Tree;
-    base: RunView[];
-    libraryText?: string;
-    pool?: Array<{ label: string; tree: Tree; rollout?: RunView }>;
-    decisions?: Record<string, string>;
-  },
-): string {
-  const parts = [job, "# CURRENT HARNESS\n\n" + renderTree(opts.current)];
-  parts.push("# BASE ROLLOUTS (unmodified harness)\n\n" + opts.base.map((r) => rolloutBlock(r, r.label)).join("\n\n"));
-  if (opts.pool?.length) {
-    parts.push(
-      "# CANDIDATE HARNESSES AND THEIR ROLLOUTS\n\n" +
-        opts.pool
-          .map((p) => {
-            const d = diffTrees(opts.current, p.tree);
-            const note = opts.decisions?.[p.label];
-            const same = !d.added.length && !d.removed.length && !d.modified.length;
-            return [
-              `## candidate ${p.label}`,
-              same
-                ? "IDENTICAL to the current harness: any difference between its rollout and the base rollouts is sampling noise, not an effect of an edit."
-                : `changed vs current: added [${d.added.join(", ")}] removed [${d.removed.join(", ")}] modified [${d.modified.join(", ")}]`,
-              note ? `proposer notes:\n${note}` : "",
-              renderTree(p.tree),
-              rolloutBlock(p.rollout, p.label),
-            ].filter(Boolean).join("\n\n");
-          })
-          .join("\n\n"),
-    );
+export function buildMission(job: string, opts: MissionOptions): string {
+  const render = (limit: number, compacted: string) => {
+    const ref = opts.diffBase ?? { name: "current", tree: opts.current };
+    const parts = [job, compacted ? `${TRUNCATION_NOTE}\n\n${compacted}` : TRUNCATION_NOTE, `# ${opts.currentTitle ?? "CURRENT HARNESS"}\n\n${renderTree(opts.current)}`];
+    parts.push("# BASE ROLLOUTS (unmodified harness)\n\n" + opts.base.map((r) => rolloutBlock(r, r.label, limit)).join("\n\n"));
+    if (opts.pool?.length) {
+      parts.push(
+        "# CANDIDATE HARNESSES AND THEIR ROLLOUTS\n\n" +
+          opts.pool
+            .map((p) => {
+              const d = diffTrees(ref.tree, p.tree);
+              const note = opts.decisions?.[p.label];
+              return [
+                `## candidate ${p.label}`,
+                isUnchanged(ref.tree, p.tree)
+                  ? `IDENTICAL to the ${ref.name} harness: any difference between its rollout and the base rollouts is sampling noise, not an effect of an edit.`
+                  : `changed vs ${ref.name}: added [${d.added.join(", ")}] removed [${d.removed.join(", ")}] modified [${d.modified.join(", ")}]`,
+                note ? `proposer notes:\n${note}` : "",
+                renderTree(p.tree),
+                rolloutBlock(p.rollout, p.label, limit),
+              ].filter(Boolean).join("\n\n");
+            })
+            .join("\n\n"),
+      );
+    }
+    if (opts.libraryText) {
+      parts.push("# LIBRARY — earlier tasks in this domain (read-only experience)\n\n" + opts.libraryText);
+    }
+    return parts.join("\n\n");
+  };
+  const full = render(Infinity, "");
+  const budget = opts.budget ?? Infinity;
+  if (full.length <= budget) return full;
+  const rollouts = [...opts.base, ...(opts.pool ?? []).map((p) => p.rollout).filter((r): r is RunView => Boolean(r))];
+  const trajectoryChars = rollouts.reduce((n, r) => n + r.trajectory.length, 0);
+  // Reserve room for the compaction note (~300 chars) and each trajectory's marker (~100 chars).
+  const share = Math.floor((budget - (full.length - trajectoryChars) - 400) / Math.max(1, rollouts.length)) - 120;
+  const limit = Math.max(MIN_TRAJECTORY_CHARS, share);
+  return render(
+    limit,
+    `THIS EVIDENCE WAS COMPACTED to fit a ${budget}-char mission budget: each rollout trajectory longer than ` +
+      `${limit} chars keeps its start and its end, and the middle is replaced by a \`…[compacted …]…\` marker.`,
+  );
+}
+
+/**
+ * One proposer call with upstream's transport policy: TRANSPORT_ATTEMPTS tries with backoff, and
+ * an empty reply counts as a failed attempt. Throws when no attempt produced a reply.
+ */
+async function callProposer(deps: RecursionDeps, prompt: string, label: string): Promise<string> {
+  let last = "";
+  let attempt = 0;
+  while (attempt < TRANSPORT_ATTEMPTS) {
+    attempt++;
+    if (attempt > 1) await sleep((deps.transportBackoffMs ?? 10_000) * (attempt - 1));
+    try {
+      const reply = await deps.propose(prompt, label);
+      if (reply.trim()) return reply;
+      last = "empty reply";
+    } catch (error) {
+      last = errText(error);
+      if (error instanceof ProposerError && !error.retryable) break;
+    }
   }
-  if (opts.libraryText) {
-    parts.push("# LIBRARY — earlier tasks in this domain (read-only experience)\n\n" + opts.libraryText);
-  }
-  return parts.join("\n\n");
+  throw new ProposerError(`${last} (after ${attempt} transport attempt${attempt > 1 ? "s" : ""})`);
+}
+
+/** What a retry sees: the rejection, the harness the rejected reply produced, and its notes. */
+function retryBlock(err: string, rejectedTree: Tree, fallback: Tree, rejectedNotes: string): string {
+  const d = diffTrees(fallback, rejectedTree);
+  const changed = [...d.added, ...d.modified];
+  const shown = changed.length ? renderTree(Object.fromEntries(changed.map((rel) => [rel, rejectedTree[rel]]))) : "_(no file changed)_";
+  const clipped = shown.length > RETRY_TREE_CHARS ? `${shown.slice(0, RETRY_TREE_CHARS)}\n…[truncated ${shown.length - RETRY_TREE_CHARS} chars]` : shown;
+  return [
+    "# YOUR PREVIOUS ATTEMPT WAS REJECTED",
+    err,
+    "Your previous reply produced the harness below. It was NOT adopted. Fix it: reply with file blocks that " +
+      "edit THIS rejected harness. Files you do not mention keep the content shown here, and files not shown " +
+      "are unchanged from CURRENT HARNESS." +
+      (d.removed.length ? ` Your reply deleted: ${d.removed.join(", ")}.` : ""),
+    clipped,
+    rejectedNotes ? `Your previous notes (excerpt):\n${rejectedNotes.slice(0, 2_000)}` : "",
+    "Reply again.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export async function runStage(args: {
@@ -156,42 +274,52 @@ export async function runStage(args: {
     libraryText: deps.libraryText,
     pool: args.pool,
     decisions: args.decisions,
+    budget: deps.missionCharBudget ?? DEFAULT_MISSION_CHAR_BUDGET,
   });
   let err = "";
   let attempts = 0;
+  // Upstream writes a rejected tree back into the workspace, so the retry edits what it sent.
+  let working: Tree = fallback;
+  let workingNotes = "";
   for (let attempt = 1; attempt <= STAGE_ATTEMPTS; attempt++) {
     attempts = attempt;
     let reply: string;
     try {
-      reply = await deps.propose(
-        mission + (err ? `\n\n# YOUR PREVIOUS ATTEMPT WAS REJECTED\n\n${err}\n\nFix it and reply again.` : ""),
-        `${label}.a${attempt}`,
-      );
+      reply = await callProposer(deps, mission + (err ? `\n\n${retryBlock(err, working, fallback, workingNotes)}` : ""), `${label}.a${attempt}`);
     } catch (error) {
-      err = `proposer failed: ${error instanceof Error ? error.message : String(error)}`;
+      err = `proposer failed: ${errText(error)}`;
       break;
     }
-    const { tree, rejected, notes } = applyReply(fallback, reply);
+    const { tree, rejected, notes, unterminated } = applyReply(working, reply);
+    working = tree;
+    workingNotes = notes;
+    if (unterminated) {
+      err =
+        `your reply was cut off inside the <file path="${unterminated}"> block (no closing </file>); the complete ` +
+        "blocks before it were applied. Write shorter files, or fewer of them, and close every block";
+      continue;
+    }
     if (rejected.length) {
       err = `these files are off the editable surface and were not applied: ${rejected.slice(0, 6).join(", ")}`;
       continue;
     }
+    const repaired = autotrigger(tree);
     try {
       validateTree(tree);
     } catch (error) {
-      err = error instanceof Error ? error.message : String(error);
+      err = errText(error);
       continue;
     }
-    return { label, dim, tree, keptBase: isUnchanged(fallback, tree), fellBack: false, error: "", attempts, notes };
+    return { label, dim, tree, keptBase: isUnchanged(fallback, tree), fellBack: false, error: "", attempts, notes, repaired };
   }
-  return { label, dim, tree: { ...fallback }, keptBase: false, fellBack: true, error: err.slice(0, 400), attempts, notes: "" };
+  return { label, dim, tree: { ...fallback }, keptBase: false, fellBack: true, error: err.slice(0, 400), attempts, notes: "", repaired: [] };
 }
 
 async function roll(deps: RecursionDeps, label: string, tree: Tree): Promise<RunView> {
   try {
     return { label, ...(await deps.execute(tree, label)) };
   } catch (error) {
-    return { label, ok: false, delivered: false, output: "", trajectory: "", error: error instanceof Error ? error.message : String(error) };
+    return { label, ok: false, delivered: false, output: "", trajectory: "", error: errText(error) };
   }
 }
 
@@ -223,7 +351,7 @@ export async function runParallel(k: number, base: RunView[], deps: RecursionDep
   record(result, stages, await mapLimit(stages, width, (s) => roll(deps, s.label, s.tree)));
 
   const pool = stages.map((s) => ({ label: s.label, tree: s.tree, rollout: result.rollouts[s.label] }));
-  const decisions = Object.fromEntries(stages.map((s) => [s.label, s.notes || s.error]));
+  const decisions = decisionsOf(stages);
   const aggs = await mapLimit(Array.from({ length: k }, (_, i) => i + 1), width, (i) =>
     runStage({ label: `agg${i}`, dim: "AGG", job: prompts.aggregate(deps.bp, { k, index: i }), fallback: deps.baseTree, base, deps, pool, decisions }),
   );
@@ -241,7 +369,6 @@ export async function runSequential(k: number, base: RunView[], deps: RecursionD
   let current: Tree = { ...deps.baseTree };
   let history: Array<{ label: string; tree: Tree; rollout?: RunView }> = [];
   for (let t = 1; t <= k; t++) {
-    const decisionsSoFar = () => Object.fromEntries(result.stages.map((s) => [s.label, s.notes || s.error]));
     const fallback = current;
     const stages = await mapLimit([`inv${t}`, `dom${t}`], Math.min(2, width), (label) => {
       const dim = label.startsWith("inv") ? "INV" : "DOM";
@@ -253,7 +380,7 @@ export async function runSequential(k: number, base: RunView[], deps: RecursionD
         base,
         deps,
         pool: [...history],
-        decisions: decisionsSoFar(),
+        decisions: decisionsOf(result.stages),
       });
     });
     record(result, stages, await mapLimit(stages, width, (s) => roll(deps, s.label, s.tree)));
@@ -267,7 +394,7 @@ export async function runSequential(k: number, base: RunView[], deps: RecursionD
       base,
       deps,
       pool: roundPool,
-      decisions: decisionsSoFar(),
+      decisions: decisionsOf(result.stages),
     });
     record(result, [comp], [await roll(deps, ck, comp.tree)]);
     history = [...roundPool, { label: ck, tree: comp.tree, rollout: result.rollouts[ck] }];

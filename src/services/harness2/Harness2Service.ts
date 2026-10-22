@@ -10,11 +10,24 @@ import { createHash } from "node:crypto";
 import { runSingleModel, type ModelResult } from "../BenchmarkService.ts";
 import { getProvider } from "../../providers/index.ts";
 import logger from "../../utils/logger.ts";
-import { isUnchanged, materialize, renderTree, type Tree } from "./HarnessTree.ts";
-import { Library, type Experience } from "./Library.ts";
+import { isUnchanged, materialize, type Tree } from "./HarnessTree.ts";
+import { Library, hasExperience, type Experience } from "./Library.ts";
 import * as prompts from "./Prompts.ts";
 import type { BenchPrompts, SelectionPool } from "./Prompts.ts";
-import { buildMission, rollBase, runParallel, runSequential, type Executor, type ModeResult, type Proposer, type RunView } from "./Recursion.ts";
+import {
+  DEFAULT_MISSION_CHAR_BUDGET,
+  ProposerError,
+  buildMission,
+  decisionsOf,
+  rollBase,
+  runParallel,
+  runSequential,
+  type Executor,
+  type ModeResult,
+  type Proposer,
+  type RecursionDeps,
+  type RunView,
+} from "./Recursion.ts";
 
 export interface ModelRef {
   provider: string;
@@ -134,7 +147,7 @@ export function parseExperience(reply: string): { edits: string; entry: Experien
     else if (key && line.trim()) fields[key] += ` ${line.trim()}`;
   }
   const entry = { cue: fields.cue ?? "", lesson: fields.lesson ?? "", evidence: fields.evidence ?? "", confidence: fields.confidence ?? "", edits };
-  return { edits, entry: entry.cue.trim() && entry.lesson.trim() && entry.evidence.trim() ? entry : null };
+  return { edits, entry: hasExperience(entry) ? entry : null };
 }
 
 /**
@@ -161,7 +174,7 @@ export async function selectOutput(
   bp: BenchPrompts,
   result: ModeResult,
   propose: Proposer,
-  opts: { taskId: string; pool?: SelectionPool; seed?: number },
+  opts: { taskId: string; pool?: SelectionPool; seed?: number; budget?: number },
 ): Promise<Selection> {
   const pool = opts.pool ?? "finals";
   const entrants = pool === "mixed" ? [...result.ledger.filter((l) => l.startsWith("base")), ...result.finals] : result.finals;
@@ -175,13 +188,15 @@ export async function selectOutput(
     return { ...sel, ok: true, trivial: true, chosenLabel: labels[0], why, ids: { a1: labels[0] } };
   }
   const order = shuffle([...labels].sort(), selectionSeed(opts.taskId, result.k, result.mode, opts.seed));
+  // Each candidate gets an equal share of the mission budget, at most 40,000 chars.
+  const cap = Math.min(SELECT_CANDIDATE_CHARS, Math.floor((opts.budget ?? DEFAULT_MISSION_CHAR_BUDGET) / order.length));
   const ids = Object.fromEntries(order.map((l, i) => [`a${i + 1}`, l]));
   const body =
     prompts.select(bp, order.length, pool) +
     "\n\n# THE REQUEST\n\n" +
     bp.work +
     "\n\n# CANDIDATES\n\n" +
-    Object.entries(ids).map(([id, l]) => `## ${id}\n\n${truncate(result.rollouts[l].output, 12_000)}`).join("\n\n");
+    Object.entries(ids).map(([id, l]) => `## ${id}\n\n${truncate(result.rollouts[l].output, cap)}`).join("\n\n");
   try {
     const reply = await propose(body, "select");
     const id = /```choice\s*\n?\s*([A-Za-z0-9_-]+)\s*\n?```/.exec(reply)?.[1];
@@ -193,14 +208,23 @@ export async function selectOutput(
   }
 }
 
+/**
+ * Per-field caps. Upstream refuses an observation limit under 10,000 chars ("in the range that
+ * fabricates defects"); the mission budget compacts whole trajectories when they add up.
+ */
+const TRAJECTORY_CAPS = { thinking: 4_000, args: 2_000, result: 10_000, final: 20_000 };
+/** Upper bound on one selector candidate (each also gets at most budget / n). */
+const SELECT_CANDIDATE_CHARS = 40_000;
+
 function trajectoryOf(r: ModelResult): string {
   const lines: string[] = [];
-  if (r.thinking) lines.push(`thinking (excerpt): ${truncate(r.thinking, 1500)}`);
+  if (r.thinking) lines.push(`thinking (excerpt): ${truncate(r.thinking, TRAJECTORY_CAPS.thinking)}`);
   for (const call of r.toolCalls || []) {
-    lines.push(`tool ${call.name}(${truncate(JSON.stringify(call.args ?? {}), 400)}) -> ${call.status}: ${truncate(typeof call.result === "string" ? call.result : JSON.stringify(call.result ?? null), 800)}`);
+    const result = typeof call.result === "string" ? call.result : JSON.stringify(call.result ?? null);
+    lines.push(`tool ${call.name}(${truncate(JSON.stringify(call.args ?? {}), TRAJECTORY_CAPS.args)}) -> ${call.status}: ${truncate(result, TRAJECTORY_CAPS.result)}`);
   }
   if (r.error) lines.push(`error: ${r.error}`);
-  lines.push(`final output:\n${truncate(r.response || "", 6000) || "(empty)"}`);
+  lines.push(`final output:\n${truncate(r.response || "", TRAJECTORY_CAPS.final) || "(empty)"}`);
   return lines.join("\n");
 }
 
@@ -217,17 +241,60 @@ export function makeExecutor(req: Harness2Request): Executor {
   };
 }
 
-export function makeProposer(model: ModelRef): Proposer {
+const PROPOSER_MAX_TOKENS = 16_384;
+
+/**
+ * The improver call. A reply that never arrived is an error, never "" (which would read as
+ * KEEP_BASE): empty text and all-zero usage (a cut-off generation) are retryable failures; a
+ * deadline is not, because `generateText` takes no signal and the timed-out call keeps running.
+ */
+export function makeProposer(
+  model: ModelRef,
+  opts: { timeoutMs?: number; providerOf?: (name: string) => Pick<ReturnType<typeof getProvider>, "generateText"> } = {},
+): Proposer {
+  const timeoutMs = opts.timeoutMs ?? (Number(process.env.HARNESS2_PROPOSER_TIMEOUT_MS) || 20 * 60_000);
+  const providerOf = opts.providerOf ?? getProvider;
   return async (prompt, label) => {
-    const provider = getProvider(model.provider);
+    const provider = providerOf(model.provider);
     logger.info(`[harness2] proposer ${label} → ${model.provider}/${model.model} (${prompt.length} chars)`);
-    const res = await provider.generateText([{ role: "user", content: prompt }] as never, model.model, {
-      maxTokens: 16_384,
-      temperature: 0.7,
-      thinkingEnabled: Boolean(model.thinkingEnabled),
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new ProposerError(`no reply within ${Math.round(timeoutMs / 1000)} s`, false)), timeoutMs);
     });
-    return res.text || "";
+    try {
+      const res = await Promise.race([
+        provider.generateText([{ role: "user", content: prompt }] as never, model.model, {
+          maxTokens: PROPOSER_MAX_TOKENS,
+          temperature: 0.7,
+          thinkingEnabled: Boolean(model.thinkingEnabled),
+        }),
+        deadline,
+      ]);
+      if (!res.text?.trim()) throw new ProposerError("empty reply");
+      if (!res.usage?.inputTokens && !res.usage?.outputTokens) throw new ProposerError("reply reported zero token usage (a cut-off generation)");
+      return res.text;
+    } finally {
+      clearTimeout(timer);
+    }
   };
+}
+
+/**
+ * Upstream adoption.json for the reflector: which run was submitted, how it was selected, and the
+ * anonymous-id map the selector's reason is written in.
+ */
+function adoptionBlock(selection: Selection, chosenTreeIsBase: boolean): string {
+  const lines = [
+    `- submitted: \`${selection.chosenLabel}\`` +
+      (selection.chosenLabel.startsWith("base") ? " (a base rollout: the BASE HARNESS, unmodified)" : " (its harness is the candidate of that label above)"),
+  ];
+  if (chosenTreeIsBase && !selection.chosenLabel.startsWith("base")) lines.push("- the adopted harness is IDENTICAL to the BASE HARNESS");
+  lines.push(selection.trivial ? `- selection: no selector call (${selection.why})` : `- selection: blind selector over ${Object.keys(selection.ids).length} anonymous candidates`);
+  if (!selection.trivial) {
+    lines.push(`- anonymous ids the selector saw: ${Object.entries(selection.ids).map(([id, l]) => `${id} → ${l}`).join(", ")}`);
+    if (selection.why) lines.push(`- selector's reason (written in those anonymous ids):\n${selection.why}`);
+  }
+  return `# ADOPTION\n\n${lines.join("\n")}`;
 }
 
 /**
@@ -236,7 +303,7 @@ export function makeProposer(model: ModelRef): Proposer {
  */
 export async function runHarness2(
   req: Harness2Request,
-  deps: { execute?: Executor; propose?: Proposer } = {},
+  deps: { execute?: Executor; propose?: Proposer } & Pick<RecursionDeps, "transportBackoffMs" | "missionCharBudget"> = {},
 ): Promise<Harness2Result> {
   const k = req.k ?? 1;
   const pool = req.selectionPool ?? "finals";
@@ -249,11 +316,22 @@ export async function runHarness2(
   let libraryText = "";
   try {
     libraryEntriesBefore = library.entries().length;
-    libraryText = library.contextText();
+    // Upstream retain(): only earlier tasks; a re-run must not read its own entry.
+    libraryText = library.contextText({ exclude: [req.taskId] });
   } catch (error) {
     errors.push(`library read failed, running without it: ${errText(error)}`);
   }
-  const recDeps = { bp, execute, propose, baseTree: req.baseTree, libraryText, width: req.width ?? 2 };
+  const budget = deps.missionCharBudget ?? (Number(process.env.HARNESS2_MISSION_CHAR_BUDGET) || DEFAULT_MISSION_CHAR_BUDGET);
+  const recDeps: RecursionDeps = {
+    bp,
+    execute,
+    propose,
+    baseTree: req.baseTree,
+    libraryText,
+    width: req.width ?? 2,
+    transportBackoffMs: deps.transportBackoffMs,
+    missionCharBudget: budget,
+  };
   const finish = (status: Harness2Status, result: ModeResult, selection: Selection, rest: Partial<Harness2Result> = {}): Harness2Result => ({
     taskId: req.taskId,
     domain: req.domain,
@@ -294,7 +372,7 @@ export async function runHarness2(
   if (improverFailed) errors.push(`every stage fell back on a proposer failure, so no harness was adapted: ${proposerDown[0].error}`);
   else for (const s of proposerDown) errors.push(`${s.label} fell back on a proposer failure: ${s.error}`);
 
-  const selection = await selectOutput(bp, result, propose, { taskId: req.taskId, pool, seed: req.seed });
+  const selection = await selectOutput(bp, result, propose, { taskId: req.taskId, pool, seed: req.seed, budget });
   if (selection.error) errors.push(`selection: ${selection.error}`);
   const chosen = selection.chosenLabel ? result.rollouts[selection.chosenLabel] : undefined;
   const adoptedTree = !chosen || selection.chosenLabel.startsWith("base") ? req.baseTree : result.trees[selection.chosenLabel];
@@ -304,12 +382,16 @@ export async function runHarness2(
   if (status !== "ok" || !chosen?.delivered) return finish(status, result, selection, outcome);
 
   const candidates = result.stages.map((s) => ({ label: s.label, tree: s.tree, rollout: result.rollouts[s.label] }));
-  const decisions = Object.fromEntries(result.stages.map((s) => [s.label, s.notes || s.error]));
   const reflection =
-    buildMission(prompts.experience(bp), { current: req.baseTree, base, pool: candidates, decisions }) +
-    `\n\n# SUBMITTED\n\nThe submitted output came from \`${selection.chosenLabel}\`.` +
-    (selection.why ? `\nSelector's reason:\n${selection.why}` : "") +
-    `\n\n# BASE HARNESS (context/base_harness)\n\n${renderTree(req.baseTree)}`;
+    buildMission(prompts.experience(bp), {
+      current: req.baseTree,
+      currentTitle: "BASE HARNESS",
+      base,
+      pool: candidates,
+      decisions: decisionsOf(result.stages),
+      diffBase: { name: "base", tree: req.baseTree },
+      budget,
+    }) + `\n\n${adoptionBlock(selection, outcome.chosenTreeIsBase)}`;
   let raw = "";
   try {
     raw = await propose(reflection, "experience");

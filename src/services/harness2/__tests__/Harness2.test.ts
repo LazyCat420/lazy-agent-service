@@ -68,15 +68,16 @@ describe("task-level recursion", () => {
 
   it("retries an invalid proposal once with the rejection, then falls back to the current harness", async () => {
     const seen: string[] = [];
-    const bad = `<file path="skills/totals/SKILL.md">${SKILL("totals")}</file><notes>x</notes>`;
+    // A frontmatter name that does not match its directory: autotrigger cannot repair this.
+    const bad = `<file path="skills/totals/SKILL.md">${SKILL("other")}</file><notes>x</notes>`;
     const d = deps(async (prompt) => (seen.push(prompt), bad));
     const r = await runParallel(1, await rollBase(d, 1), d);
     const inv = r.stages.find((s) => s.label === "inv1")!;
     expect(inv.fellBack).toBe(true);
     expect(inv.attempts).toBe(2);
     expect(inv.tree).toEqual(BASE);
-    expect(inv.error).toMatch(/no trigger line/);
-    expect(seen.some((p) => p.includes("YOUR PREVIOUS ATTEMPT WAS REJECTED") && p.includes("no trigger line"))).toBe(true);
+    expect(inv.error).toMatch(/name: totals/);
+    expect(seen.some((p) => p.includes("YOUR PREVIOUS ATTEMPT WAS REJECTED") && p.includes("name: totals"))).toBe(true);
   });
 
   it("KEEP_BASE reply keeps the tree unchanged and is not a fallback", async () => {
@@ -143,6 +144,6 @@ confidence: medium, one rollout each
 
     const prompts3: Record<string, string> = {};
     await runHarness2({ ...req, taskId: "t3", domain: "legal" }, { execute: executor, propose: async (p, l) => ((prompts3[l] = p), "<notes>KEEP_BASE</notes>") });
-    expect(prompts3["inv1.a1"]).not.toContain("LIBRARY");
+    expect(prompts3["inv1.a1"]).not.toContain("# LIBRARY — earlier tasks");
   });
 });

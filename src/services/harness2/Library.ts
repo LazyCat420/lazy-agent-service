@@ -3,14 +3,14 @@
  *
  *   <root>/<domain>/INDEX.md
  *   <root>/<domain>/harnesses/<task>/harness/<rel>   the full adopted tree
- *   <root>/<domain>/harnesses/<task>/EXPERIENCE.md   why picked + lesson
+ *   <root>/<domain>/harnesses/<task>/EXPERIENCE.md   why picked + lesson + stored time
  *
  * Retrieval is by construction: a domain directory only holds same-domain entries. The
  * whole tree is carried, never a summary.
  */
 import fs from "node:fs";
 import path from "node:path";
-import { assertNoGraderVerdicts, onSurface, skillNames, ALWAYS_ON, type Tree } from "./HarnessTree.ts";
+import { assertNoGraderVerdicts, onSurface, renderTree, skillNames, ALWAYS_ON, type Tree } from "./HarnessTree.ts";
 
 export interface Experience {
   cue: string;
@@ -26,7 +26,9 @@ export function hasExperience(exp: Partial<Experience> | null | undefined): exp 
   return Boolean(exp) && (["cue", "lesson", "evidence"] as const).every((key) => typeof exp![key] === "string" && exp![key]!.trim());
 }
 
-const slug = (s: string) => s.replace(/[/\\]/g, "__").replace(/[^A-Za-z0-9_.-]+/g, "-") || "unknown";
+/** Directory-safe name. Leading dots are replaced, so "..", "." and ".x" never resolve outside. */
+export const slug = (s: string) =>
+  s.trim().replace(/[/\\]/g, "__").replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^\.+/, "_") || "unknown";
 
 /** Upper bound on library text handed to one proposer stage. */
 const CONTEXT_CHAR_CAP = 60_000;
@@ -58,7 +60,7 @@ export class Library {
   readonly dir: string;
 
   constructor(readonly domain: string, root: string = process.env.HARNESS2_LIBRARY_PATH || DEFAULT_LIBRARY_ROOT) {
-    this.dir = path.join(root, slug(domain.trim() || "unknown"));
+    this.dir = path.join(root, slug(domain));
   }
 
   get index(): string {
@@ -72,6 +74,30 @@ export class Library {
   entries(): string[] {
     const d = path.join(this.dir, "harnesses");
     return fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort() : [];
+  }
+
+  /** When an entry was stored: its `stored:` line, else EXPERIENCE.md's mtime; 0 when unknown. */
+  storedAt(name: string): number {
+    const exp = path.join(this.dir, "harnesses", name, "EXPERIENCE.md");
+    if (!fs.existsSync(exp)) return 0;
+    const stamp = /^- stored: (\S+)$/m.exec(fs.readFileSync(exp, "utf8"))?.[1];
+    return (stamp && Date.parse(stamp)) || fs.statSync(exp).mtimeMs;
+  }
+
+  /** Entries oldest first (ties by name): the order the context cap evicts in. */
+  entriesByAge(): string[] {
+    return this.entries()
+      .map((name) => ({ name, at: this.storedAt(name) }))
+      .sort((a, b) => a.at - b.at || a.name.localeCompare(b.name))
+      .map((e) => e.name);
+  }
+
+  /** Upstream `forget`: drop these tasks' entries and rebuild INDEX.md; returns the names removed. */
+  forget(taskIds: string[]): string[] {
+    const removed = taskIds.map(slug).filter((name) => fs.existsSync(path.join(this.dir, "harnesses", name)));
+    for (const name of removed) fs.rmSync(path.join(this.dir, "harnesses", name), { recursive: true, force: true });
+    if (removed.length) this.rebuildIndex();
+    return removed;
   }
 
   treeOf(taskId: string): Tree {
@@ -93,7 +119,14 @@ export class Library {
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, text, "utf8");
     }
-    const lines = [`# ${taskId}`, "", `- adopted: \`${opts.label || "?"}\``, `- components: ${inventory(harness)}`, ""];
+    const lines = [
+      `# ${taskId}`,
+      "",
+      `- adopted: \`${opts.label || "?"}\``,
+      `- components: ${inventory(harness)}`,
+      `- stored: ${new Date().toISOString()}`,
+      "",
+    ];
     if (opts.why?.trim()) lines.push("## Why this was chosen", opts.why.trim(), "");
     if (exp.edits?.trim()) lines.push("## What each edit did", exp.edits.trim(), "");
     lines.push("## Transferable lesson");
@@ -105,7 +138,8 @@ export class Library {
     return d;
   }
 
-  rebuildIndex(): string {
+  /** INDEX.md text for these entries, in the given order. */
+  indexText(names: string[], note = ""): string {
     const rows = [
       `# Library — ${this.domain}`,
       "",
@@ -113,7 +147,7 @@ export class Library {
         "and why it was picked. Browse this index, then use the entries relevant to the matter in front of you.",
       "",
     ];
-    const names = this.entries();
+    if (note) rows.push(note, "");
     if (!names.length) rows.push("_(empty — this is the first task in this domain)_");
     for (const name of names) {
       const exp = path.join(this.dir, "harnesses", name, "EXPERIENCE.md");
@@ -122,26 +156,40 @@ export class Library {
       if (cue) rows.push(`- cue:     ${cue}`);
       rows.push("");
     }
+    return rows.join("\n");
+  }
+
+  rebuildIndex(): string {
     fs.mkdirSync(this.dir, { recursive: true });
-    fs.writeFileSync(this.index, rows.join("\n"), "utf8");
+    fs.writeFileSync(this.index, this.indexText(this.entriesByAge()), "utf8");
     return this.index;
   }
 
   /**
-   * The library as proposer evidence, or "" when the domain has no experience yet
-   * (upstream `context_dir`). Entries are newest-last; the oldest are dropped past the cap.
+   * The library as proposer evidence, or "" when it holds no experience for this task (upstream
+   * `context_dir`). `exclude` drops entries, such as the current task's own, from the index and the
+   * blocks (upstream `retain`: only earlier tasks). Entries are oldest first, and the oldest are
+   * dropped past the cap.
    */
-  contextText(): string {
-    const names = this.entries().filter((n) => fs.existsSync(path.join(this.dir, "harnesses", n, "EXPERIENCE.md")));
-    if (!names.length || !fs.existsSync(this.index)) return "";
-    const blocks = names.map((name) => {
+  contextText(opts: { exclude?: string[] } = {}): string {
+    const skip = new Set((opts.exclude ?? []).map(slug));
+    let names = this.entriesByAge().filter((n) => !skip.has(n) && fs.existsSync(path.join(this.dir, "harnesses", n, "EXPERIENCE.md")));
+    if (!names.length) return "";
+    const block = (name: string) => {
       const d = path.join(this.dir, "harnesses", name);
-      const tree = readTree(path.join(d, "harness"));
-      const files = Object.keys(tree).sort().map((rel) => `<file path="${rel}">\n${tree[rel]}\n</file>`).join("\n");
-      return `## Entry ${name}\n\n${fs.readFileSync(path.join(d, "EXPERIENCE.md"), "utf8")}\n### Adopted harness\n\n${files}`;
-    });
-    const head = fs.readFileSync(this.index, "utf8");
-    while (blocks.length > 1 && head.length + blocks.join("\n\n").length > CONTEXT_CHAR_CAP) blocks.shift();
-    return `${head}\n\n${blocks.join("\n\n")}`;
+      return `## Entry ${name}\n\n${fs.readFileSync(path.join(d, "EXPERIENCE.md"), "utf8")}\n### Adopted harness\n\n${renderTree(readTree(path.join(d, "harness")))}`;
+    };
+    const blocks = names.map(block);
+    let dropped = 0;
+    const render = () => {
+      const note = dropped ? `_${dropped} older entr${dropped === 1 ? "y was" : "ies were"} left out to fit the context cap._` : "";
+      return `${this.indexText(names, note)}\n\n${blocks.join("\n\n")}`;
+    };
+    while (blocks.length > 1 && render().length > CONTEXT_CHAR_CAP) {
+      blocks.shift();
+      names = names.slice(1);
+      dropped++;
+    }
+    return render();
   }
 }
