@@ -12,12 +12,14 @@ This chapter audits the Harness² port (`src/services/harness2/`, `POST /harness
 through this service's agentic harness, and lists what is missing, unfinished, or duplicated. It
 ends with an ordered fix plan. The audit itself changed nothing in `src/` (landed `1b3c000`).
 
-**Fix status.** The Phase 1 fixes in §6 are landing in three chunks:
-- (a) learning gates, selection and run status;
-- (b) the proposer contract, library hygiene and prompts;
-- (c) the route and the executor.
+**Fix status.** All Phase 1 fixes in §6 landed on 2026-10-22, in three chunks:
+- (a) learning gates, selection and run status (`94883af`);
+- (b) the proposer contract, library hygiene and prompts (`a3993ea`);
+- (c) the route and the executor (`2ad3f48`).
 
-Each fixed finding below carries a **Status** line. §9 records how each chunk was verified.
+Each fixed finding below carries a **Status** line. §9 records how each chunk was verified, then
+a live run with the LAN models and the NAS deploy. Phase 2 (Q1–Q5 in §6) waits on the user's
+decisions.
 
 - **Upstream:** <https://github.com/google-research/harness2> at `1cfe254` (2026-10-13). That
   commit is the latest, so the 10-19 port and this audit read the same code. Paper: arXiv 2610.14224.
@@ -45,8 +47,9 @@ harness (§4.B4), so no production agent improves from it. The rollouts don't ru
 either (§4.B1). The only domain tool is `calculate_precise`, plus the loop's own internal tools.
 The "how the agent works" (INV) half of the method therefore has almost nothing to optimise.
 
-**Exposure today is small:** the route is live on the NAS, but no library exists there yet (§2).
-That makes this the right time to fix it, before anyone relies on stored lessons.
+**Exposure was small:** at audit time the route was live on the NAS, but no library existed
+there yet (§2), so nothing relied on stored lessons. The fixed route has run on the NAS since
+2026-10-22 23:26 UTC (§9, "NAS deploy").
 
 ## 2. Measured baseline
 
@@ -58,10 +61,10 @@ That makes this the right time to fix it, before anyone relies on stored lessons
 | NAS `/volume1/docker/lazy-agent-service/runtime-data/` | no `harness2/` directory: the endpoint has never stored an entry | CONFIRMED |
 | Library persistence across deploys | `docker-compose.yml:33` bind-mounts `./runtime-data`, so it survives redeploys | CONFIRMED |
 
-**The green suite covers none of the defects below.** The tests exercise the schedule, the
-validation rules, and the library's happy path. They never reach the failure branches,
-selection, retention, or the executor and proposer wiring (`makeExecutor` / `makeProposer` and
-the route have no test).
+**At audit time, the green suite covered none of the defects below.** Its tests exercised the
+schedule, the validation rules, and the library's happy path. They never reached the failure
+branches, selection, retention, or the executor and proposer wiring (`makeExecutor` /
+`makeProposer` and the route had no test). Phase 1 added 80 tests that do (95 in 6 files, §9).
 
 ## 3. How the loop works, and where ours departs
 
@@ -562,8 +565,9 @@ audit script check named in brackets turns into NOT REPRODUCED.
    - Allow one run at a time per domain.
    - Default to local providers only.
    - Validate the `bench` slots.
-9. **Rollouts always end** [B1]. **Done in `2ad3f48`; the `ask_user` schema is still offered.** Pass an `AbortSignal` with a per-rollout deadline into
-   `runSingleModel`, and leave `ask_user` out of harness2 rollouts, since no user is attached.
+9. **Rollouts always end** [B1]. **Done in `2ad3f48`; the `ask_user` schema is still offered.**
+   Pass an `AbortSignal` with a per-rollout deadline into `runSingleModel`, and leave `ask_user`
+   out of harness2 rollouts, since no user is attached.
 10. **Served models** [A14]. Return `improver-failed` when every stage fell back on a proposer
     failure (done in `94883af`). Preflight in the route that the solver and improver models are
     served. Make the default improver follow the model `vllm-2` actually serves. **Done in
@@ -571,11 +575,13 @@ audit script check named in brackets turns into NOT REPRODUCED.
 
 **Phase 2 — needs the user's decision before building.**
 
-- **Q1 Selection pool:** finals-only (upstream, matches the paper, no selector at k=1) or mixed
-  (current; the base can win when adaptation hurts)?
-- **Q2 Skills:** keep them inline, or load them on demand?
-  - Inline: then tell the proposer skills cost the same as always-on text, and count them
-    toward an always-on cap of about 24k chars.
+- **Q1 Selection pool:** keep finals-only as the default (upstream and the paper; the Phase 1
+  default, so k=1 makes no selector call), or make mixed the default (the base and the stage
+  candidates can win when adaptation hurts)? Live evidence: in task A the best candidate
+  (`inv1`, 2/2) could not be delivered at k=1 (§9).
+- **Q2 Skills:** keep them inline (the Phase 1 default, `a3993ea`), or load them on demand?
+  - Inline, as now: the proposer is told skills cost the same as always-on text, and they count
+    toward the 24,000-char cap on the materialized prompt.
   - On demand: install the harness's skills through `skill_read`. That matches upstream, but it
     needs skills shipped into the image and their names listed (D5).
 - **Q3 Executor realism:** run rollouts as a real custom agent (`model.agent`) with its own
@@ -600,6 +606,8 @@ and it removes that directory on every exit path. A run on 2026-10-22 left the p
 `git status` unchanged. Each line reads `R<n> [CONFIRMED|NOT REPRODUCED] <claim> ::
 <observed>`. Output on 2026-10-22 (R16 was dropped while drafting; the ids match the script).
 "Now" is the latest run (§9).
+
+`scripts/harness2-live-check.ts` is the live counterpart, against the LAN models (§9).
 
 Since the finals-only default, a k=1 pool holds one final and is delivered without a selector.
 So R1, R5, R18 and R19 pass `selectionPool: "mixed"` to keep their selector call. Their
@@ -638,6 +646,7 @@ claims are unchanged:
 | 2026-10-22 | Phase 1 chunk (a): learning gates, finals-only pool, per-task seed, base-failed stop, marker tripwire, run status (A1–A4, A11, A14 detection) | `94883af` |
 | 2026-10-22 | Phase 1 chunk (b): proposer contract, retries, autotrigger, 24k cap, evidence budget, library scope/eviction/slugs, reflection input, prompts (A5–A10, A12, A13, C3, D3) | `a3993ea` |
 | 2026-10-22 | Phase 1 chunk (c): async run jobs + records, cancel, one run per domain, request checks, model preflight, rollout deadline + ask_user stop, `.gitignore runtime-data/` (B1, C1–C4, A12, A14, D7) | `2ad3f48` |
+| 2026-10-22 | Live verification with the LAN models (25/25, then 22 pass + 2 skip with the committed script); NAS deploy of `1ec9ba5`; `scripts/harness2-live-check.ts`; `.dockerignore` drops `.worktrees`, `.checks`, `runtime-data` | `5bd793b` |
 
 ## 9. Fixes and verification
 
@@ -723,4 +732,132 @@ on), `wait`.
 | `eslint` on the harness2 files, the route and its test | clean |
 | **Full suite** `vitest run --maxWorkers=4` on `main` @ `2ad3f48` (testrun) | **174 files, 1,878/1,878 pass**, 34 s, peak 1.0 GB |
 | `git status` of the primary checkout after the tests | unchanged |
+
+
+### Live verification with the LAN models (2026-10-22)
+
+The unit tests and revert checks use fake models. This run uses the real ones, to check that
+real improver, selector and reflector replies pass through every decision point.
+
+**Setup.**
+- **Code:** `main` @ `1ec9ba5` (its code is `2ad3f48`), run from the primary checkout through
+  `testrun`, with the route mounted in-process on 127.0.0.1.
+- **Models:** solver `vllm` / `nemotron35` (Jetson); improver `vllm-2` /
+  `DeepSeek-V4.1-Flash-1017` (DGX Spark), which is what the route's default resolved to.
+- **Isolation:**
+  - the library, run store and proxy sessions live in a temp directory, removed afterwards;
+  - `VAULT_SERVICE_URL` and `MONGO_URI` are unset;
+  - `fetch` reaches only the two model hosts and localhost, so the one other call (to
+    `10.0.0.16:5595`) was blocked;
+  - the primary checkout's `git status` was unchanged after both runs.
+- **Tasks:** two invoice reconciliations in one domain. Each has 8 lines, 2 duplicated ids and a
+  decoy: a line with another line's vendor and amount under a different id. The base harness is
+  deliberately weak: "Be brief: answer in one sentence."
+- **Score:** out of 2, computed by the script and never shown to a model: 1 for the
+  de-duplicated total, 1 for listing every duplicated id.
+- **Rerun:** `testrun --mem 3G --max-time 75m -- npx tsx scripts/harness2-live-check.ts`
+  (`--part=loop|select|all`), from the primary checkout while the trading cycle is idle. It
+  takes the models each instance serves that day. The tables below come from the first run
+  (two scratch scripts); the committed script's own run is under "Second run".
+
+**Checks: 25/25 pass.**
+
+| Part | Check | Observed |
+|---|---|---|
+| loop | Preflight refuses an improver model the Spark does not serve | 400 `improver.model GLM-5.3-Flash-EXL3-TF is not served by vllm-2 (serves: DeepSeek-V4.1-Flash-1017)` |
+| loop | `POST /harness2/run` is async | 202 with `runId`, `poll` and `cancel` |
+| loop | The default improver follows the served model | `{"provider":"vllm-2","model":"DeepSeek-V4.1-Flash-1017"}` |
+| loop | Task A finishes, and its record is on disk | `done` / `ok`, no errors, `runs/recon-a-….json` |
+| loop | k=1 finals-only selection | trivial: `agg1`, no selector call |
+| loop | Real improver replies are used | `inv1`, `dom1`, `agg1`: one attempt each, no fallback |
+| loop | The learning gate | `learned` = true, and an entry exists |
+| loop | Task B reads task A's lesson | all 3 proposer prompts hold `## Entry recon-a` and A's lesson |
+| loop | Task B never reads itself | no `## Entry recon-b`, also on a re-run with both entries stored |
+| loop | Every base rollout fails (solver `no-such-model`, `wait: true`) | `base-failed`, 0 stages, nothing learned |
+| loop | `DELETE` both entries, then list | 200, 200, then an empty library |
+| select | k=2: six stages, real replies, run `ok` | `inv1`, `dom1`, `inv2`, `dom2`, `agg1`, `agg2`; no fallback |
+| select | One blind selector call over the finals | 3,385-char prompt; no rollout label in it; both finals' outputs in it |
+| select | The real selector's reply parses | `{"a1":"agg2","a2":"agg1"}`, chose `a1` → `agg2`, no fallback |
+| select | Delivery and reflection | the output is `agg2`'s; the reflection prompt holds `# ADOPTION` with `a1 → agg2, a2 → agg1` |
+| select | The learning gate | `learned` = true, and an entry exists |
+
+The table merges some of the script's checks. Part `loop` took 5 min 18 s (peak 259 MB), part
+`select` 3 min 20 s (peak 239 MB). The first run's script named the retired GLM model for the
+preflight check. The committed script uses `not-a-served-model` instead.
+
+**Scores.**
+
+| Run | base | inv | dom | agg | delivered |
+|---|---|---|---|---|---|
+| Task A, k=1 | 1/2 | **2/2** | 1/2 | 1/2 | `agg1`, 1/2 |
+| Task B, k=1 | 1/2 | 1/2 | 1/2 | 1/2 | `agg1`, 1/2 (`agg1` kept the base) |
+| Task A, k=2 | 1/2, 1/2 | 1/2, 1/2 | 1/2, 1/2 | 1/2, 1/2 | `agg2`, 1/2 |
+
+**What the scores show.**
+- **The solver's arithmetic is the bottleneck.** The duplicate ids were right in all 16 scored
+  rollouts (the re-run of B was not scored), but the total was right only once. Task B's four
+  rollouts gave four different wrong totals, two of them from the same base harness (`base1`,
+  and `agg1`, which kept the base).
+- **The Q1 cost, measured.** In task A at k=1, the best candidate (`inv1`, 2/2) could not be
+  delivered: the finals pool holds only `agg1`. The `mixed` pool would have shown `inv1` to the
+  selector.
+- **Why `inv1` was right.** The improver worked out the total itself and wrote it into a "facts
+  about this task" block in the skill. A per-task harness may carry task facts, but nothing in
+  that block transfers to another task. `agg1` dropped the block and lost the total.
+- **The selector judged, but not well.** At k=2 it worked out the correct total (5,023.24) and
+  said that neither final states it. It then chose `agg2` (3,023.74) over `agg1` (5,323.50),
+  calling `agg1`'s total "even larger", although `agg1` is the closer one. Blind selection
+  works as a protocol; the selector's arithmetic judgement is still a model's.
+- **The lessons are calibrated.** The three lessons recorded (task A, task B's first run, and
+  k=2) all say `confidence: low` and name the confound: one rollout per candidate, and several
+  clauses changed at once. B's lesson opens: "Do not attribute a change in a computed total to a
+  newly added procedure skill unless a rollout pair isolates the skill from sampling variance".
+  The restored experience text asks for exactly this (§4.A8, `a3993ea`).
+- **The models still slip.** The improver's notes for task B sum to 5,546.40, missing the decoy
+  line (INV-203); the right total is 6,186.40. The task A reflection calls `base1`'s 5,824.50 "the
+  all-rows sum"; the rows actually sum to 7,085.49.
+
+**What this run does not show.** With one rollout per candidate, it cannot tell whether the loop
+improves the solver: every score difference above is within the solver's run-to-run noise.
+Measuring improvement needs repeated rollouts per harness on held-out tasks. That is Phase 2
+work, and it depends on Q1 and Q5.
+
+**Second run: the committed script (22 pass, 0 fail, 2 skip).** `scripts/harness2-live-check.ts`
+ran once more on `1ec9ba5` (2 min 33 s, peak 249 MB, temp directory removed, `git status`
+unchanged). Two checks skipped, and the reason is itself a result:
+- **The decline path, live.** Task A's reflector judged every edit "confounded" (no rollout had
+  the right total) and answered `NO_ENTRY`, so nothing was stored: `learned` = false, with no
+  error. The two checks that need A's lesson (B reads it; a re-run of B) therefore skipped.
+  The first run covers them.
+- **The Q1 cost again.** At k=2, `dom2` had the right total (2/2), but only the finals `agg1`
+  and `agg2` (both 1/2) can be delivered.
+- Everything else passed as in the first run: preflight, async route, record, trivial k=1
+  selection, real replies, the learning gate, `base-failed`, `DELETE`, and the k=2 blind selector
+  with its id map in the reflection.
+
+### NAS deploy (2026-10-22)
+
+`npm run deploy` from the primary checkout shipped `main` @ `1ec9ba5`. The trading cycle was
+idle (`cycle_running: false`). The deploy was announced to the one busy session (sun-56, which
+then held its own trading-service deploy). The dirty `tool_schemas.json` in the primary
+checkout was byte-identical to what the deploy's exporter writes from the committed shards, so
+the deploy shipped nobody's unfinished work.
+
+| Check | Result |
+|---|---|
+| Deploy | test gate 3/3 shards green; image built, transferred (19 s), restarted; 495 s in all |
+| Trading preflight (`PRE_RESTART`) | pipeline idle; deploy hold armed for 15 min (self-expiring) |
+| Container at 23:34 UTC | `running`, `healthy`, 0 restarts, label `git.sha=1ec9ba5`; no error lines in its logs |
+| `GET /health` | 200 |
+| `GET /harness2/runs/no-such-run` | before: Express's HTML 404, as the route did not exist; after: `404 {"error":"no such run"}` |
+| `POST /harness2/run` with `{}` | 400 `taskId, task and domain are required strings` |
+| `POST /harness2/run` naming the retired GLM improver | 400 `improver.model GLM-5.3-Flash-EXL3-TF is not served by vllm-2 (serves: DeepSeek-V4.1-Flash-1017)`; no run started |
+| `GET /harness2/library/audit-probe-x` | 200, empty |
+| Model requests through the adapter (`/vllm-shim/jetson`, `/vllm-shim/gold-spark`) | both list their model; both chat completions answer "ready" (`stop`; 2.1 s and 0.36 s) |
+
+**The build context was 9.15 GB.** `.dockerignore` did not exclude `.worktrees/`, which held 578
+benchmark worktrees (8.4 GB). Sending the context took 198 s and `COPY . .` 182 s, so the build
+used about 7 minutes of its 10-minute limit. The image itself was unaffected, because its
+final stage copies only `dist`, `node_modules` and a few folders. `5bd793b` adds `.worktrees`,
+`.checks` and `runtime-data` to `.dockerignore`.
 
