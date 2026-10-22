@@ -15,10 +15,6 @@ export interface StatInstance {
   reset(): number;
 }
 
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 const StatFactory = {
   create(name: string, options: StatOptions = {}): StatInstance {
     const {
