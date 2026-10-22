@@ -18,3 +18,7 @@ tests
 python/logs
 python/memory
 python/data
+# Agent worktrees are full checkouts: 578 of them made a 9.15 GB build context on 2026-10-22.
+.worktrees
+.checks
+runtime-data
