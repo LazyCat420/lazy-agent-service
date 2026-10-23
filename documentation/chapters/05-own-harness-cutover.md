@@ -1,11 +1,23 @@
 ---
 part: Plans
 status: in-progress
-updated: 2026-10-07
-review-by: 2026-10-20
+updated: 2026-10-23
+review-by: 2026-11-06
 ---
 
 # Every repo on our own agent harness
+
+> **Review 2026-10-23: mostly done, and the ticks below are stale.**
+> - Every P0 parity item in chapter 06 is on `main`.
+> - trading-service has moved off prism: `dc46829c` removed `PRISM_ENABLED`/`PRISM_URL`/`prism-proxy`, and it now uses `LAZY_AGENT_URL`.
+> - Registration with prism is gone (`f2f78a4`).
+> - These repos have moved too: music-player `c89c6da`, scraper-service `745867f`, youtube-wallgarden `eb44964`, html-notes `915a8aa`, and lazycat-sdk.
+>
+> **Still open (step 7):**
+> - SmartGardenDashBoard's camera path still defaults to prism's `:7777` (`backend/camera_service.py:429`, `:526`).
+> - LLMSortObsidian's `main.js` and `data.json` still mention prism. Not checked: whether a live URL is involved.
+>
+> Steps 5–7 below should be rewritten to match.
 
 **Goal (user decision, 2026-10-06):** every repo we own runs its agents through
 **this service's** agentic harness instead of prism-service's. Prism stays only

@@ -1,10 +1,17 @@
 ---
 part: Plans
 status: in-progress
-updated: 2026-10-08
-review-by: 2026-10-22
+updated: 2026-10-23
+review-by: 2026-11-13
 ---
 # Harness roadmap — deferred mechanisms (2026-10-07)
+
+> **Review 2026-10-23:**
+> - **Mechanism 2 (the model condenser) is covered.** `CompactionService` already summarises with a model and has a fallback model.
+> - **Mechanism 1 is partly covered.** Run resume exists (`RunStore.ts`; `b70db33`, `e23d775`), but there is no event log.
+> - **Mechanisms 3–7 are not started:** the guardrail rule library, handoff with history, ranked rule providers, the plugin kernel and trajectory-replay demos.
+>
+> Nothing has dropped them, so they stay open.
 
 > Classified `in-progress` by the documentation audit of 2026-10-08. The
 > *landed* half is shipped and recorded in

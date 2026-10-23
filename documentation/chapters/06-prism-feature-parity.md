@@ -1,11 +1,35 @@
 ---
 part: Plans
 status: in-progress
-updated: 2026-10-07
-review-by: 2026-10-21
+updated: 2026-10-23
+review-by: 2026-11-13
 ---
 
 # What prism's harness does that ours does not yet
+
+> **Review 2026-10-23: P0 is done; the P1 list and "Ours today" are out of date.**
+>
+> **Done and present in code:**
+> - All P0 items 0–10.
+> - The MCP client and the `/mcp-servers` routes.
+> - Ask-user.
+> - The approval route and its durable store.
+> - The conversation budget and pause.
+> - Plan mode.
+> - Model profiles.
+> - An offload store (`src/platform/offload/`; `2660324`, `1adaa8a`). The prose below says there is none.
+>
+> **Deleted as dead wiring in `dd69148`:** the goals, the mid-turn mailbox (`TurnMailbox`) and non-blocking questions. `prism-harness-ports-2026-10-08.md` still calls them shipped.
+>
+> **Still open:**
+> - Boot-time turn re-drive.
+> - MCP elicitation.
+> - Role-based model routing.
+> - Conversation rewind and fork.
+> - The reminder, todo and conversation-search tools.
+> - MCP permission tiers.
+>
+> The P1 list and "Ours today" below should be rewritten to match.
 
 **Goal (user, 2026-10-06):** before any repo moves off prism (chapter 05), this
 service must do everything prism's agent harness did — "like the rolling
