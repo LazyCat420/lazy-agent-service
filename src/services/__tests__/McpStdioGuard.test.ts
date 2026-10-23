@@ -279,9 +279,10 @@ describe("an allowlisted stdio command", () => {
   });
 
   it("buildStdioEnv keeps PATH/HOME/LANG/TMPDIR/NODE_* only", () => {
+    const leaked = () => `sentinel_${crypto.randomBytes(8).toString("hex")}`;
     const env = buildStdioEnv(
       { ROW: "r" },
-      { PATH: "/bin", HOME: "/h", LANG: "C", TMPDIR: "/t", NODE_ENV: "test", MONGO_URI: "m", SOME_API_KEY: "k" },
+      { PATH: "/bin", HOME: "/h", LANG: "C", TMPDIR: "/t", NODE_ENV: "test", MONGO_URI: leaked(), SOME_API_KEY: leaked() },
     );
     expect(env).toEqual({ PATH: "/bin", HOME: "/h", LANG: "C", TMPDIR: "/t", NODE_ENV: "test", ROW: "r" });
   });
