@@ -53,7 +53,10 @@ function paused(): boolean {
 async function untilUnpaused() {
   let said = false;
   while (paused()) {
-    if (!said) (log(`paused (${PAUSE} UTC)`), (said = true));
+    if (!said) {
+      log(`paused (${PAUSE} UTC)`);
+      said = true;
+    }
     await new Promise((r) => setTimeout(r, 30_000));
   }
 }
