@@ -2,7 +2,7 @@
  * Harness² improvement benchmark (documentation chapter 13 §10). Every number comes from FRESH
  * solver attempts of a fixed harness, never from the attempts the loop used to choose it.
  *
- *   base         the base harness
+ *   base         the base harness: the weak one by default, or a neutral one with --base=neutral
  *   handwritten  a hand-written harness (a reference ceiling, never part of the loop)
  *   solo-<v>     the harness the loop adopts for the task, starting from an EMPTY library
  *   chain-<v>    the same, with the tasks run in order in one domain, so each reads earlier lessons
@@ -20,10 +20,10 @@
  *
  *   cd agents/lazy-agent-service      # the primary checkout, never a .worktrees/ copy
  *   testrun --mem 3G --max-time 150m -- npx tsx scripts/harness2-eval/run.ts --name=s2 --tasks=10 --r=4 \
- *     "--lanes=solo-blind,base;solo-told,handwritten" [--pause=01:08-01:40] [--state=<dir>]
+ *     "--lanes=solo-blind,base;solo-told,handwritten" [--base=weak|neutral] [--pause=01:08-01:40] [--state=<dir>]
  *   python3 scripts/harness2-eval/report.py <state>/units.json
  */
-import { BASE, HANDWRITTEN, TOOL_NOTE, blocked, cleanup, makeTask, mod, pool, score } from "./common.ts";
+import { BASE, HANDWRITTEN, NEUTRAL_BASE, TOOL_NOTE, blocked, cleanup, makeTask, mod, pool, score } from "./common.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +34,9 @@ const NTASKS = Number(arg("tasks", "10"));
 const R = Number(arg("r", "4"));
 const LANES = arg("lanes", "solo-blind,base;solo-told,handwritten").split(";").map((l) => l.split(",").filter(Boolean));
 const PAUSE = arg("pause", ""); // no new unit starts inside this UTC window, e.g. 01:08-01:40
+const BASE_NAME = arg("base", "weak");
+if (!["weak", "neutral"].includes(BASE_NAME)) throw new Error(`--base must be weak or neutral, not ${BASE_NAME}`);
+const START = BASE_NAME === "neutral" ? NEUTRAL_BASE : BASE; // the loop's base tree and the base arm
 const STATE_DIR = arg("state", path.join(os.tmpdir(), "harness2-eval", NAME));
 fs.mkdirSync(STATE_DIR, { recursive: true });
 process.env.HARNESS2_LIBRARY_PATH = path.join(STATE_DIR, "library"); // persists across restarts
@@ -135,7 +138,7 @@ async function loopUnit(arm: string, task: ReturnType<typeof makeTask>) {
   const propose = async (p: string, label: string) => ((seen[label] = p.includes(TOOL_NOTE.slice(0, 60))), realPropose(p, label));
   const t0 = Date.now();
   const res = await S.runHarness2(
-    { taskId: task.id, task: task.text, domain, baseTree: BASE, solver, improver, k: 1, ...(variant === "told" ? { bench: { domainGuidance: TOOL_NOTE } } : {}) },
+    { taskId: task.id, task: task.text, domain, baseTree: START, solver, improver, k: 1, ...(variant === "told" ? { bench: { domainGuidance: TOOL_NOTE } } : {}) },
     { propose },
   );
   const rollouts = Object.entries(res.result?.rollouts ?? {}) as Array<[string, any]>;
@@ -156,7 +159,7 @@ async function unit(arm: string, task: ReturnType<typeof makeTask>) {
   const key = `${arm}/${task.id}`;
   if (units[key]?.attempts) return;
   await untilUnpaused();
-  let tree: Record<string, string> | undefined = arm === "base" ? BASE : arm === "handwritten" ? HANDWRITTEN : units[key]?.loop?.adoptedTree;
+  let tree: Record<string, string> | undefined = arm === "base" ? START : arm === "handwritten" ? HANDWRITTEN : units[key]?.loop?.adoptedTree;
   if (arm.includes("-") && !units[key]?.loop) {
     log(`${key}: loop run`);
     units[key] = { loop: await loopUnit(arm, task) };
@@ -177,7 +180,7 @@ async function unit(arm: string, task: ReturnType<typeof makeTask>) {
   log(`${key}: ${attempts.filter((a) => a.correct).length}/${R} correct (calculator used in ${attempts.filter((a) => a.calc > 0).length})`);
 }
 
-log(`harness2 eval ${NAME}: solver ${solver.model}, improver ${improver.model}, tasks=${NTASKS} r=${R} lanes=${JSON.stringify(LANES)} pause=${PAUSE || "none"} state=${STATE_DIR}`);
+log(`harness2 eval ${NAME}: solver ${solver.model}, improver ${improver.model}, tasks=${NTASKS} r=${R} base=${BASE_NAME} lanes=${JSON.stringify(LANES)} pause=${PAUSE || "none"} state=${STATE_DIR}`);
 // Chain arms must run in task order; every lane does, so a lane may hold a chain arm.
 await Promise.all(LANES.map(async (arms) => {
   for (const t of tasks) for (const arm of arms) await unit(arm, t);

@@ -122,6 +122,12 @@ export async function pool<T>(n: number, jobs: Array<() => Promise<T>>): Promise
 /** A deliberately weak base harness: "one sentence" fights a request for a total AND a list. */
 export const BASE = { "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n" };
 
+/**
+ * A neutral base harness: no handicap and no procedure. The loop must then improve a reasonable
+ * prompt, rather than undo the weak base's "one sentence" rule (run.ts --base=neutral).
+ */
+export const NEUTRAL_BASE = { "systemprompt.md": "You are an accounts-payable assistant.\n" };
+
 /** A hand-written reference harness (a ceiling to compare against, never part of the loop). */
 export const HANDWRITTEN = {
   "systemprompt.md":
