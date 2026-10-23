@@ -57,7 +57,7 @@ It must **never** contain trading cycle management or cognition/evaluation logic
 | `src/platform/` | Shared agent runtime: 4-layer context assembly, lifecycle memory engine, trace engineering, deterministic verifiers, and replay manifests |
 | `src/routes/` | Express REST routes (`/tools`, `/health`, `/schemas`) |
 | `tool_schemas/` | Per-app/per-domain source folders for tool schemas (`<owner_app>/<domain>.json`). Edit these, not the flat file. |
-| `tool_schemas.json` | Build artifact — flat array generated from `tool_schemas/` by `trading-service/scripts/build_tool_schemas.py` (run by deploy.sh; `update_tool_schemas.py` refreshes the sources from prism + native registry). |
+| `tool_schemas.json` | Build artifact — flat array generated from `tool_schemas/` by `scripts/export_tool_schemas.py`, the only generator (run by deploy.sh; the trading repos call it with `--out` for their copies; see documentation ch.15). |
 
 The TS layer is the entire service. Tool calls arrive over MCP or REST and are
 dispatched by `src/services/LocalToolRouter.ts`:

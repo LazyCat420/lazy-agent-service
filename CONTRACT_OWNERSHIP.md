@@ -64,4 +64,4 @@ To guarantee that no microservice or container fails due to missing neighboring 
 The following files and approaches are formally superseded:
 - `HTML-Notes/app/schemas/tool-contract-v1.json`: **Superseded**. HTML-Notes must maintain only its local domain tool manifest and profile bindings; global contracts are consumed from `lazy-agent-service`.
 - `lazy-agent-service/tool_schemas/`: Historical per-domain build inputs; replaced by versioned contract schemas.
-- `lazy-agent-service/ARCHITECTURE.md` sections referencing `build_tool_schemas.py` are marked historical.
+- `trading-service/scripts/build_tool_schemas.py`: **Deleted 2026-10-22**. `lazy-agent-service/scripts/export_tool_schemas.py` is the only generator of every `tool_schemas.json` copy (documentation ch.15).

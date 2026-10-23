@@ -43,11 +43,10 @@ exit() {
 
 PRE_BUILD() {
   step "Building flat tool_schemas.json from tool_schemas/ split sources"
-  # Our own exporter — the shards in THIS repo are the source of truth. The
-  # former call into trading-service/scripts/build_tool_schemas.py silently
-  # overwrote this repo's schemas (it regenerated scrape_url from trading-
-  # service's stale shard, reverting the prompt/char_limit params on
-  # 2026-10-10). Our exporter also fails on duplicate names across shards.
+  # The shards in THIS repo are the source of truth, and this exporter is the
+  # only generator: the trading repos call it with --out for their copies.
+  # trading-service's build_tool_schemas.py, a second generator that also
+  # wrote here, was deleted 2026-10-22 (documentation ch.15).
   python3 "${SCRIPT_DIR}/scripts/export_tool_schemas.py"
 
 

@@ -4,18 +4,28 @@
 WHY: ToolSchemaService loads tool_schemas.json at runtime, but editing that file
 by hand drifts from the per-group shards (this bit us on 2026-10-10 when a stale
 regen reverted scrape_url's description and dropped its char_limit param).
-The shards are the source of truth; this script is the only writer.
+The shards are the source of truth and this script is the ONLY generator of the
+flat file, for every repo that carries a copy. trading-service and
+trading-client call it with `--out` to write their own copy; nothing else may
+write a tool_schemas.json. (Until 2026-10-22 trading-service's
+build_tool_schemas.py was a second generator that wrote into this repo too, so
+whichever deploy ran last decided what shipped -- trading-client ch.47.)
 
 Usage:
-  python3 scripts/export_tool_schemas.py            # write tool_schemas.json
-  python3 scripts/export_tool_schemas.py --check    # exit 1 if it would change
+  python3 scripts/export_tool_schemas.py               # write ./tool_schemas.json
+  python3 scripts/export_tool_schemas.py --check       # exit 1 if it would change
+  python3 scripts/export_tool_schemas.py --out PATH    # write PATH only (other repos)
+  python3 scripts/export_tool_schemas.py --out PATH --check
+  python3 scripts/export_tool_schemas.py --supports-out  # exit 0: lets callers
+                                                         # refuse an older exporter
 
 Merge rules:
-  - every tool_schemas/*/*.json (excluding tool_schemas/README.md) is an array
-    of schema objects;
-  - groups are concatenated in sorted path order; within a group, sorted filename
-    order, then array order;
-  - duplicate tool names are an error (fail loudly, never silently dedupe).
+  - every tool_schemas/<owner_app>/*.json is a JSON array of schema objects;
+  - each entry needs name, description and parameters;
+  - an entry without owner_app gets its shard folder's name (trading,
+    shared, html-notes, ...): consumers filter on it;
+  - duplicate tool names are an error (fail loudly, never silently dedupe);
+  - output is sorted by (owner_app, name) so every copy is byte-identical.
 """
 import glob
 import json
@@ -23,48 +33,81 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "tool_schemas.json")
+DEFAULT_OUT = os.path.join(ROOT, "tool_schemas.json")
+REQUIRED_KEYS = ("name", "description", "parameters")
 
 
 def collect() -> list[dict]:
     merged: list[dict] = []
-    seen: set[str] = set()
+    seen: dict[str, str] = {}
     shards = sorted(glob.glob(os.path.join(ROOT, "tool_schemas", "*", "*.json")))
     if not shards:
         sys.exit("export_tool_schemas: no shard files found under tool_schemas/*/")
     for path in shards:
+        rel = os.path.relpath(path, ROOT)
+        owner = os.path.basename(os.path.dirname(path))
         with open(path, encoding="utf-8") as f:
             entries = json.load(f)
         if not isinstance(entries, list):
-            sys.exit(f"export_tool_schemas: {path} must contain a JSON array")
+            sys.exit(f"export_tool_schemas: {rel} must contain a JSON array")
         for entry in entries:
-            name = entry.get("name")
-            if not name:
-                sys.exit(f"export_tool_schemas: entry without 'name' in {path}")
+            if not isinstance(entry, dict):
+                sys.exit(f"export_tool_schemas: non-object entry in {rel}")
+            missing = [k for k in REQUIRED_KEYS if k not in entry]
+            if missing:
+                sys.exit(f"export_tool_schemas: {entry.get('name', '?')} in {rel} is missing {missing}")
+            name = entry["name"]
             if name in seen:
-                sys.exit(f"export_tool_schemas: duplicate tool '{name}' (also in another shard)")
-            seen.add(name)
+                sys.exit(f"export_tool_schemas: duplicate tool '{name}' in {rel} (also in {seen[name]})")
+            seen[name] = rel
+            entry.setdefault("owner_app", owner)
             merged.append(entry)
+    merged.sort(key=lambda t: (t.get("owner_app", ""), t["name"]))
     return merged
 
 
-def main() -> None:
+def render(merged: list[dict]) -> str:
+    return json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
+
+
+def _parse_args(argv: list[str]) -> tuple[str, bool]:
+    out, check, i = DEFAULT_OUT, False, 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--check":
+            check = True
+        elif arg == "--out":
+            if i + 1 >= len(argv):
+                sys.exit("export_tool_schemas: --out needs a path")
+            out = os.path.abspath(argv[i + 1])
+            i += 1
+        elif arg == "--supports-out":
+            sys.exit(0)
+        else:
+            sys.exit(f"export_tool_schemas: unknown argument {arg!r}")
+        i += 1
+    return out, check
+
+
+def main(argv: list[str]) -> None:
+    out, check = _parse_args(argv)
     merged = collect()
-    rendered = json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
-    check = "--check" in sys.argv
+    rendered = render(merged)
+    label = os.path.relpath(out) if out != DEFAULT_OUT else "tool_schemas.json"
     current = None
-    if os.path.exists(OUT):
-        with open(OUT, encoding="utf-8") as f:
+    if os.path.exists(out):
+        with open(out, encoding="utf-8") as f:
             current = f.read()
     if current == rendered:
-        print(f"export_tool_schemas: {len(merged)} tools, up to date")
+        print(f"export_tool_schemas: {len(merged)} tools, {label} up to date")
         return
     if check:
-        sys.exit(f"export_tool_schemas: tool_schemas.json is STALE ({len(merged)} tools in shards). Run: python3 scripts/export_tool_schemas.py")
-    with open(OUT, "w", encoding="utf-8") as f:
+        sys.exit(f"export_tool_schemas: {label} is STALE ({len(merged)} tools in shards). "
+                 f"Run: python3 scripts/export_tool_schemas.py" + (f" --out {out}" if out != DEFAULT_OUT else ""))
+    with open(out, "w", encoding="utf-8") as f:
         f.write(rendered)
-    print(f"export_tool_schemas: wrote {len(merged)} tools to tool_schemas.json")
+    print(f"export_tool_schemas: wrote {len(merged)} tools to {label}")
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
