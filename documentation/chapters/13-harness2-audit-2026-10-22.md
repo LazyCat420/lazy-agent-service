@@ -494,8 +494,14 @@ tripwire and code). Found by the benchmark in §10.
 - **Found:** s3's tool-set tripwire fired 2 s after it started.
   - s2 was not affected: it paused for 20 minutes before its first attempt, and its tripwire
     saw one 47-tool set throughout.
-- **Status:** the benchmark now waits for the catalog itself (`95c0810`). The service fix, making
-  `ensureSchemas()` wait for a fetch already in flight, is in progress.
+- **Status: fixed in `f8c7737`.** `ensureSchemas()` now waits for a fetch already in flight.
+  - A stale fetch that finishes late cannot clear a newer one.
+  - `_resetCaches()` forgets the in-flight fetch.
+  - The benchmark also waits for the catalog itself (`95c0810`).
+  - The regression test `src/services/__tests__/ToolOrchestratorEnsureSchemas.test.ts`
+    (`56fb8f5`) failed on the old code: `ensureSchemas()` returned with only the 5 orchestrator
+    tools. It passes on the fix.
+  - The full suite (178 files, 1,897 tests) is green, and `tsc --noEmit` is clean.
 
 ### C. Route and operational safety
 
@@ -744,6 +750,7 @@ claims are unchanged:
 | 2026-10-22 | Prompt-growth leak in `getClientToolSchemas()`, found by the §10 benchmark: regression test, then the fix (§4.B5); §4.B1 corrected (about 50 tools offered, not one) | `fd68bab`, `42e7a48` |
 | 2026-10-22 | `scripts/harness2-eval/`: the improvement benchmark (§10), with tripwires for prompt drift, a changed tool set and context exhaustion | `1c61156`, `983ad2a` |
 | 2026-10-22 | `scripts/harness2-eval/`: `--base=neutral`; wait for the tools-service catalog before the first attempt (§4.B6) | `c1d1d39`, `95c0810` |
+| 2026-10-22 | `ensureSchemas()` waits for the import-time schema fetch (§4.B6): regression test, then the fix | `56fb8f5`, `f8c7737` |
 
 ## 9. Fixes and verification
 
