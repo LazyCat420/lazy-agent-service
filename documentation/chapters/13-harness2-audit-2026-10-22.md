@@ -482,6 +482,21 @@ repro). Found by the benchmark in §10.
   - It passes on the fix. The full suite (176 files, 1,891 tests) is green, and
     `tsc --noEmit` is clean.
 
+**B6 — The first agent runs after boot get only the orchestrator tools.** CONFIRMED (benchmark
+tripwire and code). Found by the benchmark in §10.
+- **Where:** `ToolOrchestratorService` starts its tools-service fetch at module load without
+  awaiting it (`ToolOrchestratorService.ts:481`).
+  - `ensureSchemas()` skips a new fetch within 30 s of the last attempt (`:1061`).
+  - So while that first fetch is in flight, it returns at once.
+  - `AgenticToolResolver.resolve()` (`:115`) then reads an empty catalog.
+- **Effect:** a run that starts within about a second of boot is offered only the 5
+  orchestrator tools. Its assembled prompt was 1,407 characters instead of 10,329.
+- **Found:** s3's tool-set tripwire fired 2 s after it started.
+  - s2 was not affected: it paused for 20 minutes before its first attempt, and its tripwire
+    saw one 47-tool set throughout.
+- **Status:** the benchmark now waits for the catalog itself (`95c0810`). The service fix, making
+  `ensureSchemas()` wait for a fetch already in flight, is in progress.
+
 ### C. Route and operational safety
 
 **C1 — An open, expensive endpoint.** CONFIRMED (code).
@@ -728,6 +743,7 @@ claims are unchanged:
 | 2026-10-22 | Live verification with the LAN models (25/25, then 22 pass + 2 skip with the committed script); NAS deploy of `1ec9ba5`; `scripts/harness2-live-check.ts`; `.dockerignore` drops `.worktrees`, `.checks`, `runtime-data` | `5bd793b` |
 | 2026-10-22 | Prompt-growth leak in `getClientToolSchemas()`, found by the §10 benchmark: regression test, then the fix (§4.B5); §4.B1 corrected (about 50 tools offered, not one) | `fd68bab`, `42e7a48` |
 | 2026-10-22 | `scripts/harness2-eval/`: the improvement benchmark (§10), with tripwires for prompt drift, a changed tool set and context exhaustion | `1c61156`, `983ad2a` |
+| 2026-10-22 | `scripts/harness2-eval/`: `--base=neutral`; wait for the tools-service catalog before the first attempt (§4.B6) | `c1d1d39`, `95c0810` |
 
 ## 9. Fixes and verification
 
