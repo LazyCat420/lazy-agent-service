@@ -1166,10 +1166,8 @@ export default class ToolOrchestratorService {
         domainKey: "core_orchestrator",
         system: true,
       }));
-      cachedClientSchemas.push(...orchestratorClient);
 
-
-
+      // Read-only: the orchestrator tools are appended to the result below, never to the cache.
       const localeClientSchemas = (activeLocale && activeLocale !== "en" && localizedClientSchemasCache.has(activeLocale))
         ? localizedClientSchemasCache.get(activeLocale)!
         : cachedClientSchemas;
