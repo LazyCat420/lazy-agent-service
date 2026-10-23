@@ -21,6 +21,11 @@ Each fixed finding below carries a **Status** line. §9 records how each chunk w
 a live run with the LAN models and the NAS deploy. Phase 2 (Q1–Q5 in §6) waits on the user's
 decisions.
 
+**Found by the benchmark (§10).** A bug in shared code made every tools-on agent prompt grow by
+about 3k characters per call, until the context exhaustion guard skipped the call (§4.B5). It is
+fixed in `42e7a48`. The same work corrected §4.B1: a tools-on rollout is offered about 50 tools,
+not one.
+
 - **Upstream:** <https://github.com/google-research/harness2> at `1cfe254` (2026-10-13). That
   commit is the latest, so the 10-19 port and this audit read the same code. Paper: arXiv 2610.14224.
 - **Ours:** `main` @ `a4ae118`. The harness2 files are byte-identical on the primary checkout.
@@ -345,9 +350,24 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
 - **The executor:** `runSingleModel` (`BenchmarkService.ts:323`). Without `toolsEnabled` there
   are no tools at all. With it, it calls `handleAgent` with `autoApprove: true`,
   `maxIterations: 10` and `enabledTools: [CALCULATE_PRECISE]` (`:383-392`).
-- **What the solver can call:** the agentic loop adds its internal tools to every run:
-  `take_note`, `ask_user` and `retrieve_offloaded_content` always, plus `skill_read` when repo
-  skills exist (`AgenticLoopService.ts:361-378`). So `calculate_precise` is the only domain tool.
+- **What the solver can call (corrected 2026-10-22):** harness2 asks for `calculate_precise`
+  (`evaluate_expression`) only, but the solver is offered far more.
+  - A rollout runs with no agent persona, so `coreToolsLocked` defaults to true
+    (`AgenticToolResolver.ts:274`).
+  - The resolver then also passes (`:313-333`):
+    - every core-domain tool from tools-service (`read_url` among them);
+    - the orchestrator tools (`create_subagent`, `send_subagent_message`, …);
+    - `execute_python` and `emit_structured_output`;
+    - `think`, unless the model thinks natively (`:393-395`).
+  - The agentic loop adds its internal tools: `take_note`, `ask_user` and
+    `retrieve_offloaded_content` always, plus `skill_read` when repo skills exist
+    (`AgenticLoopService.ts:361-378`).
+  - With tools-service reachable, that is about 50 tools, all auto-approved.
+  - A rollout can therefore spawn sub-agents, or run Python and fetch URLs on the NAS, with no
+    approval step.
+  - A local run without `TOOLS_SERVICE_URL` gets no tools-service tools, `calculate_precise`
+    included. The first reading of this finding ("the only domain tool") held only for that
+    case.
 - **No real agent:** `makeExecutor` never passes `model.agent` (`Harness2Service.ts:144-155`), so
   a rollout cannot run as a real custom agent (trading, lupos, …) with its own tools and policies.
 - **Effect:** `tool_guidance.md` and the INV dimension have no real tool use to adapt. Harnesses
@@ -407,6 +427,37 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
 - The 10-19 plan scoped this out on purpose, so trading prompts stay untouched.
 - The result: "self-improving" currently means only that later `/harness2/run` calls in the same
   domain read earlier lessons. See §6 Q4.
+
+**B5 — Every tools-on agent prompt grew with each call (shared code).** CONFIRMED (test and
+repro). Found by the benchmark in §10.
+- **Where:** `ToolOrchestratorService.getClientToolSchemas()` (introduced in `9113901`,
+  2026-06-29).
+  - On every call it pushed the orchestrator tools (`create_subagent`,
+    `send_subagent_message`, …) into the module-level English cache, `cachedClientSchemas`.
+  - It then appended them to its result as well.
+  - So each call returned one more copy of every orchestrator tool than the call before.
+- **Effect:** the system prompt's tool docs list each enabled tool once for every copy.
+  - Every run that assembles a prompt with enabled tools grew about 3k characters per call:
+    `/agent` in direct mode, custom agents, and harness2 tools-on rollouts.
+  - Measured in one process, four rollouts: 13,324 → 16,315 → 19,306 → 22,297 characters.
+  - In the first benchmark run, the prompt reached 352,300 characters. From then on the context
+    exhaustion guard skipped every call, and the attempt's output was the injected "Context
+    window exhausted…" message.
+  - The tool-discovery section's tool count grew with it (`personas/utils.ts:77`).
+- **Scope:**
+  - The cache resets whenever the tools-service schemas are fetched again (`:360`).
+  - Non-English locales read a cache this function never writes, so they were not affected.
+  - Trading runs do not assemble this prompt.
+  - Since the 23:26 UTC deploy, the NAS logged no static-prompt assembly at all, so no
+    production run is known to have been hit. A long-lived container serving non-trading agent
+    runs would have been.
+- **Status: fixed in `42e7a48`.** The function no longer writes the cache. The orchestrator tools
+  go into its result only, as the other locales already did.
+  - The regression test `src/services/__tests__/ToolOrchestratorClientSchemas.test.ts`
+    (`fd68bab`) failed on the old code. Its first call returned 12 entries for 7 tools, and the
+    next call 17.
+  - It passes on the fix. The full suite (176 files, 1,891 tests) is green, and
+    `tsc --noEmit` is clean.
 
 ### C. Route and operational safety
 
@@ -647,6 +698,8 @@ claims are unchanged:
 | 2026-10-22 | Phase 1 chunk (b): proposer contract, retries, autotrigger, 24k cap, evidence budget, library scope/eviction/slugs, reflection input, prompts (A5–A10, A12, A13, C3, D3) | `a3993ea` |
 | 2026-10-22 | Phase 1 chunk (c): async run jobs + records, cancel, one run per domain, request checks, model preflight, rollout deadline + ask_user stop, `.gitignore runtime-data/` (B1, C1–C4, A12, A14, D7) | `2ad3f48` |
 | 2026-10-22 | Live verification with the LAN models (25/25, then 22 pass + 2 skip with the committed script); NAS deploy of `1ec9ba5`; `scripts/harness2-live-check.ts`; `.dockerignore` drops `.worktrees`, `.checks`, `runtime-data` | `5bd793b` |
+| 2026-10-22 | Prompt-growth leak in `getClientToolSchemas()`, found by the §10 benchmark: regression test, then the fix (§4.B5); §4.B1 corrected (about 50 tools offered, not one) | `fd68bab`, `42e7a48` |
+| 2026-10-22 | `scripts/harness2-eval/`: the improvement benchmark (§10), with tripwires for prompt drift, a changed tool set and context exhaustion | `1c61156`, `983ad2a` |
 
 ## 9. Fixes and verification
 
