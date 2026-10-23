@@ -73,8 +73,14 @@ const ToolOrchestratorService = (await mod("src/services/ToolOrchestratorService
 // ── Tripwires ─────────────────────────────────────────────────────────────────────────────────
 // The assembled prompt holds no harness text (the tree goes in as its own system message), so
 // only the date line may vary between solver calls. Load the tools-service catalog first, so the
-// first attempt is offered the same tools as the rest.
+// first attempt is offered the same tools as the rest. ensureSchemas() alone is not enough: while
+// the fetch started at import time is in flight it returns at once (§4.B6), so wait for the
+// catalog itself.
 await ToolOrchestratorService.ensureSchemas();
+for (let waited = 0; !ToolOrchestratorService.getClientToolSchemas().some((t: { name: string }) => t.name === "evaluate_expression"); waited += 500) {
+  if (waited >= 30_000) throw new Error("the tools-service catalog did not load within 30 s");
+  await new Promise((r) => setTimeout(r, 500));
+}
 const MAX_PROMPT_DRIFT = 500; // chars
 const meta = { promptChars: {} as Record<string, [number, number]>, offeredTools: {} as Record<string, number>, trips: [] as string[] };
 const saveMeta = () => writeJson(META, meta);
