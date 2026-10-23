@@ -31,20 +31,21 @@ import glob
 import json
 import os
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_OUT = os.path.join(ROOT, "tool_schemas.json")
 REQUIRED_KEYS = ("name", "description", "parameters")
 
 
-def collect() -> list[dict]:
+def collect(root: str = ROOT) -> list[dict]:
     merged: list[dict] = []
     seen: dict[str, str] = {}
-    shards = sorted(glob.glob(os.path.join(ROOT, "tool_schemas", "*", "*.json")))
+    shards = sorted(glob.glob(os.path.join(root, "tool_schemas", "*", "*.json")))
     if not shards:
         sys.exit("export_tool_schemas: no shard files found under tool_schemas/*/")
     for path in shards:
-        rel = os.path.relpath(path, ROOT)
+        rel = os.path.relpath(path, root)
         owner = os.path.basename(os.path.dirname(path))
         with open(path, encoding="utf-8") as f:
             entries = json.load(f)
@@ -68,6 +69,25 @@ def collect() -> list[dict]:
 
 def render(merged: list[dict]) -> str:
     return json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
+
+
+def publish(out: str, text: str) -> None:
+    """Replace `out` whole: write a temp file beside it, then os.replace.
+
+    Each consumer regenerates its copy right before taking its Docker build
+    context, and builds run in parallel, so a reader must never see a
+    half-written file. A failed publish leaves the previous copy untouched.
+    """
+    directory = os.path.dirname(out) or "."
+    fd, temporary = tempfile.mkstemp(prefix=".tool-schemas-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(temporary, os.stat(out).st_mode & 0o777 if os.path.exists(out) else 0o644)
+        os.replace(temporary, out)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def _parse_args(argv: list[str]) -> tuple[str, bool]:
@@ -104,8 +124,7 @@ def main(argv: list[str]) -> None:
     if check:
         sys.exit(f"export_tool_schemas: {label} is STALE ({len(merged)} tools in shards). "
                  f"Run: python3 scripts/export_tool_schemas.py" + (f" --out {out}" if out != DEFAULT_OUT else ""))
-    with open(out, "w", encoding="utf-8") as f:
-        f.write(rendered)
+    publish(out, rendered)
     print(f"export_tool_schemas: wrote {len(merged)} tools to {label}")
 
 
