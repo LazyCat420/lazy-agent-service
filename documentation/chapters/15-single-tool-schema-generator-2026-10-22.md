@@ -11,7 +11,7 @@ review-by: 2026-11-19
 
 | Ticket | Issue | Root cause | Fix | Commit |
 |---|---|---|---|---|
-| SCHEMA-TWO-WRITERS | The `tool_schemas.json` shipped by lazy-agent-service, trading-service and trading-client depended on which repo deployed last. Five tools (`calculate_hrp_allocation`, `forecast_volatility_garch`, `get_portfolio_covariance`, `get_strategy_health`, `news_search`) had no `owner_app` in this repo's copy, so trading-client's `owner_app == "trading"` filter (missing means trading) wrongly counted `news_search` as a trading tool. | There were two generators reading the same shards. This repo's `scripts/export_tool_schemas.py` did not stamp `owner_app` and kept glob order. trading-service's `scripts/build_tool_schemas.py` stamped `owner_app`, sorted, and wrote into all three repos, including this one, from their deploy PRE_BUILD steps. Each deploy rewrote the others' output (trading-client ch.47). | `scripts/export_tool_schemas.py` is now the only generator. It stamps `owner_app` from the shard folder, requires `name`/`description`/`parameters`, fails on duplicate names and sorts by `(owner_app, name)`. It takes `--out PATH` so the trading repos write their own copy with it, and `--supports-out` so a caller can refuse an older exporter. trading-service's `build_tool_schemas.py` was deleted. `src/services/__tests__/ToolSchemaExport.test.ts` keeps the committed file in step with the shards. | see git log |
+| SCHEMA-TWO-WRITERS | The `tool_schemas.json` shipped by lazy-agent-service, trading-service and trading-client depended on which repo deployed last. Five tools (`calculate_hrp_allocation`, `forecast_volatility_garch`, `get_portfolio_covariance`, `get_strategy_health`, `news_search`) had no `owner_app` in this repo's copy, so trading-client's `owner_app == "trading"` filter (missing means trading) wrongly counted `news_search` as a trading tool. | There were two generators reading the same shards. This repo's `scripts/export_tool_schemas.py` did not stamp `owner_app` and kept glob order. trading-service's `scripts/build_tool_schemas.py` stamped `owner_app`, sorted, and wrote into all three repos, including this one, from their deploy PRE_BUILD steps. Each deploy rewrote the others' output (trading-client ch.47). | `scripts/export_tool_schemas.py` is now the only generator. It stamps `owner_app` from the shard folder, requires `name`/`description`/`parameters`, fails on duplicate names and sorts by `(owner_app, name)`. It takes `--out PATH` so the trading repos write their own copy with it, and lists `--supports-out` in its source so a caller can refuse an older exporter. trading-service's `build_tool_schemas.py` was deleted. `src/services/__tests__/ToolSchemaExport.test.ts` keeps the committed file in step with the shards. | `3669689`, `342d155`; trading-service `254bd26c`; trading-client `df614c82` (its ch.48) |
 
 ## How it works
 
@@ -25,13 +25,17 @@ python3 scripts/export_tool_schemas.py --out PATH      # another repo's copy
 python3 scripts/export_tool_schemas.py --supports-out  # exit 0 on this version
 ```
 
-Unknown arguments are an error. The old exporter ignored them, so a trading
-deploy running `--out` against it would have overwritten this repo's file. The
-trading PRE_BUILD steps therefore call `--supports-out` first and stop if it
-fails.
+Unknown arguments are an error. The old exporter read only `--check` and
+ignored everything else: run with `--out` or `--supports-out`, it rewrote this
+repo's file, wrote nothing for the caller, and exited 0. So running the exporter
+proves nothing about its version. The trading PRE_BUILD steps (and
+trading-service's `update_tool_schemas.py`) grep its source for
+`--supports-out` instead, and stop if the flag is missing.
 
-Every copy is byte-identical. trading-service's `tests/test_multi_repo_audit.py`
-compares them, and `ToolSchemaExport.test.ts` checks this repo's copy against
+Every copy is byte-identical because one script writes them (checked with
+`cmp` on 2026-10-22). trading-service's
+`tests/unit/test_schema_build_publication.py` pins the atomic publish and the
+removal of retired tools, and `ToolSchemaExport.test.ts` checks this repo's copy against
 the shards.
 
 ## Editing a tool schema

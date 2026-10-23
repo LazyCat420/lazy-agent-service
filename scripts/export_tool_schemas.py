@@ -16,8 +16,9 @@ Usage:
   python3 scripts/export_tool_schemas.py --check       # exit 1 if it would change
   python3 scripts/export_tool_schemas.py --out PATH    # write PATH only (other repos)
   python3 scripts/export_tool_schemas.py --out PATH --check
-  python3 scripts/export_tool_schemas.py --supports-out  # exit 0: lets callers
-                                                         # refuse an older exporter
+  python3 scripts/export_tool_schemas.py --supports-out  # exit 0. Callers grep
+      # this source for the flag rather than run it: the pre-2026-10-22 exporter
+      # ignored unknown flags, rewrote its own file and exited 0.
 
 Merge rules:
   - every tool_schemas/<owner_app>/*.json is a JSON array of schema objects;
