@@ -1,0 +1,12 @@
+{
+ "promptChars": {
+  "harness2|direct": [
+   10329,
+   10329
+  ]
+ },
+ "offeredTools": {
+  "apply_patch,code_intel,commit_split,create_cron_job,create_subagent,create_task,debug,delete_cron_job,delete_datastore,delete_file,delete_subagents,edit_notebook,emit_structured_output,evaluate_expression,execute_command,execute_javascript,execute_python,find_files,get_background_output,get_file_info,get_subagent_output,get_task,kill_process,list_background_processes,list_cron_jobs,list_directory,list_tasks,move_file,query_datastore,read_file,read_files,read_url,replace_in_file,run_git,save_memory,search_file_contents,search_tools,search_web,send_subagent_message,sleep,stop_subagent,summarize_project,think,trigger_cron_job,update_task,write_datastore,write_file": 80
+ },
+ "trips": []
+}

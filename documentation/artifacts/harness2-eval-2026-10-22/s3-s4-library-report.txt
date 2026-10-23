@@ -1,0 +1,96 @@
+per-task accuracy on fresh attempts (correct / attempts):
+task               base   solo-blind    solo-told  chain-blind
+bench-0            0.50         0.50         0.75         0.75
+bench-1            0.00         0.75         0.75         0.00
+bench-2            0.75         1.00         1.00         0.25
+bench-3            0.50         0.75         0.50         1.00
+bench-4            0.00         0.00         0.75         0.25
+bench-5            0.25         0.75         1.00         0.75
+bench-6            0.00         0.75         0.00         1.00
+bench-7            0.00         0.50         0.50         1.00
+bench-8            0.25         0.00         0.00         0.25
+bench-9            0.75         0.50         0.50         0.50
+base         mean 0.300 over 10 tasks; pooled 12/40; total right 12, ids right 40, used calculator 18
+             attempts calling each tool: evaluate_expression 18, execute_python 7, think 2
+solo-blind   mean 0.550 over 10 tasks; pooled 22/40; total right 22, ids right 40, used calculator 20
+             attempts calling each tool: evaluate_expression 20, execute_python 13, think 2
+solo-told    mean 0.575 over 10 tasks; pooled 23/40; total right 23, ids right 39, used calculator 25
+             attempts calling each tool: evaluate_expression 25, execute_python 12, think 1
+chain-blind  mean 0.575 over 10 tasks; pooled 23/40; total right 23, ids right 40, used calculator 6
+             attempts calling each tool: execute_python 26, evaluate_expression 6, think 3
+
+paired deltas (mean over tasks, 95% bootstrap CI over tasks; tasks better/worse/same):
+  loop (blind) vs base, empty library: +0.250 [+0.025, +0.475] n=10 (6/2/2)
+  loop (blind) + library vs base: +0.275 [+0.000, +0.550] n=10 (6/2/2)
+  library effect (blind), tasks 2..n: +0.000 [-0.306, +0.250] n=9 (5/2/2)
+  loop (told) vs base, empty library: +0.275 [+0.050, +0.500] n=10 (6/2/2)
+
+loop runs:
+  solo-blind/bench-0: ok delivered=wrong chosen=agg1 base=True files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': True, 'inv1': False, 'dom1': False, 'agg1': False} 162s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-blind/bench-1: ok delivered=wrong chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': False, 'inv1': True, 'dom1': False, 'agg1': False} 292s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-blind/bench-2: ok delivered=right chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': True, 'inv1': False, 'dom1': False, 'agg1': True} 184s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-blind/bench-3: ok delivered=right chosen=agg1 base=True files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': False, 'inv1': True, 'dom1': False, 'agg1': True} 91s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-blind/bench-4: ok delivered=wrong chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': False, 'inv1': False, 'dom1': False, 'agg1': False} 97s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-blind/bench-5: ok delivered=right chosen=agg1 base=False files=['skills/invoice_reconcile/SKILL.md', 'systemprompt.md'] mentions_calculator=False library_before=0 learned=False in-loop={'base1': True, 'inv1': True, 'dom1': True, 'agg1': True} 73s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-blind/bench-6: ok delivered=right chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': True, 'inv1': True, 'dom1': False, 'agg1': True} 119s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-blind/bench-7: ok delivered=right chosen=agg1 base=True files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': True, 'inv1': True, 'dom1': False, 'agg1': True} 67s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-blind/bench-8: ok delivered=wrong chosen=agg1 base=False files=['skills/reconcile_invoices/SKILL.md', 'systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': False, 'inv1': False, 'dom1': False, 'agg1': False} 123s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-blind/bench-9: ok delivered=right chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': True, 'inv1': True, 'dom1': False, 'agg1': True} 131s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  solo-told/bench-0: ok delivered=right chosen=agg1 base=False files=['skills/reconcile_invoices/SKILL.md', 'systemprompt.md', 'tool_guidance.md'] mentions_calculator=True library_before=0 learned=True in-loop={'base1': False, 'inv1': True, 'dom1': False, 'agg1': True} 190s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  solo-told/bench-1: ok delivered=wrong chosen=agg1 base=False files=['systemprompt.md', 'tool_guidance.md'] mentions_calculator=True library_before=0 learned=True in-loop={'base1': False, 'inv1': False, 'dom1': False, 'agg1': False} 143s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  solo-told/bench-2: ok delivered=wrong chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=True library_before=0 learned=True in-loop={'base1': True, 'inv1': False, 'dom1': False, 'agg1': False} 120s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  solo-told/bench-3: ok delivered=wrong chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=True library_before=0 learned=True in-loop={'base1': False, 'inv1': False, 'dom1': False, 'agg1': False} 130s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  solo-told/bench-4: ok delivered=wrong chosen=agg1 base=True files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': True, 'inv1': True, 'dom1': False, 'agg1': False} 83s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  solo-told/bench-5: ok delivered=right chosen=agg1 base=True files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': False, 'inv1': True, 'dom1': True, 'agg1': True} 137s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  solo-told/bench-6: ok delivered=wrong chosen=agg1 base=False files=['skills/invoice_reconcile/SKILL.md', 'systemprompt.md'] mentions_calculator=True library_before=0 learned=True in-loop={'base1': True, 'inv1': False, 'dom1': False, 'agg1': False} 75s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  solo-told/bench-7: ok delivered=right chosen=agg1 base=False files=['skills/invoice_reconciliation/SKILL.md', 'systemprompt.md', 'tool_guidance.md'] mentions_calculator=True library_before=0 learned=True in-loop={'base1': False, 'inv1': False, 'dom1': False, 'agg1': True} 98s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  solo-told/bench-8: ok delivered=wrong chosen=agg1 base=False files=['guardrails.md', 'skills/reconcile_invoices/SKILL.md', 'systemprompt.md'] mentions_calculator=True library_before=0 learned=True in-loop={'base1': False, 'inv1': False, 'dom1': True, 'agg1': False} 95s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  solo-told/bench-9: ok delivered=wrong chosen=agg1 base=False files=['skills/invoice_reconcile/SKILL.md', 'systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': True, 'inv1': False, 'dom1': True, 'agg1': False} 132s
+      tool note in prompts: {'inv1.a1': True, 'dom1.a1': True, 'agg1.a1': True, 'experience': True}
+  chain-blind/bench-0: ok delivered=right chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=0 learned=True in-loop={'base1': False, 'inv1': True, 'dom1': False, 'agg1': True} 91s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+      lesson (low): Do not treat added procedure/skill text in systemprompt.md or a skill file as validated by a single rollout; require an execution that isolates the added component and shows a corrected error before crediting it — on thi
+  chain-blind/bench-1: ok delivered=wrong chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=1 learned=True in-loop={'base1': False, 'inv1': True, 'dom1': False, 'agg1': False} 64s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+      lesson (low): do not add procedure or skill text to the systemprompt.md on the strength of a hypothetical failure mode; on this shape the added text did not prevent the slip it named and coincided with worse totals than the bare promp
+  chain-blind/bench-2: ok delivered=right chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=2 learned=True in-loop={'base1': False, 'inv1': True, 'dom1': False, 'agg1': True} 231s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+      lesson (low): Do not attribute a summation fix to added systemprompt.md procedure text or to a new skill on the strength of one wrong-total rollout; before crediting either component, require an execution pair that differs only in tha
+  chain-blind/bench-3: ok delivered=right chosen=agg1 base=True files=['systemprompt.md'] mentions_calculator=False library_before=3 learned=True in-loop={'base1': True, 'inv1': True, 'dom1': False, 'agg1': True} 89s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+      lesson (low): Before crediting a systemprompt.md or skill-file edit with a repair, check whether the base rollout already delivered the required artifact; if it did, treat added procedure/skill text as unproven and prefer leaving the 
+  chain-blind/bench-4: ok delivered=wrong chosen=agg1 base=True files=['systemprompt.md'] mentions_calculator=False library_before=4 learned=False in-loop={'base1': False, 'inv1': False, 'dom1': False, 'agg1': False} 53s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+  chain-blind/bench-5: ok delivered=right chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=4 learned=True in-loop={'base1': True, 'inv1': True, 'dom1': False, 'agg1': True} 123s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+      lesson (medium): in systemprompt.md, add a short always-on instruction to parse the table by its actual column structure (e.g. split the amount off the end) rather than assuming single-token/CSV fields, so the first tool call does not en
+  chain-blind/bench-6: ok delivered=right chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=5 learned=True in-loop={'base1': True, 'inv1': False, 'dom1': True, 'agg1': True} 85s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+      lesson (low): In systemprompt.md, do not credit a bundled block's success to its parse clause; split the parse instruction into its own edit and confirm it against a rollout that actually hits the parse failure (retry loop, KeyError/V
+  chain-blind/bench-7: ok delivered=wrong chosen=agg1 base=True files=['systemprompt.md'] mentions_calculator=False library_before=6 learned=True in-loop={'base1': True, 'inv1': True, 'dom1': True, 'agg1': False} 81s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+      lesson (medium): Do not credit a systemprompt.md parse clause with a behavioral improvement unless a rollout actually diverges at the parse step; a clean first-call parse is equally consistent with the clause being inert, so record the e
+  chain-blind/bench-8: ok delivered=right chosen=agg1 base=False files=['systemprompt.md'] mentions_calculator=False library_before=7 learned=True in-loop={'base1': True, 'inv1': True, 'dom1': False, 'agg1': True} 102s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}
+      lesson (medium): On systemprompt.md, do not credit an added procedure with a repair it never demonstrated — compare the edited rollout against the base rollout on the same task and require a divergence point (a step the base run got wron
+  chain-blind/bench-9: ok delivered=wrong chosen=agg1 base=True files=['systemprompt.md'] mentions_calculator=False library_before=8 learned=False in-loop={'base1': True, 'inv1': True, 'dom1': False, 'agg1': False} 99s
+      tool note in prompts: {'inv1.a1': False, 'dom1.a1': False, 'agg1.a1': False, 'experience': False}

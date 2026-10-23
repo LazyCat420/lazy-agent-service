@@ -1,0 +1,21 @@
+per-task accuracy on fresh attempts (correct / attempts):
+task               base  handwritten
+bench-0            0.25         0.75
+bench-1            0.25         0.75
+bench-2            0.00         0.75
+bench-3            0.25         0.50
+bench-4            0.50         1.00
+bench-5            0.75         1.00
+bench-6            0.00         1.00
+bench-7            0.50         1.00
+bench-8            1.00         1.00
+bench-9            0.50         1.00
+base         mean 0.400 over 10 tasks; pooled 16/40; total right 16, ids right 40, used calculator 14
+             attempts calling each tool: evaluate_expression 14, execute_python 13, think 3
+handwritten  mean 0.875 over 10 tasks; pooled 35/40; total right 35, ids right 40, used calculator 30
+             attempts calling each tool: evaluate_expression 30, execute_python 21, think 13
+
+paired deltas (mean over tasks, 95% bootstrap CI over tasks; tasks better/worse/same):
+  hand-written harness vs base (headroom): +0.475 [+0.325, +0.650] n=10 (9/0/1)
+
+loop runs:

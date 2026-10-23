@@ -54,17 +54,22 @@ the loop learns:
 **The loop is also not closed.** Nothing outside `/harness2` reads the library or an adopted
 harness (§4.B4), so no production agent improves from it. The rollouts don't run a real agent
 either (§4.B1). With no agent persona, a tools-on rollout is offered about 50 tools, all
-auto-approved, though harness2 asked for one.
+auto-approved, though harness2 asks only for `calculate_precise`.
 
 **Does the loop improve the solver? Measured in §10, on fresh attempts.**
 - **Within a task, yes,** when it starts from a reasonable harness.
   - From a neutral base harness, the harness the loop adopts beats the base by +0.25 per task
     (95% CI [+0.03, +0.48], 10 tasks).
-  - That is about as far as a hand-written harness gets: the difference from it is −0.10
-    [−0.43, +0.23].
-- **From a deliberately weak base it gains much less** (+0.15 [+0.03, +0.30]). Each candidate
-  is judged on a single in-loop attempt, and when every attempt fails the loop keeps the base.
-- **Across tasks:** LIBRARY-VERDICT
+  - That is about half of what a hand-written harness gains over the same base:
+    +0.475 [+0.33, +0.65]. That gain was measured in a separate run, so "half" is approximate.
+- **From a deliberately weak base it gains much less:** +0.15 [+0.03, +0.30], against +0.65 for
+  the hand-written harness in the same run. Each candidate is judged on a single in-loop
+  attempt, and when every attempt fails the loop keeps the base.
+- **Across tasks, no measurable effect.** The library of lessons changed nothing measurable:
+  +0.00 [−0.17, +0.22] from the weak base, and +0.00 [−0.31, +0.25] from the neutral base.
+  Its lessons are mostly cautions about evidence, not knowledge about the task.
+- **Caution:** the same harness scored +0.225 higher in one run than in another, so only
+  comparisons made within one run are sound (§10).
 
 **Exposure was small:** at audit time the route was live on the NAS, but no library existed
 there yet (§2), so nothing relied on stored lessons. The fixed route has run on the NAS since
@@ -733,8 +738,19 @@ testrun --mem 3G --max-time 150m -- npx tsx scripts/harness2-eval/run.ts --name=
   "--lanes=solo-blind;base;solo-told" --state=<dir>/s3
 testrun --mem 3G --max-time 90m -- npx tsx scripts/harness2-eval/run.ts --name=s4 --base=neutral --tasks=10 --r=4 \
   --lanes=chain-blind --state=<dir>/s4
+testrun --mem 3G --max-time 90m -- npx tsx scripts/harness2-eval/run.ts --name=s5 --base=neutral --tasks=10 --r=4 \
+  "--lanes=base;handwritten" --state=<dir>/s5
 python3 scripts/harness2-eval/report.py <dir>/s2/units.json
 testrun --mem 1G -- npx tsx scripts/harness2-eval/anatomy.ts <dir>/s2/units.json
+```
+
+`report.py` reads one units file. For the s3/s4 library comparison, merge the two first (their
+arm names don't overlap):
+
+```
+python3 -c 'import json,sys; m={}; [m.update(json.load(open(f))) for f in sys.argv[2:]]; json.dump(m, open(sys.argv[1], "w"))' \
+  <dir>/s34.json <dir>/s3/units.json <dir>/s4/units.json
+python3 scripts/harness2-eval/report.py <dir>/s34.json
 ```
 
 Since the finals-only default, a k=1 pool holds one final and is delivered without a selector.
@@ -779,7 +795,7 @@ claims are unchanged:
 | 2026-10-22 | `scripts/harness2-eval/`: the improvement benchmark (§10), with tripwires for prompt drift, a changed tool set and context exhaustion | `1c61156`, `983ad2a` |
 | 2026-10-22 | `scripts/harness2-eval/`: `--base=neutral`; wait for the tools-service catalog before the first attempt (§4.B6) | `c1d1d39`, `95c0810` |
 | 2026-10-22 | `ensureSchemas()` waits for the import-time schema fetch (§4.B6): regression test, then the fix | `56fb8f5`, `f8c7737` |
-| 2026-10-22 | §10 improvement benchmark: runs s2–s4, results in `documentation/artifacts/harness2-eval-2026-10-22/`, `scripts/harness2-eval/anatomy.ts`; §1 and §4.B1 rewritten | DOCS-SHA |
+| 2026-10-22 | §10 improvement benchmark: runs s2–s5 (s1 discarded), raw results in `documentation/artifacts/harness2-eval-2026-10-22/`, `scripts/harness2-eval/anatomy.ts`; §1 verdict and the intro updated | `b8a3889`, this commit |
 
 ## 9. Fixes and verification
 
@@ -1035,8 +1051,10 @@ section measures improvement.
 - **Improver:** `vllm-2` / `DeepSeek-V4.1-Flash-1017` (Spark), k=1 (the default; finals-only
   selection).
 - **Arms**, each scored on 4 fresh attempts per task:
-  - `base`: the base harness, "Be brief: answer in one sentence." It is deliberately weak: one
-    sentence fights a request for a total and a list.
+  - `base`: the base harness, which is also the loop's starting harness. There are two:
+    - the weak base (s2), "Be brief: answer in one sentence." It is deliberately weak: one
+      sentence fights a request for a total and a list.
+    - the neutral base (s3–s5, `--base=neutral`), "You are an accounts-payable assistant."
   - `handwritten`: a hand-written harness, as a reference (never part of the loop). It says to
     list the kept lines, then add them with `evaluate_expression`, one `add` per call.
   - `solo-blind`: the harness the loop adopts, starting from an empty library, as shipped.
@@ -1060,6 +1078,14 @@ section measures improvement.
   - an attempt hits the context exhaustion guard.
 
   Every attempt also records each tool it called.
+- **Raw results:** `documentation/artifacts/harness2-eval-2026-10-22/`.
+  - Each of s2–s5 has `sN-units.json` (every attempt and loop run) and `sN-meta.json` (the
+    tripwire records: prompt sizes, offered tool sets, trips).
+  - `report.py` output: `s2-report.txt`, `s3-report.txt`, `s5-report.txt`, and
+    `s3-s4-library-report.txt` for s3 and s4 together.
+  - The breakdowns of wrong answers (`anatomy.ts`): `s2-anatomy.txt`, `s3-anatomy.txt`.
+  - `s3-first-start-tripwire-meta.json`: the tripwire record of s3's first start, stopped by
+    §4.B6.
 
 **The first run was invalid, and found a bug.**
 - **What happened:** the first run, s1, was stopped after four tasks. From about 00:55 UTC every
@@ -1091,7 +1117,7 @@ What the pilots found:
 - **The tool was missing at first.** `evaluate_expression` comes from tools-service, and a local
   run has no `TOOLS_SERVICE_URL`, so the first tools-on pilot had no tool at all. The benchmark
   points it at the NAS tools-service.
-- **The failures looked semantic**, but s2 shows otherwise: with a clean prompt, most wrong
+- **The failures looked semantic**, but s2, run after the fix, shows otherwise: most wrong
   totals are arithmetic slips (see the failure breakdown below).
 - **The improver cannot see the solver's tools.** No prompt tells it which tools exist, and no
   base attempt calls one, so the trajectories never show them either. That is why the `told`
@@ -1116,8 +1142,9 @@ Other comparisons:
   - `solo-blind` −0.50 [−0.65, −0.38], worse on all 10 tasks;
   - `solo-told` −0.38 [−0.60, −0.18];
   - `chain-blind` −0.58 [−0.75, −0.40].
-- **Library effect** (`chain-blind` minus `solo-blind`, tasks 2–10): +0.00 [−0.17, +0.22]. The
-  lessons from earlier tasks made no measurable difference.
+- **Library effect** (`chain-blind` minus `solo-blind`, on `bench-1` to `bench-9`, the tasks
+  with a library to read): +0.00 [−0.17, +0.22]. The lessons from earlier tasks made no
+  measurable difference.
 - **Being told about the tool** (`solo-told` minus `solo-blind`): +0.125 [0.00, +0.28]. That is
   not enough to call it a gain, though it points that way.
 
@@ -1135,7 +1162,7 @@ Other comparisons:
   - Changes adopted without such a success almost never helped.
   - When nothing succeeded, the loop kept the base harness, which scores 0 here.
 - **The changes that worked mostly undid the base harness's handicap.**
-  - In `solo-blind` on task 0, the adopted harness drops "answer in one sentence" and adds a
+  - In `solo-blind` on `bench-0`, the adopted harness drops "answer in one sentence" and adds a
     short procedure.
   - It never mentions the calculator, yet every fresh attempt called `evaluate_expression`
     (5 calls each), and 3 of 4 were right.
@@ -1172,12 +1199,15 @@ arm, and took 30 minutes. The tripwires never fired.
 | `solo-blind` (as shipped) | 22/40 | 0.55 | +0.25 [+0.03, +0.48] | 6 / 2 / 2 | yes |
 | `solo-told` | 23/40 | 0.575 | +0.28 [+0.05, +0.50] | 6 / 2 / 2 | yes |
 
-Other comparisons (the `handwritten` arm is s2's: the same tasks and the same harness):
+Other comparisons:
 - **Neutral base vs weak base:** +0.30 [+0.13, +0.48]. The weak base really was a handicap.
-- **Against the hand-written harness:**
-  - the neutral base alone is clearly worse: −0.35 [−0.63, −0.05];
-  - the loop's harnesses are not distinguishable from it: `solo-blind` −0.10 [−0.43, +0.23],
-    `solo-told` −0.075 [−0.40, +0.25].
+- **Against the hand-written harness:** s3 has no `handwritten` arm, so this compares runs.
+  - Against s2's `handwritten` (0.65), the loop looked level: `solo-blind` −0.10
+    [−0.43, +0.23].
+  - Against the s5 replicate's `handwritten` (0.875), it is clearly below: −0.33 [−0.58, −0.08].
+  - The two disagree because the same harness drifted between runs (s5, below). The sound
+    statement compares gains over the base within one run: the loop's is +0.25 (s3), the
+    hand-written harness's +0.475 (s5).
 - **Told vs blind:** +0.025 [−0.20, +0.25]. Once the base prompt lets the solver work, it
   finds the calculator either way. Being told does show in tool use: `evaluate_expression` in
   25 of 40 attempts, against 20 of 40 blind and 18 of 40 for the base.
@@ -1205,4 +1235,105 @@ Other comparisons (the `handwritten` arm is s2's: the same tasks and the same ha
 | `solo-blind` | 22 | 14 | 0 | 3 | 1 line left out |
 | `solo-told` | 23 | 7 | 5 | 2 | 2 lines left out, 1 with no total |
 
-S4-PLACEHOLDER
+### Results across tasks (s4: the library, from a neutral base)
+
+Run s4 ran `chain-blind` from the neutral base: the 10 tasks in order (`bench-0` to `bench-9`) in
+one domain, so the loop on each task reads the lessons stored by the tasks before it. It took 20 minutes, and the tripwires never
+fired. It is compared with s3's `solo-blind`, the same loop starting each task from an empty
+library.
+
+| Arm | Right | Per-task mean | Change vs neutral base (95% CI) | Tasks better / worse / same | Improved? |
+|---|---|---|---|---|---|
+| `chain-blind` (s4) | 23/40 | 0.575 | +0.275 [0.00, +0.55] | 6 / 2 / 2 | no (the lower bound is not above 0) |
+
+- **Library effect** (`chain-blind` minus `solo-blind`, `bench-1` to `bench-9`): +0.00
+  [−0.31, +0.25]. It was better on 5 tasks, worse on 2 and the same on 2. The two worse tasks
+  each lost 0.75.
+- **With the weak base** (s2, both arms in one run): +0.00 [−0.17, +0.22].
+- **What the library held:** mostly cautions about evidence, not knowledge about the task. For
+  example: "Do not treat added procedure/skill text in systemprompt.md … as validated by a single
+  rollout", and "keep the prompt minimal unless a rollout …". The loop that read them became more
+  conservative: from `bench-3` on it kept the base harness in 4 of 7 runs.
+- **It also changed which tool the solver used.** In three tasks the adopted harness named
+  `execute_python`, and across s4's fresh attempts the solver called `execute_python` 26 times
+  and `evaluate_expression` only 6 times. In s3 the counts were 13 and 20.
+
+### Between-run drift (s5)
+
+The library comparison sets two runs, made 30 minutes apart, against each other. In s4,
+`chain-blind` kept the neutral base harness unchanged on `bench-3`, `bench-4`, `bench-7` and
+`bench-9`, and scored 11/16 on them. The same harness scored 5/16 on those tasks in s3. No code that shapes the solver's
+tools or prompt changed between the runs. The only `src/` change was §4.B6's fix, and the prompt
+stayed at 10,329 characters.
+
+So s5 measured run-to-run drift directly, by running the neutral base and the hand-written
+harness again in one fresh run:
+
+| Harness (same tasks) | Earlier run | s5 | Change, s5 minus earlier (95% CI) |
+|---|---|---|---|
+| neutral `base` | 12/40 (s3) | 16/40 | +0.10 [−0.20, +0.38] |
+| `handwritten` | 26/40 (s2) | 35/40 | +0.225 [+0.05, +0.38] |
+
+Within s5, the hand-written harness beat the neutral base by +0.475 [+0.33, +0.65], better on
+9 of 10 tasks.
+
+- **The same harness can score about 0.2 higher in one run than in another.** The
+  hand-written harness gained +0.225 between s2 and s5, a real difference.
+  - s2 ran three lanes at once, with loops alongside, so the Jetson and tools-service were
+    busier. That is a plausible cause, but it is not proven.
+  - The tool counts don't explain it: s5's hand-written attempts called the calculator 30
+    times, s2's 28.
+- **So only comparisons within one run are sound.** These are:
+  - every arm against its base (s2, s3, s5);
+  - told against blind (s2, s3);
+  - the s2 library effect.
+- **Comparisons across runs carry that drift:** s3's loop against s2's or s5's hand-written
+  harness, and the s3/s4 library effect. Read them as direction only.
+
+### Caveats
+
+- **Narrow setting:** one task family (invoice reconciliation), one solver (`nemotron35`), one
+  improver (`DeepSeek-V4.1-Flash-1017`), and k=1. The results may not transfer to other tasks,
+  models or k.
+- **Small n:** 10 tasks per comparison, so the intervals are wide.
+  - An effect under about 0.2 can be missed.
+  - "No library effect" means none was detected, not that there is none.
+- **Coarse per-task accuracy:** 4 fresh attempts per task, so each task scores 0, 0.25, 0.5,
+  0.75 or 1.
+- **One draw per loop run:** the solver and the improver both sample at temperature 0.7. On s2's
+  `bench-0`, two empty-library loop runs ended 3/4 and 0/4.
+- **I designed both the tasks and the hand-written harness,** knowing the failure modes. The
+  reference is not an upper bound.
+- **Tool use:**
+  - Every rollout was offered the 47-tool set and the loop's own tools, auto-approved (§4.B1).
+  - Across all fresh attempts and in-loop rollouts of s2–s5, the solver called only
+    `evaluate_expression` (1,025 calls), `execute_python` (219, run on the NAS tools-service)
+    and `think` (50).
+  - No write, command or cron tool was called, so the §4.B1 exposure is a risk, not something
+    observed here.
+- **Mongo was not connected,** so workflow memory could not carry anything between attempts.
+  The production path, where it can (§4.B2), was not measured.
+
+### The answer
+
+- **Does the shipped loop improve the solver?** Yes, within a task, on fresh attempts, from both
+  starting points. Both lower bounds are above 0, but only just.
+  - From the weak base: +0.15 [+0.03, +0.30].
+  - From the neutral base: +0.25 [+0.03, +0.48].
+- **How much of the available gain does it get?** Less than a hand-written harness does.
+  - From the weak base, under a quarter: +0.15 against +0.65 in the same run (s2).
+  - From the neutral base, about half: +0.25 (s3) against +0.475 (s5). Those gains come from two
+    runs, so "half" is approximate. Running both arms in one run would settle it.
+- **What limits it is the single in-loop attempt per candidate.**
+  - A candidate that happened to succeed once was worth keeping.
+  - One that never succeeded was worth almost nothing (s2) or a little (s3: +0.13 over 6 runs).
+  - When no candidate succeeded, the loop kept the base about half the time and adopted an
+    unproven change the rest of the time (s2: 11 and 10 runs).
+  - k>1 gives the improver k base attempts and the selector k finals to choose from, though each
+    candidate is still judged on one attempt. This benchmark ran only k=1, so whether k>1 helps
+    is untested (§6 Q1).
+- **Does it improve across tasks?** Not measurably: +0.00 from both bases. Its library holds
+  cautions about evidence, not reusable knowledge about the task.
+- **Telling the improver about the solver's tool** is not a measured gain.
+  - From the weak base it pointed that way: told minus blind +0.125 [0.00, +0.28].
+  - From the neutral base it made no difference: +0.025 [−0.20, +0.25].
