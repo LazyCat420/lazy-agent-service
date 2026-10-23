@@ -1892,7 +1892,7 @@
   },
   {
     "name": "run_backtest",
-    "description": "Backtest a named equation from the library over historical price data. Returns performance metrics: PnL, win rate, max drawdown, Sharpe ratio, and trade list.",
+    "description": "Backtest a named equation from the library over one ticker's historical price data. Returns in-sample performance for that one ticker (PnL, win rate, max drawdown, trade list); it is not evidence of an edge.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2020,7 +2020,7 @@
   },
   {
     "name": "save_equation",
-    "description": "Save a new mathematical equation to the shared Quant Equation Library. The equation must be Python code that receives 'df' (price DataFrame) and 'params' (dict), and assigns its output to 'result'. Future agents can reuse it.",
+    "description": "Save a new mathematical equation to the shared Quant Equation Library. The equation must be Python code that receives 'df' (price DataFrame) and 'params' (dict), and assigns its output to 'result'. Saving runs a sanity probe (the code runs and makes trades), which does not validate the equation: it stays unvalidated until a panel audit has run on it. Future agents can reuse it.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2241,7 +2241,7 @@
   },
   {
     "name": "search_equations",
-    "description": "Search the shared Quant Equation Library for existing mathematical strategies. Returns equations with their win rates, Sharpe ratios, and code. Use this before writing a new equation to check if one already exists.",
+    "description": "Search the shared Quant Equation Library for existing mathematical strategies. Returns each equation's description, usage count, author, code and panel-audit result (PASSED, FAILED, or not run). An equation is unvalidated unless its panel audit says PASSED; stored win rates and Sharpe ratios are not shown, because they were fitted on one ticker's own history. Use this before writing a new equation to check if one already exists.",
     "parameters": {
       "type": "object",
       "properties": {
