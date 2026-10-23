@@ -362,9 +362,32 @@ run.** CONFIRMED (NAS query, 2026-10-22), found while fixing.
   - The agentic loop adds its internal tools: `take_note`, `ask_user` and
     `retrieve_offloaded_content` always, plus `skill_read` when repo skills exist
     (`AgenticLoopService.ts:361-378`).
-  - With tools-service reachable, that is about 50 tools, all auto-approved.
-  - A rollout can therefore spawn sub-agents, or run Python and fetch URLs on the NAS, with no
-    approval step.
+  - **Measured** by the §10 benchmark: every rollout was offered the same 47 tools by the
+    resolver, then the loop's own tools on top, so about 50.
+    - Arithmetic: `evaluate_expression`.
+    - Code and shell: `execute_python`, `execute_javascript`, `execute_command`, `kill_process`.
+    - Files: `read_file`, `write_file`, `delete_file`, `move_file`, `apply_patch`,
+      `replace_in_file`, `edit_notebook`, `run_git`, `commit_split`.
+    - Datastore and schedules: `write_datastore`, `delete_datastore`, `create_cron_job`,
+      `trigger_cron_job`, `delete_cron_job`.
+    - Agents and tasks: `create_subagent`, `send_subagent_message`, `stop_subagent`,
+      `delete_subagents`, `create_task`, `update_task`.
+    - Web: `read_url`, `search_web`.
+    - The rest are lookups (listing, searching and reading), plus `debug`, `think`, `sleep`,
+      `save_memory` and `emit_structured_output`.
+  - **All of them are auto-approved.**
+    - `decideToolCall` allows any tool that is not read-only once `autoApprove` is set, unless
+      a DENY policy binds (`ToolAuthorization.ts:201-219`).
+    - A rollout passes no policies.
+  - **So a harness the improver wrote can steer the solver,** with no person in the loop, into:
+    - running commands;
+    - writing or deleting files in tools-service's workspace on the NAS;
+    - creating cron jobs or spawning sub-agents.
+  - **This opens no new door:**
+    - the service enforces no auth (`AuthMiddleware` only reads identity headers);
+    - `/agent` already accepts `autoApprove` from any caller.
+  - **What is new:** harness2 does this unattended, following prompts that a model wrote. The
+    proposed restriction is Q6 in §6.
   - A local run without `TOOLS_SERVICE_URL` gets no tools-service tools, `calculate_precise`
     included. The first reading of this finding ("the only domain tool") held only for that
     case.
@@ -642,6 +665,11 @@ audit script check named in brackets turns into NOT REPRODUCED.
   memory, with trading excluded as today.
 - **Q5 Library scope:** per domain only (current), or per domain × solver model (minimum), or
   per run and mode (upstream)?
+- **Q6 Rollout tools:** restrict what a rollout may call? Proposed default: a DENY policy for
+  every tool that is not read-only, except `evaluate_expression`. That keeps
+  `tool_guidance.md` meaningful, and stops a model-written harness from steering an
+  auto-approved solver into commands, file writes or cron jobs (§4.B1). The cost is that
+  harnesses learned this way can no longer rely on write tools.
 
 ## 7. Reproduce
 
