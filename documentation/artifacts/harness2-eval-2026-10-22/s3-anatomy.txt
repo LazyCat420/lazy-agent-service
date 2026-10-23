@@ -1,0 +1,3 @@
+neutral base           {"right":12,"arithmetic, off ≥ $1":21,"left out the decoy":4,"counted a repeat twice":2,"arithmetic, off < $1":1}
+neutral solo-blind     {"arithmetic, off < $1":2,"right":22,"arithmetic, off ≥ $1":12,"left out another line":1,"counted a repeat twice":3}
+neutral solo-told      {"right":23,"no total":1,"left out the decoy":5,"left out another line":2,"arithmetic, off ≥ $1":7,"counted a repeat twice":2}

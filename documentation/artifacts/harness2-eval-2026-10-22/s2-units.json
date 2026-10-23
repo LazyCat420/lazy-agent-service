@@ -1,0 +1,4246 @@
+{
+ "solo-blind/bench-0": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": true,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {
+     "evaluate_expression": 5
+    },
+    "dom1": {},
+    "agg1": {
+     "evaluate_expression": 5
+    }
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant reconciling invoice lines.\n\nProcedure:\n1. Walk the lines in the order given.\n2. Keep a set of invoice ids already seen. A line is a duplicate only if its invoice id was already seen; different ids are never duplicates even when vendor and amount match.\n3. Add the amount of each first occurrence to the total; skip duplicates.\n4. Collect every invoice id that appeared more than once.\n\nDeliver exactly the requested shape: the total of de-duplicated lines and the list of duplicated invoice ids, ending with exactly these two lines:\nTOTAL: <total, two decimals>\nDUPLICATES: <duplicated invoice ids, comma-separated>\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "In systemprompt.md, replace a generic brevity rule with an explicit output-shape contract that names the exact required footer lines, and pair it with a short ordered procedure for the task; do not rely on the model inferring the mandated shape from a \"be brief\" instruction, since a compressed answer can collapse the footer into prose.",
+    "confidence": "medium — the shape-contract effect is visible across two independent rollouts (inv1, agg1) with identical footers, but both edits also changed the procedure text, so the footer improvement cannot be cleanly separated from the procedure change; the arithmetic divergence is a single contrast against base1."
+   },
+   "libraryBefore": 0,
+   "loopMs": 150251
+  },
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "eady seen |\n\nDuplicated invoice ids: **INV-301**, **INV-304**\n\nTotal of de‑deduplicated lines (first occurrences):\n2,403.34 + 1,176.05 + 2,974.58 + 1,244.01 + 1,398.08 + 2,403.34 = **11,599.40**\n\nTOTAL: 11599.40\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": ", INV-304\n- Duplicates: INV-301 (line 5), INV-304 (line 8)\n\n**Total** = 2,403.34 + 1,176.05 + 2,974.58 + 1,244.01 + 1,398.08 + 2,403.34 = **9,599.40**\n\n**Duplicated invoice ids**: INV-301, INV-304\n\nTOTAL: 9599.40\nDUPLICATES: INV-301,INV-304"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "03, INV-304 → amounts added.\n- Duplicates: INV-301, INV-304.\n\nTotal of de-duplicated lines: 2,403.34 + 1,176.05 + 2,974.58 + 1,244.01 + 1,398.08 + 2,403.34 = 11,599.40\n\nDUPLICATES: INV-301,INV-304\nTOTAL: 11599.40\nDUPLICATES: INV-301,INV-304"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": " 2,403.34 | Yes | 11,599.40 |\n| 8 | INV‑304 | Lumen Power | 2,403.34 | No (duplicate) | 11,599.40 |\n\n- **Total of de‑duplicated lines:** 11,599.40  \n- **Duplicated invoice ids:** INV‑301, INV‑304\n\nTOTAL: 11599.40\nDUPLICATES: INV-301,INV-304"
+   }
+  ]
+ },
+ "chain-blind/bench-0": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Before crediting an added procedure/guardrail/skill component with improving a task the base prompt already solved, require an execution contrast that isolates that component — run the base and the edited harness on the same task and compare the produced deliverable line by line; if the edited run regresses or the components were changed together, record the component as confounded rather than helped, and do not adopt scaffolding on the strength of the base run's success alone.",
+    "confidence": "medium — the direction (scaffolding runs regressed, base succeeded) is consistent across three rollouts, but every edit was multi-component and single-rollout, so no individual attribution is established; the lesson is therefore about requiring isolation before crediting, not about which specific edit caused the regression."
+   },
+   "libraryBefore": 0,
+   "loopMs": 157000
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 11,521.39\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 10625.33\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 11,600.39\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 12401.41\nDUPLICATES: INV-301, INV-304"
+   }
+  ]
+ },
+ "solo-told/bench-0": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": true,
+   "inLoop": {
+    "base1": false,
+    "inv1": true,
+    "dom1": false,
+    "agg1": true
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {
+     "evaluate_expression": 3
+    },
+    "dom1": {
+     "evaluate_expression": 6
+    },
+    "agg1": {
+     "think": 2,
+     "evaluate_expression": 6
+    }
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Work through the invoice table line by line, keeping a running set of invoice ids already seen and a running total. A line is a duplicate only when its invoice id has already appeared; matching vendor or amount alone never makes a duplicate. Add a line's amount to the total only the first time its id appears. Use evaluate_expression for the arithmetic rather than mental math. Before answering, re-check the deliverable: the total covers exactly the first occurrence of each id, and the duplicate list contains every repeated id. Report the total and the duplicated invoice ids, ending with exactly:\nTOTAL: <total, two decimals>\nDUPLICATES: <ids, comma-separated>\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "In systemprompt.md, when directing use of an exact-arithmetic tool for a running total, bind the instruction to the final sum explicitly — require that the last reported total be the tool's returned value, not a re-derived or hand-computed figure — and verify the reported total equals the final tool result before emitting it.",
+    "confidence": "medium — two edited candidates (inv1, agg1) share the same text and both produced the same wrong total, while the unmodified base produced the correct one, giving a concrete execution contrast; but the pool is small and the exact mechanism (tool chain truncated vs. mis-added) is only partially visible in the trajectories."
+   },
+   "libraryBefore": 0,
+   "loopMs": 203617
+  },
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "e** (INV-304 already seen) |\n\nRunning total after first occurrences: 2,403.34 + 1,176.05 + 2,974.58 + 1,244.01 + 1,398.08 + 2,403.34 = **11,599.40**\n\nDuplicated invoice ids: **INV-301, INV-304**\n\nTOTAL: 11599.40\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "TOTAL: 11599.40\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "e** (INV-304 already seen) |\n\nRunning total after first occurrences: 2,403.34 + 1,176.05 + 2,974.58 + 1,244.01 + 1,398.08 + 2,403.34 = **11,599.40**\n\nDuplicated invoice IDs: **INV-301, INV-304**\n\nTOTAL: 11599.40\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "e** (INV-304 already seen) |\n\nRunning total after first occurrences: 2,403.34 + 1,176.05 + 2,974.58 + 1,244.01 + 1,398.08 + 2,403.34 = **11,599.40**\n\nDuplicated invoice ids: **INV-301, INV-304**\n\nTOTAL: 11599.40\nDUPLICATES: INV-301, INV-304"
+   }
+  ]
+ },
+ "base/bench-0": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 11,024.38\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 11,602.33\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 9,621.38\nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 11501.39\nDUPLICATES: INV-301, INV-304"
+   }
+  ]
+ },
+ "handwritten/bench-0": {
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "per Media | 2,974.58  \nINV-301 | Keystone | 1,244.01  \nINV-303 | Harbor Tools | 1,398.08  \nINV-304 | Lumen Power | 2,403.34  \n\nTotal kept lines: 6  \nDuplicated invoice ids: INV-301, INV-304  \n\nTOTAL: 11,599.40  \nDUPLICATES: INV-301, INV-304"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "03.34 |\n| INV-302 | Evergreen Labs | 1,176.05 |\n| INV-305 | Juniper Media | 2,974.58 |\n| INV-301 | Keystone | 1,244.01 |\n| INV-303 | Harbor Tools | 1,398.08 |\n| INV-304 | Lumen Power | 2,403.34 |\n\nTOTAL: 11599.40\nDUPLICATES: INV-301,INV-304"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": " Juniper Media | 2,974.58 |\n| INV-301 | Keystone | 1,244.01 |\n| INV-303 | Harbor Tools | 1,398.08 |\n| INV-304 | Lumen Power | 2,403.34 |\n\nKept lines: 6  \nDuplicated invoice ids: INV-301, INV-304\n\nTOTAL: 11,599.40\nDUPLICATES: INV-301,INV-304"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "**TOTAL: 11599.40**\n\n**DUPLICATES: INV-301,INV-304**"
+   }
+  ]
+ },
+ "chain-blind/bench-1": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {
+     "evaluate_expression": 5
+    },
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Reconcile invoice lines by invoice id: a duplicate is a line whose invoice id already appeared; lines with different ids are never duplicates even when vendor and amount match. Keep the first occurrence of each id, add only kept lines to the total, and list each duplicated id once. Parse amounts with thousands separators as numbers. End with exactly two lines, nothing after them: `TOTAL: <total, two decimals>` then `DUPLICATES: <ids, comma-separated>`.\n\nWhen reconciling invoice lines, use the `invoice_reconciliation` skill.\n",
+    "skills/invoice_reconciliation/SKILL.md": "---\nname: invoice_reconciliation\ndescription: Reconcile invoice lines by invoice id, sum de-duplicated amounts, and report duplicated invoice ids. Use whenever a table of invoice lines must be de-duplicated and totalled.\n---\n\n# Invoice reconciliation\n\n## Inputs\nA table of lines, each with an invoice id, a vendor, and an amount.\n\n## Rules\n- Duplicate key is the invoice id ALONE. A repeated id is a duplicate regardless of vendor or amount.\n- Lines with different ids are never duplicates, even if vendor and amount are identical.\n- Keep the FIRST occurrence of each id; every later occurrence of that id is dropped from the total.\n- A duplicated id is reported once, no matter how many times it repeats.\n- Amounts may carry thousands separators (e.g. `1,812.08`); parse them as numbers, do not treat the comma as a decimal point.\n- Do not invent ids, vendors, or amounts.\n\n## Procedure\nWalk the table in order, keeping a running set of seen ids and a running total. If an id is new, add its amount and record the id; if it was seen, skip the row and record the id as a duplicate.\n\n## Checks before answering\n- Every id that appears more than once is in the DUPLICATES list, and every id that appears exactly once is not.\n- The total equals the sum of first occurrences only, with exactly two decimals.\n- Nothing follows the two required lines.\n\n## Output shape\nEnd with exactly these two lines, nothing after them:\nTOTAL: <total, two decimals>\nDUPLICATES: <duplicated invoice ids, comma-separated>\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "In systemprompt.md, state the keep-first-occurrence rule as an explicit per-row operation (\"if the id is new, add its amount and record the id; if already seen, skip the row\") and require a final re-check that the total covers only first occurrences — do not rely on a general \"dedupe\" instruction, because runs otherwise drop first occurrences or re-add later ones. When testing this, change only systemprompt.md in one candidate so the procedure's effect is isolated from any skill-file rules.",
+    "confidence": "low — the only isolating run (inv1) produced a wrong total, and the two candidates that stated the keep-first rule explicitly (dom1, agg1) each changed multiple components, so no run demonstrates that the rule statement alone fixes the total."
+   },
+   "libraryBefore": 1,
+   "loopMs": 148606
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 7,
+    "tools": {
+     "evaluate_expression": 7
+    },
+    "error": "",
+    "tail": "TOTAL: 11584.48\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5694.15\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5,398.43\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5381.74\nDUPLICATES: INV-401, INV-403"
+   }
+  ]
+ },
+ "solo-blind/bench-1": {
+  "loop": {
+   "status": "ok",
+   "learned": false,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": null,
+   "libraryBefore": 0,
+   "loopMs": 83272
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6439.72\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5281.46\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7280.14\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5380.14\nDUPLICATES: INV-401, INV-403"
+   }
+  ]
+ },
+ "base/bench-1": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6,430.14\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6680.14\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7039.14\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7832.74\nDUPLICATES: INV-401, INV-403"
+   }
+  ]
+ },
+ "solo-blind/bench-2": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "When a candidate edit to systemprompt.md bundles an always-on trigger sentence with a new skill file and no rollout shows a divergence the edit addresses, do not credit the bundle with improvement; require an execution that isolates the trigger from the skill body before recording either as helped, and treat a single post-edit rollout that regresses the deliverable as evidence against, not for, the bundle.",
+    "confidence": "low — the only edit row is confounded and rests on a single rollout; the record shows a regression coinciding with the bundle but cannot attribute it to the skill, the trigger, or noise."
+   },
+   "libraryBefore": 0,
+   "loopMs": 67743
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3513.23\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3613.00\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3404.96\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3222.97\nDUPLICATES: INV-502, INV-503"
+   }
+  ]
+ },
+ "chain-blind/bench-2": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not credit a skill-file addition (or the accompanying systemprompt.md rewrite) as helping or hurting based on bundled rollouts; require an isolating run that changes only the skill file (or only systemprompt.md) against the unchanged base before recording any verdict, and record the bundled comparison as confounded rather than as evidence for or against the component.",
+    "confidence": "medium — the confounded rows establish only that bundled edits coincide with wrong totals and that identical harnesses vary run-to-run; they do not show the skill file itself helped or hurt, so the lesson is a discipline for future attribution rather than a claim about this skill's effect."
+   },
+   "libraryBefore": 2,
+   "loopMs": 85940
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3868.99\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3222.96\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3833.96\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3522.96\nDUPLICATES: INV-502, INV-503"
+   }
+  ]
+ },
+ "base/bench-2": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3478.96\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3119.96\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3673.99\nDUPLICATES: INV-502,INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3513.96\nDUPLICATES: INV-502, INV-503"
+   }
+  ]
+ },
+ "solo-told/bench-1": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "In the systemprompt component, remove or subordinate any brevity instruction that could collapse a required multi-line output shape, and state that the request's output shape takes precedence; separately, in the skill component, mandate exact arithmetic via the provided exact-arithmetic tool plus an independent cross-check recomputation, since free-form mental summation is the fragile step.",
+    "confidence": "low — the component-level edits are confounded and the supporting contrast is sampling variance across identical harnesses, not a controlled edit effect; the lesson is a reasonable inference but not established by an isolated execution."
+   },
+   "libraryBefore": 0,
+   "loopMs": 169931
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6039.71\nDUPLICATES: INV-401,INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7033.13\nDUPLICATES: INV-401,INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7600.15\nDUPLICATES: INV-401,INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6122.72\nDUPLICATES: INV-401, INV-403"
+   }
+  ]
+ },
+ "solo-blind/bench-3": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not treat an added procedure or self-check clause in systemprompt.md as validated by a single rollout; require at least one execution where the pre-edit and post-edit harnesses are compared on the same task with the divergent step identified, otherwise record the component as confounded rather than helped.",
+    "confidence": "medium — the record shows three different totals across base, inv1, dom1, and agg1 with no isolating execution, so the only defensible transferable claim is the evidentiary standard itself, not that any specific edit helped or hurt."
+   },
+   "libraryBefore": 0,
+   "loopMs": 81085
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5782.14\nDUPLICATES: INV-601, INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6,852.14\nDUPLICATES: INV-601,INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7431.78\nDUPLICATES: INV-601, INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7432.15\nDUPLICATES: INV-601, INV-604"
+   }
+  ]
+ },
+ "handwritten/bench-1": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "d | 758.71 |\n\n**Kept lines:** 6 (first occurrence of each unique invoice id; INV-401 and INV-403 each appear twice but only their first line is kept)\n\n**Duplicated invoice ids:** INV-401, INV-403\n\nTOTAL: 6440.09\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "TOTAL: 6440.09\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "1 | Acme Supplies | 1,812.08 |\n| INV-402 | Pinecrest | 1,953.65 |\n| INV-404 | Orchid Print | 395.42 |\n| INV-405 | Northwind | 758.71 |\n\nKept lines: 6\n\n**Duplicated invoice ids:** INV-401, INV-403\n\nTOTAL: 8252.17\nDUPLICATES: INV-401, INV-403"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "lies | 1,812.08 |\n| INV-403 | Ironwood | 1,520.23 |\n| INV-401 | Acme Supplies | 1,812.08 |\n| INV-402 | Pinecrest | 1,953.65 |\n| INV-404 | Orchid Print | 395.42 |\n| INV-405 | Northwind | 758.71 |\n\nTOTAL: 8,440.14\nDUPLICATES: INV-401, INV-403"
+   }
+  ]
+ },
+ "base/bench-3": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6432.21\nDUPLICATES: INV-601, INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7935.15\nDUPLICATES: INV-601, INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6932.84\nDUPLICATES: INV-601,INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7431.15\nDUPLICATES: INV-601,INV-604"
+   }
+  ]
+ },
+ "chain-blind/bench-3": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": true,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": true,
+    "agg1": true
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {
+     "evaluate_expression": 6
+    },
+    "dom1": {
+     "execute_python": 1
+    },
+    "agg1": {
+     "execute_python": 4
+    }
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Reconcile invoice lines by invoice id: a duplicate is a line whose invoice id already appeared; lines with different ids are never duplicates even when vendor and amount match. Keep the first occurrence of each id, add only kept lines to the total, and list each duplicated id once, comma-separated, with no spaces. Parse amounts with thousands separators as numbers. End with exactly these two lines, nothing after them:\nTOTAL: <total, two decimals>\nDUPLICATES: <duplicated invoice ids, comma-separated>\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not credit the skill file (skills/<name>/SKILL.md) with any behavioral change unless a rollout isolates it — the skill is not invoked by default and its text does not bind the model's actual computation; attribute only what a run shows the prompt alone driving.",
+    "confidence": "medium — the inv1/dom1 contrast shows the skill did not enforce keep-first, but each candidate differs in more than one respect and only one rollout stands behind each."
+   },
+   "libraryBefore": 3,
+   "loopMs": 152183
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "TOTAL: 9412.85\nDUPLICATES: INV-601,INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7932.20\nDUPLICATES: INV-601,INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 3,
+    "tools": {
+     "evaluate_expression": 3
+    },
+    "error": "",
+    "tail": "TOTAL: 6407.95\nDUPLICATES: INV-601,INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 3,
+    "tools": {
+     "evaluate_expression": 3
+    },
+    "error": "",
+    "tail": "TOTAL: 6407.95\nDUPLICATES: INV-601,INV-604"
+   }
+  ]
+ },
+ "solo-told/bench-2": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {
+     "evaluate_expression": 3
+    },
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not credit a procedure/skill component with improving reliability unless an execution isolates it; when the only rollouts behind a component are single samples bundled with other simultaneous edits, record the row as confounded and decline to draw a transferable lesson from it.",
+    "confidence": "low — every candidate row is confounded or noise; the record shows no concrete, reusable execution contrast isolating a component."
+   },
+   "libraryBefore": 0,
+   "loopMs": 151252
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3523.96\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3172.97\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3222.99\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3272.96\nDUPLICATES: INV-502, INV-503"
+   }
+  ]
+ },
+ "solo-blind/bench-4": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": true,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Reconcile invoice lines by invoice id.\n\nProcedure:\n1. Read every row in order. Track the invoice ids seen so far.\n2. A line is a duplicate only if its invoice id already appeared earlier. Different ids are never duplicates, even when vendor and amount match.\n3. Keep the first occurrence of each id; drop later occurrences.\n4. Sum the amounts of the kept lines. Amounts are decimal currency: keep two decimals.\n5. Re-check: every reported duplicate id must appear twice or more, and no single-occurrence id may be listed.\n\nReport the total and the duplicated ids, then end with exactly these two lines:\nTOTAL: <the total, with two decimals>\nDUPLICATES: <the duplicated invoice ids, comma-separated>\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Before crediting a systemprompt.md procedure edit with an improvement, isolate the step it targets from the steps it merely re-orders — run the edited prompt and check whether the divergence appears in the targeted step or in a later step the edit did not address; if the failure moved to an untouched step, the edit is not evidence of a fix and should not be adopted on the strength of the base's success.",
+    "confidence": "low — every edit row is confounded, the base already succeeded, and no rollout isolates the procedure edit from the summation step; the record shows only that the edited prompts coincided with arithmetic errors, not that any edit helped."
+   },
+   "libraryBefore": 0,
+   "loopMs": 148766
+  },
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "6: 961.24\n  - INV-705: 368.38\n  - INV-702: 961.24\n  - INV-704: 2,770.27\n\n- **Duplicated invoice ids** (appeared more than once): INV-701, INV-702\n\n- **Total of de-duplicated lines**: **8,687.31**\n\nTOTAL: 8687.31\nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": " Freight | 961.24 | ❌ duplicate (id already seen) |\n\n**Total of kept lines:** 2,950.57 + 675.61 + 961.24 + 368.38 + 961.24 + 2,770.27 = **7,726.07**\n\n**Duplicated invoice ids:** INV-701, INV-702\n\nTOTAL: 7,726.07\nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "TOTAL: 2970.47\nDUPLICATES: INV-701,INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": " INV-706, INV-705, INV-702, INV-704  \nAmounts kept: 2,950.57 + 675.61 + 961.24 + 368.38 + 961.24 + 2,770.27 = **7,726.07**\n\nDuplicated invoice ids (appearing twice or more): **INV-701, INV-702**\n\nTOTAL: 7,726.07\nDUPLICATES: INV-701, INV-702"
+   }
+  ]
+ },
+ "chain-blind/bench-4": {
+  "loop": {
+   "status": "ok",
+   "learned": false,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": null,
+   "libraryBefore": 4,
+   "loopMs": 96467
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7248.92\nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6170.12\nDUPLICATES: INV-701,INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7640.93\nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7299.92\nDUPLICATES: INV-701, INV-702"
+   }
+  ]
+ },
+ "handwritten/bench-2": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 3,
+    "tools": {
+     "evaluate_expression": 3
+    },
+    "error": "",
+    "tail": "TOTAL: 4404.21\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 3,
+    "tools": {
+     "execute_python": 3,
+     "evaluate_expression": 3
+    },
+    "error": "",
+    "tail": "ines:** 4 (first occurrence of each distinct invoice id; duplicates are INV-502 and INV-503)\n- **Duplicated invoice ids:** INV-502, INV-503\n- **TOTAL:** 4404.21\n- **DUPLICATES:** INV-502, INV-503\n\nTOTAL: 4404.21\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "---|---|---|\n| INV-504 | Northwind | 2,517.51 |\n| INV-502 | Coastal Freight | 732.02 |\n| INV-501 | Delta Office | 85.93 |\n| INV-503 | Orchid Print | 1,068.75 |\n| INV-505 | Delta Office | 85.93 |\n\nTOTAL: 4,490.14\nDUPLICATES: INV-502, INV-503"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 3,
+    "tools": {
+     "evaluate_expression": 3
+    },
+    "error": "",
+    "tail": "TOTAL: 4404.21\nDUPLICATES: INV-502, INV-503"
+   }
+  ]
+ },
+ "base/bench-4": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7309.47\nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7619.50\nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7670.29\nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7300.00\nDUPLICATES: INV-701, INV-702"
+   }
+  ]
+ },
+ "solo-blind/bench-5": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not treat added rule prose in systemprompt.md as a fix unless a rollout shows the rule being applied to the quantity it governs; when the base already succeeds, prefer leaving systemprompt.md unchanged, and if you do edit it, verify the edit's effect on each reported quantity (here, the total) in a separate run before adopting.",
+    "confidence": "low — the only contrast rests on a single confounded rollout, and the identical-harness candidates show no effect to compare against."
+   },
+   "libraryBefore": 0,
+   "loopMs": 93440
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1540.21\nDUPLICATES: INV-804, INV-801"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1944.21\nDUPLICATES: INV-801, INV-804"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1540.21\nDUPLICATES: INV-804, INV-801"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1540.21\nDUPLICATES: INV-801, INV-804"
+   }
+  ]
+ },
+ "base/bench-5": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1540.21\nDUPLICATES: INV-801, INV-804"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1540.21\nDUPLICATES: INV-801,INV-804"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1540.21\nDUPLICATES: INV-804,INV-801"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1540.21\nDUPLICATES: INV-801, INV-804"
+   }
+  ]
+ },
+ "solo-told/bench-3": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence, then the two required lines.\n\nWork the lines in order: track which invoice ids you have already seen; a line is a duplicate only when its invoice id already appeared (matching vendor/amount with a different id is not a duplicate). Keep the first occurrence of each id and drop later repeats. Compute the total of the kept lines with exact arithmetic per `tool_guidance.md`, then verify the deliverable before answering.\n\nWhen reconciling invoice lines for duplicates, use the `invoice_reconcile` skill.\n",
+    "tool_guidance.md": "Arithmetic: amounts may carry decimals and totals can exceed what mental math reliably handles. When computing a sum (or any total) of more than two amounts, use `evaluate_expression` with `operation: \"add\"` and pass each number as a string, accumulating step by step (or add pairwise and combine). Do not report a total you computed only in your head.\n\nFallback: if `evaluate_expression` returns an error, check that both `a` and `b` are plain numeric strings with no currency symbols or thousands separators (strip commas first). If it still fails after one corrected retry, state the arithmetic you performed and stop — do not loop.\n\nBefore finalizing: re-read the requested output shape and confirm the total and the duplicate list are both present and consistent with the lines you kept.\n",
+    "skills/invoice_reconcile/SKILL.md": "---\nname: invoice_reconcile\ndescription: Reconcile invoice lines by invoice id, de-duplicating repeated ids and reporting the de-duplicated total plus the duplicated ids.\n---\n\n# Invoice line reconciliation\n\n## Analytic move\nReconcile: classify each line as first occurrence or duplicate by invoice id, then calculate the total over first occurrences only.\n\n## Rules\n- Duplicate key is the invoice id alone. A line is a duplicate only if its invoice id already appeared earlier in the table. Different ids are never duplicates, even when vendor and amount match.\n- The first occurrence of an id is kept; every later occurrence with the same id is a duplicate and is excluded from the total.\n- Amounts are given with two decimals; sum with exact arithmetic (use evaluate_expression with add, passing amounts as strings without thousands separators).\n- Vendor and amount are not part of the duplicate test; equal vendor/amount across different ids is coincidental, not duplication.\n\n## Artifact contract\nDeliver exactly two facts, in this order:\n1. TOTAL: sum of kept (de-duplicated) line amounts, formatted with two decimals.\n2. DUPLICATES: the duplicated invoice ids, comma-separated. If none, state that none are duplicated. List each duplicated id once, in order of first appearance as a duplicate.\nDependencies: DUPLICATES must be derived from the id-appearance scan; TOTAL must exclude every line whose id was already seen.\n\n## Decision rule\nTrigger: a table of invoice lines with an invoice id column and an amount column.\nSupporting evidence: the id sequence in table order.\nConflict to resolve: matching vendor/amount on different ids looks like duplication but is not — resolve in favour of the id rule.\nUncertainty: none required; the id rule is deterministic. Do not infer duplicates from vendor or amount similarity.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "In the tool-guidance component, do not rely on prose telling the model to \"use exact arithmetic\"; require that the total be produced by an explicit sequence of evaluate_expression calls whose intermediate results are carried forward, and make the reported total a value copied from the final tool result rather than a number the model writes from memory.",
+    "confidence": "low — every supporting run is a single rollout and no execution isolates the arithmetic guidance from the simultaneous systemprompt and skill edits; the record shows only that prose guidance alone did not yield a correct total."
+   },
+   "libraryBefore": 0,
+   "loopMs": 154909
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7,932.15\nDUPLICATES: INV-601, INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7,932.15\nDUPLICATES: INV-601, INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7932.15\nDUPLICATES: INV-601, INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7932.17\nDUPLICATES: INV-601, INV-604"
+   }
+  ]
+ },
+ "chain-blind/bench-5": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not credit a systemprompt.md scaffolding edit with improving behavior on the strength of one rollout; before adopting, require an isolating run that holds the rest of the harness fixed, because on this substrate identical-to-base harnesses already vary run-to-run (agg1 vs base1) and every scaffolding variant tried (inv1's per-row walk, dom1's rules block) regressed the same way rather than fixing anything.",
+    "confidence": "medium — the regressions are consistent across two edit shapes and the unchanged-harness variance is concrete, but each rests on a single rollout and no run isolates the scaffolding from the rest of the prompt, so the causal claim is bounded to \"do not credit without isolation\" rather than \"scaffolding always hurts.\""
+   },
+   "libraryBefore": 4,
+   "loopMs": 150851
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1944.21\nDUPLICATES: INV-801,INV-804"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1544.21\nDUPLICATES: INV-804, INV-801"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1944.21\nDUPLICATES: INV-801,INV-804"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1944.18\nDUPLICATES: INV-804, INV-801"
+   }
+  ]
+ },
+ "handwritten/bench-3": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "e | 748.95 |\n| INV-602 | Quarry Works | 2,657.05 |\n| INV-601 | Lumen Power | 2,482.64 |\n| INV-604 | Orchid Print | 519.31 |\n| INV-605 | Northwind | 1,041.57 |\n| INV-606 | Lumen Power | 2,482.64 |\nTOTAL: 8,450.16\nDUPLICATES: INV-601, INV-604"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "execute_python": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "TOTAL: 9932.16\nDUPLICATES: INV-601,INV-604"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "ce | 748.95 |\n| INV-602 | Quarry Works | 2,657.05 |\n| INV-601 | Lumen Power | 2,482.64 |\n| INV-604 | Orchid Print | 519.31 |\n| INV-605 | Northwind | 1,041.57 |\n| INV-606 | Lumen Power | 2,482.64 |\n\nTOTAL: 9932.16\nDUPLICATES: INV-601,INV-604"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": " | 748.95 |\n| INV-602 | Quarry Works | 2,657.05 |\n| INV-601 | Lumen Power | 2,482.64 |\n| INV-604 | Orchid Print | 519.31 |\n| INV-605 | Northwind | 1,041.57 |\n| INV-606 | Lumen Power | 2,482.64 |\n\nTOTAL: 7,450.16\nDUPLICATES: INV-601, INV-604"
+   }
+  ]
+ },
+ "chain-blind/bench-6": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant.\n\nWork the table in order, keeping a running set of seen invoice ids and a running total. For each row: if its invoice id is new, add its amount to the total and record the id; if the id was already seen, skip the row and record that id as a duplicate (record each id once). A duplicate is a line whose invoice id already appeared; lines with different ids are never duplicates, even when vendor and amount match. Parse amounts with thousands separators as numbers.\n\nBefore answering, re-check: the total is the sum of first occurrences only; every repeated id is listed and every single-occurrence id is not; the answer ends with exactly these two lines and nothing after them:\nTOTAL: <total, two decimals>\nDUPLICATES: <duplicated invoice ids, comma-separated>\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Before crediting a systemprompt.md edit with a behavioral change, require an isolating contrast — either two runs of the same edited harness that agree, or a run pair differing only in that edit — because a single rollout per candidate cannot separate the edit's effect from run-to-run sampling variance in the prompt component.",
+    "confidence": "medium — the same-harness disagreement between inv1 and agg1 is a concrete execution contrast showing sampling variance dominates, but the record contains only single rollouts per candidate, so the lesson is narrowed to \"require isolation\" rather than any claim about which prompt form helps."
+   },
+   "libraryBefore": 5,
+   "loopMs": 125949
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4440.36\nDUPLICATES: INV-902, INV-903"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4,447.35\nDUPLICATES: INV-902, INV-903"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4,667.36\nDUPLICATES: INV-903, INV-902"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4667.62\nDUPLICATES: INV-902, INV-903"
+   }
+  ]
+ },
+ "solo-blind/bench-6": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief.\n\nReconciling invoice lines:\n1. Scan the table in order. A line is a duplicate only if its invoice id has already appeared; different ids are never duplicates even when vendor and amount match.\n2. Write out the kept lines (first occurrence of each id) explicitly before summing.\n3. Sum the kept amounts, then re-check: recount the kept lines and re-add in a different order; if the two totals differ, find the discrepancy before answering.\n4. Report the total with two decimals and the duplicated invoice ids, ending with exactly the two required lines.\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not treat an added self-check/re-check step in systemprompt.md as a fix for arithmetic reliability on the strength of its presence in the prompt; the record shows enumeration and re-check instructions did not yield a correct total in any rollout, so require an execution that actually produces the correct value before crediting the procedure component.",
+    "confidence": "low — every relevant row is confounded and no execution shows a correct total arising from the edit; the only concrete contrast is \"wrong before, wrong after, different wrong values,\" which does not establish that the procedure helped."
+   },
+   "libraryBefore": 0,
+   "loopMs": 177493
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "INV-903, INV-902\n\nTOTAL: 4,447.34\nDUPLICATES: INV-903, INV-902"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "72\n\nSum: 350.53 + 2560.17 + 221.20 + 361.24 + 767.72 + 767.72 = 5028.58\n\nRe‑check: 6 lines, re‑adding in reverse order gives the same total 5028.58 — no discrepancy.\n\nDUPLICATES: INV-903, INV-902\n\nTOTAL: 5028.58\nDUPLICATES: INV-903, INV-902"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4,647.34\nDUPLICATES: INV-903, INV-902"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "Processed lines (kept first occurrence of each invoice id):\n- INV-901: 350.53\n- INV-903: 2,560.17\n- INV-905: 221.20\n- INV-904: 361.24\n- INV-902: 767.72\n- INV-906: 767.72\n\nTOTAL: 4,267.36\nDUPLICATES: INV-902, INV-903"
+   }
+  ]
+ },
+ "base/bench-6": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4447.36\nDUPLICATES: INV-902, INV-903"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4667.36\nDUPLICATES: INV-903, INV-902"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5239.36\nDUPLICATES: INV-902, INV-903"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4,667.36\nDUPLICATES: INV-902, INV-903"
+   }
+  ]
+ },
+ "solo-told/bench-4": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": true,
+   "inLoop": {
+    "base1": false,
+    "inv1": true,
+    "dom1": false,
+    "agg1": true
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {
+     "evaluate_expression": 5
+    },
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant reconciling invoice lines. Work in this order:\n\n1. Scan the table top to bottom, tracking invoice ids already seen.\n2. A line is a duplicate only if its invoice id appeared earlier. Different ids are never duplicates, even when vendor and amount match.\n3. For each first-occurrence line, add its amount to a running total. Use `evaluate_expression` with operation `add`, passing both operands as strings, for every addition; do not sum mentally.\n4. Before reporting, re-check: every duplicated id appears exactly once in DUPLICATES, no id that appeared only once is listed, and the total covers exactly the first-occurrence lines.\n\nReport the de-duplicated total and every duplicated invoice id. End your answer with exactly these two lines:\nTOTAL: <total, two decimals>\nDUPLICATES: <duplicated invoice ids, comma-separated>\n\nBe brief.\n",
+    "tool_guidance.md": "`evaluate_expression(operation, a, b)` does exact arbitrary-precision arithmetic on two numbers. Pass `a` and `b` as strings (e.g. `\"2950.57\"`). Operations: add, subtract, multiply, divide, modulo, power, sqrt. Chain calls to accumulate a running total; do not round intermediate results. If a call errors, check the operand strings first (strip commas, no currency symbols); retry once with corrected input, and if it still fails, fall back to careful manual arithmetic and note the fallback.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "In the systemprompt procedure component, when the required output is a subtotal over a filtered subset of rows while the running accumulator covers all rows, add an explicit final step that recomputes or restates the reported total from the kept-subset only (e.g. \"report the sum of first-occurrence amounts, not the all-row running total\"), and check that the reported figure equals that subset sum before emitting it.",
+    "confidence": "medium — two rollouts (inv1, agg1) share the same procedure and the same failure mode, and base1 without the procedure got it right; but the failure is a single observed contrast per candidate and the exact mechanism (procedure vs. brevity prompt removal) is not isolated."
+   },
+   "libraryBefore": 0,
+   "loopMs": 146443
+  },
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "\"2950.57\" \"675.61\" → 3,626.18  \n- `add` \"3626.18\" \"961.24\" → 4,587.42  \n- `add` \"4587.42\" \"368.38\" → 4,955.80  \n- `add` \"4955.80\" \"961.24\" → 5,917.04  \n- `add` \"5917.04\" \"2770.27\" → 8,687.31  \n\nTOTAL: 8,687.31  \nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "ate (already seen)\n6. INV-702 – first occurrence → total = 5,917.04\n7. INV-704 – first occurrence → total = 8,687.31\n8. INV-702 – duplicate (already seen)\n\nDuplicated invoice ids: INV-701, INV-702\n\nTOTAL: 8687.31\nDUPLICATES: INV-701,INV-702"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": ".38 = 4,955.80\n- INV‑701 (dup) → skip\n- After INV‑702: 4,955.80 + 961.24 = 5,917.04\n- After INV‑704: 5,917.04 + 2,770.27 = 8,687.31\n- INV‑702 (dup) → skip\n\nDuplicated invoice ids: INV‑701, INV‑702\n\nTOTAL: 8687.31\nDUPLICATES: INV-701,INV-702"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "ce → total = 4,955.80\n5. INV-701 – duplicate (already seen)\n6. INV-702 – first occurrence → total = 5,917.04\n7. INV-704 – first occurrence → total = 8,687.31\n8. INV-702 – duplicate (already seen)\n\nDUPLICATES: INV-701, INV-702\nTOTAL: 8687.31"
+   }
+  ]
+ },
+ "handwritten/bench-4": {
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": " as expected for 6 kept lines):**\n1. 2,950.57 + 675.61 = 3,626.18\n2. 3,626.18 + 961.24 = 4,587.42\n3. 4,587.42 + 368.38 = 4,955.80\n4. 4,955.80 + 961.24 = 5,917.04\n5. 5,917.04 + 2,770.27 = 8,687.31\n\nTOTAL: 8687.31\nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "execute_python": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": " Freight | 961.24 |\n| INV-705 | Evergreen Labs | 368.38 |\n| INV-702 | Coastal Freight | 961.24 |\n| INV-704 | Harbor Tools | 2,770.27 |\n\nKept lines: 6  \nDuplicated invoice ids: INV-701, INV-702  \n\nTOTAL: 8687.31  \nDUPLICATES: INV-701,INV-702"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 7,648.99\nDUPLICATES: INV-701, INV-702"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "4 | Harbor Tools | 2,770.27 |\n\nKept amount total: **8,687.31** (computed via 5 successive `evaluate_expression` additions).\n\nDuplicated invoice ids (appeared more than once): **INV-701, INV-702**\n\nTOTAL: 8687.31\nDUPLICATES: INV-701, INV-702"
+   }
+  ]
+ },
+ "chain-blind/bench-7": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not attribute a delivered-output change to an added skill or trigger line when the only evidence is one rollout per variant and an unedited control also varies run-to-run; before crediting the skill component, require either a paired run with the skill removed (trigger line only) or repeated rollouts of the same harness, and record the edit as confounded until such a contrast exists.",
+    "confidence": "medium — the record clearly shows same-harness disagreement and no isolating run, which supports \"confounded\" and the demand for a paired/repeated contrast; but with one rollout per variant the direction of any true effect (help or hurt) cannot be established, so the lesson is about attribution discipline rather than a claim that the skill helps or hurts."
+   },
+   "libraryBefore": 6,
+   "loopMs": 128174
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5377.22\nDUPLICATES: INV-1001, INV-1002"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5378.19\nDUPLICATES: INV-1001, INV-1002"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5376.73\nDUPLICATES: INV-1001, INV-1002"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5377.73\nDUPLICATES: INV-1001, INV-1002"
+   }
+  ]
+ },
+ "solo-blind/bench-7": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": true,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": true
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {
+     "evaluate_expression": 4
+    },
+    "dom1": {},
+    "agg1": {
+     "think": 2,
+     "evaluate_expression": 3
+    }
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant reconciling invoice lines. Work in this order:\n\n1. Scan the table once, left to right, recording each line's invoice id and amount.\n2. Track seen invoice ids in a set. A line is a duplicate only if its invoice id already appeared earlier; different ids are never duplicates even when vendor and amount match.\n3. Keep every first occurrence; drop only later occurrences of an already-seen id.\n4. Sum the amounts of the de-duplicated lines (first occurrences only).\n5. Before answering, re-check: every duplicated id you report must correspond to a line you actually dropped, and the total must equal the sum of the kept lines.\n\nReport the total and the duplicated invoice ids. End with exactly these two lines:\nTOTAL: <total, two decimals>\nDUPLICATES: <duplicated invoice ids, comma-separated>\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "In the systemprompt.md procedure, do not rely on a prose re-check step to catch summation drift; instead require the agent to list the kept amounts explicitly and sum them from that list (e.g., \"write the kept amounts, then add them in that order\") so the running total is auditable against the enumerated kept set, and make the re-check compare the enumerated kept count/amounts to the summed terms rather than restating the total.",
+    "confidence": "medium — two independent rollouts of the same procedure show the identical omission at the summation step, but neither run isolates the re-check step from the rest of the procedure, and no rollout of a revised summation instruction exists to confirm the fix."
+   },
+   "libraryBefore": 0,
+   "loopMs": 179555
+  },
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": ",068.95), INV-1006 (623.28), INV-1001 (971.52), INV-1003 (1,694.26)\n\nTotal = 1,045.18 + 623.28 + 2,068.95 + 623.28 + 971.52 + 1,694.26 = **7,026.47**\n\nDuplicated invoice ids: INV-1002, INV-1001\n\nTOTAL: 7026.47\nDUPLICATES: INV-1002, INV-1001"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5,363.15\nDUPLICATES: INV-1002, INV-1001"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "01, INV‑1003  \n**Duplicated invoice ids:** INV‑1002, INV‑1001  \n\n**Sum of kept amounts (with two‑decimal formatting):**\n\n1,045.18 + 623.28 + 2,068.95 + 623.28 + 971.52 + 1,694.26 = **5,332.21**\n\nTOTAL: 5332.21\nDUPLICATES: INV-1002, INV-1001"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 3,
+    "tools": {
+     "evaluate_expression": 3
+    },
+    "error": "",
+    "tail": "TOTAL: 4708.93\nDUPLICATES: INV-1001, INV-1002"
+   }
+  ]
+ },
+ "base/bench-7": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5376.73\nDUPLICATES: INV-1001, INV-1002"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5376.73\nDUPLICATES: INV-1001, INV-1002"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4339.18\nDUPLICATES: INV-1001,INV-1002"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5378.72\nDUPLICATES: INV-1001,INV-1002"
+   }
+  ]
+ },
+ "solo-told/bench-5": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Before crediting a skill file with a fix, check whether the base harness already delivers correctly and whether the skill's own illustrative example can be inverted by the model; if the base is already correct, treat the skill as unproven and require a run where base fails and the skill succeeds before relying on it. Applies to the skill-file component.",
+    "confidence": "low — the record contains no run where a skill edit demonstrably changed behavior for the better; the only contrast (dom1 wrong) is reproduced by the unedited base, so no transferable operation is established."
+   },
+   "libraryBefore": 0,
+   "loopMs": 104800
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1642.21\nDUPLICATES: INV-804,INV-801"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1944.18\nDUPLICATES: INV-801, INV-804"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1541.18\nDUPLICATES: INV-801, INV-804"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 1944.21\nDUPLICATES: INV-801, INV-804"
+   }
+  ]
+ },
+ "chain-blind/bench-8": {
+  "loop": {
+   "status": "ok",
+   "learned": false,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": true,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {
+     "execute_python": 1
+    },
+    "agg1": {
+     "evaluate_expression": 3
+    }
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Reconcile invoice lines by invoice id: a duplicate is a line whose invoice id already appeared; lines with different ids are never duplicates, even when vendor and amount match. Keep the first occurrence of each id, add only kept lines to the total, and list each duplicated id once. Parse amounts with thousands separators as numbers. End with exactly these two lines, nothing after them:\nTOTAL: <total, two decimals>\nDUPLICATES: <duplicated invoice ids, comma-separated>\n\nWhen reconciling invoice lines, use the `invoice_reconciliation` skill.\n",
+    "skills/invoice_reconciliation/SKILL.md": "---\nname: invoice_reconciliation\ndescription: Reconcile a table of invoice lines by invoice id, total the de-duplicated amounts, and report duplicated invoice ids. Use whenever invoice lines must be de-duplicated and totalled.\n---\n\n# Invoice reconciliation\n\n## Inputs\nA table of lines, each with an invoice id, a vendor, and an amount.\n\n## Rules\n- Duplicate key is the invoice id ALONE. A repeated id is a duplicate regardless of vendor or amount.\n- Lines with different ids are never duplicates, even when vendor and amount match.\n- Keep the FIRST occurrence of each id; every later occurrence of that id is dropped from the total.\n- Report a duplicated id once, no matter how many times it repeats.\n- Amounts may carry thousands separators (e.g. `1,268.77`); parse them as numbers, not as a decimal comma.\n- Do not invent ids, vendors, or amounts.\n\n## Procedure\n1. Walk the table in order with a running set of seen ids and a running total.\n2. For each row: if its id is new, add its amount and record the id; if the id was already seen, skip the row and record the id as a duplicate (once).\n3. Compute the total by explicit addition of the kept amounts; do not re-add a skipped row.\n\n## Checks before answering\n- Every id appearing more than once is in DUPLICATES; every id appearing exactly once is not.\n- The total equals the sum of first occurrences only, written with two decimals and no thousands separator.\n- Nothing follows the two required lines.\n\n## Output shape\nEnd with exactly these two lines, nothing after them:\nTOTAL: <total, two decimals>\nDUPLICATES: <duplicated invoice ids, comma-separated>\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": null,
+   "libraryBefore": 7,
+   "loopMs": 132296
+  },
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "TOTAL: 5502.62\nDUPLICATES: INV-1104,INV-1101"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "TOTAL: 5502.62\nDUPLICATES: INV-1104,INV-1101"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 3,
+    "tools": {
+     "evaluate_expression": 3
+    },
+    "error": "",
+    "tail": "TOTAL: 4233.85\nDUPLICATES: INV-1101, INV-1104"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "TOTAL: 5502.62\nDUPLICATES: INV-1104,INV-1101"
+   }
+  ]
+ },
+ "handwritten/bench-5": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "**TOTAL: 1881.74**  \n**DUPLICATES: INV-801, INV-804**"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "|\n|---|---|---|\n| INV-803 | Acme Supplies | 403.99 |\n| INV-804 | Harbor Tools | 435.13 |\n| INV-805 | Acme Supplies | 403.99 |\n| INV-802 | Brightline | 359.56 |\n| INV-801 | Delta Office | 341.53 |\n\nTOTAL: 1944.20\nDUPLICATES: INV-801, INV-804"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "|\n|---|---|---|\n| INV-803 | Acme Supplies | 403.99 |\n| INV-804 | Harbor Tools | 435.13 |\n| INV-805 | Acme Supplies | 403.99 |\n| INV-802 | Brightline | 359.56 |\n| INV-801 | Delta Office | 341.53 |\n\nTOTAL: 1944.21\nDUPLICATES: INV-801, INV-804"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "execute_python": 1,
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "TOTAL: 1944.20\nDUPLICATES: INV-804, INV-801"
+   }
+  ]
+ },
+ "solo-blind/bench-8": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n\nWork the reconciliation in this order:\n1. Read every line of the table before computing anything; do not stop at the first pass.\n2. Track invoice ids seen so far. A line is a duplicate only when its invoice id already appeared earlier in the table; matching vendor or amount alone never makes a duplicate.\n3. Sum the de-duplicated lines: keep the first occurrence of each invoice id, drop later occurrences with the same id.\n4. Re-check the deliverable before finishing: recompute the total from the kept lines, and confirm each reported duplicate id actually appeared more than once.\n\nReport (1) the total of the de-duplicated lines with two decimals and (2) every duplicated invoice id. End your answer with exactly these two lines:\nTOTAL: <the total, with two decimals>\nDUPLICATES: <the duplicated invoice ids, comma-separated>\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Before crediting a systemprompt.md or skill-body addition with improving a task the base already solved, require an execution contrast that isolates the added component — a single rollout of a multi-part edit cannot show the procedure helped, and here every such edit's rollout diverged from the base's correct total, so do not add procedural or skill scaffolding to a harness whose base rollout already satisfies the deliverable; keep the base and spend the edit elsewhere.",
+    "confidence": "low — every supporting row is confounded (single rollout, multi-component edits), so this records an observed pattern of divergence, not a demonstrated causal effect; it should be revisited with isolated, repeated runs before being relied on."
+   },
+   "libraryBefore": 0,
+   "loopMs": 96732
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4494.85\nDUPLICATES: INV-1101, INV-1104"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4233.87\nDUPLICATES: INV-1101, INV-1104"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3,873.85\nDUPLICATES: INV-1101, INV-1104"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 3,
+    "tools": {
+     "evaluate_expression": 3
+    },
+    "error": "",
+    "tail": "TOTAL: 6027.76\nDUPLICATES: INV-1101, INV-1104"
+   }
+  ]
+ },
+ "base/bench-8": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4493.87\nDUPLICATES: INV-1101, INV-1104"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4193.85\nDUPLICATES: INV-1101, INV-1104"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4502.84\nDUPLICATES: INV-1104, INV-1101"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4193.85\nDUPLICATES: INV-1101, INV-1104"
+   }
+  ]
+ },
+ "chain-blind/bench-9": {
+  "loop": {
+   "status": "ok",
+   "learned": false,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": null,
+   "libraryBefore": 7,
+   "loopMs": 121297
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 6371.07\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5560.91\nDUPLICATES: INV-1201,INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5981.58\nDUPLICATES: INV-1201,INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4491.06\nDUPLICATES: INV-1201, INV-1204"
+   }
+  ]
+ },
+ "solo-told/bench-6": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": true,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {
+     "evaluate_expression": 5
+    },
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant reconciling invoice lines. The shape of the deliverable is set by the request: follow any required output format exactly.\n\nProcedure:\n1. Read the table in order. Track a set of invoice ids already seen.\n2. For each line: if its invoice id is already in the set, record it as a duplicate (keep each distinct duplicated id once, in first-appearance order) and exclude the line from the total. Otherwise add the line to the set and add its amount to the running total.\n3. Lines with different ids are never duplicates, even if vendor and amount match.\n4. Compute the total exactly with `evaluate_expression`, operation `add`, operands as plain decimal strings (strip thousands separators), accumulating one kept line at a time; do not rely on mental arithmetic.\n5. Before answering, re-check: every duplicated id listed once, no non-duplicated id listed, and the total equals the sum of first-occurrence lines only.\n\nEnd your answer with exactly these two lines:\nTOTAL: <the total, with two decimals>\nDUPLICATES: <the duplicated invoice ids, comma-separated>\n\n",
+    "tool_guidance.md": "`evaluate_expression(operation, a, b)` performs exact arbitrary-precision arithmetic on two numbers passed as strings; operation is one of add, subtract, multiply, divide, modulo, power, sqrt.\n\n- Pass numbers as plain decimal strings without thousands separators (e.g. \"2560.17\", not \"2,560.17\").\n- Accumulate a running total pairwise with `add`; do not batch multiple operands into one call.\n- If a call errors, check the operand format first (separators, stray characters). If it still fails, fall back to summing manually and state the arithmetic; do not repeat the same failing call.\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "do not treat a single divergent delivered total as proof that any specific systemprompt.md procedure, tool_guidance.md arithmetic instruction, or skill body fixed the aggregation — the record shows three edited harnesses producing three different totals (5028.58, 4968.36, 4440.34) against a base of 4667.36, so no edit can be credited; before claiming an aggregation edit helped, obtain at least two rollouts of the same edited harness whose evaluate_expression call sequence and returned values can be compared line-by-line to the delivered total.",
+    "confidence": "low — every edit row is confounded, each rests on one rollout, and the totals are mutually inconsistent, so the record supports only the negative observation that adoption and single-run totals cannot attribute a fix."
+   },
+   "libraryBefore": 0,
+   "loopMs": 156528
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 6,
+    "tools": {
+     "evaluate_expression": 6
+    },
+    "error": "",
+    "tail": "TOTAL: 5796.30\nDUPLICATES: INV-903, INV-902"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "xpression` to confirm exact arithmetic:\n\n- 350.53 + 2,560.17 = 2,910.70\n- 2,910.70 + 221.20 = 3,131.90\n- 3,131.90 + 361.24 = 3,493.14\n- 3,493.14 + 767.72 = 4,260.86\n- 4,260.86 + 767.72 = 5,028.58\n\nTOTAL: 5028.58\nDUPLICATES: INV-903, INV-902"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 3,
+    "tools": {
+     "evaluate_expression": 3
+    },
+    "error": "",
+    "tail": "TOTAL: 4039.66\nDUPLICATES: INV-903, INV-902"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "TOTAL: 5028.58\nDUPLICATES: INV-903, INV-902"
+   }
+  ]
+ },
+ "solo-blind/bench-9": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Reconcile invoice lines by invoice id: a line is a duplicate only when its invoice id has already appeared; lines with different ids are never duplicates even when vendor and amount match. Sum the amounts of the de-duplicated lines (each invoice id counted once) and list every duplicated invoice id. Be brief: report the total and the duplicated ids, ending with exactly these two lines:\nTOTAL: <the total, with two decimals>\nDUPLICATES: <the duplicated invoice ids, comma-separated>\n\n",
+    "guardrails.md": "- Deduplicate strictly on invoice id. Never treat matching vendor or matching amount as evidence of duplication.\n- Count each invoice id once in the total; do not drop a line merely because its vendor or amount repeats another line's.\n- Preserve amounts exactly as given; do not round or re-key figures.\n- If no invoice id repeats, report DUPLICATES: none.\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": false,
+    "dom1.a1": false,
+    "agg1.a1": false,
+    "experience": false
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "In systemprompt.md, do not rely on prose alone to anchor arithmetic — add an explicit check step (recompute the total independently, or state the exact set of rows entering the sum) and require the figure to be reconciled against that set before emitting it; a rule-only prompt rewrite leaves the numeric result unstable across runs.",
+    "confidence": "medium — the instability is well documented across four runs, but no single edit was isolated as the fix, and the correct total was never produced by any candidate, so the operation is inferred from the failure pattern rather than from a demonstrated success."
+   },
+   "libraryBefore": 0,
+   "loopMs": 53599
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4999.06\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4981.17\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4940.91\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4935.73\nDUPLICATES: INV-1201, INV-1204"
+   }
+  ]
+ },
+ "base/bench-9": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5900.75\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4991.16\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4900.73\nDUPLICATES: INV-1201,INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4995.66\nDUPLICATES: INV-1201, INV-1204"
+   }
+  ]
+ },
+ "handwritten/bench-6": {
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "5 | Acme Supplies | 221.20 |\n| INV-904 | Orchid Print | 361.24 |\n| INV-902 | Keystone | 767.72 |\n| INV-906 | Keystone | 767.72 |\n\nKept lines: 6  \nDuplicated invoice ids: INV-903, INV-902\n\n**TOTAL: 5028.58**  \n**DUPLICATES: INV-903,INV-902**"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "e | 767.72 |\n| INV-906 | Keystone | 767.72 |\n\nKept lines: 6  \nDuplicated invoice ids: INV-903, INV-902\n\nNow adding the kept amounts using `evaluate_expression`:\n\n1. 350.53 + 2,560.17 = 2,910.70  \n\nTOTAL: 5028.58\nDUPLICATES: INV-903, INV-902"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 2
+    },
+    "error": "",
+    "tail": "TOTAL: 5028.58  \nDUPLICATES: INV-902,INV-903"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "350.53 |\n| INV-903 | Pinecrest | 2,560.17 |\n| INV-905 | Acme Supplies | 221.20 |\n| INV-904 | Orchid Print | 361.24 |\n| INV-902 | Keystone | 767.72 |\n| INV-906 | Keystone | 767.72 |\n\n6 kept lines\n\nDUPLICATES: INV-903, INV-902\n\nTOTAL: 4667.86"
+   }
+  ]
+ },
+ "solo-told/bench-7": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": true,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": true
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {
+     "evaluate_expression": 3
+    },
+    "dom1": {
+     "evaluate_expression": 5
+    },
+    "agg1": {
+     "evaluate_expression": 4
+    }
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant reconciling invoice lines.\n\nProcedure:\n1. Walk the table top to bottom, tracking invoice ids already seen.\n2. A line is a duplicate only if its invoice id already appeared earlier in the table. Lines with different ids are never duplicates, even when vendor and amount match.\n3. Keep each first occurrence; drop later occurrences of a repeated id. Duplicate amounts are excluded from the total entirely.\n4. Compute the de-duplicated total with evaluate_expression, adding amounts one at a time as strings. Do not sum mentally.\n5. Re-check: confirm the number of kept lines equals the number of distinct ids, and that every id you list as duplicated actually repeats.\n\nReport (1) the total of the de-duplicated lines with two decimals and (2) every duplicated invoice id. End your answer with exactly these two lines:\nTOTAL: <the total, with two decimals>\nDUPLICATES: <the duplicated invoice ids, comma-separated>\n\n",
+    "tool_guidance.md": "evaluate_expression(operation, a, b) does exact arbitrary-precision arithmetic on two numbers; operation is one of add, subtract, multiply, divide, modulo, power, sqrt; a and b are strings.\n\nUse it for every arithmetic step rather than mental math. Sum a list by repeated add: accumulate a running string result and pass it as a on the next call.\n\nIf a call errors: check that operation is one of the listed names and both operands are strings. If it still fails after one corrected retry, fall back to adding the amounts by hand and note the fallback; do not repeat the same failing call.\n\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not attribute a changed final answer to any single added component (procedure text, tool_guidance, or skill file) when they were introduced together; instead run one rollout per component in isolation before crediting any of them, and treat the adopted candidate's output as evidence only of the combined bundle, not of any individual edit.",
+    "confidence": "medium — the record shows three distinct totals from three bundles but never a single-component rollout, so the lesson is about attribution discipline rather than a proven behavioral cause."
+   },
+   "libraryBefore": 0,
+   "loopMs": 69579
+  },
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 2,
+    "tools": {
+     "evaluate_expression": 2
+    },
+    "error": "",
+    "tail": ". 4360.69 + 971.52 → **5332.21**\n6. 5332.21 + 1,694.26 → **7026.47**\n\nThe de‑duplicated total is **7026.47** (6 distinct invoice ids, matching the 6 kept lines).\n\nDUPLICATES: INV-1002, INV-1001\n\nTOTAL: 7026.47\nDUPLICATES: INV-1002, INV-1001"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": false,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "):**\n\n1. 0 + 971.52 = **971.52**  \n2. 971.52 + 1,694.26 = **2,665.78**  \n3. 2,665.78 + 623.28 = **3,289.06**  \n4. 3,289.06 + 2,068.95 = **5,358.01**  \n5. 5,358.01 + 1,045.18 = **6,403.19**\n\nTOTAL: **6403.19**\n\nDUPLICATES: INV‑1002, INV‑1001"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 7,
+    "tools": {
+     "evaluate_expression": 7
+    },
+    "error": "",
+    "tail": "*  \n2. 1045.18 + 623.28 → **1668.46**  \n3. 1668.46 + 2068.95 → **3737.41**  \n4. 3737.41 + 623.28 → **4360.69**  \n5. 4360.69 + 971.52 → **5332.21**  \n6. 5332.21 + 1694.26 → **7997.99**\n\n**TOTAL: 7997.99**  \n**DUPLICATES: INV-1001, INV-1002**"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 6,
+    "tools": {
+     "evaluate_expression": 6
+    },
+    "error": "",
+    "tail": "hich equals the number of distinct invoice ids (INV-1004, INV-1002, INV-1005, INV-1006, INV-1001, INV-1003).  \n- Duplicated ids that repeat: INV-1002 (appears twice), INV-1001 (appears twice).\n\nTOTAL: 7,649.75\nDUPLICATES: INV-1002, INV-1001"
+   }
+  ]
+ },
+ "handwritten/bench-7": {
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "execute_python": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "| INV-1005 | Keystone | 2,068.95 |\n| INV-1006 | Acme Supplies | 623.28 |\n| INV-1001 | Quarry Works | 971.52 |\n| INV-1003 | Brightline | 1,694.26 |\n\n**Duplicated invoice ids:** INV-1001, INV-1002\n\nTOTAL: 7026.47\nDUPLICATES: INV-1001,INV-1002"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "1668.46  \n**Addition 2:** 1668.46 + 2068.95 = 3737.41  \n**Addition 3:** 3737.41 + 623.28 = 4360.69  \n**Addition 4:** 4360.69 + 971.52 = 5332.21  \n**Addition 5:** 5332.21 + 1694.26 = 7026.47  \n\nTOTAL: 7026.47  \n\nDUPLICATES: INV-1001,INV-1002"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {
+     "execute_python": 1
+    },
+    "error": "",
+    "tail": "add the kept amounts sequentially:\n\n- 1,045.18 + 623.28 = 1,668.46\n- 1,668.46 + 2,068.95 = 3,737.41\n- 3,737.41 + 623.28 = 4,360.69\n- 4,360.69 + 971.52 = 5,332.21\n- 5,332.21 + 1,694.26 = 7,026.47\n\nTOTAL: 7026.47\nDUPLICATES: INV-1001,INV-1002"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "execute_python": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": ", 2,068.95\n- INV-1006: Acme Supplies, 623.28\n- INV-1001: Quarry Works, 971.52\n- INV-1003: Brightline, 1,694.26\n\n**Total of kept lines:** 7,026.47  \n**Duplicated invoice IDs:** INV-1001, INV-1002\n\nTOTAL: 7026.47\nDUPLICATES: INV-1001,INV-1002"
+   }
+  ]
+ },
+ "solo-told/bench-8": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": true,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {
+     "evaluate_expression": 3
+    },
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not attribute a candidate's changed output to its systemprompt.md edit when the base harness itself produces different outputs across identical runs; before crediting or blaming a prompt rewrite, require either a repeated-run contrast on the same harness or a component-isolating comparison, and treat single-rollout divergences under a rewritten systemprompt.md as confounded.",
+    "confidence": "medium — the three distinct totals under identical or near-identical prompts demonstrate variance, but the record contains only one rollout per state, so the magnitude and direction of any specific edit's effect cannot be pinned down."
+   },
+   "libraryBefore": 0,
+   "loopMs": 43829
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3,482.85\nDUPLICATES: INV-1101, INV-1104"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4294.60\nDUPLICATES: INV-1101, INV-1104"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 3502.57\nDUPLICATES: INV-1101, INV-1104"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4193.85\nDUPLICATES: INV-1101, INV-1104"
+   }
+  ]
+ },
+ "handwritten/bench-8": {
+  "attempts": [
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "execute_python": 1,
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "ession (4 calls for 5 lines):\n\n1. Start: 1,268.77 + 2,200.12 = 3,468.89\n\n2,200.12 already added. Next: 3,468.89 + 358.75 = 3,827.64\n\n3,827.64 + 1,268.77 = 5,096.41\n\n5,096.41 + 406.21 = 5,502.62\n\nTOTAL: 5502.62\nDUPLICATES: INV-1104, INV-1101"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "ce of each invoice id, in order):**\n- INV-1105: 1,268.77\n- INV-1104: 2,200.12\n- INV-1103: 358.75\n- INV-1101: 1,268.77\n- INV-1102: 406.21\n\n**Duplicated invoice ids:** INV-1104, INV-1101\n\n**TOTAL:** 5502.62\n\n**DUPLICATES:** INV-1104, INV-1101"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "execute_python": 1,
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "INV-1105\tBrightline\t1268.77\nINV-1104\tIronwood\t2200.12\nINV-1103\tNorthwind\t358.75\nINV-1101\tBrightline\t1268.77\nINV-1102\tCoastal Freight\t406.21\n\nTOTAL: 5502.62\nDUPLICATES: INV-1104, INV-1101"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "execute_python": 1,
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": "TOTAL: 5502.62\nDUPLICATES: INV-1101, INV-1104"
+   }
+  ]
+ },
+ "solo-told/bench-9": {
+  "loop": {
+   "status": "ok",
+   "learned": true,
+   "errors": [],
+   "chosen": "agg1",
+   "chosenTreeIsBase": false,
+   "deliveredCorrect": false,
+   "inLoop": {
+    "base1": false,
+    "inv1": false,
+    "dom1": false,
+    "agg1": false
+   },
+   "inLoopTools": {
+    "base1": {},
+    "inv1": {},
+    "dom1": {},
+    "agg1": {}
+   },
+   "adoptedTree": {
+    "systemprompt.md": "You are an accounts-payable assistant. Be brief: answer in one sentence.\n\nWhen a task asks you to reconcile invoice lines, compute a de-duplicated total, or report duplicate invoice ids, use the `invoice_reconciliation` skill.\n",
+    "skills/invoice_reconciliation/SKILL.md": "---\nname: invoice_reconciliation\ndescription: Reconcile invoice lines by invoice id, compute the de-duplicated total with exact arithmetic, and report duplicated invoice ids.\n---\n\n# Invoice reconciliation\n\n## Analytic move\nReconcile (not just sum): classify each line by whether its invoice id has already appeared,\nkeep the first occurrence of each id, and total only kept lines.\n\n## Rules\n- A duplicate is defined ONLY by repeated invoice id. Different ids are never duplicates,\n  even when vendor and amount match (e.g. two lines with the same vendor and amount but\n  different ids are both kept).\n- Keep exactly one line per distinct invoice id; drop later repeats of that id.\n- Report each duplicated id once, in order of first appearance as a duplicate.\n\n## Artifact contract\nEnd with exactly two lines:\nTOTAL: <de-duplicated total, two decimals>\nDUPLICATES: <duplicated invoice ids, comma-separated>\nTOTAL must be computed from kept lines only.\n\n## Calculation check (mandatory)\nDo NOT sum mentally. List the kept amounts, strip commas (e.g. \"2,199.05\" -> \"2199.05\"),\nand accumulate them with `evaluate_expression` using `add` on string operands, one amount at\na time. The final TOTAL is the last accumulator value, formatted to two decimals. Re-verify\nthe kept-line count matches the number of distinct ids before reporting.\n\n## Decision rule\nTrigger: input table of invoice lines with invoice id, vendor, amount. Evidence: the invoice\nid column. Conflict to resolve: matching vendor+amount with distinct ids is NOT a duplicate.\nUncertainty: if an id repeats with a different amount, keep the first occurrence and note the\ndiscrepancy explicitly rather than silently dropping.\n\n## Encoding\nThis skill is the default home for invoice de-duplication knowledge; reuse it on later\nreconciliation tasks. Do not store this matter's specific figures as durable memory.\n"
+   },
+   "toolNoteSeen": {
+    "inv1.a1": true,
+    "dom1.a1": true,
+    "agg1.a1": true,
+    "experience": true
+   },
+   "stages": [
+    {
+     "label": "inv1",
+     "keptBase": true,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "dom1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    },
+    {
+     "label": "agg1",
+     "keptBase": false,
+     "fellBack": false,
+     "error": ""
+    }
+   ],
+   "lesson": {
+    "lesson": "Do not credit a skill or prompt edit for fixing an arithmetic failure unless a rollout with the edit actually produces the correct number; when every rollout — base included — gets the same field wrong and rollouts of an unchanged harness already vary on that field, treat the arithmetic edit as unproven and require a per-rollout numeric contrast (correct vs incorrect TOTAL under the edited harness) before recording it as `helped`. Name the component explicitly (the skill's calculation-check section) and mark it `confounded` when only a single rollout and a simultaneous trigger-line change stand behind it.",
+    "confidence": "medium — the pattern (correct classification, wrong arithmetic across every rollout, including an unchanged-harness rollout that varies) is concrete and reusable, but no rollout ever produced a correct total under any edit, so the record shows only that these arithmetic edits were not demonstrated to help, not which wording would."
+   },
+   "libraryBefore": 0,
+   "loopMs": 58360
+  },
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 5010.74\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4910.72\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4900.72\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 0,
+    "tools": {},
+    "error": "",
+    "tail": "TOTAL: 4938.18\nDUPLICATES: INV-1201, INV-1204"
+   }
+  ]
+ },
+ "handwritten/bench-9": {
+  "attempts": [
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": false,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "execute_python": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "| Delta Office | 680.50 |\n| INV-1202 | Harbor Tools | 2,199.05 |\n| INV-1205 | Keystone | 625.69 |\n| INV-1201 | Lumen Power | 972.56 |\n| INV-1204 | Acme Supplies | 1,560.36 |\n\nTotal of kept lines: **6,038.16**\n\nDUPLICATES: INV-1201, INV-1204"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "think": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "\n| INV-1201 | Lumen Power | 972.56 |\n| INV-1204 | Acme Supplies | 1,560.36 |\n| INV-1206 | Lumen Power | 972.56 |\n\n**Kept amount total:** 7,010.72  \n**Duplicated invoice ids:** INV-1201, INV-1204\n\nTOTAL: 7010.72\nDUPLICATES: INV-1201,INV-1204"
+   },
+   {
+    "correct": false,
+    "totalOk": false,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 4,
+    "tools": {
+     "execute_python": 1,
+     "evaluate_expression": 4
+    },
+    "error": "",
+    "tail": " INV-1201 | Lumen Power | 972.56 |\n| INV-1204 | Acme Supplies | 1,560.36 |\n| INV-1206 | Lumen Power | 972.56 |\n\n**Total of kept lines:** 6,038.16  \n**Duplicated invoice IDs:** INV-1201, INV-1204\n\nTOTAL: 6038.16\nDUPLICATES: INV-1201,INV-1204"
+   },
+   {
+    "correct": true,
+    "totalOk": true,
+    "dupsOk": true,
+    "formatted": true,
+    "ok": true,
+    "calc": 5,
+    "tools": {
+     "execute_python": 1,
+     "evaluate_expression": 5
+    },
+    "error": "",
+    "tail": "TOTAL: 7010.72\nDUPLICATES: INV-1201, INV-1204"
+   }
+  ]
+ }
+}

@@ -1,0 +1,5 @@
+solo-blind             {"right":6,"arithmetic, off ≥ $1":27,"left out the decoy":5,"arithmetic, off < $1":1,"left out another line":1}
+chain-blind            {"arithmetic, off ≥ $1":31,"arithmetic, off < $1":4,"left out another line":1,"right":3,"left out the decoy":1}
+solo-told              {"right":11,"arithmetic, off ≥ $1":23,"arithmetic, off < $1":2,"counted a repeat twice":3,"left out the decoy":1}
+base                   {"arithmetic, off ≥ $1":36,"left out the decoy":4}
+handwritten            {"right":26,"left out the decoy":6,"arithmetic, off ≥ $1":6,"arithmetic, off < $1":1,"no total":1}

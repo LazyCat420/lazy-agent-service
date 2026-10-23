@@ -21,10 +21,14 @@ Each fixed finding below carries a **Status** line. §9 records how each chunk w
 a live run with the LAN models and the NAS deploy. Phase 2 (Q1–Q5 in §6) waits on the user's
 decisions.
 
-**Found by the benchmark (§10).** A bug in shared code made every tools-on agent prompt grow by
-about 3k characters per call, until the context exhaustion guard skipped the call (§4.B5). It is
-fixed in `42e7a48`. The same work corrected §4.B1: a tools-on rollout is offered about 50 tools,
-not one.
+**Found by the benchmark (§10).**
+- A bug in shared code made every tools-on agent prompt grow by about 3k characters per call,
+  until the context exhaustion guard skipped the call (§4.B5). Fixed in `42e7a48`.
+- Agent runs in the first second after boot got only the orchestrator tools (§4.B6). Fixed in
+  `f8c7737`.
+- §4.B1 was corrected: a tools-on rollout is offered about 50 tools, not one, and all of them
+  are auto-approved (Q6).
+- Both fixes are deployed (§9).
 
 - **Upstream:** <https://github.com/google-research/harness2> at `1cfe254` (2026-10-13). That
   commit is the latest, so the 10-19 port and this audit read the same code. Paper: arXiv 2610.14224.
@@ -48,9 +52,19 @@ the loop learns:
 3. A re-run task reads its own earlier answer (R6). **Fixed in `a3993ea`.**
 
 **The loop is also not closed.** Nothing outside `/harness2` reads the library or an adopted
-harness (§4.B4), so no production agent improves from it. The rollouts don't run the real agent
-either (§4.B1). The only domain tool is `calculate_precise`, plus the loop's own internal tools.
-The "how the agent works" (INV) half of the method therefore has almost nothing to optimise.
+harness (§4.B4), so no production agent improves from it. The rollouts don't run a real agent
+either (§4.B1). With no agent persona, a tools-on rollout is offered about 50 tools, all
+auto-approved, though harness2 asked for one.
+
+**Does the loop improve the solver? Measured in §10, on fresh attempts.**
+- **Within a task, yes,** when it starts from a reasonable harness.
+  - From a neutral base harness, the harness the loop adopts beats the base by +0.25 per task
+    (95% CI [+0.03, +0.48], 10 tasks).
+  - That is about as far as a hand-written harness gets: the difference from it is −0.10
+    [−0.43, +0.23].
+- **From a deliberately weak base it gains much less** (+0.15 [+0.03, +0.30]). Each candidate
+  is judged on a single in-loop attempt, and when every attempt fails the loop keeps the base.
+- **Across tasks:** LIBRARY-VERDICT
 
 **Exposure was small:** at audit time the route was live on the NAS, but no library existed
 there yet (§2), so nothing relied on stored lessons. The fixed route has run on the NAS since
@@ -709,6 +723,20 @@ and it removes that directory on every exit path. A run on 2026-10-22 left the p
 
 `scripts/harness2-live-check.ts` is the live counterpart, against the LAN models (§9).
 
+`scripts/harness2-eval/` is the improvement benchmark (§10). It needs the Jetson, the Spark and
+the NAS tools-service, and the trading cycle should be idle:
+
+```
+testrun --mem 3G --max-time 150m -- npx tsx scripts/harness2-eval/run.ts --name=s2 --tasks=10 --r=4 \
+  "--lanes=solo-blind,base;solo-told,handwritten;chain-blind" --state=<dir>/s2
+testrun --mem 3G --max-time 150m -- npx tsx scripts/harness2-eval/run.ts --name=s3 --base=neutral --tasks=10 --r=4 \
+  "--lanes=solo-blind;base;solo-told" --state=<dir>/s3
+testrun --mem 3G --max-time 90m -- npx tsx scripts/harness2-eval/run.ts --name=s4 --base=neutral --tasks=10 --r=4 \
+  --lanes=chain-blind --state=<dir>/s4
+python3 scripts/harness2-eval/report.py <dir>/s2/units.json
+testrun --mem 1G -- npx tsx scripts/harness2-eval/anatomy.ts <dir>/s2/units.json
+```
+
 Since the finals-only default, a k=1 pool holds one final and is delivered without a selector.
 So R1, R5, R18 and R19 pass `selectionPool: "mixed"` to keep their selector call. Their
 claims are unchanged:
@@ -751,6 +779,7 @@ claims are unchanged:
 | 2026-10-22 | `scripts/harness2-eval/`: the improvement benchmark (§10), with tripwires for prompt drift, a changed tool set and context exhaustion | `1c61156`, `983ad2a` |
 | 2026-10-22 | `scripts/harness2-eval/`: `--base=neutral`; wait for the tools-service catalog before the first attempt (§4.B6) | `c1d1d39`, `95c0810` |
 | 2026-10-22 | `ensureSchemas()` waits for the import-time schema fetch (§4.B6): regression test, then the fix | `56fb8f5`, `f8c7737` |
+| 2026-10-22 | §10 improvement benchmark: runs s2–s4, results in `documentation/artifacts/harness2-eval-2026-10-22/`, `scripts/harness2-eval/anatomy.ts`; §1 and §4.B1 rewritten | DOCS-SHA |
 
 ## 9. Fixes and verification
 
@@ -965,3 +994,215 @@ used about 7 minutes of its 10-minute limit. The image itself was unaffected, be
 final stage copies only `dist`, `node_modules` and a few folders. `5bd793b` adds `.worktrees`,
 `.checks` and `runtime-data` to `.dockerignore`.
 
+**Deploys of the §10 fixes (2026-10-23 UTC).** Both were announced to sun-56 first, with the
+trading cycle idle. The second shipped sun-fd's single `tool_schemas.json` generator
+(`3669689`, `342d155`) along with the boot-race fix.
+
+| Check | `62d44d1` (prompt-growth fix) | `8ef7687` (boot-race fix) |
+|---|---|---|
+| Deploy | 95 s, test gate green | 91 s, test gate green; PRE_BUILD "76 tools, tool_schemas.json up to date" |
+| Container | `running`, `healthy`, 0 restarts, started 02:08:38 | `running`, `healthy`, 0 restarts, started 02:24:46 |
+| `GET :5591/health` | 200 | 200 |
+| Boot log | 0 `ERROR` lines; MCP: 1 SSE server connected (74 tools), 5 reserved-name rows refused, as before | 0 `ERROR` lines; tools-api 245 schemas; the same MCP server |
+| `GET /config/tools`, three calls | 250 entries each, all unique | 250 entries each, all unique |
+
+The MCP change these deploys also shipped (`d1deebd`, stdio servers off unless allowlisted)
+refused nothing in use: the NAS connects no stdio server.
+
+## 10. Does the loop improve the solver? A benchmark (2026-10-22)
+
+§9 shows that each step of the loop works with real models. It does not show that the loop
+makes answers better. Its live runs scored the attempts the loop itself chose from, with one
+attempt per candidate and no comparison against the base harness on fresh attempts. This
+section measures improvement.
+
+**The questions.**
+- **Within a task:** is the harness the loop adopts better than the base harness, on fresh
+  attempts?
+- **Across tasks:** do lessons from earlier tasks make later tasks' harnesses better than an
+  empty library does?
+
+**Design** (`scripts/harness2-eval/`).
+- **Tasks:** a seeded family of invoice reconciliations (`common.ts`).
+  - Each task has 4–5 distinct invoices, 2 exact repeats and a decoy. The decoy is a line with
+    another line's vendor and amount under a different id, and it counts in the total.
+  - Each task ends with two required lines, `TOTAL:` and `DUPLICATES:`. An answer is right only
+    if both are exactly right.
+- **Solver:** `vllm` / `nemotron35` (Jetson), thinking off, tools on.
+  - It is offered about 50 tools (§4.B1).
+  - The one that matters here is `evaluate_expression(operation, a, b)` from tools-service:
+    exact arithmetic on two numbers.
+- **Improver:** `vllm-2` / `DeepSeek-V4.1-Flash-1017` (Spark), k=1 (the default; finals-only
+  selection).
+- **Arms**, each scored on 4 fresh attempts per task:
+  - `base`: the base harness, "Be brief: answer in one sentence." It is deliberately weak: one
+    sentence fights a request for a total and a list.
+  - `handwritten`: a hand-written harness, as a reference (never part of the loop). It says to
+    list the kept lines, then add them with `evaluate_expression`, one `add` per call.
+  - `solo-blind`: the harness the loop adopts, starting from an empty library, as shipped.
+  - `solo-told`: the same, except the improver also gets one neutral sentence through
+    `bench.domainGuidance`. The sentence names one of the solver's tools, its signature and
+    what it does, but not what to use it for.
+  - `chain-blind`: the tasks run in order in one domain, so each task reads the lessons of the
+    tasks before it.
+- **Decision rule, fixed before any result:**
+  - An arm improved on another only if the lower bound of the 95% bootstrap interval of the
+    per-task difference is above 0.
+  - n is the number of tasks (one loop run each), not the number of attempts.
+- **Isolation:** as in §9, plus tools-service on the NAS.
+  - Mongo is not connected, so workflow memory cannot carry anything from one attempt to the
+    next (§4.B2 hypothesis).
+  - The fetch allowlist confines the benchmark process, not the solver. Its tools-service tools
+    (`read_url`, `execute_python`, …) run on the NAS.
+- **Tripwires:** the runner stops (exit 3) if any of these happens:
+  - the assembled system prompt changes size by more than 500 characters between solver calls;
+  - the solver is offered a different tool set;
+  - an attempt hits the context exhaustion guard.
+
+  Every attempt also records each tool it called.
+
+**The first run was invalid, and found a bug.**
+- **What happened:** the first run, s1, was stopped after four tasks. From about 00:55 UTC every
+  tools-on attempt answered with the guard's "Context window exhausted…" text.
+- **Root cause:** a cache leak in shared code (§4.B5) grew every tools-on prompt by about 3k
+  characters per call. It reached 352,300 characters.
+- **Status:** the leak is fixed (`42e7a48`), and s1 is discarded whole. Even its early units
+  ran with inflated tool sections.
+
+**Pilots: is there anything to gain?** Before the benchmark, solver-only pilots (4 tasks × 5
+attempts per condition, no improver) checked the headroom:
+
+| Condition | Right | Total right | Ids right | Used the calculator |
+|---|---|---|---|---|
+| base harness, tools off (9–10 rows) | 0/20 | 0/20 | 20/20 | – |
+| base harness, tools on ¹ | 0/20 | 0/20 | 20/20 | 0/20 |
+| hand-written "show your work", tools off | 1/20 | 1/20 | 20/20 | – |
+| hand-written "one `add` per call", tools on ¹ | 5/20 | 5/20 | 18/20 | 13/20 |
+| the same, shorter tasks (7–8 rows) ¹ | 5/20 | 5/20 | 20/20 | 15/20 |
+| base harness, shorter tasks ¹ | 0/20 | 0/20 | 20/20 | 0/20 |
+| hand-written "list the kept lines, then add", shorter tasks ¹ | 6/20 | 6/20 | 20/20 | 12/20 |
+
+¹ Run before the fix. Later attempts in each pilot ran with a growing tool section, so these rows
+are lower bounds. The `base` and `handwritten` arms below supersede them.
+
+What the pilots found:
+- **Without the calculator there is almost nothing to gain:** even a hand-written "show your
+  work" prompt got 1 in 20.
+- **The tool was missing at first.** `evaluate_expression` comes from tools-service, and a local
+  run has no `TOOLS_SERVICE_URL`, so the first tools-on pilot had no tool at all. The benchmark
+  points it at the NAS tools-service.
+- **The failures looked semantic**, but s2 shows otherwise: with a clean prompt, most wrong
+  totals are arithmetic slips (see the failure breakdown below).
+- **The improver cannot see the solver's tools.** No prompt tells it which tools exist, and no
+  base attempt calls one, so the trajectories never show them either. That is why the `told`
+  arm exists.
+
+### Results with the weak base (s2)
+
+Run s2 used 10 tasks with 4 fresh attempts per arm, and took 49 minutes. The tripwires never
+fired: the assembled prompt stayed at 10,329 characters, and the solver had one 47-tool set
+throughout.
+
+| Arm | Right | Per-task mean | Change vs base (95% CI) | Tasks better / worse / same | Improved? |
+|---|---|---|---|---|---|
+| `base` | 0/40 | 0.00 | – | – | – |
+| `handwritten` | 26/40 | 0.65 | +0.65 [+0.48, +0.83] | 10 / 0 / 0 | yes |
+| `solo-blind` (as shipped) | 6/40 | 0.15 | +0.15 [+0.03, +0.30] | 4 / 0 / 6 | yes, narrowly |
+| `solo-told` | 11/40 | 0.28 | +0.28 [+0.05, +0.53] | 4 / 0 / 6 | yes |
+| `chain-blind` | 3/40 | 0.075 | +0.075 [0.00, +0.23] | 1 / 0 / 9 | no |
+
+Other comparisons:
+- **Against the hand-written harness,** every loop arm is clearly worse:
+  - `solo-blind` −0.50 [−0.65, −0.38], worse on all 10 tasks;
+  - `solo-told` −0.38 [−0.60, −0.18];
+  - `chain-blind` −0.58 [−0.75, −0.40].
+- **Library effect** (`chain-blind` minus `solo-blind`, tasks 2–10): +0.00 [−0.17, +0.22]. The
+  lessons from earlier tasks made no measurable difference.
+- **Being told about the tool** (`solo-told` minus `solo-blind`): +0.125 [0.00, +0.28]. That is
+  not enough to call it a gain, though it points that way.
+
+**What the loop did** in its 30 runs (`solo-blind`, `solo-told` and `chain-blind`):
+
+| Outcome of the loop run | Runs | Fresh accuracy |
+|---|---|---|
+| Kept the base harness (the AGG stage kept base after every candidate failed in the loop) | 11 | 0.00 |
+| Changed it, and some candidate was right in the loop | 9 | 0.53 (8 of 9 above 0) |
+| Changed it, but no candidate was right in the loop | 10 | 0.03 |
+
+- **Every candidate is judged on one attempt in the loop** (k=1), and that single attempt
+  decides almost everything.
+  - The loop helped only when a candidate happened to succeed once.
+  - Changes adopted without such a success almost never helped.
+  - When nothing succeeded, the loop kept the base harness, which scores 0 here.
+- **The changes that worked mostly undid the base harness's handicap.**
+  - In `solo-blind` on task 0, the adopted harness drops "answer in one sentence" and adds a
+    short procedure.
+  - It never mentions the calculator, yet every fresh attempt called `evaluate_expression`
+    (5 calls each), and 3 of 4 were right.
+  - The neutral-base stage below (s3) tests whether the loop also improves a prompt that has no
+    handicap.
+
+**Why answers were wrong** (each wrong `TOTAL` checked against the task's lines):
+
+| Arm | Right | Arithmetic slip | Left out the decoy | Other |
+|---|---|---|---|---|
+| `base` | 0 | 36 | 4 | 0 |
+| `solo-blind` | 6 | 28 | 5 | 1 line left out |
+| `solo-told` | 11 | 25 | 1 | 3 repeats counted twice |
+| `chain-blind` | 3 | 35 | 1 | 1 line left out |
+| `handwritten` | 26 | 7 | 6 | 1 with no total |
+
+- The duplicate ids were right in 199 of 200 attempts. The errors are in the sum.
+- The hand-written harness gets the solver to use the calculator reliably: 28 of 40 attempts
+  called `evaluate_expression`, and 18 called `execute_python`. With that, the decoy
+  becomes its main remaining error.
+- The loop's harnesses got the calculator used in only 10 of 40 attempts (`solo-blind` and
+  `solo-told` alike).
+
+### Results with a neutral base (s3)
+
+The weak base makes the loop look like it undoes a handicap, so s3 repeats the within-task
+question from a neutral base: "You are an accounts-payable assistant." It ran
+`scripts/harness2-eval/run.ts --base=neutral` on the same 10 tasks, with 4 fresh attempts per
+arm, and took 30 minutes. The tripwires never fired.
+
+| Arm | Right | Per-task mean | Change vs neutral base (95% CI) | Tasks better / worse / same | Improved? |
+|---|---|---|---|---|---|
+| neutral `base` | 12/40 | 0.30 | – | – | – |
+| `solo-blind` (as shipped) | 22/40 | 0.55 | +0.25 [+0.03, +0.48] | 6 / 2 / 2 | yes |
+| `solo-told` | 23/40 | 0.575 | +0.28 [+0.05, +0.50] | 6 / 2 / 2 | yes |
+
+Other comparisons (the `handwritten` arm is s2's: the same tasks and the same harness):
+- **Neutral base vs weak base:** +0.30 [+0.13, +0.48]. The weak base really was a handicap.
+- **Against the hand-written harness:**
+  - the neutral base alone is clearly worse: −0.35 [−0.63, −0.05];
+  - the loop's harnesses are not distinguishable from it: `solo-blind` −0.10 [−0.43, +0.23],
+    `solo-told` −0.075 [−0.40, +0.25].
+- **Told vs blind:** +0.025 [−0.20, +0.25]. Once the base prompt lets the solver work, it
+  finds the calculator either way. Being told does show in tool use: `evaluate_expression` in
+  25 of 40 attempts, against 20 of 40 blind and 18 of 40 for the base.
+
+**What the loop did** in its 20 runs:
+
+| Outcome of the loop run | Runs | Fresh accuracy | Neutral base on the same tasks |
+|---|---|---|---|
+| Kept the base harness | 5 | 0.70 | 0.70 |
+| Changed it, and some candidate was right in the loop | 9 | 0.61 | 0.36 |
+| Changed it, but no candidate was right in the loop | 6 | 0.38 | 0.25 |
+
+- **The loop's own evidence is better here.** The base attempt succeeded in the loop in 10 of
+  20 runs, against none in s2. So the improver had working trajectories to learn from, and
+  the loop kept the base harness mostly where it was already doing well.
+- **Its changes help a little even without an in-loop success:** +0.13 over the base on those
+  tasks (6 runs, so weak evidence). In s2 such changes were worth nothing.
+- **Fewer arithmetic slips.** Wrong totals from arithmetic fell from 22 (neutral base) to 14
+  (`solo-blind`) and 7 (`solo-told`). The decoy and the repeats are now the main remaining
+  errors.
+
+| Arm | Right | Arithmetic slip | Left out the decoy | Counted a repeat twice | Other |
+|---|---|---|---|---|---|
+| neutral `base` | 12 | 22 | 4 | 2 | 0 |
+| `solo-blind` | 22 | 14 | 0 | 3 | 1 line left out |
+| `solo-told` | 23 | 7 | 5 | 2 | 2 lines left out, 1 with no total |
+
+S4-PLACEHOLDER
