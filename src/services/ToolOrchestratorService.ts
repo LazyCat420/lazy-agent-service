@@ -475,10 +475,22 @@ async function prefetchAllLocaleSchemas() {
   );
 }
 
+/** The default-locale fetch in flight, so ensureSchemas() can wait for it instead of reading an empty catalog. */
+let schemaFetchInFlight: Promise<void> | null = null;
+function startSchemaFetch(): Promise<void> {
+  if (!schemaFetchInFlight) {
+    const fetching: Promise<void> = fetchSchemas().finally(() => {
+      if (schemaFetchInFlight === fetching) schemaFetchInFlight = null;
+    });
+    schemaFetchInFlight = fetching;
+  }
+  return schemaFetchInFlight;
+}
+
 // Kick off schema fetch eagerly at module load (non-blocking).
 // If tools-api is unreachable, schemas stay empty until the first
 // consumer calls ensureSchemas(), which fetches on-demand.
-fetchSchemas().then(() => prefetchAllLocaleSchemas());
+startSchemaFetch().then(() => prefetchAllLocaleSchemas());
 
 // ────────────────────────────────────────────────────────────
 // Generic URL Builder — uses endpoint metadata
@@ -1058,9 +1070,15 @@ export default class ToolOrchestratorService {
    * Eliminates boot-order dependency between prism and tools-api.
    */
   static async ensureSchemas(locale?: string) {
-    if (!initialized && Date.now() - lastFetchAttemptTime > 30000) {
-      logger.info("[ToolOrchestrator] Schemas not loaded — fetching on-demand");
-      await fetchSchemas();
+    if (!initialized) {
+      if (schemaFetchInFlight) {
+        // The module-load fetch (or another caller's) is still running: wait for it, or the
+        // caller reads an empty catalog (documentation chapter 13 §4.B6).
+        await schemaFetchInFlight;
+      } else if (Date.now() - lastFetchAttemptTime > 30000) {
+        logger.info("[ToolOrchestrator] Schemas not loaded — fetching on-demand");
+        await startSchemaFetch();
+      }
     }
     if (locale && locale !== "en" && !localizedClientSchemasCache.has(locale)) {
       await fetchSchemasForLocale(locale);
@@ -2409,6 +2427,7 @@ export default class ToolOrchestratorService {
     toolMap.clear();
     initialized = false;
     lastFetchAttemptTime = 0;
+    schemaFetchInFlight = null;
   }
   /** @internal */ static async _proxyPost(
     path: string,
