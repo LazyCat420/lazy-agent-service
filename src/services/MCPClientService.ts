@@ -13,7 +13,7 @@ import { ACCEPTED_MCP_PREFIXES } from "./McpPrefix.ts";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { ObjectId } from "mongodb";
 import MongoWrapper from "../wrappers/MongoWrapper.ts";
-import { MONGO_DB_NAME } from "../../config.ts";
+import { MCP_STDIO_COMMANDS, MONGO_DB_NAME } from "../../config.ts";
 import {
   approveMcpTools,
   reviewMcpTools,
@@ -262,6 +262,70 @@ function describeQuarantine(conn: MCPConnection): string {
     .join(", ")}`;
 }
 
+// ─── stdio guard ─────────────────────────────────────────────────────────────
+// A stdio row is a command line this service spawns. Rows come from the
+// unauthenticated /mcp-servers routes and from prism-service, which shares the
+// collection, so a stdio server only runs when its command is on the
+// operator's MCP_STDIO_COMMANDS allowlist (empty by default: stdio off).
+
+/** Thrown when a stdio MCP server's command is not allowlisted. */
+export class McpStdioRefusedError extends Error {
+  constructor(serverName: string, reason: string) {
+    super(`MCP server "${serverName}": stdio refused — ${reason}`);
+    this.name = "McpStdioRefusedError";
+  }
+}
+
+/** Row env keys that would let a caller load code into an allowlisted binary. */
+const FORBIDDEN_STDIO_ENV = /^(NODE_OPTIONS|LD_.*|DYLD_.*)$/i;
+
+/** Why this config may not be spawned, or null when it may (or isn't stdio). */
+export function stdioRefusalReason(config: {
+  transport?: unknown;
+  command?: unknown;
+  env?: unknown;
+}): string | null {
+  if (config.transport !== "stdio") return null;
+  const command = typeof config.command === "string" ? config.command : "";
+  if (MCP_STDIO_COMMANDS.length === 0) {
+    return "stdio MCP servers are disabled on this service (MCP_STDIO_COMMANDS is empty)";
+  }
+  if (!MCP_STDIO_COMMANDS.includes(command)) {
+    return `command "${command}" is not in MCP_STDIO_COMMANDS`;
+  }
+  const env = config.env && typeof config.env === "object" ? config.env : {};
+  const forbidden = Object.keys(env).filter((key) => FORBIDDEN_STDIO_ENV.test(key));
+  if (forbidden.length > 0) {
+    return `env may not set ${forbidden.join(", ")}`;
+  }
+  return null;
+}
+
+/** The single enforcement point: throws McpStdioRefusedError for a refused stdio config. */
+export function assertStdioAllowed(config: MCPServerConfig): void {
+  const reason = stdioRefusalReason(config);
+  if (reason) {
+    logger.warn(`[MCP] Refused stdio server "${config.name}": ${reason}`);
+    throw new McpStdioRefusedError(config.name, reason);
+  }
+}
+
+/** Inherited by a spawned stdio server; everything else in process.env stays here. */
+const STDIO_INHERITED_ENV = new Set(["PATH", "HOME", "LANG", "TMPDIR"]);
+
+/** Minimal env for a spawned stdio server: PATH/HOME/LANG/TMPDIR/NODE_* plus the row's env. */
+export function buildStdioEnv(
+  rowEnv: Record<string, string> | undefined,
+  source: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if (STDIO_INHERITED_ENV.has(key) || key.startsWith("NODE_")) env[key] = value;
+  }
+  return { ...env, ...(rowEnv || {}) };
+}
+
 /**
  * Create the appropriate transport based on server config.
  */
@@ -281,10 +345,12 @@ function createTransport(
   }
 
   if (config.transport === "stdio") {
+    // connect() already checked; repeated so no caller of createTransport can skip it.
+    assertStdioAllowed(config);
     return new StdioClientTransport({
       command: config.command!,
       args: config.args || [],
-      env: { ...process.env, ...(config.env || {}) } as Record<string, string>,
+      env: buildStdioEnv(config.env),
     });
   }
 
@@ -325,6 +391,9 @@ const MCPClientService = {
     if (RESERVED_SERVER_NAMES.has(serverName)) {
       throw new Error(`"${serverName}" is reserved for this service's own tool catalog`);
     }
+
+    // Before the disconnect below, so a refused config can't tear down a live connection.
+    assertStdioAllowed(config);
 
     // Disconnect existing connection if any
     if (connections.has(serverName)) {
@@ -963,10 +1032,18 @@ const MCPClientService = {
     if (!db) return;
 
     try {
-      const servers = (await db
+      const rows = (await db
         .collection(COLLECTIONS.MCP_SERVERS)
         .find({ enabled: true })
         .toArray()) as unknown as MCPServerConfig[];
+
+      // The collection is shared with prism-service: skip (never spawn) a
+      // stdio row whose command isn't allowlisted.
+      const servers = rows.filter((row) => {
+        const reason = stdioRefusalReason(row);
+        if (reason) logger.warn(`[MCP] Auto-connect skipped "${row.name}": ${reason}`);
+        return !reason;
+      });
 
       if (servers.length === 0) return;
 

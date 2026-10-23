@@ -4,7 +4,10 @@ import { errorMessage } from "@rodrigo-barraza/utilities-library";
 import express, { Request, Response, NextFunction } from "express";
 import { ObjectId, type Db } from "mongodb";
 import requireDb from "../middleware/RequireDbMiddleware.ts";
-import MCPClientService from "../services/MCPClientService.ts";
+import MCPClientService, {
+  McpStdioRefusedError,
+  stdioRefusalReason,
+} from "../services/MCPClientService.ts";
 import type { MCPServerConfig } from "../services/MCPClientService.ts";
 import logger from "../utils/logger.ts";
 import { COLLECTIONS } from "../constants.ts";
@@ -86,6 +89,14 @@ function nameClashResponse(res: Response, name: string) {
 
 const NOT_FOUND = { error: "MCP server not found" };
 
+/** 403 for a row that would spawn a non-allowlisted local command (see MCPClientService). */
+function stdioRefusedResponse(res: Response, name: string, reason: string) {
+  logger.warn(`MCP server "${name}" refused: ${reason}`);
+  return res.status(403).json({
+    error: `MCP server "${name}": stdio refused — ${reason}. Use an "sse" or "streamable-http" server instead.`,
+  });
+}
+
 interface ConnectedServerInfo {
   name: string;
   status: string;
@@ -152,6 +163,10 @@ router.post(
       const parsed = PostMcpServerSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.format() });
+      }
+      const refusal = stdioRefusalReason(parsed.data);
+      if (refusal) {
+        return stdioRefusedResponse(res, parsed.data.name, refusal);
       }
       if (await findNameClash(db, req, parsed.data.name)) {
         return nameClashResponse(res, parsed.data.name);
@@ -225,6 +240,31 @@ router.put(
         (await findNameClash(db, req, parsed.data.name, new ObjectId(serverId)))
       ) {
         return nameClashResponse(res, parsed.data.name);
+      }
+
+      // PUT is partial: judge the row as it would be stored, so a command-only
+      // edit, a switch to stdio, or re-enabling a stdio row is caught too.
+      const existing = await db
+        .collection<McpServerDocument>(COLLECTION)
+        .findOne({ _id: new ObjectId(serverId), ...scopeOf(req) });
+      if (!existing) {
+        return res.status(404).json(NOT_FOUND);
+      }
+      const effective = {
+        transport: parsed.data.transport ?? existing.transport,
+        command: parsed.data.command ?? existing.command,
+        env: parsed.data.env ?? existing.env,
+      };
+      // Turning a refused row off (and nothing else that could launch it) stays allowed.
+      const onlyDisables =
+        parsed.data.enabled === false &&
+        parsed.data.transport === undefined &&
+        parsed.data.command === undefined &&
+        parsed.data.args === undefined &&
+        parsed.data.env === undefined;
+      const refusal = stdioRefusalReason(effective);
+      if (refusal && !onlyDisables) {
+        return stdioRefusedResponse(res, parsed.data.name ?? existing.name, refusal);
       }
 
       const updates: Record<string, unknown> = {
@@ -340,6 +380,9 @@ router.post(
           authorizationRequired: true,
           authorizationUrl: error.authorizationUrl,
         });
+      }
+      if (error instanceof McpStdioRefusedError) {
+        return res.status(403).json({ error: error.message });
       }
       const serverId = req.params.id as string;
       const errorText = errorMessage(error);

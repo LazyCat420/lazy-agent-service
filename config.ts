@@ -189,3 +189,14 @@ export const LAZY_AGENT_SERVICE_PUBLIC_URL = process.env.LAZY_AGENT_SERVICE_PUBL
 // 32-byte key (base64 or hex) that encrypts MCP OAuth tokens and client
 // registrations at rest. Without it, OAuth MCP servers can't be connected.
 export const MCP_OAUTH_ENCRYPTION_KEY = process.env.MCP_OAUTH_ENCRYPTION_KEY;
+
+// ── MCP stdio servers ─────────────────────────────────────────
+// A stdio MCP server is a local process this service spawns, so it is refused
+// unless its `command` exactly matches an entry here (comma-separated). Empty
+// (the default) turns stdio off. Never list an interpreter or shell (node,
+// npx, python, sh, bash): a row's args are caller-controlled, so `-e` would
+// make it remote code execution.
+export const MCP_STDIO_COMMANDS: string[] = (process.env.MCP_STDIO_COMMANDS ?? "")
+  .split(",")
+  .map((entry) => entry.trim())
+  .filter(Boolean);

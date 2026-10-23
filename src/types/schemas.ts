@@ -243,10 +243,9 @@ const McpServerSettingsSchema = {
 export const PostMcpServerSchema = z.object({
   name: z.string().min(1, "name is required"),
   displayName: z.string().optional(),
-  transport: z
-    .enum(["stdio", "sse", "streamable-http"])
-    .optional()
-    .default("stdio"),
+  // Required: it used to default to "stdio", so a body with only a command
+  // became a local process. stdio also needs MCP_STDIO_COMMANDS (see config.ts).
+  transport: z.enum(["stdio", "sse", "streamable-http"]),
   command: z.string().optional().default(""),
   args: z.array(z.string()).optional().default([]),
   env: z.record(z.string(), z.string()).optional().default({}),

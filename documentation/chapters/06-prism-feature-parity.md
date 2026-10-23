@@ -223,6 +223,11 @@ previews.
       without it) and, behind a proxy, `LAZY_AGENT_SERVICE_PUBLIC_URL` for the
       redirect (else the request origin). Not ported: the Client ID Metadata
       Document and `iss` binding (the 1.29 SDK has neither).
+      **stdio servers are off by default** (2026-10-22, ch.14): a stdio row
+      only connects when its `command` exactly matches an entry in
+      `MCP_STDIO_COMMANDS` (comma-separated, empty = stdio off), and the
+      child gets a minimal env (`PATH`, `HOME`, `LANG`, `TMPDIR`, `NODE_*`
+      plus the row's `env`). `transport` is required on create.
   - **Still not ported:** elicitation (`McpElicitation.ts`, ~250 lines plus
     the question-card plumbing — not a few lines), profile scoping
     (`profileId` / `shared`), tool permission tiers, MCP protocol-era
