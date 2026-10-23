@@ -796,6 +796,7 @@ claims are unchanged:
 | 2026-10-22 | `scripts/harness2-eval/`: `--base=neutral`; wait for the tools-service catalog before the first attempt (§4.B6) | `c1d1d39`, `95c0810` |
 | 2026-10-22 | `ensureSchemas()` waits for the import-time schema fetch (§4.B6): regression test, then the fix | `56fb8f5`, `f8c7737` |
 | 2026-10-22 | §10 improvement benchmark: runs s2–s5 (s1 discarded), raw results in `documentation/artifacts/harness2-eval-2026-10-22/`, `scripts/harness2-eval/anatomy.ts`; §1 verdict and the intro updated | `b8a3889`, `716b3cb` |
+| 2026-10-22 | §10: the bootstrap's fixed seed and a 50-seed check of the within-task lower bounds; `report.py` reruns match the stored reports byte for byte | this commit |
 
 ## 9. Fixes and verification
 
@@ -1067,6 +1068,10 @@ section measures improvement.
   - An arm improved on another only if the lower bound of the 95% bootstrap interval of the
     per-task difference is above 0.
   - n is the number of tasks (one loop run each), not the number of attempts.
+  - The interval is a percentile bootstrap, 10,000 resamples with a fixed seed (7), so
+    `report.py` reproduces every interval exactly from the units files. Across 50 other seeds,
+    the lower bounds of the four within-task gains (`solo-blind` and `solo-told` against
+    `base`, s2 and s3) stayed between +0.025 and +0.05, above 0 every time.
 - **Isolation:** as in §9, plus tools-service on the NAS.
   - Mongo is not connected, so workflow memory cannot carry anything from one attempt to the
     next (§4.B2 hypothesis).
