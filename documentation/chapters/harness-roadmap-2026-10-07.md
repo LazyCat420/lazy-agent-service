@@ -1,9 +1,11 @@
 ---
-part: Plans
+part: Agent loop and harness
 status: in-progress
 updated: 2026-10-23
 review-by: 2026-11-13
+type: plan
 ---
+
 # Harness roadmap — deferred mechanisms (2026-10-07)
 
 > **Review 2026-10-23:**

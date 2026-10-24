@@ -1,8 +1,9 @@
 ---
-part: Features
+part: Models and routing
 status: shipped
 updated: 2026-10-20
 review-by: 2026-11-03
+type: record
 ---
 
 # Chapter 12 — Wallgarden Jetson (`nemotron35`) Priority Gate & Candidate Classification Cutoff (2026-10-20)

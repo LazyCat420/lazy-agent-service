@@ -1,3 +1,10 @@
+---
+part: Tools and shared services
+status: reference
+type: record
+updated: 2026-09-05
+---
+
 # news_search — region filtering and top headlines (2026-09-05)
 
 Two defects in `NewsSearchService`, both reported from html-notes as "the news is

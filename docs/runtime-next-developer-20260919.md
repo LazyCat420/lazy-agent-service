@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: reference
+type: plan
+updated: 2026-09-19
+---
+
 # Shared agent runtime: next developer plan
 
 Snapshot: September 19, 2026. Implementation stopped at the user's request. This handoff is documentation only. The overall plan is **not complete**.

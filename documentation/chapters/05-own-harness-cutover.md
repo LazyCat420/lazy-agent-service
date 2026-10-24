@@ -1,8 +1,9 @@
 ---
-part: Plans
+part: Prism cutover
 status: in-progress
 updated: 2026-10-23
 review-by: 2026-11-06
+type: plan
 ---
 
 # Every repo on our own agent harness

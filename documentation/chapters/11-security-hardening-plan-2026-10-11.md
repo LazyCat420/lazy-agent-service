@@ -1,8 +1,9 @@
 ---
-part: Plans
+part: Security and operations
 status: in-progress
 updated: 2026-10-11
 review-by: 2026-10-25
+type: plan
 ---
 
 # Security Hardening Plan — the three remaining weak spots (2026-10-11)

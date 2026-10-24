@@ -1,6 +1,13 @@
+---
+part: Tools and shared services
+status: shipped
+type: record
+updated: 2026-09-07
+---
+
 # Trading tool fixes and benchmark — September 7, 2026
 
-The four findings in the [tool audit](trading-tool-audit-2026-09-07.md) are repaired in lazy-agent-service. Prism source and deployment are unchanged. The changes restore tool authorization, cycle attribution, current whiteboard reads and truthful MCP failure flags.
+The four findings in the [tool audit](../documentation/archive/trading-tool-audit-2026-09-07.md) are repaired in lazy-agent-service. Prism source and deployment are unchanged. The changes restore tool authorization, cycle attribution, current whiteboard reads and truthful MCP failure flags.
 
 ## Runtime changes
 

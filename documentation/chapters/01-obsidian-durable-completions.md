@@ -1,7 +1,8 @@
 ---
-part: Features
+part: Consumer apps
 status: verified
 updated: 2026-10-06
+type: record
 ---
 
 # Durable model completions for Obsidian Vault Notes

@@ -1,8 +1,9 @@
 ---
-part: Operations
+part: Contracts and runtime API
 status: shipped
 updated: 2026-10-22
 review-by: 2026-11-19
+type: record
 ---
 
 # Chapter 15 — One tool-schema generator (2026-10-22)

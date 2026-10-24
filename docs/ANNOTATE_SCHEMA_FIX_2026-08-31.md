@@ -1,3 +1,10 @@
+---
+part: Tools and shared services
+status: shipped
+type: record
+updated: 2026-08-31
+---
+
 # whiteboard_annotate declared integer ids for a string-id store (fixed 2026-08-31)
 
 `tool_schemas/trading/general.json` declared `whiteboard_annotate.entry_id` as

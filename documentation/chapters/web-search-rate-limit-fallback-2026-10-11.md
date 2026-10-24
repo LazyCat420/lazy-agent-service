@@ -1,8 +1,9 @@
 ---
-part: Features
+part: Tools and shared services
 status: shipped
 updated: 2026-10-11
 review-by: 2026-10-25
+type: record
 ---
 
 # Web Search: Exa's Rate Limit Is Not an Empty Answer (2026-10-11)

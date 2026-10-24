@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: plan
+updated: 2026-10-07
+---
+
 # Harness research plan: Oh My Pi (omp)
 
 **Purpose:** extract the mechanisms that make the omp harness effective and specify how each maps into `lazy-agent-service`. Sources: live omp install docs (`omp://skills.md`, `omp://hooks.md`, `omp://compaction.md`, `omp://rulebook-matching-pipeline.md`, `omp://context-files.md`, `omp://magic-keywords.md`) plus the local Claude-style hook suite (`~/.claude/hooks/`) that complements it.

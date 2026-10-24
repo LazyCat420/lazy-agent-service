@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: plan
+updated: 2026-10-07
+---
+
 # Harness research plan: Hermes (Nous Research) function-calling harness
 
 **Source:** [NousResearch/Hermes-Function-Calling](https://github.com/NousResearch/Hermes-Function-Calling) (MIT; `functioncall.py`, `prompter.py`, `prompt_assets/sys_prompt.yml`), Hermes 3 card + tech report ([arXiv:2408.11857](https://arxiv.org/abs/2408.11857)). Reference implementation, not a product — the value is the format and prompt discipline.

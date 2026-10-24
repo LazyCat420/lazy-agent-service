@@ -1,0 +1,38 @@
+[
+  {
+    "part": "Start Here",
+    "blurb": "How the documentation is organised, the rules that keep it from piling up, and where to start."
+  },
+  {
+    "part": "Prism cutover",
+    "blurb": "Moving every repo from prism-service onto this harness: plan, parity, verification, ports."
+  },
+  {
+    "part": "Agent loop and harness",
+    "blurb": "The core loop, failure handling, harness audits, roadmap and research, architecture overview."
+  },
+  {
+    "part": "Harness2 loop",
+    "blurb": "The self-improving recursive harness: plan and audit."
+  },
+  {
+    "part": "Contracts and runtime API",
+    "blurb": "Run, profile and plugin contracts, ownership, the tool-schema generator, shared runtime evidence."
+  },
+  {
+    "part": "Tools and shared services",
+    "blurb": "Web search and extract, embeddings, MCP, trading tool fixes, news, tool metrics."
+  },
+  {
+    "part": "Models and routing",
+    "blurb": "Jetson and vLLM routing, the wallgarden gate, scheduled-task model resolution."
+  },
+  {
+    "part": "Security and operations",
+    "blurb": "Security hardening, dependency refreshes, tracing."
+  },
+  {
+    "part": "Consumer apps",
+    "blurb": "How html-notes, Obsidian, wallgarden and the chat UI use the harness; widgets."
+  }
+]

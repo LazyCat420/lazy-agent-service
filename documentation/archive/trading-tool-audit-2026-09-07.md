@@ -1,3 +1,13 @@
+---
+part: Archive
+status: superseded
+type: record
+updated: 2026-10-23
+---
+
+> **Archived 2026-10-23.** All four findings were repaired; the repair replaces this audit. Current: [Trading tool fixes and benchmark](../../docs/trading-tool-fix-2026-09-07.md).
+> Kept for history; do not use as current.
+
 # Trading tool execution audit — September 7, 2026
 
 Continuation of the trading memory/rule audit, performed without subagents. Inspected lazy-agent-service runtime HEAD `7908bc5` and trading-service `cacc3003`. This batch examines REST/MCP dispatch, caller context, Python bridge caching and failure envelopes. It is not a complete audit of every tool implementation or a measurement of live incident frequency. No production execution, database write, model request or Prism modification occurred.

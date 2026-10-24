@@ -1,3 +1,10 @@
+---
+part: Tools and shared services
+status: shipped
+type: record
+updated: 2026-09-29
+---
+
 # Probe faults for trading's boundary contract probe (2026-09-29)
 
 Commit `fb384a2`, deployed 2026-09-29 07:13 UTC. Code: `src/services/ProbeFault.ts`, hooks in

@@ -1,7 +1,8 @@
 ---
-part: Features
+part: Tools and shared services
 status: verified
 updated: 2026-10-10
+type: record
 ---
 
 # Web Harness Hardening (2026-10-10)

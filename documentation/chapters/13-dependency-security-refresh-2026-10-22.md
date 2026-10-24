@@ -1,8 +1,9 @@
 ---
-part: Operations
+part: Security and operations
 status: shipped
 updated: 2026-10-22
 review-by: 2026-11-19
+type: record
 ---
 
 # Chapter 13 — Dependency security refresh 2026-10-22

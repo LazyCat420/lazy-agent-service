@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: reference
+type: record
+updated: 2026-09-19
+---
+
 # Shared runtime repair release
 
 The September 19 repair follows the audit's staged rollout. Prism is unchanged.

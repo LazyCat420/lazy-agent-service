@@ -1,7 +1,8 @@
 ---
-part: Features
+part: Prism cutover
 status: shipped
 updated: 2026-10-11
+type: record
 ---
 
 # Prism harness ports (2026-10-08)

@@ -1,3 +1,13 @@
+---
+part: Archive
+status: superseded
+type: record
+updated: 2026-10-23
+---
+
+> **Archived 2026-10-23.** The page itself is marked superseded 2026-10-19: the Bonsai llama.cpp server on :8080 is gone and vLLM `nemotron35` serves on :8000. Current: [12 - Wallgarden Jetson gate](../chapters/12-wallgarden-jetson-gate-2026-10-20.md).
+> Kept for history; do not use as current.
+
 # Jetson Bonsai Port Alignment & VLLM Shim Routing (2026-09-18)
 
 > **Superseded 2026-10-19.** The Bonsai llama.cpp server on `:8080` is gone

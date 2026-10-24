@@ -1,3 +1,10 @@
+---
+part: Tools and shared services
+status: shipped
+type: record
+updated: 2026-09-06
+---
+
 # watch_ticker — the open question, and the catalog that nearly ate it (2026-09-06)
 
 Shipped as `c8baee3`. Source edit in `tool_schemas/trading/watch_desk.json`,

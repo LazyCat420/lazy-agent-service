@@ -1,3 +1,10 @@
+---
+part: Consumer apps
+status: reference
+type: record
+updated: 2026-09-20
+---
+
 # Agent chat migration inventory
 
 Snapshot: 2026-09-20. This is an inventory and compatibility map, not a

@@ -1,8 +1,9 @@
 ---
-part: Runtime
+part: Tools and shared services
 status: shipped
 updated: 2026-10-06
 review-by: 2026-11-06
+type: record
 ---
 
 # Shared harness embeddings and EmbeddingGemma 2 audit

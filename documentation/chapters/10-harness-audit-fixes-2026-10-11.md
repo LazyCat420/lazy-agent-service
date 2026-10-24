@@ -1,8 +1,9 @@
 ---
-part: Features
+part: Agent loop and harness
 status: shipped
 updated: 2026-10-11
 review-by: 2026-10-25
+type: record
 ---
 
 # Harness Audit Fixes + Security Bench (2026-10-11)

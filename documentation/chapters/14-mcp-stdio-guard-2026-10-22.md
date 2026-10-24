@@ -1,8 +1,9 @@
 ---
-part: Operations
+part: Tools and shared services
 status: shipped
 updated: 2026-10-22
 review-by: 2026-11-19
+type: record
 ---
 
 # Chapter 14 — MCP stdio guard (2026-10-22)

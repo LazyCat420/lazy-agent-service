@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: plan
+updated: 2026-10-07
+---
+
 # Harness research plan: SWE-agent (Princeton NLP)
 
 **Source:** [SWE-agent/SWE-agent](https://github.com/SWE-agent/SWE-agent) (MIT, active), ACI paper [arXiv:2405.15793](https://arxiv.org/abs/2405.15793), [ACI background doc](https://github.com/SWE-agent/SWE-agent/blob/main/docs/background/aci.md), [config reference](https://swe-agent.com/0.7/config/config/).

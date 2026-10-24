@@ -1,8 +1,9 @@
 ---
-part: Runtime
+part: Consumer apps
 status: verified
 updated: 2026-10-06
 review-by: 2026-11-06
+type: record
 ---
 
 # Obsidian harness admission and recovery

@@ -1,3 +1,10 @@
+---
+part: Consumer apps
+status: shipped
+type: record
+updated: 2026-09-06
+---
+
 # HANDOFF — topic roles by batch, a FIT rating, seeds that reach the model (2026-09-06)
 
 **Deployed:** see the youtube-wallgarden handoff for the live verification;

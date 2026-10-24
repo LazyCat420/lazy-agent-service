@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: reference
+type: record
+updated: 2026-09-19
+---
+
 # Shared runtime duplication inventory
 
 Snapshot: September 19, 2026. This inventory names temporary execution loops,

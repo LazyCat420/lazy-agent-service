@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: record
+updated: 2026-10-10
+---
+
 # Agentic Harness Research Report — Hermes Agent, Claude Code, Web Search (2026-10-10)
 
 **Mode:** Understand / Plan (read-only research; no code changed).

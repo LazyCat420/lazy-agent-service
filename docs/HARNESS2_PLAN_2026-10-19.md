@@ -1,3 +1,10 @@
+---
+part: Harness2 loop
+status: shipped
+type: plan
+updated: 2026-10-22
+---
+
 # Harness² (recursive agent harnessing) port — plan, 2026-10-19
 
 > **Audited and fixed 2026-10-22:** see `documentation/chapters/13-harness2-audit-2026-10-22.md`.

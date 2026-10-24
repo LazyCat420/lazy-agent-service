@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: record
+updated: 2026-09-29
+---
+
 # Strategy Chat Tool Resilience & Soft Recovery (2026-09-30)
 
 ## Problem Summary

@@ -1,9 +1,11 @@
 ---
-part: Features
+part: Agent loop and harness
 status: shipped
 updated: 2026-10-08
 review-by: 2026-11-08
+type: record
 ---
+
 # Harness upgrades from the agentic-harness research (2026-10-07)
 
 > Classified `shipped` by the documentation audit of 2026-10-08. Evidence

@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: reference
+type: record
+updated: 2026-09-19
+---
+
 # Shared agent runtime requirement-to-evidence ledger
 
 Snapshot: September 19, 2026. This ledger maps the two original requirement

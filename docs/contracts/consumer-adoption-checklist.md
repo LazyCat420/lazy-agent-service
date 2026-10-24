@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: reference
+type: spec
+updated: 2026-09-19
+---
+
 # Consumer Adoption Checklist & Parity Gates (v1.0.0)
 
 > **Document ID:** `consumer-adoption-checklist`  

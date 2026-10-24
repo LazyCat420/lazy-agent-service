@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: shipped
+type: spec
+updated: 2026-10-02
+---
+
 # Agent Execution Path Standard
 
 **Status:** Adopted 2026-10-02. This is the ecosystem-wide answer to "which path

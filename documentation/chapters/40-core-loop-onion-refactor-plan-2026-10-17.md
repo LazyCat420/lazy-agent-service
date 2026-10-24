@@ -1,8 +1,9 @@
 ---
-part: Plans
+part: Agent loop and harness
 status: in-progress
 updated: 2026-10-18
 review-by: 2026-11-01
+type: plan
 ---
 
 # 40 — Build the 8 core loop traits into lazy-agent-service (2026-10-17, rev 2)

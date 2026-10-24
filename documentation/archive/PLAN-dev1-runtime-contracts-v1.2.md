@@ -1,3 +1,13 @@
+---
+part: Archive
+status: superseded
+type: record
+updated: 2026-10-23
+---
+
+> **Archived 2026-10-23.** Delivered: branch `dev1/runtime-contracts-v1.2` is merged and the v1.2 contracts live in `docs/contracts/`. Current: [Migration v1.1 to v1.2](../../docs/contracts/MIGRATION-v1.1-to-v1.2.md).
+> Kept for history; do not use as current.
+
 # Plan — Developer 1: Shared Runtime & Contracts v1.2
 
 > **Repository:** `lazy-agent-service`  

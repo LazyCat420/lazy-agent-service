@@ -1,7 +1,8 @@
 ---
-part: Features
+part: Consumer apps
 status: verified
 updated: 2026-10-10
+type: record
 ---
 
 # First-Party Chat UI + Disconnect-Safe Persistence (2026-10-10)

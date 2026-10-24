@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: plan
+updated: 2026-10-07
+---
+
 # Harness research plan: DeepSeek (API conventions + `deepseek-harness`)
 
 **Source:** [api-docs.deepseek.com](https://api-docs.deepseek.com/) (function calling, tool calls, `strict` mode), official agent harness [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) ("Everything is a Plugin", TypeScript, MIT, developer preview; built on the Cordis kernel), thinking-mode tool calling (V3.2+).

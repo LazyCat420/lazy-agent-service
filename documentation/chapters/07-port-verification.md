@@ -1,7 +1,8 @@
 ---
-part: Operations
+part: Prism cutover
 status: approved
 updated: 2026-10-16
+type: record
 ---
 
 # 07 — Port verification (2026-10-16)

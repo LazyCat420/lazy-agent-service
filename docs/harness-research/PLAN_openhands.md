@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: plan
+updated: 2026-10-07
+---
+
 # Harness research plan: OpenHands (All-Hands-AI)
 
 **Source:** [OpenHands/OpenHands](https://github.com/OpenHands/OpenHands) (MIT, ~90k stars, very active), [runtime architecture docs](https://docs.openhands.dev/openhands/usage/architecture/runtime), [stuck detector docs](https://docs.openhands.dev/sdk/guides/agent-stuck-detector), [software-agent-sdk](https://github.com/OpenHands/software-agent-sdk).

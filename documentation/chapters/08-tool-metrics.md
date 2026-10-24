@@ -1,7 +1,8 @@
 ---
-part: Operations
+part: Security and operations
 status: approved
 updated: 2026-10-16
+type: record
 ---
 
 # 08 — Tool Metrics (one week, 2026-10-09 → 2026-10-16)

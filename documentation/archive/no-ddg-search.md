@@ -1,3 +1,13 @@
+---
+part: Archive
+status: superseded
+type: record
+updated: 2026-10-23
+---
+
+> **Archived 2026-10-23.** Handoff finished: shared Exa search landed on main (`executeSharedWebSearch` in `ToolOrchestratorService`). Current: [04 - Shared web search](../chapters/04-shared-web-search.md).
+> Kept for history; do not use as current.
+
 # Handoff: no-ddg-search (lazy-agent-service)
 
 From sun-10, 2026-10-06, for the last agent on this repo (sun-20).

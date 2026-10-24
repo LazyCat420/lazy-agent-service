@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: record
+updated: 2026-08-26
+---
+
 # The empty-output death spiral (2026-08-26)
 
 Request `7f0929e2` (cycle-v3-1787786020, KSS, CUSTOM_V3_JUNIOR_ANALYST on

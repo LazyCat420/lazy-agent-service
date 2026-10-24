@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: record
+updated: 2026-09-27
+---
+
 # The forced final turn answered with a tool call (2026-09-28)
 
 prism's agentic loop takes `maxIterations` tool turns and then forces one more

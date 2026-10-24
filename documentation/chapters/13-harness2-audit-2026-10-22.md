@@ -1,8 +1,9 @@
 ---
-part: Plans
+part: Harness2 loop
 status: in-progress
 updated: 2026-10-22
 review-by: 2026-11-05
+type: record
 ---
 
 # Harness² Self-Improving Loop — Deep Audit (2026-10-22)

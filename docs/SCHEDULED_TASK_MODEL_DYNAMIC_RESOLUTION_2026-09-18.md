@@ -1,3 +1,10 @@
+---
+part: Models and routing
+status: reference
+type: record
+updated: 2026-09-18
+---
+
 # Scheduled Task Model Dynamic Resolution & VllmShim Self-Healing (2026-09-18)
 
 ## 1. Incident & Root Cause

@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: plan
+updated: 2026-10-10
+---
+
 # PLAN — ARIA Snapshot Extraction for Scrape Paths
 
 Written: 2026-10-10. Status: **NOT IMPLEMENTED — parked**.

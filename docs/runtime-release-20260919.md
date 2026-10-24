@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: reference
+type: record
+updated: 2026-09-19
+---
+
 # Shared runtime repair release — September 19, 2026
 
 This is implementation and acceptance evidence, not a claim that all migration gates have passed. Prism was not edited or deployed.

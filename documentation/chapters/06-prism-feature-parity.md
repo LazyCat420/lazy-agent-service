@@ -1,8 +1,9 @@
 ---
-part: Plans
+part: Prism cutover
 status: in-progress
 updated: 2026-10-23
 review-by: 2026-11-13
+type: plan
 ---
 
 # What prism's harness does that ours does not yet

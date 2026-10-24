@@ -1,3 +1,10 @@
+---
+part: Consumer apps
+status: reference
+type: spec
+updated: 2026-10-15
+---
+
 # HTML-Notes Widget System
 
 The `lazy-agent-service` manages widget creation, planning, and schema enforcement for the HTML-Notes dashboard.

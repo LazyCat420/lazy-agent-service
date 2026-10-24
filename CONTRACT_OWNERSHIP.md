@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: shipped
+type: spec
+updated: 2026-10-22
+---
+
 # Canonical Contract Ownership & Architecture Standard (v1.1.0)
 
 > **Status:** Authoritative Standard  

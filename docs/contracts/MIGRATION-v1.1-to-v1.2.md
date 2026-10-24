@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: shipped
+type: spec
+updated: 2026-10-16
+---
+
 # Migration Guide: Runtime Contracts v1.1 → v1.2
 
 > **Version:** 1.2.0  

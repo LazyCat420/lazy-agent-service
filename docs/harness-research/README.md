@@ -1,3 +1,10 @@
+---
+part: Agent loop and harness
+status: reference
+type: record
+updated: 2026-10-07
+---
+
 # Agentic harness research — pattern extraction for lazy-agent-service
 
 Compiled 2026-10-07. Each `PLAN_*.md` documents one harness's mechanisms and a

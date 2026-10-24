@@ -1,3 +1,10 @@
+---
+part: Prism cutover
+status: reference
+type: record
+updated: 2026-10-08
+---
+
 # Prism harness audit → adoption plan for lazy-agent-service (2026-10-08)
 
 Read-only audit of `prism-service` (Rodrigo's repo, not modified) against our fork's harness in

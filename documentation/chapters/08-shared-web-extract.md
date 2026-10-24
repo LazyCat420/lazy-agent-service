@@ -1,7 +1,8 @@
 ---
-part: Features
+part: Tools and shared services
 status: verified
 updated: 2026-10-09
+type: record
 ---
 
 # 08 — Shared Web Extract & Search Fallback

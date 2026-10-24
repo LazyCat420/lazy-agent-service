@@ -1,8 +1,9 @@
 ---
-part: Plans
+part: Agent loop and harness
 status: approved
 updated: 2026-10-11
 review-by: 2026-10-25
+type: plan
 ---
 
 # Harness Audit + Handoff Plan (2026-10-11)

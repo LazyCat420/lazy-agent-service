@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: reference
+type: record
+updated: 2026-09-19
+---
+
 # Dev 1 Audit: Shared Runtime & Canonical Contract Inventory
 
 > **Document Type:** Audit Report & Baseline Inventory (Workstream: Dev 1 — Runtime & Contracts)  

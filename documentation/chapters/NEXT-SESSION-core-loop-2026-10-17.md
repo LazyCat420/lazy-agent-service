@@ -1,8 +1,9 @@
 ---
-part: Plans
+part: Agent loop and harness
 status: in-progress
 updated: 2026-10-19
 review-by: 2026-11-01
+type: plan
 ---
 
 # NEXT-SESSION backlog: core-loop refactor (from 2026-10-17)

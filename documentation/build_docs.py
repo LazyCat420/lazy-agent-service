@@ -654,7 +654,7 @@ def _last_touched(path: Path) -> str:
 # renumbering, no HTML. The rest is metadata the page renders as a badge and the
 # daily audit reads to decide what has gone stale.
 
-FRONT_KEYS = {"part", "status", "updated", "review-by", "owner", "supersedes"}
+FRONT_KEYS = {"part", "status", "updated", "review-by", "owner", "supersedes", "type", "covers", "last-verified"}
 
 # The lifecycle, and the tone each state renders in. `approved` and
 # `in-progress` are the two the staleness check cares about: they are claims

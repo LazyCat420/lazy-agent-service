@@ -1,3 +1,10 @@
+---
+part: Contracts and runtime API
+status: reference
+type: record
+updated: 2026-09-17
+---
+
 # Shared Agent-Runtime Platform & Phase 0 Inventory (2026-09-17)
 
 ## Phase 0: Memory, Context, Trace, & Injection Inventory

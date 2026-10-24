@@ -1,7 +1,8 @@
 ---
-part: Operations
+part: Security and operations
 status: shipped
 updated: 2026-10-09
+type: record
 ---
 
 # OpenTelemetry tracing (2026-10-09)

@@ -1,3 +1,10 @@
+---
+part: Prism cutover
+status: shipped
+type: record
+updated: 2026-09-28
+---
+
 # Adapting the trading desk to the prism build of 2026-09-27
 
 prism-service was redeployed at 2026-09-27 19:36 PDT (image built 19:35 PDT). The image it replaced
