@@ -1,7 +1,7 @@
 ---
 part: Tools and shared services
 status: verified
-updated: 2026-10-09
+updated: 2026-10-25
 type: record
 ---
 
@@ -39,6 +39,21 @@ type: record
    stored file when truncated, prefer narrower queries over scraping many pages").
    `DeepResearchPersona` gains `scrape_url` in its tool set and matching identity
    text. `search_web`'s description still lives in tools-service (not editable here).
+5. **Publishers that cannot be read, and a scrape budget (2026-10-25,
+   trading-client ch.47 item 2.5).** Over 65 trading cycles (10-14 to 10-24),
+   95 `scrape_url` calls, 42 failed: seekingalpha.com 22/22, reuters.com 5/5,
+   streetinsider.com 5/5, so 32 of the 42 failures came from three publishers
+   that block automated reading. `src/services/UnscrapableDomains.ts` holds that
+   one list. `webExtract` refuses those hosts before DNS or any fetch, with an
+   `UNSCRAPABLE_DOMAIN:` error worded so the model moves on rather than retries;
+   `LocalToolRouter` blanks their links in `lazy_web_search` results (the
+   headline, publisher and date stay as evidence). msn.com, named in the plan,
+   is not on the list: 13 of its 16 scrapes worked, and the 3 failures were 404s
+   on URLs the model built. One agent run may call `scrape_url` 4 times
+   (`SCRAPE_URL_MAX_PER_RUN`, 0 turns it off), counted per signed
+   `conversationId`; a call with no run identity has no budget. Measured run
+   sizes: of 42 runs that scraped, 6 made more than 4 calls. This is not the
+   operator's `WEB_BLOCKED_DOMAINS` security list, which answers `blocked:`.
 
 ## Config
 
@@ -51,6 +66,7 @@ type: record
 | `WEB_EXTRACT_TIMEOUT_MS` | `120000` | per-scrape wall clock |
 | `WEB_EXTRACT_STORE_DIR` | `/tmp/lazy-agent-web-extract` | full-text store |
 | `WEB_SEARCH_SEARXNG_TIMEOUT_MS` | `20000` | fallback collector timeout |
+| `SCRAPE_URL_MAX_PER_RUN` | `4` | `scrape_url` calls per agent run; `0` = no cap |
 
 ## Verification
 
