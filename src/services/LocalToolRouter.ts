@@ -7,6 +7,7 @@ import { filterResultsByDomain, webSearch, webSearchStatus, withSiteSearch } fro
 import { CATEGORIES } from "./EditorialHeadlinesService.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 import MCPClientService from "./MCPClientService.ts";
+import { chargeScrape, filterSearchResultLinks, unscrapableDomainOf } from "./UnscrapableDomains.ts";
 
 /**
  * LocalToolRouter — single source of truth for executing this service's
@@ -22,6 +23,10 @@ import MCPClientService from "./MCPClientService.ts";
  *   news_search                          → implemented HERE (NewsSearchService)
  *   web_search                           → implemented HERE (WebSearchService); not in
  *                                          tool_schemas.json, so services call it, agents don't
+ *   scrape_url                           → implemented HERE (WebExtractService), with the
+ *                                          UnscrapableDomains refusal and per-run budget
+ *   lazy_web_search                      → trading-service bridge, links to unscrapable
+ *                                          publishers blanked on the way back
  *   music_player_*                       → music-player HTTP API
  *   *_widget tools                       → validated locally, forwarded to HTML-Notes /internal/execute
  *   html_notes_* / canvas_* → HTML-Notes /internal/execute
@@ -32,6 +37,8 @@ export interface LocalToolContext {
   agentName?: string;
   cycleId?: string;
   ticker?: string;
+  /** One agent run; carried by the signed trading context (TradingToolContext). */
+  conversationId?: string;
   signal?: AbortSignal;
 }
 
@@ -459,9 +466,24 @@ export async function routeLocalTool(
   // scrape_url never falls through to the trading-service bridge: every
   // caller (agents, trading via dispatchTool, POST /execute/scrape_url) gets
   // the shared extractor — SSRF guard, `prompt` Q&A, truncate-and-store.
+  // Per-run budget (UnscrapableDomains.chargeScrape): a deny-listed URL is
+  // refused inside executeWebExtract without being charged; only a scrape
+  // that would reach scraper-service counts against the run.
   if (tName === "scrape_url") {
+    const url = typeof toolArguments.url === "string" ? toolArguments.url : "";
+    if (url.trim() && !unscrapableDomainOf(url)) {
+      const refusal = chargeScrape(url, context);
+      if (refusal) return refusal;
+    }
     const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
     return ToolOrchestratorService.executeWebExtract(toolArguments);
+  }
+
+  // lazy_web_search runs in trading-service (Bing News + Google News RSS);
+  // its links to publishers scraper-service cannot read are blanked here so
+  // the model is never handed a scrape that is known to fail.
+  if (tName === "lazy_web_search") {
+    return filterSearchResultLinks(await executeToolViaTradingService(tName, toolArguments, context));
   }
 
   // Natively implemented here: one keyless web search (Exa) with one cache and

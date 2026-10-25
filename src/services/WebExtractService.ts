@@ -26,6 +26,8 @@
 // and are never cached. Set ALLOW_PRIVATE_URLS=1 to permit (dev only).
 // WEB_BLOCKED_DOMAINS (comma-separated) denies domains and their
 // subdomains before any fetch; also never cached.
+// UNSCRAPABLE_DOMAINS (UnscrapableDomains.ts, code-owned and measured) are
+// refused first, before DNS: publishers whose every scrape has failed.
 // WEB_CACHE_EXEMPT_HOSTS (comma-separated; exact, `*.wildcard`, or
 // domain-suffix match) skip the cache — fetched live each time — but are
 // still subject to the blocklist unless also private.
@@ -37,6 +39,7 @@ import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { assertPublicUrl, isPrivateAddress } from "../utils/UrlSafety.ts";
+import { UNSCRAPABLE_CODE, unscrapableDomainOf } from "./UnscrapableDomains.ts";
 import SettingsService from "./SettingsService.ts";
 import { getProvider } from "../providers/index.ts";
 import { getInstancesByType, getInstanceType } from "../providers/instance-registry.ts";
@@ -59,6 +62,8 @@ export interface WebExtractResult {
   engineUsed?: string;
   cached: boolean;
   error?: string;
+  /** Present only when the host is on UNSCRAPABLE_DOMAINS: the matched domain (nothing was fetched). */
+  unscrapable?: string;
 }
 
 export interface WebExtractDeps {
@@ -236,6 +241,13 @@ export async function webExtract(url: string, charLimit = DEFAULT_CHAR_LIMIT, de
   const cleanUrl = String(url ?? "").trim();
   if (!/^https?:\/\//i.test(cleanUrl)) {
     return { status: "error", url: cleanUrl, content: "", truncated: false, cached: false, error: "url is required and must start with http(s)://" };
+  }
+  // Before the SSRF guard's DNS lookup and any fetch: these publishers fail
+  // every scrape (see UnscrapableDomains), so asking costs a 20 s browser
+  // escalation for a known answer.
+  const unscrapable = unscrapableDomainOf(cleanUrl);
+  if (unscrapable) {
+    return { status: "error", url: cleanUrl, content: "", truncated: false, cached: false, unscrapable, error: `${UNSCRAPABLE_CODE}: ${unscrapable} blocks automated reading; not fetched` };
   }
   if (isBlockedHost(cleanUrl)) {
     const reason = blockedDomains().some((d) => {

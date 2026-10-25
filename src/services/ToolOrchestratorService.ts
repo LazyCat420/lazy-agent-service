@@ -8,6 +8,7 @@ import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import { ORCHESTRATOR_ONLY_TOOLS } from "./OrchestratorPrompt.ts";
 import { filterResultsByDomain, webSearch, withSiteSearch } from "./WebSearchService.ts";
 import { webExtract, webExtractAnswered } from "./WebExtractService.ts";
+import { unscrapableDomainOf, unscrapableRefusal } from "./UnscrapableDomains.ts";
 import { compactFinnhubNews } from "./FinnhubNewsProjection.ts";
 import { createAbortController } from "../utils/AbortController.ts";
 import {
@@ -1957,6 +1958,12 @@ export default class ToolOrchestratorService {
     const url = typeof args.url === "string" ? args.url.trim() : "";
     if (!url) {
       return { error: "'url' is required and must be a non-empty string" };
+    }
+    // A publisher that fails every scrape gets its own refusal, not the
+    // generic "Try again later" below, which invited the retries.
+    const unscrapable = unscrapableDomainOf(url);
+    if (unscrapable) {
+      return unscrapableRefusal(url, unscrapable);
     }
     const charLimit = Number(args.char_limit ?? args.charLimit ?? undefined) || undefined;
     const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
