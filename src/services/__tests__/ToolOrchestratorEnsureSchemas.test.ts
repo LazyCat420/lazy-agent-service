@@ -84,6 +84,15 @@ function slowToolsService(delayMs: number) {
   });
 }
 
+/**
+ * How long the mocked tools-service takes to answer. The tests need the
+ * import-time fetch still in flight when `ensureSchemas` runs; with 50 ms, an
+ * import slowed by a loaded box (the deploy's sharded run spent 305 s on
+ * imports) outlasted the fetch, so the test saw a second fetch or timed out.
+ */
+const IN_FLIGHT_MS = 2_000;
+const TEST_TIMEOUT_MS = 30_000;
+
 describe("ToolOrchestratorService.ensureSchemas — a fetch already in flight", () => {
   let originalFetch: typeof globalThis.fetch;
 
@@ -99,18 +108,18 @@ describe("ToolOrchestratorService.ensureSchemas — a fetch already in flight", 
   });
 
   it("waits for the import-time fetch instead of returning an empty catalog", async () => {
-    globalThis.fetch = slowToolsService(50);
-    // Importing starts the module's own fetch; it answers after 50 ms.
+    globalThis.fetch = slowToolsService(IN_FLIGHT_MS);
+    // Importing starts the module's own fetch; it answers after IN_FLIGHT_MS.
     const ToolOrchestratorService = (await import("../ToolOrchestratorService.ts")).default;
 
     await ToolOrchestratorService.ensureSchemas();
 
     const names = ToolOrchestratorService.getClientToolSchemas().map((t) => t.name);
     expect(names).toContain("evaluate_expression");
-  });
+  }, TEST_TIMEOUT_MS);
 
   it("does not start a second fetch while one is in flight", async () => {
-    const fetchMock = slowToolsService(50);
+    const fetchMock = slowToolsService(IN_FLIGHT_MS);
     globalThis.fetch = fetchMock;
     const ToolOrchestratorService = (await import("../ToolOrchestratorService.ts")).default;
 
@@ -118,5 +127,5 @@ describe("ToolOrchestratorService.ensureSchemas — a fetch already in flight", 
 
     const schemaFetches = fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/admin/tool-schemas"));
     expect(schemaFetches).toHaveLength(1);
-  });
+  }, TEST_TIMEOUT_MS);
 });
