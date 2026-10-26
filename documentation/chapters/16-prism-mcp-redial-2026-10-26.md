@@ -29,10 +29,12 @@ Decision per periodic check:
 | our id not in the list | — | log an error (wrong `PRISM_MCP_SERVER_ID` or scope), skip |
 | `enabled: false` | — | leave it alone |
 | `connected: false` | — | dial |
-| `connected: true` | 0 | dial (stale entry) |
+| `connected: true` | 0 | dial (stale entry), at most once per `PRISM_MCP_STALE_REDIAL_MIN_MS` (1 h); otherwise log and skip |
 | `connected: true` | ≥ 1 | healthy, nothing |
 
 Timers are chained `setTimeout`s, `unref()`'d, never overlap, and are cleared by `stop()` (registered with the shutdown cleanup). Nothing throws out of a timer; startup is never blocked. Every dial logs `[PrismMcpRedial] re-dialing prism → ... (reason: ...)` and its result.
+
+Stale-entry guard: if the local count reads 0 over a healthy link (a different client name, an idled-out session), the stale rule would replace prism's live connection every check and could cut in-flight tool calls. So stale-entry re-dials are limited to one per hour, and if the first check after one still reads 0 live local sessions the service logs once: `[PrismMcpRedial] local session check reads 0 right after a re-dial; the stale-entry rule is unreliable here`. Seeing that line means set `PRISM_MCP_CLIENT_NAME=""` (turns the stale rule off) and investigate. Boot and `connected: false` dials are not limited.
 
 A session counts only after the MCP initialize handshake (`Server.getClientVersion()`), so an SSE auto-reconnect that never re-initialised does not hide a dead link.
 
@@ -50,6 +52,7 @@ Set in `docker-compose.yml` (not secrets). Unset URL or ID = disabled (logged on
 | `PRISM_MCP_REDIAL_BOOT_DELAY_MS` | — | `5000` |
 | `PRISM_MCP_REDIAL_BOOT_RETRIES_MS` | — | `5000,15000,60000` |
 | `PRISM_MCP_REDIAL_TIMEOUT_MS` | — | `60000` |
+| `PRISM_MCP_STALE_REDIAL_MIN_MS` | — | `3600000` |
 | `PRISM_MCP_CLIENT_NAME` | — | `prism` (empty string turns the local-session check off) |
 
 ## How to verify after a deploy
@@ -64,7 +67,7 @@ Set in `docker-compose.yml` (not secrets). Unset URL or ID = disabled (logged on
 
 ## Tests
 
-`src/services/__tests__/PrismMcpRedial.test.ts` drives the real `PrismMcpRedialer` against a fake prism HTTP server on 127.0.0.1, and the real `McpAdapter` with real MCP SDK SSE clients: boot dial (even when prism says connected), re-dial on `connected: false`, no dial when healthy, re-dial on stale entry, disabled server left alone, wrong scope reported, boot retry with backoff, prism down (no crash, no unhandled rejection), `stop()`, disabled when env unset, session counting by client name.
+`src/services/__tests__/PrismMcpRedial.test.ts` drives the real `PrismMcpRedialer` against a fake prism HTTP server on 127.0.0.1, and the real `McpAdapter` with real MCP SDK SSE clients: boot dial (even when prism says connected), re-dial on `connected: false`, no dial when healthy, re-dial on stale entry, disabled server left alone, wrong scope reported, boot retry with backoff, stale-entry re-dial limited to one per hour with the unreliable-check warning logged once, connected:false not limited, prism down (no crash, no unhandled rejection), `stop()`, disabled when env unset, session counting by client name.
 
 ## Not done / open
 

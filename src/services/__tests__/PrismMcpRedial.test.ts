@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import {
   PrismMcpRedialer,
+  STALE_RULE_UNRELIABLE_WARNING,
   readPrismMcpRedialConfig,
   startPrismMcpRedial,
   type PrismMcpRedialConfig,
@@ -111,6 +112,7 @@ function config(url: string, overrides: Partial<PrismMcpRedialConfig> = {}): Pri
     bootRetryDelaysMs: [15, 15, 15],
     requestTimeoutMs: 2_000,
     clientName: "prism",
+    staleRedialMinMs: 3_600_000,
     ...overrides,
   };
 }
@@ -154,7 +156,15 @@ describe("readPrismMcpRedialConfig", () => {
       intervalMs: 300_000,
       bootRetryDelaysMs: [5_000, 15_000, 60_000],
       clientName: "prism",
+      staleRedialMinMs: 3_600_000,
     });
+    expect(
+      readPrismMcpRedialConfig({
+        PRISM_MCP_REDIAL_URL: "http://x",
+        PRISM_MCP_SERVER_ID: SERVER_ID,
+        PRISM_MCP_STALE_REDIAL_MIN_MS: "60000",
+      })?.staleRedialMinMs,
+    ).toBe(60_000);
   });
 });
 
@@ -264,6 +274,75 @@ describe("PrismMcpRedialer", () => {
     expect(log.lines.filter((line) => line.includes("re-dial failed: prism unreachable"))).toHaveLength(3);
     expect(redialer.running).toBe(true);
     expect(unhandled).toEqual([]);
+  });
+
+  it("rate-limits stale-entry re-dials to one per hour and warns once when the local check stays at 0", async () => {
+    const prism = await startFakePrism();
+    prism.connected = true; // prism keeps saying connected; our local count never sees prism
+    let clock = 1_000_000;
+    const log = captureLogger();
+    const redialer = new PrismMcpRedialer(config(prism.url), {
+      logger: log,
+      countLocalClientSessions: () => 0,
+      now: () => clock,
+    });
+    const warnings = () => log.lines.filter((line) => line === STALE_RULE_UNRELIABLE_WARNING);
+
+    // Three checks inside one hour: only the first dials.
+    expect(await redialer.checkOnce()).toMatchObject({ action: "redialed", dial: { ok: true } });
+    clock += 5 * 60_000;
+    const second = await redialer.checkOnce();
+    expect(second.action).toBe("skipped");
+    expect((second as { reason: string }).reason).toContain("stale-entry re-dial suppressed");
+    clock += 5 * 60_000;
+    expect((await redialer.checkOnce()).action).toBe("skipped");
+    expect(prism.connects).toHaveLength(1);
+    // The check right after the re-dial still read 0: one warning.
+    expect(warnings()).toHaveLength(1);
+
+    // One hour after the first stale re-dial, it may dial again.
+    clock = 1_000_000 + 3_600_000;
+    expect((await redialer.checkOnce()).action).toBe("redialed");
+    expect(prism.connects).toHaveLength(2);
+    // The check after the second re-dial reads 0 again: still only one warning.
+    clock += 5 * 60_000;
+    expect((await redialer.checkOnce()).action).toBe("skipped");
+    expect(warnings()).toHaveLength(1);
+    expect(prism.connects).toHaveLength(2);
+  });
+
+  it("does not warn when the local check sees prism right after a stale-entry re-dial", async () => {
+    const prism = await startFakePrism();
+    prism.connected = true;
+    let local = 0;
+    const log = captureLogger();
+    const redialer = new PrismMcpRedialer(config(prism.url), {
+      logger: log,
+      countLocalClientSessions: () => local,
+    });
+    expect((await redialer.checkOnce()).action).toBe("redialed");
+    local = 1; // prism's fresh session arrived
+    expect((await redialer.checkOnce()).action).toBe("healthy");
+    expect(log.lines).not.toContain(STALE_RULE_UNRELIABLE_WARNING);
+  });
+
+  it("keeps re-dialing on connected:false regardless of the stale-entry limit", async () => {
+    const prism = await startFakePrism();
+    let clock = 0;
+    const redialer = new PrismMcpRedialer(config(prism.url), {
+      logger: captureLogger(),
+      countLocalClientSessions: () => 0,
+      now: () => clock,
+    });
+    prism.connected = true;
+    expect((await redialer.checkOnce()).action).toBe("redialed"); // stale-entry re-dial
+    clock += 60_000;
+    prism.connected = false;
+    expect((await redialer.checkOnce()).action).toBe("redialed"); // connected:false, not limited
+    clock += 60_000;
+    prism.connected = false;
+    expect((await redialer.checkOnce()).action).toBe("redialed");
+    expect(prism.connects).toHaveLength(3);
   });
 
   it("stop() cancels the pending timers", async () => {

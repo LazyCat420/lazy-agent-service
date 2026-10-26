@@ -59,6 +59,13 @@ export interface PrismMcpRedialConfig {
   requestTimeoutMs: number;
   /** MCP clientInfo.name prism announces; "" disables the local-session check. */
   clientName: string;
+  /**
+   * Minimum gap between two stale-entry re-dials (prism connected:true, no
+   * live local prism session). Guards against a local session count that
+   * reads 0 over a healthy link: each re-dial replaces prism's connection and
+   * can cut its in-flight tool calls. Boot and connected:false dials ignore it.
+   */
+  staleRedialMinMs: number;
 }
 
 export interface RedialLogger {
@@ -75,12 +82,17 @@ export interface PrismMcpRedialDeps {
    * `clientName`. Return null when unknown (the check is then skipped).
    */
   countLocalClientSessions?: (clientName: string) => number | null;
+  /** Clock (ms since epoch); injectable for tests. Defaults to Date.now. */
+  now?: () => number;
 }
 
 export const DEFAULT_INTERVAL_MS = 300_000;
 export const DEFAULT_BOOT_DELAY_MS = 5_000;
 export const DEFAULT_BOOT_RETRY_DELAYS_MS = [5_000, 15_000, 60_000];
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+export const DEFAULT_STALE_REDIAL_MIN_MS = 3_600_000;
+export const STALE_RULE_UNRELIABLE_WARNING =
+  "[PrismMcpRedial] local session check reads 0 right after a re-dial; the stale-entry rule is unreliable here";
 
 const LOG_PREFIX = "[PrismMcpRedial]";
 
@@ -111,6 +123,7 @@ export function readPrismMcpRedialConfig(
     bootRetryDelaysMs: retries.length > 0 ? retries : [...DEFAULT_BOOT_RETRY_DELAYS_MS],
     requestTimeoutMs: positiveInt(env.PRISM_MCP_REDIAL_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS),
     clientName: env.PRISM_MCP_CLIENT_NAME === undefined ? "prism" : env.PRISM_MCP_CLIENT_NAME.trim(),
+    staleRedialMinMs: positiveInt(env.PRISM_MCP_STALE_REDIAL_MIN_MS, DEFAULT_STALE_REDIAL_MIN_MS),
   };
 }
 
@@ -140,6 +153,12 @@ export class PrismMcpRedialer {
   private timer: NodeJS.Timeout | null = null;
   private stopped = true;
   private busy = false;
+  private readonly now: () => number;
+  /** When the last stale-entry re-dial was attempted (null = never). */
+  private lastStaleRedialAt: number | null = null;
+  /** The previous check did a stale-entry re-dial; the next one verifies it. */
+  private verifyAfterStaleRedial = false;
+  private warnedStaleRuleUnreliable = false;
 
   constructor(config: PrismMcpRedialConfig, deps: PrismMcpRedialDeps = {}) {
     this.config = config;
@@ -147,6 +166,7 @@ export class PrismMcpRedialer {
     this.fetchImpl = deps.fetch ?? ((...args) => globalThis.fetch(...args));
     this.log = deps.logger ?? defaultLogger;
     this.countLocal = deps.countLocalClientSessions;
+    this.now = deps.now ?? Date.now;
   }
 
   get running(): boolean {
@@ -302,7 +322,13 @@ export class PrismMcpRedialer {
         return { action: "skipped", reason };
       }
 
+      // Only the first check that reads prism's status after a stale-entry
+      // re-dial verifies it; clear the flag whatever this check finds.
+      const verifyingStaleRedial = this.verifyAfterStaleRedial;
+      this.verifyAfterStaleRedial = false;
+
       let reason: string | null = null;
+      let staleEntry = false;
       if (server.connected !== true) {
         reason = "prism reports connected:false";
       } else if (this.config.clientName && this.countLocal) {
@@ -312,7 +338,12 @@ export class PrismMcpRedialer {
         } catch (error: unknown) {
           this.log.warn(`${LOG_PREFIX} local session count failed: ${describeError(error)}`);
         }
+        if (local === 0 && verifyingStaleRedial && !this.warnedStaleRuleUnreliable) {
+          this.warnedStaleRuleUnreliable = true;
+          this.log.warn(STALE_RULE_UNRELIABLE_WARNING);
+        }
         if (local === 0) {
+          staleEntry = true;
           reason =
             `prism reports connected:true but this service holds no live MCP session ` +
             `from client "${this.config.clientName}" (stale entry in prism's connection map)`;
@@ -322,6 +353,19 @@ export class PrismMcpRedialer {
       if (!reason) {
         const toolCount = typeof server.toolCount === "number" ? server.toolCount : 0;
         return { action: "healthy", toolCount };
+      }
+      if (staleEntry) {
+        const now = this.now();
+        const sinceLast = this.lastStaleRedialAt === null ? Infinity : now - this.lastStaleRedialAt;
+        if (sinceLast < this.config.staleRedialMinMs) {
+          const skip =
+            `stale-entry re-dial suppressed: last one ${Math.round(sinceLast / 1000)}s ago, ` +
+            `minimum gap ${Math.round(this.config.staleRedialMinMs / 1000)}s (PRISM_MCP_STALE_REDIAL_MIN_MS)`;
+          this.log.info(`${LOG_PREFIX} ${skip}`);
+          return { action: "skipped", reason: skip };
+        }
+        this.lastStaleRedialAt = now;
+        this.verifyAfterStaleRedial = true;
       }
       const dial = await this.dial(reason);
       return { action: "redialed", reason, dial };
