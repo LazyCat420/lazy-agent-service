@@ -53,7 +53,7 @@ Set in `docker-compose.yml` (not secrets). Unset URL or ID = disabled (logged on
 | `PRISM_MCP_REDIAL_BOOT_RETRIES_MS` | — | `5000,15000,60000` |
 | `PRISM_MCP_REDIAL_TIMEOUT_MS` | — | `60000` |
 | `PRISM_MCP_STALE_REDIAL_MIN_MS` | — | `3600000` |
-| `PRISM_MCP_CLIENT_NAME` | — | `prism` (empty string turns the local-session check off) |
+| `PRISM_MCP_CLIENT_NAME` | empty (stale rule off, since 10-26) | `prism` (empty string turns the local-session check off) |
 
 ## How to verify after a deploy
 
@@ -73,3 +73,9 @@ Set in `docker-compose.yml` (not secrets). Unset URL or ID = disabled (logged on
 
 - Not deployed by this change; the orchestrator lands and deploys.
 - If prism itself restarts, prism re-dials at its own boot; the periodic check covers the case where that boot dial failed because this service was down.
+
+## Measured on the NAS, 2026-10-26: the stale rule is off
+
+From the 07:53 UTC deploy to 16:03 UTC the boot dial worked (prism reconnected 5 s after boot, 72 tools), and the stale-entry rule then fired once an hour (08:03, 09:03 ... 16:03 UTC), each time over a healthy link. The cause is in lazy's own log: prism's SSE stream closes about every 5 minutes and reconnects 3 s later with a new session id (`SSE connection closed for session ...`, `New SSE connection request received`), and a reconnected SSE stream sends no new `initialize`, so `countLiveClientSessions("prism")`, which counts only sessions that finished the handshake, reads 0 while prism is connected and working. The hourly guard kept it to one needless re-dial an hour, as designed. Compose now sets `PRISM_MCP_CLIENT_NAME` empty, which turns the stale rule off; the boot dial and the `connected:false` re-dial stay. Turn it back on only with a session check that survives SSE reconnects.
+
+Open, not ours to fix: why prism's SSE stream to lazy closes every ~5 minutes (an idle timeout in between is LIKELY).
