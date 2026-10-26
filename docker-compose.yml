@@ -27,6 +27,14 @@ services:
       # container itself, so the SearXNG search fallback and the scraper
       # extract path were refused (ECONNREFUSED) in production.
       - SCRAPER_SERVICE_URL=${SCRAPER_SERVICE_URL:-http://10.0.0.16:8001}
+      # Re-dial prism's MCP link to this service after every restart (prism
+      # only dials at its own boot). Not secrets. Unset URL or ID = disabled.
+      # See documentation/chapters/16-prism-mcp-redial-2026-10-26.md.
+      - PRISM_MCP_REDIAL_URL=${PRISM_MCP_REDIAL_URL:-http://10.0.0.16:7777}
+      - PRISM_MCP_SERVER_ID=${PRISM_MCP_SERVER_ID:-6a764f9e6729baa25e6f2153}
+      - PRISM_MCP_PROJECT=${PRISM_MCP_PROJECT:-vllm-trading-bot}
+      - PRISM_MCP_USERNAME=${PRISM_MCP_USERNAME:-lazy-trader}
+      - PRISM_MCP_REDIAL_INTERVAL_MS=${PRISM_MCP_REDIAL_INTERVAL_MS:-300000}
     volumes:
       - /usr/share/zoneinfo/America/Los_Angeles:/etc/localtime:ro
       - ./data/charts:/app/data/charts
