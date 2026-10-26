@@ -188,6 +188,21 @@ export default class McpAdapter {
     await server.connect(transport);
   }
 
+  /**
+   * Live SSE sessions whose client finished the MCP initialize handshake
+   * under `clientName` (clientInfo.name; prism announces "prism"). A session
+   * that never initialised (e.g. an EventSource auto-reconnect after this
+   * service restarted) is not counted. Used by PrismMcpRedial to spot prism
+   * reporting connected:true over a dead link.
+   */
+  public countLiveClientSessions(clientName: string): number {
+    let count = 0;
+    for (const { server } of this.sessions.values()) {
+      if (server.getClientVersion()?.name === clientName) count += 1;
+    }
+    return count;
+  }
+
   public async handleMessage(req: Request, res: Response) {
     const sessionId = req.query.sessionId as string;
     const session = this.sessions.get(sessionId);

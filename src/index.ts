@@ -658,6 +658,18 @@ setupWebSocket(wss);
 
   server.listen(PORT, async () => {
     logger.success(`lazy-agent-service is running on port ${PORT}`);
+    // Re-dial prism's MCP link to /mcp/sse: prism only dials at its own boot,
+    // so this service's restart would otherwise leave prism without our tools.
+    // Started first so a slow step below can't delay it; it never throws.
+    try {
+      const { startPrismMcpRedial } = await import("./services/PrismMcpRedial.ts");
+      const redialer = startPrismMcpRedial({
+        countLocalClientSessions: (clientName) => mcpAdapter.countLiveClientSessions(clientName),
+      });
+      if (redialer) registerCleanup(async () => redialer.stop());
+    } catch (error: unknown) {
+      logger.warn(`Prism MCP re-dialer failed to start: ${errorMessage(error)}`);
+    }
     logger.info("Available providers:", listProviders().join(", "));
     // Modality colors matching Prism Client's MODALITY_COLORS
     const MODALITY_COLORS: Record<string, number[]> = {
