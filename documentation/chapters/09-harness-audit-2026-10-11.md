@@ -1,12 +1,33 @@
 ---
 part: Agent loop and harness
-status: approved
-updated: 2026-10-11
-review-by: 2026-10-25
+status: in-progress
+updated: 2026-10-26
+review-by: 2026-11-09
 type: plan
 ---
 
 # Harness Audit + Handoff Plan (2026-10-11)
+
+> **Docs audit 2026-10-26: in progress. Phase C is partly done; Phase D has barely started.**
+> Each item below was checked against `origin/main` (`a0ac42b`) and the consumer repos, not
+> against this plan's own claims:
+>
+> | Item | State | Evidence |
+> |---|---|---|
+> | 12 music-player | partly | `llm.py` now points at `:5591` (`apps/api/app/services/llm.py:184-186`, music-player `c89c6da`). Still missing: `MUSIC_RUNTIME_ENABLED` defaults to `"false"` (`apps/api/app/agent/harness.py:472`), there is no `tool_schemas/music-player/`, and there is no `MUSIC_PLAYER_URL`; the URL is still hard-coded at `src/services/LocalToolRouter.ts:330` |
+> | 13 trading-service off prism | **done** | trading-service `dc46829c` (2026-10-16) removed `PRISM_ENABLED`/`PRISM_URL`/prism-proxy. One leftover mention: `app/audit/boundary_probe.py` |
+> | 14 html-notes | partly, not re-verified | html-notes `915a8aa`; health/MCP/STT, `.venv/` and `ddgs` not re-checked in this pass |
+> | 15 lazycat-sdk | partly | `LLMClient` defaults to the harness (`lazycat/config.py:13`, `:5591`); `EmbedClient` does not exist (0 hits) |
+> | 16 Obsidian `lazy_web_search` | not started | 0 hits for `/execute/web_search` in `LLMSortObsidian-Plugin/src`; the hub still routes it to trading (`LocalToolRouter.ts:485`) |
+> | 17 office-client + portal | not verified | no prism hits in office-client `src` (proves nothing on its own); portal-service is Rod's repo |
+> | 18 tools-service DDG | **outside our ownership** | `duckduckgo` is still in `src/services/AgenticWebService.ts`, but tools-service is Rod's repo (workspace AGENTS.md). An item for him, not for this plan's developer |
+> | 19 Tier 0 golden-trace eval | not started | 0 hits for golden-trace; only a building block exists (`prefixHash`, `src/platform/context/ContextAssembly.ts:198`) |
+> | 20 frozen per-repo suites | not started | `ConfidenceInterval`/`BenchmarkService` predate the plan; the Harness² eval (`1c61156`) is a different benchmark |
+> | 21 BFCL / τ²-bench | not started | 0 hits for `bfcl`, `tau2` or `evalscope` |
+> | 22 Terminal-Bench | not started | conditional ("only if we host coding agents") |
+> | 23 §5 features | partly | #7, the MCP client, is back (`3ddeeba` 2026-10-16, stdio allowlist `d1deebd`); 0 hits for `todo_write`, `search_conversations` or `/fork`. #6, #9 and #10 not checked |
+>
+> No remaining item needs a prism-service edit.
 
 > **Progress (2026-10-11, same day):** Phase A (items 1–6) and Phase B (items 7–11) are
 > fixed and landed — see the chapter "Harness Audit Fixes + Security Bench". Phases C and D

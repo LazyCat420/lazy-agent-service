@@ -1,12 +1,32 @@
 ---
 part: Security and operations
-status: in-progress
-updated: 2026-10-11
-review-by: 2026-10-25
+status: shipped
+updated: 2026-10-26
 type: plan
 ---
 
 # Security Hardening Plan — the three remaining weak spots (2026-10-11)
+
+> **Docs audit 2026-10-26: shipped. All three weak spots are fixed, and only two rollout
+> chores remain.** Checked against the code, not this chapter's own ticks:
+>
+> - **W1:** `340140e` and `f2701c6` are on `origin/main`. `src/services/harnesses/CodeInterpreter.ts:199-200`
+>   passes `--permission` and `--disallow-code-generation-from-strings`, `:379` returns
+>   `CODE_INTERPRETER_UNAVAILABLE`, and the `Dockerfile` uses `node:26-slim`.
+> - **W2:** trading-service `263c1408` is on `origin/master`. See
+>   `app/scraper/core/session_manager.py:80-81` (`install_httpx_redirect_guard`) and
+>   `app/scraper/engines/playwright_engine.py:130,252`. crawl4ai remains the documented residual.
+> - **W3:** `requireExecuteKey` is at `src/routes/ExecuteRoutes.ts:211` and mounted at `:225`.
+>
+> Still open from W3's rollout list below. Both are operations steps, not plan work:
+>
+> - bittle-agent is still `exited` on the NAS (container watch 2026-10-26), so it gets
+>   the key only when it is next deployed.
+> - The Obsidian plugin key is pasted by the user.
+>
+> Security commits since this plan: `d1deebd` (stdio MCP allowlist), `6e43d55` (its test),
+> `528c7a9` (sharp advisories), `bb00c0d` (deps refresh). The W1/W3 code cited above is
+> still present at `a0ac42b`.
 
 Follows "Harness Audit Fixes + Security Bench". That chapter left three known limits. This
 plan audits each one, then fixes them one at a time (plan → implement → test → land).

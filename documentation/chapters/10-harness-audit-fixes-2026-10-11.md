@@ -1,12 +1,16 @@
 ---
 part: Agent loop and harness
 status: shipped
-updated: 2026-10-11
-review-by: 2026-10-25
+updated: 2026-10-26
 type: record
 ---
 
 # Harness Audit Fixes + Security Bench (2026-10-11)
+
+> **Docs audit 2026-10-26: still shipped.** All 17 commits this record cites are
+> ancestors of `origin/main` (`a0ac42b`), and no commit since 2026-10-11 reverts any
+> of them. `review-by` removed: a shipped record is a claim about the past. Phases C
+> and D are tracked in the audit chapter ("Harness Audit + Handoff Plan").
 
 Fixes every lazy-agent-service defect in the audit chapter (D1–D11 and the PARTIAL commit
 verdicts), plus one sandbox escape the branch's own security review found. Phases C

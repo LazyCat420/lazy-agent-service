@@ -1,14 +1,16 @@
 ---
 part: Tools and shared services
 status: shipped
-updated: 2026-10-11
-review-by: 2026-10-25
+updated: 2026-10-26
 type: record
 ---
 
 # Web Search: Exa's Rate Limit Is Not an Empty Answer (2026-10-11)
 
 **Commit `66fab33`.**
+
+> **Docs audit 2026-10-26: still shipped.** `66fab33` is an ancestor of
+> `origin/main` (`a0ac42b`) and nothing since 2026-10-11 reverts it. `review-by` removed.
 
 ## Symptom
 
