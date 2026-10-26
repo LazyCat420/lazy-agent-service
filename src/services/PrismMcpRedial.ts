@@ -192,17 +192,20 @@ export class PrismMcpRedialer {
         : `boot retry ${attempt}/${this.config.bootRetryDelaysMs.length}`;
     const outcome = await this.dial(reason);
     if (this.stopped) return;
-    if (outcome.ok) {
+    // `in` narrowing: the repo compiles with strict:false, where a boolean
+    // discriminant (`outcome.ok`) does not narrow the union.
+    if (!("reason" in outcome)) {
       this.schedule(this.config.intervalMs, () => this.tick());
       return;
     }
+    const failure = outcome.reason;
     const nextDelay = this.config.bootRetryDelaysMs[attempt];
     if (nextDelay !== undefined) {
-      this.log.warn(`${LOG_PREFIX} boot dial failed (${outcome.reason}); retrying in ${nextDelay}ms`);
+      this.log.warn(`${LOG_PREFIX} boot dial failed (${failure}); retrying in ${nextDelay}ms`);
       this.schedule(nextDelay, () => this.bootAttempt(attempt + 1));
     } else {
       this.log.warn(
-        `${LOG_PREFIX} boot dial failed after ${attempt + 1} attempts (${outcome.reason}); ` +
+        `${LOG_PREFIX} boot dial failed after ${attempt + 1} attempts (${failure}); ` +
           `periodic check every ${this.config.intervalMs}ms takes over`,
       );
       this.schedule(this.config.intervalMs, () => this.tick());
