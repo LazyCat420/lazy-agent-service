@@ -1,18 +1,19 @@
 ---
 part: Tools and shared services
 status: shipped
-updated: 2026-10-26
+updated: 2026-10-27
 review-by: 2026-11-23
 type: record
 ---
 
-# Chapter 16 — Prism MCP re-dialer (2026-10-26)
+# Chapter 16 — Prism MCP re-dialer & LocalToolRouter repeat guards (2026-10-26 / 2026-10-27)
 
 ## Resolved tickets
 
 | Ticket | Issue | Root cause | Fix | Commit |
 |---|---|---|---|---|
 | MCP-REDIAL (trading-client ch.47 row 4.3; 03-open-work §0 step 4) | After every lazy-agent-service deploy or restart, prism-service's agents lost all of this service's MCP tools until someone ran `curl -X POST http://10.0.0.16:7777/mcp-servers/6a764f9e6729baa25e6f2153/connect -H 'x-project: vllm-trading-bot' -H 'x-username: lazy-trader'` by hand. | Prism dials MCP servers only at its own boot (`MCPClientService.connectAllFromDB`). Its `connected` flag is just "an entry exists in its connection map": the entry is not removed when the transport closes, so after our restart prism kept reporting `connected: true` over a dead link. The old re-dialer lived in trading-client (`ef1705c3`) and left with the prism exit (`ab57ab38`); it also only re-dialled on `connected: false`, so it could not see this case. | `src/services/PrismMcpRedial.ts`, started from `server.listen` in `src/index.ts`. Boot: always dial (our old process took the old link with it), retry 5 s / 15 s / 60 s, then the periodic check. Every 5 min: `GET /mcp-servers`; dial when our server reads `connected: false`, **or** when this service holds no live, initialised MCP session whose client is named `prism` (`McpAdapter.countLiveClientSessions`), which catches prism's stale entry. Prism is not edited; only its HTTP interface is used. | branch `wt-mcp-redial` |
+| H-5 & Wave A (`LocalToolRouter.ts`) | Trading desk agents called `whiteboard_read`, `peer_comparison`, `data_completeness`, `get_earnings_data`, and `get_upcoming_events` multiple times with identical args in a single desk run; `LocalToolRouter.ts` also carried 12 dead `music_player_*` switch arms. | Only `get_market_data` had a per-run repeat guard, and retired `music_player_*` switch cases were duplicated 12 times. | Added `REPEAT_GUARDED_TOOLS` in `src/services/LocalToolRouter.ts` covering all 6 idempotent desk tools and collapsed the `music_player_*` arms into a single `startsWith('music_player_')` check. | `1003bb2` |
 
 ## How it works
 
