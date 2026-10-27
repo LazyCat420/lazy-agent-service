@@ -57,6 +57,22 @@ export const REUSABLE_READ_TOOLS = new Set([
   "get_technical_indicators", "get_upcoming_events", "lazy_web_search", "scrape_url",
 ]);
 
+export const REPEAT_GUARDED_TOOLS = new Set([
+  ...REUSABLE_READ_TOOLS,
+  "whiteboard_read",
+  "screener_query",
+  "run_equation",
+  "run_backtest",
+  "search_equations",
+  "get_sec_filings",
+  "query_sec_filing",
+  "get_insider_trades",
+  "get_congress_trades",
+  "get_reddit_sentiment",
+  "get_macro_indicators",
+]);
+
+
 /**
  * Execute a python-bridge tool via trading-service's HTTP endpoint
  * (POST /api/v1/agent-tools/execute). Returns {error, is_error} instead of
@@ -93,9 +109,10 @@ export const executeToolViaTradingService = async (
     scope: { agentName: context?.agentName, cycleId: context?.cycleId },
     cached: reusable ? readCache : undefined,
     coalesce: reusable,
-    repeatGuard: reusable,
+    repeatGuard: REPEAT_GUARDED_TOOLS.has(toolName),
     run: () => callTradingService(toolName, toolArguments, context, reusable ? cacheKey : undefined),
   });
+
 };
 
 const callTradingService = async (
@@ -312,72 +329,8 @@ export async function routeLocalTool(
     return MCPClientService.callTool(remote.serverName, remote.toolName, toolArguments);
   }
 
-  // UNREACHABLE FROM THE AGENT PATH — kept only for direct REST callers.
-  //
-  // These twelve branches have had no schema behind them since c620151
-  // (2026-07-12) dropped the music_player entries from tool_schemas.json, so
-  // they are absent from `tools/list`, from `getMCPToolSchemas`, and therefore
-  // from every persona. music-player's own registration dropped them at the
-  // same time ("the previous registration listed nonexistent tools"), and
-  // nothing in that repo calls `/execute/music_player_*` either. Zero calls in
-  // tool_usage_stats, all time.
-  //
-  // Left in place rather than deleted because `POST /execute/:toolName` is a
-  // public route and this is the only thing standing between an outside caller
-  // and the trading-service bridge fall-through. Delete the branch and the
-  // catalog entry together, or not at all.
   if (tName.startsWith("music_player_")) {
-    const musicApiUrl = "http://10.0.0.16:8002";
-    let musicApiResponse: globalThis.Response | null = null;
-    let result: unknown;
-    if (tName === "music_player_suggest_artists") {
-      result = { artists: toolArguments.artists || [] };
-    } else if (tName === "music_player_add_node") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/artists/add-node`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: toolArguments.name, type: toolArguments.type })
-      });
-    } else if (tName === "music_player_remove_node") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/graph/discovered/${encodeURIComponent(toolArguments.node_id as string)}`, { method: "DELETE" });
-    } else if (tName === "music_player_add_edge") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/graph/edge`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: toolArguments.source, target: toolArguments.target, relationship: toolArguments.relationship || "related" })
-      });
-    } else if (tName === "music_player_remove_edge") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/graph/edge?source=${encodeURIComponent(toolArguments.source as string)}&target=${encodeURIComponent(toolArguments.target as string)}`, { method: "DELETE" });
-    } else if (tName === "music_player_override_node_type") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/graph/override-type`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ node_id: toolArguments.node_id, group_type: toolArguments.group_type })
-      });
-    } else if (tName === "music_player_expand_artist") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/graph/expand/${encodeURIComponent(toolArguments.artist as string)}?count=${toolArguments.count || 8}`);
-    } else if (tName === "music_player_expand_genre") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/graph/expand/genre/${encodeURIComponent(toolArguments.genre as string)}?count=${toolArguments.count || 8}`);
-    } else if (tName === "music_player_get_graph_state") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/graph/discovered`);
-    } else if (tName === "music_player_search_artists") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/artists`);
-    } else if (tName === "music_player_get_artist_info") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/artist/info/${encodeURIComponent(toolArguments.name as string)}`);
-    } else if (tName === "music_player_list_genres") {
-      musicApiResponse = await fetch(`${musicApiUrl}/api/genres`);
-    } else {
-      result = { success: true };
-    }
-
-    if (musicApiResponse !== null) {
-      if (musicApiResponse.ok) {
-        result = await musicApiResponse.json();
-      } else {
-        result = { error: await musicApiResponse.text() };
-      }
-    }
-    return result;
+    return { error: `Retired tool: ${tName}` };
   }
 
   if (tName.startsWith("strain_")) {
