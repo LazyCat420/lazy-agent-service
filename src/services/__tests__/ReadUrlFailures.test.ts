@@ -112,17 +112,29 @@ describe("read_url failure handling", () => {
 
   it("reports a bot-block with guidance when the fallback also fails", async () => {
     readUrlStatus = 403;
-    readUrlBody = { error: "HTTP 403: https://www.thestreet.com/stock-market-today" };
+    readUrlBody = { error: "HTTP 403: https://www.discogs.com/release/999999-test" };
     scrapeCalls = 0;
     scrapeBody = { success: false, error: "render failed" };
     const result = (await orchestrator.default.executeTool("read_url", {
-      url: "https://www.thestreet.com/stock-market-today",
+      url: "https://www.discogs.com/release/999999-test",
     }, {})) as Record<string, unknown>;
     expect(result.error).toContain("HTTP 403");
     expect(result.error).toContain("blocks automated fetchers");
     expect(result.error).toContain("scrape_url or read_web_page");
     expect(result.error).toContain("render failed");
     expect(scrapeCalls).toBe(1);
+  });
+
+  it("short-circuits fallback scrape when the 403 URL is on UNSCRAPABLE_DOMAINS (thestreet.com)", async () => {
+    readUrlStatus = 403;
+    readUrlBody = { error: "HTTP 403: https://www.thestreet.com/stock-market-today" };
+    scrapeCalls = 0;
+    const result = (await orchestrator.default.executeTool("read_url", {
+      url: "https://www.thestreet.com/stock-market-today",
+    }, {})) as Record<string, unknown>;
+    expect(result.error).toContain("HTTP 403");
+    expect(result.error).toContain("UNSCRAPABLE_DOMAIN");
+    expect(scrapeCalls).toBe(0);
   });
 
   it("does not fall back on a 404 and tells the model what to do", async () => {
