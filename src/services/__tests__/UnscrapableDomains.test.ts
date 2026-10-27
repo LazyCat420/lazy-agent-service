@@ -34,9 +34,17 @@ afterEach(() => {
 
 describe("deny-listed domains are refused without a network call", () => {
   it("matches the domain and its subdomains, nothing else", () => {
-    expect(UNSCRAPABLE_DOMAINS).toEqual(["seekingalpha.com", "reuters.com", "streetinsider.com"]);
+    expect(UNSCRAPABLE_DOMAINS).toEqual([
+      "seekingalpha.com",
+      "reuters.com",
+      "streetinsider.com",
+      "chartmill.com",
+      "thestreet.com",
+    ]);
     expect(unscrapableDomainOf("https://seekingalpha.com/news/1")).toBe("seekingalpha.com");
     expect(unscrapableDomainOf("https://www.reuters.com/markets/x")).toBe("reuters.com");
+    expect(unscrapableDomainOf("https://www.chartmill.com/news/AAPL/1")).toBe("chartmill.com");
+    expect(unscrapableDomainOf("https://www.thestreet.com/investing/x")).toBe("thestreet.com");
     expect(unscrapableDomainOf("https://notreuters.com/x")).toBeNull();
     expect(unscrapableDomainOf("https://www.msn.com/en-us/money/x/ar-AA1")).toBeNull();
     expect(unscrapableDomainOf("not a url")).toBeNull();
@@ -129,6 +137,108 @@ describe("lazy_web_search results lose links to deny-listed publishers", () => {
     expect(filterSearchResultLinks(error)).toBe(error);
     const truncated = { role: "tool", content: '{"status": "success", "results": [ [TRUNCATED' };
     expect(filterSearchResultLinks(truncated)).toBe(truncated);
+  });
+
+  it("blanks Yahoo /m/ partner teaser links with a teaser note", () => {
+    const payload = {
+      role: "tool",
+      content: JSON.stringify({
+        status: "success",
+        results: [
+          {
+            title: "Partner stub",
+            url: "https://finance.yahoo.com/m/bb1a0bc9-aa0d-3fa7-b20e-7290988735b7/story.html",
+            provider: "bing_news",
+          },
+          {
+            title: "Full Yahoo article",
+            url: "https://finance.yahoo.com/news/real-story-123456.html",
+            provider: "bing_news",
+          },
+        ],
+        followable: 2,
+      }),
+    };
+    const filtered = filterSearchResultLinks(payload) as Record<string, unknown>;
+    const body = JSON.parse(String(filtered.content));
+    expect(body.results[0].url).toBe("");
+    expect(body.results[0].note).toContain("teaser only");
+    expect(body.results[1].url).toBe("https://finance.yahoo.com/news/real-story-123456.html");
+    expect(body.followable).toBe(1);
+    expect(body.unscrapable_links_removed).toBe(1);
+  });
+});
+
+describe("tool-redirect and guessed corporate IR URL guards", () => {
+  const call = (url: string, context: Record<string, string>) =>
+    routeLocalTool("mcp__lazy-agent-service__scrape_url", { url }, context) as Promise<Record<string, unknown>>;
+
+  it("refuses finviz.com, finnhub.com, and sec.gov/edgar/search with dedicated-tool guidance", async () => {
+    const extract = vi.spyOn(ToolOrchestratorService, "executeWebExtract");
+    const run = { conversationId: "conv-guard-1" };
+
+    const finviz = await call("https://finviz.com/quote.ashx?t=CRWV", run);
+    expect(finviz.success).toBe(false);
+    expect(finviz.skipped).toBe("use_dedicated_tool");
+    expect(String(finviz.error)).toContain("get_finviz_fundamentals");
+
+    const finnhub = await call("https://finnhub.com/stocks/gm", run);
+    expect(finnhub.success).toBe(false);
+    expect(finnhub.skipped).toBe("use_dedicated_tool");
+    expect(String(finnhub.error)).toContain("get_finnhub_news");
+
+    const edgar = await call("https://www.sec.gov/edgar/search/#/q=LMND", run);
+    expect(edgar.success).toBe(false);
+    expect(edgar.skipped).toBe("use_dedicated_tool");
+    expect(String(edgar.error)).toContain("get_sec_filings");
+
+    expect(extract).not.toHaveBeenCalled();
+  });
+
+  it("refuses guessed corporate IR URLs unless returned by lazy_web_search in the same run", async () => {
+    const extract = vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue({
+      url: "x",
+      success: true,
+      content: "verified IR release",
+    });
+    const run = { conversationId: "conv-guard-ir", cycleId: "cycle-v3-ir", ticker: "GE", agentName: "v3_junior_analyst" };
+
+    const guessed1 = await call("https://www.ge.com/investors/earnings", run);
+    expect(guessed1.success).toBe(false);
+    expect(guessed1.skipped).toBe("unverified_url");
+    expect(String(guessed1.error)).toContain("UNVERIFIED_URL");
+
+    const guessed2 = await call("https://www.salesforce.com/investor-relations/financials/", run);
+    expect(guessed2.success).toBe(false);
+    expect(guessed2.skipped).toBe("unverified_url");
+
+    const guessed3 = await call("https://www.lockheedmartin.com/en-us/investors/earnings/2026-q3.html", run);
+    expect(guessed3.success).toBe(false);
+    expect(guessed3.skipped).toBe("unverified_url");
+
+    expect(extract).not.toHaveBeenCalled();
+
+    // Now simulate lazy_web_search returning an exact IR URL in this run
+    const verifiedUrl = "https://www.ge.com/investors/earnings/q3-2026-release";
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () =>
+      new Response(
+        JSON.stringify({
+          role: "tool",
+          name: "lazy_web_search",
+          content: JSON.stringify({
+            status: "success",
+            results: [{ title: "GE Q3 Earnings", url: verifiedUrl, provider: "bing_news" }],
+            followable: 1,
+          }),
+        }),
+        { status: 200 },
+      ),
+    );
+    await routeLocalTool("mcp__lazy-agent-service__lazy_web_search", { query: "GE Q3 earnings" }, run);
+
+    const allowed = await call(verifiedUrl, run);
+    expect(allowed.success).toBe(true);
+    expect(extract).toHaveBeenCalledTimes(1);
   });
 });
 

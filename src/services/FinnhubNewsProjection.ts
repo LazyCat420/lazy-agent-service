@@ -15,8 +15,18 @@
  * would offload exactly the results this projection exists to save.
  */
 import { RESULT_BUDGET_CHARS, bridgeContent } from "./ModelVisibleToolResult.js";
+import { isPartnerTeaserUrl, unscrapableDomainOf } from "./UnscrapableDomains.js";
 
 const MAX_SUMMARY_CHARS = 300;
+
+const UNSCRAPABLE_PUBLISHERS = new Set([
+  "seekingalpha",
+  "seeking alpha",
+  "chartmill",
+  "thestreet",
+  "reuters",
+  "streetinsider",
+]);
 
 /** One rendered article row. Tolerates the bridge's column names and the
  * finnhub field names (Title/Headline, Publisher/Source, Key Facts/Summary). */
@@ -52,10 +62,22 @@ export function parseNewsText(text: string): ParsedNews | null {
         datetime: match[3].trim(),
       };
       // A link anywhere in the row is the article URL; keep it as a field
-      // instead of leaving it buried in the summary text.
-      const url = (summary || item.headline).match(/https?:\/\/\S+/);
-      if (url) item.url = url[0];
-      if (summary) item.summary = summary;
+      // instead of leaving it buried in the summary text — UNLESS the
+      // publisher or URL is on the unscrapable / teaser deny-list
+      // (e.g. Finnhub 302 wrappers to ChartMill, SeekingAlpha, TheStreet).
+      const urlMatch = (summary || item.headline).match(/https?:\/\/\S+/);
+      const rawUrl = urlMatch ? urlMatch[0] : "";
+      const publisherBlocked = UNSCRAPABLE_PUBLISHERS.has(item.source.toLowerCase());
+      const urlBlocked = rawUrl
+        ? Boolean(unscrapableDomainOf(rawUrl) || isPartnerTeaserUrl(rawUrl))
+        : false;
+      if (rawUrl && !publisherBlocked && !urlBlocked) {
+        item.url = rawUrl;
+      }
+      const cleanedSummary = (publisherBlocked || urlBlocked) && rawUrl
+        ? summary.replace(rawUrl, "").replace(/\s*\|\s*URL:\s*$/i, "").trim()
+        : summary;
+      if (cleanedSummary) item.summary = cleanedSummary;
       articles.push(item);
     } else if (
       line.trim() &&

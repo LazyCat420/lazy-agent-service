@@ -30,11 +30,26 @@ export const UNSCRAPABLE_DOMAINS: readonly string[] = [
   "seekingalpha.com",
   "reuters.com",
   "streetinsider.com",
+  "chartmill.com",
+  "thestreet.com",
 ];
 
 /** Stable prefixes so telemetry (error_message) can split refusals from real scrape failures. */
 export const UNSCRAPABLE_CODE = "UNSCRAPABLE_DOMAIN";
 export const SCRAPE_BUDGET_CODE = "SCRAPE_BUDGET_EXHAUSTED";
+export const USE_DEDICATED_TOOL_CODE = "USE_DEDICATED_TOOL";
+export const UNVERIFIED_URL_CODE = "UNVERIFIED_URL";
+
+/** True when the URL is a Yahoo Finance /m/<uuid> partner teaser stub. */
+export function isPartnerTeaserUrl(url: string): boolean {
+  try {
+    const parsed = new URL(String(url ?? "").trim());
+    const host = parsed.hostname.toLowerCase();
+    return (host === "finance.yahoo.com" || host.endsWith(".yahoo.com")) && /^\/m\/[0-9a-f-]+/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
 
 /** The deny-listed domain a URL belongs to, or null (also for unparseable URLs). */
 export function unscrapableDomainOf(url: string): string | null {
@@ -78,10 +93,21 @@ export function blankUnscrapableLinks(
 ): { results: Array<Record<string, unknown>>; removed: number } {
   let removed = 0;
   const out = results.map((result) => {
-    const domain = typeof result?.url === "string" ? unscrapableDomainOf(result.url) : null;
-    if (!domain) return result;
-    removed++;
-    return { ...result, url: "", note: `headline only — ${domain} blocks automated reading; do not scrape it` };
+    const rawUrl = typeof result?.url === "string" ? result.url : "";
+    const domain = rawUrl ? unscrapableDomainOf(rawUrl) : null;
+    if (domain) {
+      removed++;
+      return { ...result, url: "", note: `headline only — ${domain} blocks automated reading; do not scrape it` };
+    }
+    if (rawUrl && isPartnerTeaserUrl(rawUrl)) {
+      removed++;
+      return {
+        ...result,
+        url: "",
+        note: "teaser only — Yahoo /m/ link is a 1-paragraph partner stub; use the headline and snippet",
+      };
+    }
+    return result;
   });
   return { results: out, removed };
 }
@@ -158,6 +184,139 @@ export function scrapeRunKey(scope: ScrapeRunScope = {}): string | null {
 
 const RUN_TTL_MS = 6 * 60 * 60 * 1_000;
 const runs = new Map<string, { count: number; at: number }>();
+const runUrls = new Map<string, { urls: Set<string>; at: number }>();
+
+/**
+ * Corporate IR / press-release path patterns that models frequently guess
+ * (e.g. ge.com/investors/earnings, salesforce.com/investor-relations/financials/,
+ * lockheedmartin.com/en-us/investors/earnings/2026-q3.html) and hit 404.
+ * Allowed when the exact URL was returned by a search tool in the same run.
+ */
+const GUESSED_IR_PATH_RE =
+  /^\/(?:[a-z]{2}-[a-z]{2}\/)?(?:dt\/corporate\/)?(?:investors|investor-relations|investor-centre|newsroom)\/(?:earnings|financials|financial-results|press-releases|news-events)(?:\/|$)/i;
+
+function normalizeUrlForRegistry(url: string): string {
+  try {
+    const parsed = new URL(url.trim());
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return url.trim().replace(/\/$/, "");
+  }
+}
+
+/** Record URLs returned by search/news tools so scrapeTargetGuard knows they were discovered, not guessed. */
+export function registerRunUrls(urls: Iterable<string>, scope: ScrapeRunScope = {}, now = Date.now()): void {
+  const key = scrapeRunKey(scope);
+  if (!key) return;
+  if (runUrls.size > 1_000) {
+    for (const [k, v] of runUrls) if (now - v.at > RUN_TTL_MS) runUrls.delete(k);
+  }
+  const existing = runUrls.get(key);
+  const set = existing && now - existing.at <= RUN_TTL_MS ? existing.urls : new Set<string>();
+  for (const u of urls) {
+    if (typeof u === "string" && u.trim()) {
+      set.add(normalizeUrlForRegistry(u));
+    }
+  }
+  runUrls.set(key, { urls: set, at: now });
+}
+
+/** Extract and register URLs from a lazy_web_search bridge response. */
+export function registerSearchResultUrls(result: unknown, scope: ScrapeRunScope = {}): void {
+  const wrapped = typeof result === "object" && result !== null && !Array.isArray(result)
+    && typeof (result as Record<string, unknown>).content === "string";
+  const raw = wrapped ? (result as Record<string, unknown>).content : result;
+  let body: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return;
+    }
+  }
+  if (typeof body !== "object" || body === null || !Array.isArray((body as Record<string, unknown>).results)) {
+    return;
+  }
+  const urls: string[] = [];
+  for (const row of (body as Record<string, unknown>).results as Array<Record<string, unknown>>) {
+    if (typeof row?.url === "string" && row.url.trim()) urls.push(row.url);
+  }
+  if (urls.length > 0) registerRunUrls(urls, scope);
+}
+
+/**
+ * Guard against scraping domains that have dedicated structured tools
+ * (finviz.com, finnhub.com, sec.gov/edgar/search) or hallucinated corporate IR
+ * root paths that were never returned by a search tool in this run.
+ */
+export function scrapeTargetGuard(url: string, scope: ScrapeRunScope = {}, now = Date.now()): Record<string, unknown> | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(String(url ?? "").trim());
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const pathname = parsed.pathname || "/";
+
+  if (host === "finviz.com" || host.endsWith(".finviz.com")) {
+    return {
+      url,
+      content: "",
+      success: false,
+      skipped: "use_dedicated_tool",
+      error:
+        `${USE_DEDICATED_TOOL_CODE}: finviz.com blocks generic scraping and has a dedicated tool. ` +
+        "Call get_finviz_fundamentals(ticker=...) instead of scrape_url.",
+    };
+  }
+  if (host === "finnhub.com" || host.endsWith(".finnhub.com")) {
+    return {
+      url,
+      content: "",
+      success: false,
+      skipped: "use_dedicated_tool",
+      error:
+        `${USE_DEDICATED_TOOL_CODE}: finnhub.com stock pages do not exist. ` +
+        "Call get_finnhub_news(ticker=...) instead of scrape_url.",
+    };
+  }
+  if (
+    (host === "sec.gov" || host.endsWith(".sec.gov")) &&
+    (/^\/edgar\/search/i.test(pathname) || /^\/cgi-bin\/browse-edgar/i.test(pathname))
+  ) {
+    return {
+      url,
+      content: "",
+      success: false,
+      skipped: "use_dedicated_tool",
+      error:
+        `${USE_DEDICATED_TOOL_CODE}: SEC EDGAR search pages cannot be read with scrape_url. ` +
+        "Call get_sec_filings(ticker=...) and query_sec_filing(...) instead of scrape_url.",
+    };
+  }
+
+  if (GUESSED_IR_PATH_RE.test(pathname)) {
+    const key = scrapeRunKey(scope);
+    const entry = key ? runUrls.get(key) : undefined;
+    const known = entry && now - entry.at <= RUN_TTL_MS && entry.urls.has(normalizeUrlForRegistry(url));
+    if (!known) {
+      return {
+        url,
+        content: "",
+        success: false,
+        skipped: "unverified_url",
+        error:
+          `${UNVERIFIED_URL_CODE}: '${url}' looks like a guessed corporate investor-relations or press-release URL ` +
+          "that was not returned by lazy_web_search in this run (guessed IR paths fail with HTTP 404). " +
+          "Call lazy_web_search first and only pass exact URLs returned in its results to scrape_url.",
+      };
+    }
+  }
+
+  return null;
+}
 
 /**
  * Charge one scrape to its run. Returns null when allowed, or the refusal
@@ -190,4 +349,5 @@ export function chargeScrape(url: string, scope: ScrapeRunScope = {}, now = Date
 
 export function __resetScrapeBudgetForTests(): void {
   runs.clear();
+  runUrls.clear();
 }

@@ -7,7 +7,14 @@ import { filterResultsByDomain, webSearch, webSearchStatus, withSiteSearch } fro
 import { CATEGORIES } from "./EditorialHeadlinesService.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 import MCPClientService from "./MCPClientService.ts";
-import { chargeScrape, filterSearchResultLinks, unscrapableDomainOf } from "./UnscrapableDomains.ts";
+import {
+  chargeScrape,
+  filterSearchResultLinks,
+  registerRunUrls,
+  registerSearchResultUrls,
+  scrapeTargetGuard,
+  unscrapableDomainOf,
+} from "./UnscrapableDomains.ts";
 
 /**
  * LocalToolRouter — single source of truth for executing this service's
@@ -424,9 +431,13 @@ export async function routeLocalTool(
   // that would reach scraper-service counts against the run.
   if (tName === "scrape_url") {
     const url = typeof toolArguments.url === "string" ? toolArguments.url : "";
-    if (url.trim() && !unscrapableDomainOf(url)) {
-      const refusal = chargeScrape(url, context);
-      if (refusal) return refusal;
+    if (url.trim()) {
+      const targetRefusal = scrapeTargetGuard(url, context);
+      if (targetRefusal) return targetRefusal;
+      if (!unscrapableDomainOf(url)) {
+        const refusal = chargeScrape(url, context);
+        if (refusal) return refusal;
+      }
     }
     const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
     return ToolOrchestratorService.executeWebExtract(toolArguments);
@@ -436,7 +447,9 @@ export async function routeLocalTool(
   // its links to publishers scraper-service cannot read are blanked here so
   // the model is never handed a scrape that is known to fail.
   if (tName === "lazy_web_search") {
-    return filterSearchResultLinks(await executeToolViaTradingService(tName, toolArguments, context));
+    const filtered = filterSearchResultLinks(await executeToolViaTradingService(tName, toolArguments, context));
+    registerSearchResultUrls(filtered, context);
+    return filtered;
   }
 
   // Natively implemented here: one keyless web search (Exa) with one cache and
@@ -447,6 +460,7 @@ export async function routeLocalTool(
     const query = String(toolArguments.query ?? toolArguments.q ?? "").trim();
     const found = await webSearch(withSiteSearch(query, toolArguments), Number(toolArguments.limit ?? 6) || 6, undefined, context.signal);
     const result = { ...found, results: filterResultsByDomain(found.results, toolArguments) };
+    registerRunUrls(result.results.map((r) => r.url), context);
     return {
       query,
       ...result,
@@ -496,6 +510,7 @@ export async function routeLocalTool(
     const result = country
       ? await newsSearch(topic, limit, country, category, debug)
       : await newsSearch(topic, limit, undefined, category, debug);
+    registerRunUrls(result.items.map((r) => r.url), context);
     return {
       topic,
       country: country || "(default)",

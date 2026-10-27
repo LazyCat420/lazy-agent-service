@@ -147,3 +147,9 @@ x.com-not-misrouted guard, MusicBrainz 503 guidance, projection parse/30-article
 Each fails on reverted source: reverted read_url classified the misroute `other` and returned the
 bare error with no fallback; reverted get_music returned the bare status; reverted
 get_finnhub_news cut the text and dropped headlines.
+
+### Follow-up fixes (2026-10-27, `wt-scrape-guard`)
+
+- **Expanded `UNSCRAPABLE_DOMAINS` (`src/services/UnscrapableDomains.ts`)**: Added `chartmill.com` and `thestreet.com` (measured 655+ and 252+ HTTP 403 blocks in `scraper-service` via Finnhub 302 redirects) alongside `seekingalpha.com`, `reuters.com`, and `streetinsider.com`.
+- **Yahoo `/m/` Partner Teaser Blanking (`isPartnerTeaserUrl`, `blankUnscrapableLinks`, `FinnhubNewsProjection.ts`)**: Blanks `finance.yahoo.com/m/<uuid>` partner stub URLs in `lazy_web_search` and `get_finnhub_news` projections with a teaser note so agents use the headline/snippet instead of wasting `scrape_url` budget on 1-paragraph partner stubs.
+- **Dedicated-Tool & Guessed-IR URL Guard (`scrapeTargetGuard`, `registerRunUrls`, `LocalToolRouter.ts`)**: Refuses `scrape_url` calls on `finviz.com` ($\to$ `get_finviz_fundamentals`), `finnhub.com` ($\to$ `get_finnhub_news`), and `sec.gov/edgar/search` ($\to$ `get_sec_filings`), and blocks guessed corporate IR paths (`/investors/earnings`, `/investor-relations/financials`, `/investor-centre/financial-results`, `/newsroom/press-releases`) unless the URL was returned by `lazy_web_search`, `web_search`, or `news_search` in the current run.
