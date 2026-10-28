@@ -215,7 +215,19 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
   static description =
     "In-band <tool_call> tool loop for models without native tool-calling (Hermes format).";
 
-  async run(): Promise<{ messages: ConversationMessage[] }> {
+  private resolveMaxToolIterations(clientMaxIterations?: number): number {
+    if (clientMaxIterations === 0) return Infinity;
+    if (clientMaxIterations) {
+      return Math.min(100, Math.max(1, clientMaxIterations));
+    }
+    return MAX_TOOL_ITERATIONS;
+  }
+
+  private async prepareFirstIterationPrompt(
+    currentMessages: ConversationMessage[],
+    tools: ToolSchema[],
+    hooks: ReturnType<typeof createStandardHooks>["hooks"],
+  ): Promise<void> {
     const context = this.context;
     const state = this.state;
     const {
@@ -227,22 +239,257 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
       username,
       agent,
       workspaceRoot,
+    } = context;
+
+    const hookContext: BeforePromptHookContext = {
+      messages: currentMessages,
+      project,
+      username,
+      agent,
+      traceId,
+      conversationId,
+      agentConversationId,
+      parentAgentConversationId: context.parentAgentConversationId,
+      agentContext: options.agentContext,
+      enabledTools: this.tools.resolvedEnabledTools,
+      resolvedToolNames: tools.map((tool) => tool.name),
+      workspaceRoot: workspaceRoot || undefined,
+      workspaceEnabled: options.workspaceEnabled as boolean | undefined,
+      locale: options.locale as string | undefined,
+      loadedTools: state.loadedTools,
+    };
+    await hooks.run("beforePrompt", hookContext);
+
+    if (hookContext._assembledSystemPrompt) {
+      applyAssembledSystemPrompt(
+        options,
+        hookContext._assembledSystemPrompt as string,
+      );
+    }
+
+    currentMessages.unshift({
+      role: "system",
+      content: buildPromptedToolSystemPrompt(tools),
+    });
+  }
+
+  private appendParseFailurePrompt(
+    currentMessages: ConversationMessage[],
+    responseText: string,
+    parseError: string,
+    repairAttempted: boolean,
+  ): boolean {
+    currentMessages.push({
+      role: "assistant",
+      content: responseText,
+    });
+    if (!repairAttempted) {
+      currentMessages.push({
+        role: "user",
+        content:
+          `Your previous message contained a <tool_call> block that could not be parsed:\n` +
+          `${parseError}\n\n` +
+          `Re-emit the call as a single <tool_call>{"name": ..., "arguments": ...}</tool_call> block with valid JSON.`,
+        _isSystemWarning: true,
+      });
+      logger.info(
+        `[PromptedToolCallingHarness] Parse failure on iteration ${this.state.iterations} — repair re-prompt issued.`,
+      );
+      return true;
+    }
+    currentMessages.push({
+      role: "user",
+      content: buildToolCallErrorObservation(parseError),
+      _isSystemWarning: true,
+    });
+    logger.warn(
+      `[PromptedToolCallingHarness] Parse failure persisted after repair on iteration ${this.state.iterations} — structured error observation surfaced.`,
+    );
+    return true;
+  }
+
+  private async executeParsedPromptedToolCall(
+    toolCall: ToolCall,
+    tools: ToolSchema[],
+    hooks: ReturnType<typeof createStandardHooks>["hooks"],
+  ): Promise<ToolResult[]> {
+    const context = this.context;
+    const state = this.state;
+    const partition = partitionCodeInterpreterCalls([toolCall], tools);
+    const isLocalInterpreter = partition.interpreterCalls.length > 0;
+    if (
+      !isLocalInterpreter &&
+      !tools.some((tool) => tool.name === toolCall.name)
+    ) {
+      toolCall.isUnauthorized = true;
+    }
+
+    if (isLocalInterpreter && context.runtimeToolExecutor) {
+      return [
+        {
+          name: toolCall.name,
+          id: toolCall.id,
+          result: {
+            success: false,
+            error: "CODE_INTERPRETER_NOT_ADMITTED",
+            message:
+              "code_interpreter is not in this run's profile whitelist.",
+          },
+        },
+      ];
+    }
+    if (isLocalInterpreter) {
+      const authorization = await authorizeToolCalls(
+        [toolCall],
+        context,
+        hooks,
+      );
+      const denial = authorization.denied.get(toolCall);
+      if (denial) {
+        return [{ name: toolCall.name, id: toolCall.id, result: denial }];
+      }
+      if (authorization.executable.has(toolCall)) {
+        return runCodeInterpreterCalls([toolCall]);
+      }
+      throw new Error(
+        `Tool call "${toolCall.name}" reached execution without an allow verdict`,
+      );
+    }
+    return executeToolBatch([toolCall], context, this.tools, hooks, state);
+  }
+
+  private appendToolCallObservationAndSummary(
+    currentMessages: ConversationMessage[],
+    pass: ReturnType<BaseAgenticHarness["createPassState"]>,
+    responseText: string,
+    toolCall: ToolCall,
+    result: ToolResult | undefined,
+    totalBlocks: number,
+  ): void {
+    const resultJson =
+      JSON.stringify(result?.result ?? null, null, 2) || "null";
+    const observationParts: string[] = [
+      `<tool_result name="${toolCall.name}" status="success">\n${resultJson}\n</tool_result>`,
+    ];
+    if (totalBlocks > 1) {
+      observationParts.push(
+        `You emitted ${totalBlocks} <tool_call> blocks; only the first was executed. ` +
+          `Issue the next call in a new message (one call per turn).`,
+      );
+    }
+    currentMessages.push({
+      role: "assistant",
+      content: responseText,
+      ...(pass.streamedThinking.trim() && {
+        thinking: pass.streamedThinking.trim(),
+      }),
+      ...(pass.thinkingSignature && {
+        thinkingSignature: pass.thinkingSignature,
+      }),
+    });
+    currentMessages.push({
+      role: "user",
+      content: observationParts.join("\n\n"),
+      _isSystemWarning: true,
+    });
+
+    const latestSummary = extractLatestRunningSummary(currentMessages);
+    if (
+      latestSummary !== null &&
+      currentMessages[0]?.role === "system" &&
+      typeof currentMessages[0].content === "string"
+    ) {
+      currentMessages[0] = {
+        ...currentMessages[0],
+        content: applyRunningSummary(currentMessages[0].content, latestSummary),
+      };
+    }
+  }
+
+  private handleExhaustedStreamGuard(
+    currentMessages: ConversationMessage[],
+    pass: ReturnType<BaseAgenticHarness["createPassState"]>,
+  ): void {
+    logger.warn(
+      `[PromptedToolCallingHarness] Context exhaustion guard fired on iteration ${this.state.iterations}.`,
+    );
+    injectErrorAsConversationMessage(
+      currentMessages,
+      `Context window exhausted on iteration ${this.state.iterations}: the remaining output ` +
+        `token budget is too small to produce a complete response.`,
+      this.context,
+    );
+    this.state.conversationOutcome = "exhausted";
+    this.logIteration(pass, currentMessages);
+  }
+
+  private handleNoToolCallBlocks(
+    currentMessages: ConversationMessage[],
+    pass: ReturnType<BaseAgenticHarness["createPassState"]>,
+    responseText: string,
+  ): boolean {
+    if (!responseText.trim()) {
+      logger.warn(
+        `[PromptedToolCallingHarness] Empty output on iteration ${this.state.iterations} — breaking.`,
+      );
+      this.logIteration(pass, currentMessages);
+      return false;
+    }
+    currentMessages.push({
+      role: "assistant",
+      content: responseText,
+      ...(pass.streamedThinking.trim() && {
+        thinking: pass.streamedThinking.trim(),
+      }),
+      ...(pass.thinkingSignature && {
+        thinkingSignature: pass.thinkingSignature,
+      }),
+    });
+    this.logIteration(pass, currentMessages);
+    return true;
+  }
+
+  private async persistErrorAndRethrow(
+    loopError: unknown,
+    currentMessages: ConversationMessage[],
+    hooks: ReturnType<typeof createStandardHooks>["hooks"],
+  ): Promise<never> {
+    const errMsg =
+      loopError instanceof Error ? loopError.message : String(loopError);
+    logger.error(
+      `[PromptedToolCallingHarness] Loop error on iteration ${this.state.iterations}: ${errMsg}.`,
+    );
+    injectErrorAsConversationMessage(currentMessages, errMsg, this.context);
+    this.state.conversationOutcome = "error";
+    try {
+      await this.finalize(currentMessages, hooks);
+    } catch (persistError: unknown) {
+      logger.error(
+        `[PromptedToolCallingHarness] Failed to persist messages on error path: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
+      );
+    }
+    throw loopError;
+  }
+
+  async run(): Promise<{ messages: ConversationMessage[] }> {
+    const context = this.context;
+    const state = this.state;
+    const {
+      options,
+      agentConversationId,
+      project,
+      username,
+      agent,
+      workspaceRoot,
       emit,
       signal,
     } = context;
 
-    // ── Resolve max iterations — same mechanism as ReActHarness ──
-    const clientMaxIterations = options.maxIterations;
-    const resolvedMaxIterations =
-      clientMaxIterations === 0
-        ? Infinity
-        : clientMaxIterations
-          ? Math.min(100, Math.max(1, clientMaxIterations))
-          : MAX_TOOL_ITERATIONS;
-
+    const resolvedMaxIterations = this.resolveMaxToolIterations(
+      options.maxIterations,
+    );
     let currentMessages: ConversationMessage[] = [...context.messages];
     let hasCleanTextBreak = false;
-    // One repair re-prompt per run for a malformed <tool_call> block.
     let repairAttempted = false;
 
     const { hooks } = createStandardHooks({
@@ -250,13 +497,11 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
       enableCriticGate: options.enableCriticGate === true,
       criticModel: options.criticModel || undefined,
     });
-
     const tools = (this.tools.finalTools || []) as ToolSchema[];
 
     try {
       while (state.iterations < resolvedMaxIterations) {
         state.iterations++;
-
         emit({
           type: SERVER_SENT_EVENT_TYPES.STATUS,
           message: STATUS_MESSAGES.ITERATION_PROGRESS,
@@ -264,43 +509,10 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
           maxIterations: resolvedMaxIterations,
         });
 
-        // ── Iteration 1: identity prompt + <tools> system prompt ──
         if (state.iterations === 1) {
-          const hookContext: BeforePromptHookContext = {
-            messages: currentMessages,
-            project,
-            username,
-            agent,
-            traceId,
-            conversationId,
-            agentConversationId,
-            parentAgentConversationId: context.parentAgentConversationId,
-            agentContext: options.agentContext,
-            enabledTools: this.tools.resolvedEnabledTools,
-            resolvedToolNames: tools.map((tool) => tool.name),
-            workspaceRoot: workspaceRoot || undefined,
-            workspaceEnabled: options.workspaceEnabled as boolean | undefined,
-            locale: options.locale as string | undefined,
-            loadedTools: state.loadedTools,
-          };
-          await hooks.run("beforePrompt", hookContext);
-
-          if (hookContext._assembledSystemPrompt) {
-            applyAssembledSystemPrompt(
-              options,
-              hookContext._assembledSystemPrompt as string,
-            );
-          }
-
-          // The prompted-tools system prompt is prepended so it precedes the
-          // conversation; the model has no native tools parameter to receive.
-          currentMessages.unshift({
-            role: "system",
-            content: buildPromptedToolSystemPrompt(tools),
-          });
+          await this.prepareFirstIterationPrompt(currentMessages, tools, hooks);
         }
 
-        // ── Pass options: NO native tools — calls are parsed from text ──
         const passOptions: IterationPassOptions = {
           ...options,
           tools: undefined,
@@ -308,121 +520,68 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
           agent,
           username,
         };
-
         const pressureResult = await manageContextPressure(
           currentMessages,
           context,
           state,
           "PromptedToolCallingHarness",
         );
-        currentMessages = pressureResult.messages;
-
-        currentMessages = this.enforceContextWindow(
-          currentMessages,
-          0,
-        );
+        currentMessages = this.enforceContextWindow(pressureResult.messages, 0);
 
         const pass = this.createPassState(passOptions);
         const requestIdBase =
           context.requestId || agentConversationId || crypto.randomUUID();
         const passRequestId = `${requestIdBase}-iter-${state.iterations}`;
         pass.requestId = passRequestId;
-
         this.registerTrackerRequest(passRequestId);
 
-        const stream = await this.createProviderStream(currentMessages, passOptions);
+        const stream = await this.createProviderStream(
+          currentMessages,
+          passOptions,
+        );
         if (stream === null) {
-          logger.warn(
-            `[PromptedToolCallingHarness] Context exhaustion guard fired on iteration ${state.iterations}.`,
-          );
-          injectErrorAsConversationMessage(
-            currentMessages,
-            `Context window exhausted on iteration ${state.iterations}: the remaining output ` +
-              `token budget is too small to produce a complete response.`,
-            context,
-          );
-          state.conversationOutcome = "exhausted";
-          this.logIteration(pass, currentMessages);
+          this.handleExhaustedStreamGuard(currentMessages, pass);
           break;
         }
 
-        // No native tool names: text chunks only — <tool_call> parsing is ours.
         await this.consumeStream(stream, pass, new Set<string>());
-
         finalizePassTracker(pass, passRequestId);
         this.emitGenerationProgress();
         this.emitUsageUpdate();
 
         if (signal?.aborted) break;
-
-        if (
-        await checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId, {
-          signal: context.signal,
-          pauseTimeoutMs: options.budgetPauseTimeoutMs,
-        })
-      ) {
-          break;
-        }
+        const budgetExceeded = await checkCostBudget(
+          state,
+          context.resolvedModel,
+          options.maxCostDollars,
+          emit,
+          context.conversationId,
+          {
+            signal: context.signal,
+            pauseTimeoutMs: options.budgetPauseTimeoutMs,
+          },
+        );
+        if (budgetExceeded) break;
 
         const responseText = pass.streamedText || "";
         const blocks = extractToolCallBlocks(responseText);
-
-        // ── No tool call: this is the final answer ────────────────
         if (blocks.length === 0) {
-          if (!responseText.trim()) {
-            logger.warn(
-              `[PromptedToolCallingHarness] Empty output on iteration ${state.iterations} — breaking.`,
-            );
-            this.logIteration(pass, currentMessages);
-            break;
-          }
-          currentMessages.push({
-            role: "assistant",
-            content: responseText,
-            ...(pass.streamedThinking.trim() && {
-              thinking: pass.streamedThinking.trim(),
-            }),
-            ...(pass.thinkingSignature && {
-              thinkingSignature: pass.thinkingSignature,
-            }),
-          });
-          this.logIteration(pass, currentMessages);
-          hasCleanTextBreak = true;
+          hasCleanTextBreak = this.handleNoToolCallBlocks(
+            currentMessages,
+            pass,
+            responseText,
+          );
           break;
         }
 
-        // ── Parse the first block ────────────────────────────────
         const parsed = parsePromptedToolCall(blocks[0]);
         if (parsed.ok === false) {
-          currentMessages.push({
-            role: "assistant",
-            content: responseText,
-          });
-          if (!repairAttempted) {
-            // Exactly ONE repair re-prompt with the parse error...
-            repairAttempted = true;
-            currentMessages.push({
-              role: "user",
-              content:
-                `Your previous message contained a <tool_call> block that could not be parsed:\n` +
-                `${parsed.error}\n\n` +
-                `Re-emit the call as a single <tool_call>{"name": ..., "arguments": ...}</tool_call> block with valid JSON.`,
-              _isSystemWarning: true,
-            });
-            logger.info(
-              `[PromptedToolCallingHarness] Parse failure on iteration ${state.iterations} — repair re-prompt issued.`,
-            );
-          } else {
-            // ...then surface a structured error observation.
-            currentMessages.push({
-              role: "user",
-              content: buildToolCallErrorObservation(parsed.error),
-              _isSystemWarning: true,
-            });
-            logger.warn(
-              `[PromptedToolCallingHarness] Parse failure persisted after repair on iteration ${state.iterations} — structured error observation surfaced.`,
-            );
-          }
+          repairAttempted = this.appendParseFailurePrompt(
+            currentMessages,
+            responseText,
+            parsed.error,
+            repairAttempted,
+          );
           this.logIteration(pass, currentMessages);
           continue;
         }
@@ -432,105 +591,37 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
           name: parsed.call.name,
           args: parsed.call.args,
         };
-
-        // ── One call per turn: execute the first, defer the rest ──
-        const extraCallCount = blocks.length - 1;
-
-        // ── code_interpreter escape hatch (Hermes pattern) ───────
-        // If no sandboxed code-execution tool is registered, evaluate the
-        // fenced block locally instead of failing as an unknown tool.
-        const partition = partitionCodeInterpreterCalls([toolCall], tools);
-        const isLocalInterpreter = partition.interpreterCalls.length > 0;
-        // Allow-list: a parsed call must name a tool this run offers (the
-        // local interpreter is this harness's own built-in).
-        if (!isLocalInterpreter && !tools.some((tool) => tool.name === toolCall.name)) {
-          toolCall.isUnauthorized = true;
-        }
         context._currentMessages = currentMessages;
+        const results = await this.executeParsedPromptedToolCall(
+          toolCall,
+          tools,
+          hooks,
+        );
 
-        let results: ToolResult[];
-        if (isLocalInterpreter && context.runtimeToolExecutor) {
-          // A profile-admitted run (/v1/runs) admits only whitelisted
-          // capabilities, and the local interpreter is never one of them.
-          results = [
-            {
-              name: toolCall.name,
-              id: toolCall.id,
-              result: {
-                success: false,
-                error: "CODE_INTERPRETER_NOT_ADMITTED",
-                message: "code_interpreter is not in this run's profile whitelist.",
-              },
-            },
-          ];
-        } else if (isLocalInterpreter) {
-          // The local interpreter passes the same authorization as any tool.
-          const authorization = await authorizeToolCalls([toolCall], context, hooks);
-          const denial = authorization.denied.get(toolCall);
-          if (denial) {
-            results = [{ name: toolCall.name, id: toolCall.id, result: denial }];
-          } else if (authorization.executable.has(toolCall)) {
-            results = await runCodeInterpreterCalls([toolCall]);
-          } else {
-            throw new Error(`Tool call "${toolCall.name}" reached execution without an allow verdict`);
-          }
-        } else {
-          // ── Execute through the same path ReActHarness uses ────
-          results = await executeToolBatch([toolCall], context, this.tools, hooks, state);
-        }
-
-        await processToolResultMedia([toolCall], results, state, pass, emit, context);
+        await processToolResultMedia(
+          [toolCall],
+          results,
+          state,
+          pass,
+          emit,
+          context,
+        );
         trackToolErrors([toolCall], results, state, 3, emit);
         emitPostExecutionStatus([toolCall], emit);
 
-        const result = results[0];
-        const resultJson = JSON.stringify(result?.result ?? null, null, 2) || "null";
-        const observationParts: string[] = [
-          `<tool_result name="${toolCall.name}" status="success">\n${resultJson}\n</tool_result>`,
-        ];
-        if (extraCallCount > 0) {
-          observationParts.push(
-            `You emitted ${blocks.length} <tool_call> blocks; only the first was executed. ` +
-              `Issue the next call in a new message (one call per turn).`,
-          );
-        }
-        currentMessages.push({
-          role: "assistant",
-          content: responseText,
-          ...(pass.streamedThinking.trim() && {
-            thinking: pass.streamedThinking.trim(),
-          }),
-          ...(pass.thinkingSignature && {
-            thinkingSignature: pass.thinkingSignature,
-          }),
-        });
-        currentMessages.push({
-          role: "user",
-          content: observationParts.join("\n\n"),
-          _isSystemWarning: true,
-        });
-
-        // ── Running-summary discipline (Hermes) ──────────────────
-        // The newest model-emitted <running_summary> replaces the stale
-        // one in the system prompt instead of scrolling away.
-        const latestSummary = extractLatestRunningSummary(currentMessages);
-        if (
-          latestSummary !== null &&
-          currentMessages[0]?.role === "system" &&
-          typeof currentMessages[0].content === "string"
-        ) {
-          currentMessages[0] = {
-            ...currentMessages[0],
-            content: applyRunningSummary(currentMessages[0].content, latestSummary),
-          };
-        }
+        this.appendToolCallObservationAndSummary(
+          currentMessages,
+          pass,
+          responseText,
+          toolCall,
+          results[0],
+          blocks.length,
+        );
 
         this.checkAndApplyToolSetChanges(currentMessages);
         this.logIteration(pass, currentMessages);
-        continue;
       }
 
-      // ── Exhaustion recovery — same discipline as ReActHarness ──
       if (!hasCleanTextBreak && !signal?.aborted) {
         state.conversationOutcome = "exhausted";
         await runExhaustionRecoveryPass(this, context, state, currentMessages);
@@ -539,23 +630,7 @@ export default class PromptedToolCallingHarness extends BaseAgenticHarness {
       await this.finalize(currentMessages, hooks);
       return { messages: currentMessages };
     } catch (loopError: unknown) {
-      logger.error(
-        `[PromptedToolCallingHarness] Loop error on iteration ${state.iterations}: ${loopError instanceof Error ? loopError.message : String(loopError)}.`,
-      );
-      injectErrorAsConversationMessage(
-        currentMessages,
-        loopError instanceof Error ? loopError.message : String(loopError),
-        context,
-      );
-      state.conversationOutcome = "error";
-      try {
-        await this.finalize(currentMessages, hooks);
-      } catch (persistError: unknown) {
-        logger.error(
-          `[PromptedToolCallingHarness] Failed to persist messages on error path: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
-        );
-      }
-      throw loopError;
+      return this.persistErrorAndRethrow(loopError, currentMessages, hooks);
     }
   }
 }

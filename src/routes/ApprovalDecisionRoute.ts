@@ -39,89 +39,165 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+interface ValidatedApprovalBody {
+  conversationId: string;
+  toolCallId?: string;
+  resolved: Decision;
+  resolvedScope: Scope;
+  reason?: string;
+  editedArgs?: Record<string, unknown>;
+}
+
+function parseDecisionField(
+  decision: unknown,
+  approved: unknown,
+): { resolved: Decision } | { error: string } {
+  if (decision !== undefined) {
+    if (decision !== "allow" && decision !== "deny") {
+      return { error: 'decision must be "allow" or "deny"' };
+    }
+    const resolved: Decision = decision;
+    if (approved !== undefined && approved !== (resolved === "allow")) {
+      return { error: "approved contradicts decision" };
+    }
+    return { resolved };
+  }
+  if (approved === true || approved === false) {
+    return { resolved: approved ? "allow" : "deny" };
+  }
+  return {
+    error: 'Missing decision: send decision "allow" or "deny" (or a boolean approved)',
+  };
+}
+
+function validateApprovalRequestBody(
+  body: unknown,
+): { valid: ValidatedApprovalBody } | { error: string } {
+  if (!isPlainObject(body)) {
+    return { error: "Body must be a JSON object" };
+  }
+  const {
+    conversationId,
+    toolCallId,
+    decision,
+    approved,
+    approveAll,
+    reason,
+    editedArgs,
+    scope,
+  } = body;
+
+  if (typeof conversationId !== "string" || !conversationId) {
+    return { error: "Missing conversationId" };
+  }
+
+  const decisionResult = parseDecisionField(decision, approved);
+  if ("error" in decisionResult) {
+    return decisionResult;
+  }
+  const resolved = decisionResult.resolved;
+
+  if (
+    toolCallId !== undefined &&
+    (typeof toolCallId !== "string" || !toolCallId)
+  ) {
+    return { error: "toolCallId must be a non-empty string" };
+  }
+  if (reason !== undefined && reason !== null && typeof reason !== "string") {
+    return { error: "reason must be a string" };
+  }
+  if (editedArgs !== undefined && !isPlainObject(editedArgs)) {
+    return { error: "editedArgs must be a JSON object" };
+  }
+
+  let resolvedScope: Scope = "call";
+  if (scope !== undefined) {
+    if (!SCOPES.includes(scope as Scope)) {
+      return { error: 'scope must be "call", "batch" or "conversation"' };
+    }
+    resolvedScope = scope as Scope;
+  } else if (approveAll === true && resolved === "allow") {
+    resolvedScope = "batch";
+  }
+
+  return {
+    valid: {
+      conversationId,
+      toolCallId: toolCallId as string | undefined,
+      resolved,
+      resolvedScope,
+      reason: typeof reason === "string" ? reason : undefined,
+      editedArgs: editedArgs as Record<string, unknown> | undefined,
+    },
+  };
+}
+
+function sendApprovalErrorResponse(
+  response: Response,
+  outcome: Awaited<ReturnType<typeof AgenticLoopService.decideApproval>>,
+  conversationId: string,
+  toolCallId?: string,
+): Response | null {
+  if (outcome.status === "invalid") {
+    return response.status(400).json({ error: outcome.error, conversationId });
+  }
+  if (outcome.status === "already_decided") {
+    return response.status(409).json({
+      error: "This approval was already decided",
+      conversationId,
+      ...(toolCallId ? { toolCallId } : {}),
+    });
+  }
+  if (outcome.status === "not_found") {
+    return response.status(404).json({
+      error: toolCallId
+        ? "No pending approval with this toolCallId"
+        : "No pending approval for this conversation",
+      conversationId,
+      ...(toolCallId ? { toolCallId } : {}),
+    });
+  }
+  if (outcome.status === "ambiguous") {
+    return response.status(400).json({
+      error: `toolCallId is required: ${outcome.pendingToolCallIds.length} calls are pending`,
+      conversationId,
+      pendingToolCallIds: outcome.pendingToolCallIds,
+    });
+  }
+  return null;
+}
+
 export function handleApprovalDecision(logPrefix: string) {
   return async (request: Request, response: Response) => {
-    const body: unknown = request.body;
-    if (!isPlainObject(body)) {
-      return response.status(400).json({ error: "Body must be a JSON object" });
+    const validation = validateApprovalRequestBody(request.body);
+    if ("error" in validation) {
+      return response.status(400).json({ error: validation.error });
     }
-    const { conversationId, toolCallId, decision, approved, approveAll, reason, editedArgs, scope } = body;
-
-    if (typeof conversationId !== "string" || !conversationId) {
-      return response.status(400).json({ error: "Missing conversationId" });
-    }
-
-    let resolved: Decision;
-    if (decision !== undefined) {
-      if (decision !== "allow" && decision !== "deny") {
-        return response.status(400).json({ error: 'decision must be "allow" or "deny"' });
-      }
-      resolved = decision;
-      if (approved !== undefined && approved !== (resolved === "allow")) {
-        return response.status(400).json({ error: "approved contradicts decision" });
-      }
-    } else if (approved === true || approved === false) {
-      resolved = approved ? "allow" : "deny";
-    } else {
-      return response.status(400).json({
-        error: 'Missing decision: send decision "allow" or "deny" (or a boolean approved)',
-      });
-    }
-
-    if (toolCallId !== undefined && (typeof toolCallId !== "string" || !toolCallId)) {
-      return response.status(400).json({ error: "toolCallId must be a non-empty string" });
-    }
-    if (reason !== undefined && reason !== null && typeof reason !== "string") {
-      return response.status(400).json({ error: "reason must be a string" });
-    }
-    if (editedArgs !== undefined && !isPlainObject(editedArgs)) {
-      return response.status(400).json({ error: "editedArgs must be a JSON object" });
-    }
-    let resolvedScope: Scope = "call";
-    if (scope !== undefined) {
-      if (!SCOPES.includes(scope as Scope)) {
-        return response.status(400).json({ error: 'scope must be "call", "batch" or "conversation"' });
-      }
-      resolvedScope = scope as Scope;
-    } else if (approveAll === true && resolved === "allow") {
-      resolvedScope = "batch";
-    }
+    const {
+      conversationId,
+      toolCallId,
+      resolved,
+      resolvedScope,
+      reason,
+      editedArgs,
+    } = validation.valid;
 
     const outcome = await AgenticLoopService.decideApproval(conversationId, {
       isApproved: resolved === "allow",
-      ...(toolCallId ? { toolCallId: toolCallId as string } : {}),
+      ...(toolCallId ? { toolCallId } : {}),
       batchWide: resolvedScope !== "call",
-      ...(typeof reason === "string" ? { reason } : {}),
-      ...(editedArgs !== undefined ? { editedArgs: editedArgs as Record<string, unknown> } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+      ...(editedArgs !== undefined ? { editedArgs } : {}),
     });
 
-    if (outcome.status === "invalid") {
-      return response.status(400).json({ error: outcome.error, conversationId });
-    }
-    if (outcome.status === "already_decided") {
-      return response.status(409).json({
-        error: "This approval was already decided",
-        conversationId,
-        ...(toolCallId ? { toolCallId } : {}),
-      });
-    }
-
-    if (outcome.status === "not_found") {
-      return response.status(404).json({
-        error: toolCallId
-          ? "No pending approval with this toolCallId"
-          : "No pending approval for this conversation",
-        conversationId,
-        ...(toolCallId ? { toolCallId } : {}),
-      });
-    }
-    if (outcome.status === "ambiguous") {
-      return response.status(400).json({
-        error: `toolCallId is required: ${outcome.pendingToolCallIds.length} calls are pending`,
-        conversationId,
-        pendingToolCallIds: outcome.pendingToolCallIds,
-      });
-    }
+    const errResp = sendApprovalErrorResponse(
+      response,
+      outcome,
+      conversationId,
+      toolCallId,
+    );
+    if (errResp) return errResp;
+    if (outcome.status !== "decided") return response.status(500).end();
 
     logger.info(
       `${logPrefix} ${resolved} ${outcome.decidedToolCallIds.join(", ")} (scope ${resolvedScope}${editedArgs !== undefined ? ", edited args" : ""}) for conversation ${conversationId}${outcome.delivered ? "" : " — stored, no live turn"}`,

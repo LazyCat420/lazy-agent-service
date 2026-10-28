@@ -77,358 +77,66 @@ export default class SystemPromptAssembler {
     const agentId = context.agent || AGENT_IDS.CODING;
     const persona = isDirectMode ? null : AgentPersonaRegistry.get(agentId);
     const isSubAgent = !!context.parentAgentConversationId;
-    // Memories and workflows (steps 9-10) are learned state. Sub-agents skip
-    // them, and so does a trading run, which also skips skills (step 8):
-    // trading owns its prompts and learning (TradingLearningBoundary).
-    // ported from prism-service src/services/system-prompt/index.ts (withoutLearnedState)
     const isTradingRun = excludesLearnedState(context.project);
     const withoutLearnedState = isSubAgent || isTradingRun;
-    // Lean personas (coreToolsLocked: false) asked for exactly their own tool
-    // set — don't graft the orchestrator tools onto it, or the orchestrator
-    // addendum below fires and re-bloats the prompt they opted out of.
-    if (
-      !isSubAgent &&
-      context.enabledTools &&
-      persona?.coreToolsLocked !== false
-    ) {
-      context.enabledTools = Array.from(
-        new Set([...context.enabledTools, ...ORCHESTRATOR_ONLY_TOOLS]),
-      );
+    if (!isSubAgent && context.enabledTools && persona?.coreToolsLocked !== false) {
+      context.enabledTools = Array.from(new Set([...context.enabledTools, ...ORCHESTRATOR_ONLY_TOOLS]));
     }
 
-    const codingFallback =
-      !isDirectMode && (!persona || persona.id === AGENT_IDS.CODING);
-
+    const codingFallback = !isDirectMode && (!persona || persona.id === AGENT_IDS.CODING);
     const settings = await SettingsService.getSection("agents");
     const defaultTopology = settings?.topology || DEFAULT_TOPOLOGY;
     const locale = context.locale || settings?.locale || PromptLocaleService.getDefaultLocale();
 
-    // ── 1. Agent Identity ────────────────────────────────────────
-    if (isDirectMode) {
-      sections.push(
-        PromptLocaleService.get(locale, "system-prompt.directModeIdentity"),
-      );
-    } else if (persona) {
-      const identityText =
-        typeof persona.identity === "function"
-          ? persona.identity({ ...context, locale })
-          : persona.identity;
-      sections.push(identityText);
-    } else {
-      sections.push(
-        PromptLocaleService.get(locale, "system-prompt.codingFallbackIdentity"),
-      );
-    }
+    // ── 1 & 1b. Agent Identity & Platform Rules ─────────────────
+    appendIdentityAndPlatformRuleSections(isDirectMode, persona, context, locale, sections);
 
-    // ── 1b. Platform-Specific Rules ──────────────────────────────
-    if (persona?.platformRules && context.agentContext?.platform) {
-      const platformKey = context.agentContext.platform;
-      const platformSection = persona.platformRules[platformKey];
-      if (platformSection) {
-        const platformText =
-          typeof platformSection === "function"
-            ? platformSection({ ...context, locale })
-            : platformSection;
-        if (platformText) sections.push(platformText);
-      }
-    }
-
-    // ── 2. Runtime Context (from caller) ──────────────────────────
-    // Platform context and self context are collected into separate
-    // arrays — they become distinct role:"system" messages instead of
-    // being concatenated into the main system prompt.
+    // ── 2. Runtime & Somatic Context ────────────────────────────
     const platformContextSections: string[] = [];
     const selfContextSections: string[] = [];
-
     if (context.agentContext) {
-      const agentContext = context.agentContext;
-
-      // ── 2a. Platform Context (separate SYSTEM message) ──────────
-      // Runtime platform data (server/channel/participant info, matched
-      // knowledge, image captions, IDs). Injected as its own system
-      // message so the LLM sees it as a distinct instruction block.
-      const platformContext = agentContext.platformContext;
-      if (platformContext) {
-        if (platformContext.description) {
-          platformContextSections.push(platformContext.description);
-        }
-        if (platformContext.serverContext) {
-          platformContextSections.push(platformContext.serverContext);
-        }
-        if (platformContext.imageContext) {
-          platformContextSections.push(platformContext.imageContext);
-        }
-        if (platformContext.ids) {
-          platformContextSections.push(platformContext.ids);
-        }
-      } else {
-        // Legacy flat fields — backward compatible
-        if (agentContext.discordContext) {
-          platformContextSections.push(agentContext.discordContext);
-        }
-        if (agentContext.serverContext) {
-          platformContextSections.push(agentContext.serverContext);
-        }
-        if (agentContext.imageContext) {
-          platformContextSections.push(agentContext.imageContext);
-        }
-        if (agentContext.guildId) {
-          let idsBlock = `# Discord IDs\n- Guild ID: ${agentContext.guildId}`;
-          if (agentContext.channelId)
-            idsBlock += `\n- Channel ID: ${agentContext.channelId}`;
-          platformContextSections.push(idsBlock);
-        }
-      }
-
-      // Agent-specific runtime context (non-platform, non-self)
-      // These remain in the main system prompt for now
-      if (agentContext.clockCrewContext) {
-        sections.push(agentContext.clockCrewContext);
-      }
-      if (agentContext.stickersContext) {
-        sections.push(agentContext.stickersContext);
-      }
-      if (agentContext.emotionContext) {
-        sections.push(agentContext.emotionContext);
-      }
-      if (agentContext.visualContext) {
-        sections.push(agentContext.visualContext);
-      }
-      if (agentContext.lightsContext) {
-        sections.push(agentContext.lightsContext);
-      }
+      collectPlatformAndRuntimeContext(context.agentContext, sections, platformContextSections);
     }
-
-    // ── 2b. Self Context (separate SYSTEM message) ──────────────
-    // Somatic state is agent-level (not platform-level). Runs for any
-    // agent with hasSomaticState, regardless of whether agentContext
-    // is present. This ensures prism-client Lupos gets somatic state
-    // even though only Discord sends agentContext.
-    // Sub-agents are ephemeral workers — they don't maintain emotional
-    // continuity, so somatic adaptation is skipped entirely.
     if (persona?.hasSomaticState && agentId && !isSubAgent) {
-      const userMessages =
-        context.messages?.filter((message) => message.role === "user") || [];
-      const latestUserMessage = userMessages[userMessages.length - 1];
-      if (latestUserMessage && typeof latestUserMessage.content === "string") {
-        await SomaticStateService.adaptFromMessage(
-          agentId,
-          latestUserMessage.content,
-          {
-            traceId: context.traceId,
-            agentConversationId: context.agentConversationId,
-            endpoint: context.agentContext?.endpoint || "/agent",
-            project: context.project,
-            username: context.username,
-          },
-        );
-      }
-
-      const somaticMessage =
-        await SomaticStateService.renderSystemMessage(agentId, locale);
-      if (somaticMessage) {
-        selfContextSections.push(somaticMessage);
-      }
+      await collectSomaticSelfContext(agentId, context, locale, selfContextSections);
     }
 
-    // ── 3. Tool Policy (persona-specific) ────────────────────────
+    // ── 3. Tool Policy ──────────────────────────────────────────
     if (persona?.toolPolicy) {
       const policyText =
-        typeof persona.toolPolicy === "function"
-          ? persona.toolPolicy({ ...context, locale })
-          : persona.toolPolicy;
+        typeof persona.toolPolicy === "function" ? persona.toolPolicy({ ...context, locale }) : persona.toolPolicy;
       if (policyText) sections.push(policyText);
     }
 
-    // ── 4. Enabled Tools (domain-grouped) ──────────────────────
-    {
-      // Guarantee locale-specific remote tool schemas are cached
-      // before the synchronous buildToolDescriptions() reads them.
-      await ToolOrchestratorService.ensureSchemas(locale);
-      const lockedOffToolNames = await resolveLockedOffToolNames();
-      const isCompactToolDocs = persona?.compactToolDocs === true;
-      const toolDescriptions = this.buildToolDescriptions(
-        context.enabledTools,
-        agentId,
-        defaultTopology,
-        context.resolvedToolNames,
-        lockedOffToolNames,
-        isCompactToolDocs,
-        locale,
-        context.loadedTools,
-      );
-      if (toolDescriptions) {
-        let count: number;
-        if (context.resolvedToolNames?.length) {
-          count =
-            lockedOffToolNames.size > 0
-              ? context.resolvedToolNames.filter(
-                  (toolName) => !lockedOffToolNames.has(toolName),
-                ).length
-              : context.resolvedToolNames.length;
-        } else {
-          const schemas =
-            ToolOrchestratorService.getClientToolSchemas(defaultTopology, locale);
-          count =
-            lockedOffToolNames.size > 0
-              ? schemas.filter(
-                  (toolSchema) =>
-                    !lockedOffToolNames.has(toolSchema.name as string),
-                ).length
-              : schemas.length;
-          if (context.enabledTools) {
-            const hasPrefixed = context.enabledTools.some(
-              (enabledTool) =>
-                enabledTool.startsWith("domain:") ||
-                enabledTool.startsWith("domainKey:"),
-            );
-            const enabledSet = hasPrefixed
-              ? resolveToolEntriesToSet(context.enabledTools, schemas)
-              : new Set(context.enabledTools);
-
-            const countPersona = agentId
-              ? AgentPersonaRegistry.get(agentId)
-              : null;
-            const isCoreToolsLockedForCount =
-              countPersona?.coreToolsLocked ?? true;
-
-            let filteredSchemas = schemas.filter(
-              (toolSchema) =>
-                enabledSet.has(toolSchema.name as string) ||
-                (isCoreToolsLockedForCount &&
-                  (isCoreDomain(
-                    ((toolSchema as Record<string, unknown>)
-                      .domain as string) || "",
-                  ) ||
-                    CORE_AGENTIC_TOOLS.has(toolSchema.name as string))),
-            );
-
-            if (agentId) {
-              const assemblerPersona = AgentPersonaRegistry.get(agentId);
-              if (assemblerPersona?.blockedTools?.length) {
-                const disabledSet = resolveToolEntriesToSet(
-                  assemblerPersona.blockedTools,
-                  schemas,
-                );
-                filteredSchemas = filteredSchemas.filter(
-                  (toolSchema) =>
-                    !disabledSet.has(toolSchema.name as string) ||
-                    enabledSet.has(toolSchema.name as string),
-                );
-              }
-            }
-
-            if (lockedOffToolNames.size > 0) {
-              filteredSchemas = filteredSchemas.filter(
-                (toolSchema) =>
-                  !lockedOffToolNames.has(toolSchema.name as string),
-              );
-            }
-
-            count = filteredSchemas.length;
-          }
-        }
-        const header = PromptLocaleService.get(locale, "system-prompt.enabledToolsHeader", { count: String(count) });
-        sections.push(header + "\n" + toolDescriptions);
-      }
-    }
-
-    // ── 5. Guidelines ─────────────────────────────────────────────
-    if (!isDirectMode) {
-      if (persona?.guidelines) {
-        sections.push(persona.guidelines);
-      } else if (codingFallback || persona?.usesCodingGuidelines) {
-        sections.push(
-          PromptLocaleService.get(locale, "system-prompt.codingGuidelines") +
-          PromptLocaleService.get(locale, "system-prompt.commandExecutionGuidelines"),
-        );
-      }
-    }
-
-    // ── 5b. Orchestrator Mode Addendum (when orchestrator tools available) ──
-    if (!isDirectMode) {
-      const resolvedEnabledSet = (() => {
-        if (!context.enabledTools) return null;
-        const hasPrefixed = context.enabledTools.some(
-          (entry) =>
-            entry.startsWith("domain:") || entry.startsWith("domainKey:"),
-        );
-        if (hasPrefixed) {
-          const schemas =
-            ToolOrchestratorService.getClientToolSchemas(defaultTopology, locale);
-          return resolveToolEntriesToSet(context.enabledTools, schemas);
-        }
-        return new Set(context.enabledTools);
-      })();
-      // Persona-only callers have no context.enabledTools, which used to
-      // default this to "orchestrator available" — a lean persona would get
-      // the whole team-spawning addendum it never asked for.
-      const orchestratorAvailable =
-        persona?.coreToolsLocked === false
-          ? false
-          : resolvedEnabledSet
-            ? ORCHESTRATOR_ONLY_TOOLS.some((toolName: string) =>
-                resolvedEnabledSet.has(toolName),
-              )
-            : true;
-
-      if (orchestratorAvailable) {
-        const allSchemas =
-          ToolOrchestratorService.getToolSchemas(defaultTopology, locale);
-        const orchestratorSet = new Set(ORCHESTRATOR_ONLY_TOOLS);
-        const lockedOffSet = await resolveLockedOffToolNames();
-
-        // Build the sub-agent tool list from only the enabled tools
-        // (not the full catalog). Sub-agents inherit the parent's
-        // enabled set minus orchestrator-only tools.
-        let enabledToolNames: string[];
-        if (context.resolvedToolNames?.length) {
-          enabledToolNames = context.resolvedToolNames;
-        } else if (context.enabledTools?.length) {
-          const hasPrefixed = context.enabledTools.some(
-            (entry) =>
-              entry.startsWith("domain:") || entry.startsWith("domainKey:"),
-          );
-          const clientSchemas =
-            ToolOrchestratorService.getClientToolSchemas(defaultTopology, locale);
-          const enabledSet = hasPrefixed
-            ? resolveToolEntriesToSet(context.enabledTools, clientSchemas)
-            : new Set(context.enabledTools);
-          enabledToolNames = allSchemas
-            .map((tool) => tool.name as string)
-            .filter(
-              (toolName) =>
-                enabledSet.has(toolName) || CORE_AGENTIC_TOOLS.has(toolName),
-            );
-        } else {
-          enabledToolNames = allSchemas.map((tool) => tool.name as string);
-        }
-
-        const subAgentTools = enabledToolNames.filter(
-          (toolName) =>
-            !orchestratorSet.has(toolName) && !lockedOffSet.has(toolName),
-        );
-        sections.push(
-          getOrchestratorPromptAddendum({ subAgentTools, defaultTopology, locale }),
-        );
-      }
-    }
-
-    // ── 6. Environment ───────────────────────────────────────────
-    const isWorkspaceEnabled = context.workspaceEnabled !== false;
-    const environmentLines = [PromptLocaleService.get(locale, "system-prompt.environmentOsLine")];
-    if (isWorkspaceEnabled) {
-      environmentLines.push(
-        PromptLocaleService.get(locale, "system-prompt.environmentWorkspaceLine", {
-          workspaceRoot: this.workspaceRoot,
-        }),
-      );
-    }
-    sections.push(
-      PromptLocaleService.get(locale, "system-prompt.environmentHeader") + `\n` + environmentLines.join(`\n`),
+    // ── 4. Enabled Tools (domain-grouped) ───────────────────────
+    await ToolOrchestratorService.ensureSchemas(locale);
+    const lockedOffToolNames = await resolveLockedOffToolNames();
+    const toolDescriptions = this.buildToolDescriptions(
+      context.enabledTools,
+      agentId,
+      defaultTopology,
+      context.resolvedToolNames,
+      lockedOffToolNames,
+      persona?.compactToolDocs === true,
+      locale,
+      context.loadedTools,
     );
+    if (toolDescriptions) {
+      const count = countEnabledToolsForHeader(context, agentId, defaultTopology, locale, lockedOffToolNames);
+      const header = PromptLocaleService.get(locale, "system-prompt.enabledToolsHeader", { count: String(count) });
+      sections.push(header + "\n" + toolDescriptions);
+    }
 
-    // ── 7. Project Structure (cached) ────────────────────────────
+    // ── 5 & 5b. Guidelines & Orchestrator Addendum ──────────────
+    appendGuidelineSections(isDirectMode, persona, codingFallback, locale, sections);
+    if (!isDirectMode) {
+      const addendum = await buildOrchestratorAddendumSection(context, persona, defaultTopology, locale);
+      if (addendum) sections.push(addendum);
+    }
+
+    // ── 6 & 7. Environment & Project Structure ──────────────────
+    const isWorkspaceEnabled = context.workspaceEnabled !== false;
+    appendEnvironmentSection(isWorkspaceEnabled, this.workspaceRoot, locale, sections);
     if (isWorkspaceEnabled && (codingFallback || persona?.usesDirectoryTree)) {
       const dirTree = await this.fetchDirectoryTree();
       if (dirTree) {
@@ -437,115 +145,22 @@ export default class SystemPromptAssembler {
       }
     }
 
-    // ── 8. Project Skills (relevance-filtered) ────────────────────
-    const lastUserMessage = [...(context.messages || [])]
-      .reverse()
-      .find((message) => message.role === "user");
-    const queryText = (lastUserMessage?.content as string) || "";
-
-    const skills = isTradingRun ? [] : await this.scorer.fetchSkills(
-      context.project || null,
-      context.username || "",
-      queryText,
-      {
-        traceId: context.traceId,
-        agentConversationId: context.agentConversationId,
-        endpoint: "/agent",
-        agent: agentId,
-      },
+    // ── 8, 9, 10. Skills, Conversation Memory, Workflow Memory ──
+    const { skillNames, skillsText, memoriesText, workflowsText } = await fetchLearnedContextBlocks(
+      this.scorer,
+      context,
+      agentId,
+      isTradingRun,
+      withoutLearnedState,
     );
-    const skillNames: string[] = [];
-    let skillsText = "";
-    if (skills.length > 0) {
-      const skillBlocks = skills.map((s) => {
-        skillNames.push(s.name);
-        return `### ${s.name}\n${s.content}`;
-      });
-      skillsText =
-        `${PROMPT_DELIMITERS.PROJECT_SKILLS}\n` + skillBlocks.join("\n\n");
-    }
 
-    // ── 9. Conversation Memory (embedding search) ────────────────────
-    // Sub-agents are ephemeral workers with isolated context windows.
-    // They receive only the task prompt from the orchestrator — injecting
-    // the parent user's long-term memory would add irrelevant noise and
-    // waste tokens. This aligns with the industry-standard pattern used
-    // by LangGraph, CrewAI, AutoGen, Google ADK, and OpenAI Agents SDK.
-    const memoryQuery = queryText || context.project || "";
-    let memoriesText = "";
-
-    if (memoryQuery && !withoutLearnedState) {
-      const agentContextForMemory = context.agentContext || {};
-      const memoryGuildId = agentContextForMemory.guildId;
-      const memoryUserIds = agentContextForMemory.participantUserIds;
-
-      const memories = await this.scorer.fetchMemories(
-        agentId,
-        context.project || null,
-        memoryQuery,
-        {
-          traceId: context.traceId,
-          agentConversationId: context.agentConversationId,
-          conversationId: context.conversationId as string | null,
-          endpoint: "/agent",
-          _username: context.username,
-          guildId: memoryGuildId,
-          userIds: memoryUserIds,
-        },
-      );
-      if (memories) {
-        memoriesText = `${PROMPT_DELIMITERS.AGENT_MEMORY}\n` + memories;
-      }
-    }
-
-    // ── 10. Workflow Memory (cross-conversation procedural learning) ──
-    // Same rationale as Step 9 — sub-agents don't need cross-conversation
-    // procedural workflows. They execute a single task and are destroyed.
-    let workflowsText = "";
-    if (memoryQuery && !withoutLearnedState) {
-      try {
-        const workflows = await WorkflowMemoryService.retrieveRelevantWorkflows(
-          agentId,
-          context.project || null,
-          memoryQuery,
-          {
-            traceId: context.traceId,
-            agentConversationId: context.agentConversationId,
-            conversationId: context.conversationId as string | null,
-            endpoint: "/agent",
-            username: context.username,
-          },
-        );
-        if (workflows) {
-          workflowsText = workflows;
-        }
-      } catch (error: unknown) {
-        logger.error(
-          `[SystemPromptAssembler] Workflow memory retrieval failed: ${getErrorMessage(error)}`,
-        );
-      }
-    }
-
-    // ── 11. Current Date (A6): ground the model in today's date ──
-    const now = new Date();
-    const tz = process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const currentDateLine =
-      `Current date: ${new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now)}` +
-      ` (${new Intl.DateTimeFormat("en-CA", { timeZone: tz, weekday: "long" }).format(now)}), timezone ${tz}`;
-    // Replace any pre-existing date line instead of stacking a second one.
-    const datedSections = sections.map((s) => s.split("\n").filter((l) => !l.startsWith("Current date: ")).join("\n").trim()).filter((s) => s.length > 0);
-    datedSections.unshift(currentDateLine);
+    // ── 11. Current Date (A6) ───────────────────────────────────
+    const datedSections = formatDatedSystemSections(sections);
 
     return {
       prompt: datedSections.join("\n\n"),
-      platformContextMessage:
-        platformContextSections.length > 0
-          ? platformContextSections.join("\n\n")
-          : null,
-      selfContextMessage:
-        selfContextSections.length > 0
-          ? selfContextSections.join("\n\n")
-          : null,
+      platformContextMessage: platformContextSections.length > 0 ? platformContextSections.join("\n\n") : null,
+      selfContextMessage: selfContextSections.length > 0 ? selfContextSections.join("\n\n") : null,
       skillNames,
       skillsText,
       memoriesText,
@@ -707,6 +322,333 @@ export function injectSystemPromptContext(
       }
     }
   }
+}
+
+function appendIdentityAndPlatformRuleSections(
+  isDirectMode: boolean,
+  persona: ReturnType<typeof AgentPersonaRegistry.get>,
+  context: AssemblerContext,
+  locale: string,
+  sections: string[],
+): void {
+  if (isDirectMode) {
+    sections.push(PromptLocaleService.get(locale, "system-prompt.directModeIdentity"));
+  } else if (persona) {
+    const identityText =
+      typeof persona.identity === "function" ? persona.identity({ ...context, locale }) : persona.identity;
+    sections.push(identityText);
+  } else {
+    sections.push(PromptLocaleService.get(locale, "system-prompt.codingFallbackIdentity"));
+  }
+  if (persona?.platformRules && context.agentContext?.platform) {
+    const platformSection = persona.platformRules[context.agentContext.platform];
+    if (platformSection) {
+      const platformText =
+        typeof platformSection === "function" ? platformSection({ ...context, locale }) : platformSection;
+      if (platformText) sections.push(platformText);
+    }
+  }
+}
+
+function collectPlatformAndRuntimeContext(
+  agentContext: NonNullable<AssemblerContext["agentContext"]>,
+  sections: string[],
+  platformContextSections: string[],
+): void {
+  const platformContext = agentContext.platformContext;
+  if (platformContext) {
+    for (const part of [
+      platformContext.description,
+      platformContext.serverContext,
+      platformContext.imageContext,
+      platformContext.ids,
+    ]) {
+      if (part) platformContextSections.push(part);
+    }
+  } else {
+    for (const part of [agentContext.discordContext, agentContext.serverContext, agentContext.imageContext]) {
+      if (part) platformContextSections.push(part);
+    }
+    if (agentContext.guildId) {
+      let idsBlock = `# Discord IDs\n- Guild ID: ${agentContext.guildId}`;
+      if (agentContext.channelId) idsBlock += `\n- Channel ID: ${agentContext.channelId}`;
+      platformContextSections.push(idsBlock);
+    }
+  }
+  for (const part of [
+    agentContext.clockCrewContext,
+    agentContext.stickersContext,
+    agentContext.emotionContext,
+    agentContext.visualContext,
+    agentContext.lightsContext,
+  ]) {
+    if (part) sections.push(part);
+  }
+}
+
+async function collectSomaticSelfContext(
+  agentId: string,
+  context: AssemblerContext,
+  locale: string,
+  selfContextSections: string[],
+): Promise<void> {
+  const userMessages = context.messages?.filter((message) => message.role === "user") || [];
+  const latestUserMessage = userMessages[userMessages.length - 1];
+  if (latestUserMessage && typeof latestUserMessage.content === "string") {
+    await SomaticStateService.adaptFromMessage(agentId, latestUserMessage.content, {
+      traceId: context.traceId,
+      agentConversationId: context.agentConversationId,
+      endpoint: context.agentContext?.endpoint || "/agent",
+      project: context.project,
+      username: context.username,
+    });
+  }
+  const somaticMessage = await SomaticStateService.renderSystemMessage(agentId, locale);
+  if (somaticMessage) {
+    selfContextSections.push(somaticMessage);
+  }
+}
+
+function isSchemaIncludedInHeaderCount(
+  toolSchema: Record<string, unknown>,
+  enabledSet: Set<string>,
+  isCoreToolsLockedForCount: boolean,
+): boolean {
+  const name = toolSchema.name as string;
+  if (enabledSet.has(name)) return true;
+  if (!isCoreToolsLockedForCount) return false;
+  const domain = (toolSchema.domain as string) || "";
+  return isCoreDomain(domain) || CORE_AGENTIC_TOOLS.has(name);
+}
+
+function countEnabledToolsForHeader(
+  context: AssemblerContext,
+  agentId: string,
+  defaultTopology: string,
+  locale: string,
+  lockedOffToolNames: Set<string>,
+): number {
+  if (context.resolvedToolNames?.length) {
+    return context.resolvedToolNames.filter((toolName) => !lockedOffToolNames.has(toolName)).length;
+  }
+  const schemas = ToolOrchestratorService.getClientToolSchemas(defaultTopology, locale);
+  if (!context.enabledTools) {
+    return schemas.filter((toolSchema) => !lockedOffToolNames.has(toolSchema.name as string)).length;
+  }
+  const hasPrefixed = context.enabledTools.some(
+    (enabledTool) => enabledTool.startsWith("domain:") || enabledTool.startsWith("domainKey:"),
+  );
+  const enabledSet = hasPrefixed
+    ? resolveToolEntriesToSet(context.enabledTools, schemas)
+    : new Set(context.enabledTools);
+  const countPersona = agentId ? AgentPersonaRegistry.get(agentId) : null;
+  const isCoreToolsLockedForCount = countPersona?.coreToolsLocked ?? true;
+
+  let filteredSchemas = schemas.filter((toolSchema) =>
+    isSchemaIncludedInHeaderCount(
+      toolSchema as Record<string, unknown>,
+      enabledSet,
+      isCoreToolsLockedForCount,
+    ),
+  );
+  if (countPersona?.blockedTools?.length) {
+    const disabledSet = resolveToolEntriesToSet(countPersona.blockedTools, schemas);
+    filteredSchemas = filteredSchemas.filter(
+      (toolSchema) =>
+        !disabledSet.has(toolSchema.name as string) || enabledSet.has(toolSchema.name as string),
+    );
+  }
+  return filteredSchemas.filter((toolSchema) => !lockedOffToolNames.has(toolSchema.name as string)).length;
+}
+
+function appendGuidelineSections(
+  isDirectMode: boolean,
+  persona: ReturnType<typeof AgentPersonaRegistry.get>,
+  codingFallback: boolean,
+  locale: string,
+  sections: string[],
+): void {
+  if (isDirectMode) return;
+  if (persona?.guidelines) {
+    sections.push(persona.guidelines);
+  } else if (codingFallback || persona?.usesCodingGuidelines) {
+    sections.push(
+      PromptLocaleService.get(locale, "system-prompt.codingGuidelines") +
+        PromptLocaleService.get(locale, "system-prompt.commandExecutionGuidelines"),
+    );
+  }
+}
+
+async function buildOrchestratorAddendumSection(
+  context: AssemblerContext,
+  persona: ReturnType<typeof AgentPersonaRegistry.get>,
+  defaultTopology: string,
+  locale: string,
+): Promise<string | null> {
+  if (persona?.coreToolsLocked === false) return null;
+  let resolvedEnabledSet: Set<string> | null = null;
+  if (context.enabledTools) {
+    const hasPrefixed = context.enabledTools.some(
+      (entry) => entry.startsWith("domain:") || entry.startsWith("domainKey:"),
+    );
+    const schemas = hasPrefixed ? ToolOrchestratorService.getClientToolSchemas(defaultTopology, locale) : [];
+    resolvedEnabledSet = hasPrefixed ? resolveToolEntriesToSet(context.enabledTools, schemas) : new Set(context.enabledTools);
+  }
+  const orchestratorAvailable = resolvedEnabledSet
+    ? ORCHESTRATOR_ONLY_TOOLS.some((toolName: string) => resolvedEnabledSet.has(toolName))
+    : true;
+  if (!orchestratorAvailable) return null;
+
+  const allSchemas = ToolOrchestratorService.getToolSchemas(defaultTopology, locale);
+  const orchestratorSet = new Set(ORCHESTRATOR_ONLY_TOOLS);
+  const lockedOffSet = await resolveLockedOffToolNames();
+  const enabledToolNames = resolveEnabledOrchestratorToolNames(context, allSchemas, defaultTopology, locale);
+  const subAgentTools = enabledToolNames.filter(
+    (toolName) => !orchestratorSet.has(toolName) && !lockedOffSet.has(toolName),
+  );
+  return getOrchestratorPromptAddendum({ subAgentTools, defaultTopology, locale });
+}
+
+function resolveEnabledOrchestratorToolNames(
+  context: AssemblerContext,
+  allSchemas: Array<{ name?: unknown }>,
+  defaultTopology: string,
+  locale: string,
+): string[] {
+  if (context.resolvedToolNames?.length) {
+    return context.resolvedToolNames;
+  }
+  if (context.enabledTools?.length) {
+    const hasPrefixed = context.enabledTools.some(
+      (entry) => entry.startsWith("domain:") || entry.startsWith("domainKey:"),
+    );
+    const clientSchemas = ToolOrchestratorService.getClientToolSchemas(defaultTopology, locale);
+    const enabledSet = hasPrefixed
+      ? resolveToolEntriesToSet(context.enabledTools, clientSchemas)
+      : new Set(context.enabledTools);
+    return allSchemas
+      .map((tool) => tool.name as string)
+      .filter((toolName) => enabledSet.has(toolName) || CORE_AGENTIC_TOOLS.has(toolName));
+  }
+  return allSchemas.map((tool) => tool.name as string);
+}
+
+function appendEnvironmentSection(
+  isWorkspaceEnabled: boolean,
+  workspaceRoot: string,
+  locale: string,
+  sections: string[],
+): void {
+  const environmentLines = [PromptLocaleService.get(locale, "system-prompt.environmentOsLine")];
+  if (isWorkspaceEnabled) {
+    environmentLines.push(
+      PromptLocaleService.get(locale, "system-prompt.environmentWorkspaceLine", { workspaceRoot }),
+    );
+  }
+  sections.push(PromptLocaleService.get(locale, "system-prompt.environmentHeader") + `\n` + environmentLines.join(`\n`));
+}
+
+async function fetchMemoriesAndWorkflowsForPrompt(
+  scorer: SystemPromptAssembler["scorer"],
+  context: AssemblerContext,
+  agentId: string,
+  memoryQuery: string,
+): Promise<{ memoriesText: string; workflowsText: string }> {
+  const agentContextForMemory = context.agentContext || {};
+  const memories = await scorer.fetchMemories(agentId, context.project || null, memoryQuery, {
+    traceId: context.traceId,
+    agentConversationId: context.agentConversationId,
+    conversationId: context.conversationId as string | null,
+    endpoint: "/agent",
+    _username: context.username,
+    guildId: agentContextForMemory.guildId,
+    userIds: agentContextForMemory.participantUserIds,
+  });
+  const memoriesText = memories ? `${PROMPT_DELIMITERS.AGENT_MEMORY}\n` + memories : "";
+  let workflowsText = "";
+  try {
+    const workflows = await WorkflowMemoryService.retrieveRelevantWorkflows(
+      agentId,
+      context.project || null,
+      memoryQuery,
+      {
+        traceId: context.traceId,
+        agentConversationId: context.agentConversationId,
+        conversationId: context.conversationId as string | null,
+        endpoint: "/agent",
+        username: context.username,
+      },
+    );
+    if (workflows) workflowsText = workflows;
+  } catch (error: unknown) {
+    logger.error(`[SystemPromptAssembler] Workflow memory retrieval failed: ${getErrorMessage(error)}`);
+  }
+  return { memoriesText, workflowsText };
+}
+
+async function fetchLearnedContextBlocks(
+  scorer: SystemPromptAssembler["scorer"],
+  context: AssemblerContext,
+  agentId: string,
+  isTradingRun: boolean,
+  withoutLearnedState: boolean,
+): Promise<{
+  skillNames: string[];
+  skillsText: string;
+  memoriesText: string;
+  workflowsText: string;
+}> {
+  const lastUserMessage = [...(context.messages || [])].reverse().find((message) => message.role === "user");
+  const queryText = (lastUserMessage?.content as string) || "";
+
+  const skills = isTradingRun
+    ? []
+    : await scorer.fetchSkills(context.project || null, context.username || "", queryText, {
+        traceId: context.traceId,
+        agentConversationId: context.agentConversationId,
+        endpoint: "/agent",
+        agent: agentId,
+      });
+  const skillNames: string[] = [];
+  let skillsText = "";
+  if (skills.length > 0) {
+    const skillBlocks = skills.map((s) => {
+      skillNames.push(s.name);
+      return `### ${s.name}\n${s.content}`;
+    });
+    skillsText = `${PROMPT_DELIMITERS.PROJECT_SKILLS}\n` + skillBlocks.join("\n\n");
+  }
+
+  const memoryQuery = queryText || context.project || "";
+  if (!memoryQuery || withoutLearnedState) {
+    return { skillNames, skillsText, memoriesText: "", workflowsText: "" };
+  }
+  const { memoriesText, workflowsText } = await fetchMemoriesAndWorkflowsForPrompt(
+    scorer,
+    context,
+    agentId,
+    memoryQuery,
+  );
+  return { skillNames, skillsText, memoriesText, workflowsText };
+}
+
+function formatDatedSystemSections(sections: string[]): string[] {
+  const now = new Date();
+  const tz = process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const currentDateLine =
+    `Current date: ${new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now)}` +
+    ` (${new Intl.DateTimeFormat("en-CA", { timeZone: tz, weekday: "long" }).format(now)}), timezone ${tz}`;
+  const datedSections = sections
+    .map((s) =>
+      s
+        .split("\n")
+        .filter((l) => !l.startsWith("Current date: "))
+        .join("\n")
+        .trim(),
+    )
+    .filter((s) => s.length > 0);
+  datedSections.unshift(currentDateLine);
+  return datedSections;
 }
 
 export { SystemPromptAssembler };

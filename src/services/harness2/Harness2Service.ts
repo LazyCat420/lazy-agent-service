@@ -360,6 +360,129 @@ function adoptionBlock(selection: Selection, chosenTreeIsBase: boolean): string 
   return `# ADOPTION\n\n${lines.join("\n")}`;
 }
 
+function loadHarnessLibraryContext(
+  library: Library,
+  taskId: string,
+  errors: string[],
+): { libraryEntriesBefore: number; libraryText: string } {
+  try {
+    const libraryEntriesBefore = library.entries().length;
+    const libraryText = library.contextText({ exclude: [taskId] });
+    return { libraryEntriesBefore, libraryText };
+  } catch (error) {
+    errors.push(`library read failed, running without it: ${errText(error)}`);
+    return { libraryEntriesBefore: 0, libraryText: "" };
+  }
+}
+
+function recordProposerStageFallbacks(
+  result: ModeResult,
+  errors: string[],
+): boolean {
+  const proposerDown = result.stages.filter(
+    (s) => s.fellBack && s.error.startsWith("proposer failed"),
+  );
+  const improverFailed =
+    proposerDown.length > 0 && proposerDown.length === result.stages.length;
+  if (improverFailed) {
+    errors.push(
+      `every stage fell back on a proposer failure, so no harness was adapted: ${proposerDown[0].error}`,
+    );
+  } else {
+    for (const s of proposerDown) {
+      errors.push(`${s.label} fell back on a proposer failure: ${s.error}`);
+    }
+  }
+  return improverFailed;
+}
+
+function resolveSelectionOutcome(
+  req: Harness2Request,
+  result: ModeResult,
+  selection: Selection,
+  improverFailed: boolean,
+  errors: string[],
+) {
+  if (selection.error) errors.push(`selection: ${selection.error}`);
+  const chosen = selection.chosenLabel
+    ? result.rollouts[selection.chosenLabel]
+    : undefined;
+  const adoptedTree =
+    !chosen || selection.chosenLabel.startsWith("base")
+      ? req.baseTree
+      : result.trees[selection.chosenLabel];
+  let status: Harness2Status = "selection-fallback";
+  if (improverFailed) status = "improver-failed";
+  else if (!chosen) status = "no-output";
+  else if (selection.ok) status = "ok";
+
+  const outcome = {
+    adoptedTree,
+    chosenTreeIsBase: isUnchanged(req.baseTree, adoptedTree),
+    output: chosen?.output ?? "",
+  };
+  return { chosen, adoptedTree, status, outcome };
+}
+
+async function reflectAndStoreHarnessExperience(
+  req: Harness2Request,
+  bp: BenchPrompts,
+  base: RunView[],
+  result: ModeResult,
+  selection: Selection,
+  adoptedTree: Tree,
+  chosenTreeIsBase: boolean,
+  propose: Proposer,
+  library: Library,
+  budget: number,
+  errors: string[],
+): Promise<{
+  learned: boolean;
+  experience: Harness2Result["experience"];
+  libraryEntry: string | null;
+}> {
+  const candidates = result.stages.map((s) => ({
+    label: s.label,
+    tree: s.tree,
+    rollout: result.rollouts[s.label],
+  }));
+  const reflection =
+    buildMission(prompts.experience(bp), {
+      current: req.baseTree,
+      currentTitle: "BASE HARNESS",
+      base,
+      pool: candidates,
+      decisions: decisionsOf(result.stages),
+      diffBase: { name: "base", tree: req.baseTree },
+      budget,
+    }) + `\n\n${adoptionBlock(selection, chosenTreeIsBase)}`;
+  let raw = "";
+  try {
+    raw = await propose(reflection, "experience");
+  } catch (error) {
+    errors.push(`experience reflection failed: ${errText(error)}`);
+    logger.warn(`[harness2] experience reflection failed: ${errText(error)}`);
+  }
+  const exp = parseExperience(raw);
+  let libraryEntry: string | null = null;
+  if (exp.entry) {
+    try {
+      libraryEntry = library.add(req.taskId, adoptedTree, {
+        why: selection.why,
+        label: selection.chosenLabel,
+        experience: exp.entry,
+      });
+    } catch (error) {
+      errors.push(`library entry not stored: ${errText(error)}`);
+    }
+  }
+  return {
+    learned: libraryEntry !== null,
+    experience: { ...exp, raw },
+    libraryEntry,
+  };
+}
+
 /**
  * Run one task: base rollouts → recursion → select → reflect → library. `execute` and
  * `propose` are injectable for tests; the route uses the real ones.
@@ -373,19 +496,19 @@ export async function runHarness2(
   const bp: BenchPrompts = { ...req.bench, work: req.bench?.work || req.task };
   const signal = deps.signal;
   const execute = deps.execute ?? makeExecutor(req, { signal });
-  const propose = deps.propose ?? makeProposer(req.improver ?? DEFAULT_IMPROVER, { signal });
+  const propose =
+    deps.propose ?? makeProposer(req.improver ?? DEFAULT_IMPROVER, { signal });
   const errors: string[] = [];
   const library = new Library(req.domain, req.libraryRoot);
-  let libraryEntriesBefore = 0;
-  let libraryText = "";
-  try {
-    libraryEntriesBefore = library.entries().length;
-    // Upstream retain(): only earlier tasks; a re-run must not read its own entry.
-    libraryText = library.contextText({ exclude: [req.taskId] });
-  } catch (error) {
-    errors.push(`library read failed, running without it: ${errText(error)}`);
-  }
-  const budget = deps.missionCharBudget ?? (Number(process.env.HARNESS2_MISSION_CHAR_BUDGET) || DEFAULT_MISSION_CHAR_BUDGET);
+  const { libraryEntriesBefore, libraryText } = loadHarnessLibraryContext(
+    library,
+    req.taskId,
+    errors,
+  );
+  const budget =
+    deps.missionCharBudget ??
+    (Number(process.env.HARNESS2_MISSION_CHAR_BUDGET) ||
+      DEFAULT_MISSION_CHAR_BUDGET);
   const recDeps: RecursionDeps = {
     bp,
     execute,
@@ -396,7 +519,12 @@ export async function runHarness2(
     transportBackoffMs: deps.transportBackoffMs,
     missionCharBudget: budget,
   };
-  const finish = (status: Harness2Status, result: ModeResult, selection: Selection, rest: Partial<Harness2Result> = {}): Harness2Result => ({
+  const finish = (
+    status: Harness2Status,
+    result: ModeResult,
+    selection: Selection,
+    rest: Partial<Harness2Result> = {},
+  ): Harness2Result => ({
     taskId: req.taskId,
     domain: req.domain,
     status,
@@ -424,64 +552,74 @@ export async function runHarness2(
     ledger: base.map((b) => b.label),
     similarity: null,
   });
-  const noSelection: Selection = { ok: false, chosenLabel: "", why: "", ids: {}, pool, trivial: false, fallback: false };
+  const noSelection: Selection = {
+    ok: false,
+    chosenLabel: "",
+    why: "",
+    ids: {},
+    pool,
+    trivial: false,
+    fallback: false,
+  };
   if (signal?.aborted) {
     errors.push("cancelled after the base rollouts");
-    return finish("cancelled", emptyResult(), { ...noSelection, error: "cancelled" });
+    return finish("cancelled", emptyResult(), {
+      ...noSelection,
+      error: "cancelled",
+    });
   }
   if (!base.some((b) => b.ok)) {
-    // Upstream schedule.py: with no base trajectory the proposers would adapt on nothing.
-    errors.push(`no base rollout produced anything: ${base.map((b) => `${b.label}: ${b.error || "failed"}`).join("; ")}`);
-    return finish("base-failed", emptyResult(), { ...noSelection, error: "base-failed" });
+    errors.push(
+      `no base rollout produced anything: ${base.map((b) => `${b.label}: ${b.error || "failed"}`).join("; ")}`,
+    );
+    return finish("base-failed", emptyResult(), {
+      ...noSelection,
+      error: "base-failed",
+    });
   }
 
-  const result = req.mode === "sequential" ? await runSequential(k, base, recDeps) : await runParallel(k, base, recDeps);
+  const result =
+    req.mode === "sequential"
+      ? await runSequential(k, base, recDeps)
+      : await runParallel(k, base, recDeps);
   if (signal?.aborted) {
-    errors.push("cancelled during the recursion; no selection or reflection ran");
+    errors.push(
+      "cancelled during the recursion; no selection or reflection ran",
+    );
     return finish("cancelled", result, { ...noSelection, error: "cancelled" });
   }
-  const proposerDown = result.stages.filter((s) => s.fellBack && s.error.startsWith("proposer failed"));
-  const improverFailed = proposerDown.length > 0 && proposerDown.length === result.stages.length;
-  if (improverFailed) errors.push(`every stage fell back on a proposer failure, so no harness was adapted: ${proposerDown[0].error}`);
-  else for (const s of proposerDown) errors.push(`${s.label} fell back on a proposer failure: ${s.error}`);
-
-  const selection = await selectOutput(bp, result, propose, { taskId: req.taskId, pool, seed: req.seed, budget });
-  if (selection.error) errors.push(`selection: ${selection.error}`);
-  const chosen = selection.chosenLabel ? result.rollouts[selection.chosenLabel] : undefined;
-  const adoptedTree = !chosen || selection.chosenLabel.startsWith("base") ? req.baseTree : result.trees[selection.chosenLabel];
-  const status: Harness2Status = improverFailed ? "improver-failed" : !chosen ? "no-output" : selection.ok ? "ok" : "selection-fallback";
-  const outcome = { adoptedTree, chosenTreeIsBase: isUnchanged(req.baseTree, adoptedTree), output: chosen?.output ?? "" };
-  // Upstream schedule.py: reflect and store only after a successful selection of a delivered run.
-  if (status !== "ok" || !chosen?.delivered) return finish(status, result, selection, outcome);
-
-  const candidates = result.stages.map((s) => ({ label: s.label, tree: s.tree, rollout: result.rollouts[s.label] }));
-  const reflection =
-    buildMission(prompts.experience(bp), {
-      current: req.baseTree,
-      currentTitle: "BASE HARNESS",
-      base,
-      pool: candidates,
-      decisions: decisionsOf(result.stages),
-      diffBase: { name: "base", tree: req.baseTree },
-      budget,
-    }) + `\n\n${adoptionBlock(selection, outcome.chosenTreeIsBase)}`;
-  let raw = "";
-  try {
-    raw = await propose(reflection, "experience");
-  } catch (error) {
-    errors.push(`experience reflection failed: ${errText(error)}`);
-    logger.warn(`[harness2] experience reflection failed: ${errText(error)}`);
+  const improverFailed = recordProposerStageFallbacks(result, errors);
+  const selection = await selectOutput(bp, result, propose, {
+    taskId: req.taskId,
+    pool,
+    seed: req.seed,
+    budget,
+  });
+  const { chosen, adoptedTree, status, outcome } = resolveSelectionOutcome(
+    req,
+    result,
+    selection,
+    improverFailed,
+    errors,
+  );
+  if (status !== "ok" || !chosen?.delivered) {
+    return finish(status, result, selection, outcome);
   }
-  const exp = parseExperience(raw);
-  let libraryEntry: string | null = null;
-  if (exp.entry) {
-    try {
-      libraryEntry = library.add(req.taskId, adoptedTree, { why: selection.why, label: selection.chosenLabel, experience: exp.entry });
-    } catch (error) {
-      errors.push(`library entry not stored: ${errText(error)}`);
-    }
-  }
-  return finish(status, result, selection, { ...outcome, learned: libraryEntry !== null, experience: { ...exp, raw }, libraryEntry });
+
+  const reflected = await reflectAndStoreHarnessExperience(
+    req,
+    bp,
+    base,
+    result,
+    selection,
+    adoptedTree,
+    outcome.chosenTreeIsBase,
+    propose,
+    library,
+    budget,
+    errors,
+  );
+  return finish(status, result, selection, { ...outcome, ...reflected });
 }
 
 export type { RunView };

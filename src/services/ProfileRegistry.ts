@@ -75,10 +75,7 @@ export class ProfileRegistry {
   private static profiles: Map<string, AgentProfile> = new Map();
   private static initialized = false;
 
-  /**
-   * Validate that an object conforms to AgentProfile schema
-   */
-  static validateProfileSchema(data: any): AgentProfile {
+  private static assertRequiredProfileFields(data: any): void {
     if (!data || typeof data !== "object") {
       throw new Error("Profile manifest must be a non-null object");
     }
@@ -112,26 +109,15 @@ export class ProfileRegistry {
       );
     }
 
-    if (!["structured_completion", "interactive_agent", "application_workflow"].includes(data.workflow_type)) {
+    const validWorkflows = [
+      "structured_completion",
+      "interactive_agent",
+      "application_workflow",
+    ];
+    if (!validWorkflows.includes(data.workflow_type)) {
       throw new Error(`Invalid workflow_type '${data.workflow_type}'`);
     }
 
-    if (data.model_constraints.max_output_tokens !== undefined && (!Number.isInteger(data.model_constraints.max_output_tokens) || data.model_constraints.max_output_tokens < 0)) throw new Error("Invalid per-call output limit");
-
-    if (data.model_constraints.reasoning_effort !== undefined) {
-      if (typeof data.model_constraints.reasoning_effort !== "string") throw new Error("Invalid reasoning_effort: must be a string");
-      if (!REASONING_EFFORT_LEVELS.includes(data.model_constraints.reasoning_effort)) {
-        throw new Error(`Invalid reasoning_effort '${data.model_constraints.reasoning_effort}': must be one of ${REASONING_EFFORT_LEVELS.join(", ")}`);
-      }
-    }
-
-    if (data.model_constraints.provider_by_model) {
-      for (const [model, provider] of Object.entries(data.model_constraints.provider_by_model)) {
-        if (!data.model_constraints.allowed_models.includes(model) || !data.model_constraints.allowed_providers.includes(provider)) throw new Error("Model route outside profile policy");
-      }
-    }
-
-    // 1. Validate contract_version if provided
     if (data.contract_version) {
       const match = /^(\d+)\./.exec(data.contract_version);
       if (!match || match[1] !== "1") {
@@ -140,8 +126,62 @@ export class ProfileRegistry {
         );
       }
     }
+  }
 
-    // 2. Synthesize or validate tool_policy
+  private static validateProfileModelConstraints(model_constraints: any): void {
+    const maxOut = model_constraints.max_output_tokens;
+    if (maxOut !== undefined && (!Number.isInteger(maxOut) || maxOut < 0)) {
+      throw new Error("Invalid per-call output limit");
+    }
+
+    if (model_constraints.reasoning_effort !== undefined) {
+      if (typeof model_constraints.reasoning_effort !== "string") {
+        throw new Error("Invalid reasoning_effort: must be a string");
+      }
+      if (
+        !REASONING_EFFORT_LEVELS.includes(model_constraints.reasoning_effort)
+      ) {
+        throw new Error(
+          `Invalid reasoning_effort '${model_constraints.reasoning_effort}': must be one of ${REASONING_EFFORT_LEVELS.join(", ")}`,
+        );
+      }
+    }
+
+    if (
+      !model_constraints.default_model ||
+      !Array.isArray(model_constraints.allowed_models) ||
+      !Array.isArray(model_constraints.allowed_providers)
+    ) {
+      throw new Error(
+        "Invalid model_constraints: default_model and allowed arrays required",
+      );
+    }
+
+    if (
+      !model_constraints.allowed_models.includes(
+        model_constraints.default_model,
+      )
+    ) {
+      throw new Error(
+        `default_model '${model_constraints.default_model}' must be in allowed_models: [${model_constraints.allowed_models.join(", ")}]`,
+      );
+    }
+
+    if (model_constraints.provider_by_model) {
+      for (const [model, provider] of Object.entries(
+        model_constraints.provider_by_model,
+      )) {
+        const modelAllowed = model_constraints.allowed_models.includes(model);
+        const providerAllowed =
+          model_constraints.allowed_providers.includes(provider);
+        if (!modelAllowed || !providerAllowed) {
+          throw new Error("Model route outside profile policy");
+        }
+      }
+    }
+  }
+
+  private static resolveAndValidateToolPolicy(data: any): void {
     if (!data.tool_policy) {
       if (data.allowed_global_capabilities || data.allowed_local_tools) {
         data.tool_policy = {
@@ -152,26 +192,13 @@ export class ProfileRegistry {
           ],
         };
       } else {
-        throw new Error("Profile manifest missing required field: tool_policy");
+        throw new Error(
+          "Profile manifest missing required field: tool_policy",
+        );
       }
     }
 
-    const { model_constraints, tool_policy, budget_limits } = data;
-
-    if (
-      !model_constraints.default_model ||
-      !Array.isArray(model_constraints.allowed_models) ||
-      !Array.isArray(model_constraints.allowed_providers)
-    ) {
-      throw new Error("Invalid model_constraints: default_model and allowed arrays required");
-    }
-
-    if (!model_constraints.allowed_models.includes(model_constraints.default_model)) {
-      throw new Error(
-        `default_model '${model_constraints.default_model}' must be in allowed_models: [${model_constraints.allowed_models.join(", ")}]`,
-      );
-    }
-
+    const { tool_policy } = data;
     if (!["STRICT_WHITELIST", "DENYLIST"].includes(tool_policy.mode)) {
       throw new Error(`Invalid tool_policy.mode: ${tool_policy.mode}`);
     }
@@ -180,23 +207,41 @@ export class ProfileRegistry {
       throw new Error("tool_policy.whitelist must be an array");
     }
 
-    // 3. Validate allowed_local_tools if declared
     if (data.allowed_local_tools) {
-      if (!Array.isArray(data.allowed_local_tools)) {
-        throw new Error("allowed_local_tools must be an array");
+      this.validateAllowedLocalToolsList(data.allowed_local_tools);
+    }
+  }
+
+  private static validateAllowedLocalToolsList(allowedLocalTools: unknown): void {
+    if (!Array.isArray(allowedLocalTools)) {
+      throw new Error("allowed_local_tools must be an array");
+    }
+    for (const localTool of allowedLocalTools) {
+      if (typeof localTool !== "string") {
+        throw new Error("Each entry in allowed_local_tools must be a string");
       }
-      for (const localTool of data.allowed_local_tools) {
-        if (typeof localTool !== "string") {
-          throw new Error("Each entry in allowed_local_tools must be a string");
-        }
-        if (localTool.startsWith("global.")) {
-          throw new Error(`Local tool '${localTool}' cannot declare global namespace`);
-        }
-        if (!/^[a-z0-9_-]+\.[a-z0-9_.]+(@\d+(\.\d+)?)?$/.test(localTool)) {
-          throw new Error(`Invalid local tool declaration '${localTool}': must match pattern <app>.<domain>.<action>`);
-        }
+      if (localTool.startsWith("global.")) {
+        throw new Error(
+          `Local tool '${localTool}' cannot declare global namespace`,
+        );
+      }
+      if (!/^[a-z0-9_-]+\.[a-z0-9_.]+(@\d+(\.\d+)?)?$/.test(localTool)) {
+        throw new Error(
+          `Invalid local tool declaration '${localTool}': must match pattern <app>.<domain>.<action>`,
+        );
       }
     }
+  }
+
+  /**
+   * Validate that an object conforms to AgentProfile schema
+   */
+  static validateProfileSchema(data: any): AgentProfile {
+    this.assertRequiredProfileFields(data);
+    this.resolveAndValidateToolPolicy(data);
+    this.validateProfileModelConstraints(data.model_constraints);
+
+    const { tool_policy, budget_limits } = data;
 
     if (
       typeof budget_limits.max_tokens !== "number" ||
@@ -208,20 +253,21 @@ export class ProfileRegistry {
       );
     }
 
-    // Validate capabilities: a profile cannot grant a nonexistent global capability or unsupported version
-    const toolsToValidate = Array.from(new Set([
-      ...tool_policy.whitelist,
-      ...(data.allowed_global_capabilities || []),
-    ]));
+    const toolsToValidate = Array.from(
+      new Set([
+        ...tool_policy.whitelist,
+        ...(data.allowed_global_capabilities || []),
+      ]),
+    );
 
-    const capValidation = CapabilityRegistry.validateProfileCapabilities(toolsToValidate);
+    const capValidation =
+      CapabilityRegistry.validateProfileCapabilities(toolsToValidate);
     if (!capValidation.valid) {
       throw new Error(
         `Profile manifest '${data.profile_id}' grants nonexistent or unauthorized capability: ${capValidation.unauthorized.join(", ")}`,
       );
     }
 
-    // Attach backwards-compatibility getters
     const profile: AgentProfile = {
       ...data,
       get id() {
@@ -312,24 +358,109 @@ export class ProfileRegistry {
     this.profiles.set(`${validated.profile_id}@${validated.version}`, validated);
   }
 
-  /**
-   * Validate runtime overrides against profile bounds
-   */
-  static validateOverrides(profile: AgentProfile, overrides?: RuntimeOverrides): void {
-    if (!overrides) return;
+  private static assertNonNegativeIntegerBudgets(
+    b: NonNullable<RuntimeOverrides["budget"]>,
+  ): void {
+    for (const value of Object.values(b)) {
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+        throw new Error("Budgets must be nonnegative integers");
+      }
+    }
+  }
 
+  private static assertSingleBudgetCeiling(
+    requested: number | undefined,
+    limit: number,
+    message: string,
+  ): void {
+    if (requested !== undefined && requested > limit) {
+      throw new Error(message);
+    }
+  }
+
+  private static validateBudgetOverrides(
+    profile: AgentProfile,
+    b: NonNullable<RuntimeOverrides["budget"]>,
+  ): void {
+    this.assertNonNegativeIntegerBudgets(b);
+    const limits = profile.budget_limits;
+    this.assertSingleBudgetCeiling(
+      b.max_retries ?? b.maxRetries,
+      limits.max_retries ?? 0,
+      "Retry budget exceeds profile limit",
+    );
+    const maxTokens = b.max_tokens ?? b.maxTokens;
+    this.assertSingleBudgetCeiling(
+      maxTokens,
+      limits.max_tokens,
+      `Requested max_tokens (${maxTokens}) exceeds profile limit (${limits.max_tokens})`,
+    );
+    const maxToolCalls = b.max_tool_calls ?? b.maxToolCalls;
+    this.assertSingleBudgetCeiling(
+      maxToolCalls,
+      limits.max_tool_calls,
+      `Requested max_tool_calls (${maxToolCalls}) exceeds profile limit (${limits.max_tool_calls})`,
+    );
+    const maxDurationMs = b.max_duration_ms ?? b.maxDurationMs;
+    this.assertSingleBudgetCeiling(
+      maxDurationMs,
+      limits.max_duration_ms,
+      `Requested max_duration_ms (${maxDurationMs}) exceeds profile limit (${limits.max_duration_ms})`,
+    );
+  }
+
+  private static validateToolOverrides(
+    profile: AgentProfile,
+    tools: NonNullable<RuntimeOverrides["tools"]>,
+  ): void {
+    if (profile.tool_policy.mode !== "STRICT_WHITELIST") return;
+    for (const tool of tools) {
+      const toolName = typeof tool === "string" ? tool : tool.name;
+      if (!toolName) continue;
+      const isAllowed = profile.tool_policy.whitelist.some(
+        (registered) =>
+          registered === toolName ||
+          (!toolName.includes("@") && registered.split("@")[0] === toolName),
+      );
+      if (!isAllowed) {
+        throw new Error(
+          `Requested tool '${toolName}' is not allowed by profile '${profile.profile_id}' strict whitelist`,
+        );
+      }
+    }
+  }
+
+  private static validateModelAndSamplingOverrides(
+    profile: AgentProfile,
+    overrides: RuntimeOverrides,
+  ): void {
     const temperature = overrides.sampling_temperature;
     const range = profile.model_constraints.temperature_range;
-    if (temperature !== undefined && range && (temperature < range[0] || temperature > range[1])) throw new Error("Temperature outside profile limits");
-    if (overrides.provider && !profile.model_constraints.allowed_providers.includes(String(overrides.provider))) throw new Error("Requested provider is outside profile policy");
+    if (temperature !== undefined && range && (temperature < range[0] || temperature > range[1])) {
+      throw new Error("Temperature outside profile limits");
+    }
+    if (
+      overrides.provider &&
+      !profile.model_constraints.allowed_providers.includes(String(overrides.provider))
+    ) {
+      throw new Error("Requested provider is outside profile policy");
+    }
 
     if (overrides.reasoning_effort !== undefined) {
-      if (typeof overrides.reasoning_effort !== "string" || !REASONING_EFFORT_LEVELS.includes(overrides.reasoning_effort)) {
-        throw new Error(`Invalid reasoning_effort override '${String(overrides.reasoning_effort)}': must be one of ${REASONING_EFFORT_LEVELS.join(", ")}`);
+      if (
+        typeof overrides.reasoning_effort !== "string" ||
+        !REASONING_EFFORT_LEVELS.includes(overrides.reasoning_effort)
+      ) {
+        throw new Error(
+          `Invalid reasoning_effort override '${String(overrides.reasoning_effort)}': must be one of ${REASONING_EFFORT_LEVELS.join(", ")}`,
+        );
       }
     }
 
-    if (overrides.model && !profile.model_constraints.allowed_models.includes(overrides.model)) {
+    if (
+      overrides.model &&
+      !profile.model_constraints.allowed_models.includes(overrides.model)
+    ) {
       const liveCheck = DynamicModelResolver.isModelAllowedForProfile(
         overrides.model,
         profile.model_constraints.allowed_providers,
@@ -341,45 +472,19 @@ export class ProfileRegistry {
         );
       }
     }
+  }
 
+  /**
+   * Validate runtime overrides against profile bounds
+   */
+  static validateOverrides(profile: AgentProfile, overrides?: RuntimeOverrides): void {
+    if (!overrides) return;
+    this.validateModelAndSamplingOverrides(profile, overrides);
     if (overrides.budget) {
-      const b = overrides.budget;
-      for (const value of Object.values(b)) {
-        if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("Budgets must be nonnegative integers");
-      }
-      const retries = b.max_retries ?? b.maxRetries;
-      if (retries !== undefined && retries > (profile.budget_limits.max_retries ?? 0)) throw new Error("Retry budget exceeds profile limit");
-      const maxTokens = b.max_tokens ?? b.maxTokens;
-      if (maxTokens !== undefined && maxTokens > profile.budget_limits.max_tokens) {
-        throw new Error(
-          `Requested max_tokens (${maxTokens}) exceeds profile limit (${profile.budget_limits.max_tokens})`,
-        );
-      }
-
-      const maxToolCalls = b.max_tool_calls ?? b.maxToolCalls;
-      if (maxToolCalls !== undefined && maxToolCalls > profile.budget_limits.max_tool_calls) {
-        throw new Error(
-          `Requested max_tool_calls (${maxToolCalls}) exceeds profile limit (${profile.budget_limits.max_tool_calls})`,
-        );
-      }
-
-      const maxDurationMs = b.max_duration_ms ?? b.maxDurationMs;
-      if (maxDurationMs !== undefined && maxDurationMs > profile.budget_limits.max_duration_ms) {
-        throw new Error(
-          `Requested max_duration_ms (${maxDurationMs}) exceeds profile limit (${profile.budget_limits.max_duration_ms})`,
-        );
-      }
+      this.validateBudgetOverrides(profile, overrides.budget);
     }
-
-    if (Array.isArray(overrides.tools) && profile.tool_policy.mode === "STRICT_WHITELIST") {
-      for (const tool of overrides.tools) {
-        const toolName = typeof tool === "string" ? tool : tool.name;
-        if (toolName && !profile.tool_policy.whitelist.some(registered => registered === toolName || (!toolName.includes("@") && registered.split("@")[0] === toolName))) {
-          throw new Error(
-            `Requested tool '${toolName}' is not allowed by profile '${profile.profile_id}' strict whitelist`,
-          );
-        }
-      }
+    if (Array.isArray(overrides.tools)) {
+      this.validateToolOverrides(profile, overrides.tools);
     }
   }
 

@@ -163,6 +163,315 @@ export function swapMessageContent(message: MessagePayload) {
  *
  * Used by all harness implementations and the /chat streaming path.
  */
+function swapAllMessageContents(
+  messages: MessagePayload[] | undefined,
+  overrideMessagesToAppend: MessagePayload[] | null,
+  userMessage: MessagePayload | null | undefined,
+): void {
+  if (messages) {
+    for (const message of messages) {
+      swapMessageContent(message);
+    }
+  }
+  if (overrideMessagesToAppend) {
+    for (const message of overrideMessagesToAppend) {
+      swapMessageContent(message);
+    }
+  }
+  if (userMessage) {
+    swapMessageContent(userMessage);
+  }
+}
+
+function calculateFinalizerCostAndSpeed(
+  usage: TokenUsage | null | undefined,
+  images: string[],
+  text: string | null,
+  resolvedModel: string,
+  modelDefinition: FinalizerContext["modelDefinition"],
+  generationSec: number | null | undefined,
+  totalSec: number | null | undefined,
+): { estimatedCost: number | null; tokensPerSec: number | null } {
+  if (!usage) return { estimatedCost: null, tokensPerSec: null };
+
+  let estimatedCost: number | null = null;
+  if (images.length > 0) {
+    const imgPricing =
+      getPricing(TYPES.TEXT, TYPES.IMAGE)[resolvedModel] ||
+      (modelDefinition?.pricing as Record<string, number>);
+    if (imgPricing?.imageOutputPerMillion) {
+      const estimatedTextOutputTokens = Math.ceil((text?.length || 0) / 4);
+      const imageTokens = Math.max(0, (usage.outputTokens || 0) - estimatedTextOutputTokens);
+      const textOutputTokens = Math.max(0, (usage.outputTokens || 0) - imageTokens);
+      const inputCost = ((usage.inputTokens || 0) / 1_000_000) * (imgPricing.inputPerMillion || 0);
+      const textOutCost = (textOutputTokens / 1_000_000) * (imgPricing.outputPerMillion || 0);
+      const imageOutCost = (imageTokens / 1_000_000) * imgPricing.imageOutputPerMillion;
+      estimatedCost = parseFloat((inputCost + textOutCost + imageOutCost).toFixed(8));
+    } else {
+      const pricing = getPricing(TYPES.TEXT, TYPES.TEXT)[resolvedModel];
+      estimatedCost = calculateTextCost(usage, pricing);
+    }
+  } else {
+    const pricing = getPricing(TYPES.TEXT, TYPES.TEXT)[resolvedModel];
+    estimatedCost = calculateTextCost(usage, pricing);
+  }
+
+  const tokensPerSec = calculateTokensPerSec(usage.outputTokens || 0, generationSec, {
+    providerReported: usage.tokensPerSec as number | undefined,
+    fallbackSec: totalSec,
+  });
+  return { estimatedCost, tokensPerSec };
+}
+
+function logFinalizerConsoleTelemetry(
+  context: FinalizerContext,
+  usage: TokenUsage | null | undefined,
+  tokensPerSec: number | null,
+  timeToGenerationSec: number | null | undefined,
+  generationSec: number | null | undefined,
+  totalSec: number | null | undefined,
+  estimatedCost: number | null,
+): void {
+  const inputTokens = usage ? getTotalInputTokens(usage) : 0;
+  const outputTokens = usage?.outputTokens || 0;
+  const tokensPerSecondString = tokensPerSec !== null ? tokensPerSec.toFixed(1) : "N/A";
+  const cacheInfo =
+    usage?.cacheReadInputTokens || usage?.cacheCreationInputTokens
+      ? `, cache_read: ${usage.cacheReadInputTokens || 0}, cache_write: ${usage.cacheCreationInputTokens || 0}`
+      : "";
+  logger.request(
+    context.project || "",
+    context.username as string,
+    context.clientIp || null,
+    `[chat] ${context.providerName} ${context.resolvedModel} — ` +
+      `in: ${inputTokens} tokens, out: ${outputTokens} tokens${cacheInfo}, ` +
+      `speed: ${tokensPerSecondString} tok/s, ` +
+      `ttg: ${timeToGenerationSec != null ? timeToGenerationSec.toFixed(2) + "s" : "N/A"}, ` +
+      `generation: ${generationSec != null ? generationSec.toFixed(2) + "s" : "N/A"}, ` +
+      `total: ${totalSec != null ? totalSec.toFixed(2) : "0.00"}s` +
+      formatCostTag(estimatedCost),
+  );
+}
+
+async function buildAndUploadFinalizerAudio(
+  audioChunks: string[],
+  audioSampleRate: number,
+  project: string | undefined,
+  username: string | undefined,
+): Promise<string | null> {
+  if (audioChunks.length === 0) return null;
+  try {
+    const pcmBuffers = audioChunks.map((b64) => Buffer.from(b64, "base64"));
+    const pcmData = Buffer.concat(pcmBuffers);
+    const numberOfChannels = 1;
+    const bitsPerSample = 16;
+    const byteRate = audioSampleRate * numberOfChannels * (bitsPerSample / 8);
+    const blockAlign = numberOfChannels * (bitsPerSample / 8);
+    const wavHeader = Buffer.alloc(44);
+    wavHeader.write("RIFF", 0);
+    wavHeader.writeUInt32LE(36 + pcmData.length, 4);
+    wavHeader.write("WAVE", 8);
+    wavHeader.write("fmt ", 12);
+    wavHeader.writeUInt32LE(16, 16);
+    wavHeader.writeUInt16LE(1, 20);
+    wavHeader.writeUInt16LE(numberOfChannels, 22);
+    wavHeader.writeUInt32LE(audioSampleRate, 24);
+    wavHeader.writeUInt32LE(byteRate, 28);
+    wavHeader.writeUInt16LE(blockAlign, 32);
+    wavHeader.writeUInt16LE(bitsPerSample, 34);
+    wavHeader.write("data", 36);
+    wavHeader.writeUInt32LE(pcmData.length, 40);
+    const wavBuffer = Buffer.concat([wavHeader, pcmData]);
+    const dataUrl = `data:audio/wav;base64,${wavBuffer.toString("base64")}`;
+    const { ref } = await FileService.uploadFile(
+      dataUrl,
+      FILE_CATEGORIES.GENERATIONS,
+      project as string,
+      username || "system",
+    );
+    return ref;
+  } catch (error: unknown) {
+    logger.error(`[chat] Failed to build/upload Live API audio WAV: ${getErrorMessage(error)}`);
+    return null;
+  }
+}
+
+function resolvePersistedToolConfig(
+  resolvedEnabledTools: string[] | null | undefined,
+  options: FinalizerContext["options"],
+  conversationMeta: FinalizerContext["conversationMeta"],
+  agent: string | null | undefined,
+): Record<string, unknown> | undefined {
+  if (!resolvedEnabledTools) return undefined;
+  const existingSettings = conversationMeta?.settings as Record<string, unknown> | undefined;
+  const existingToolConfig = existingSettings?.toolConfig as Record<string, unknown> | undefined;
+  let disabledTools: string[] = [];
+  if (Array.isArray(options.disabledTools)) {
+    disabledTools = options.disabledTools;
+  } else if (Array.isArray(existingToolConfig?.disabledTools)) {
+    disabledTools = existingToolConfig.disabledTools as string[];
+  }
+  const clientSchemas = ToolOrchestratorService.getClientToolSchemas() || [];
+  let availableTools: string[] = [];
+  const persona = agent ? AgentPersonaRegistry.get(agent) : null;
+  if (persona) {
+    availableTools = [...resolveToolEntriesToSet(persona.availableTools, clientSchemas)];
+  } else {
+    availableTools = clientSchemas.map((toolSchema) => toolSchema.name);
+  }
+  return {
+    availableTools,
+    disabledTools,
+    enabledTools: resolvedEnabledTools,
+  };
+}
+
+function buildFinalConversationMeta(
+  context: FinalizerContext,
+  toolConfig: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const {
+    conversationMeta,
+    providerName,
+    resolvedModel,
+    agent,
+    workspaceRoot,
+    options,
+    parentAgentConversationId,
+    parentConversationId,
+  } = context;
+
+  const mergedSettings = {
+    ...((conversationMeta?.settings as any) || {}),
+    provider: providerName,
+    model: resolvedModel,
+    agent: agent || undefined,
+    workspaceRoot: workspaceRoot || undefined,
+    toolConfig: toolConfig || undefined,
+    harness: options.harness || undefined,
+    topology: options.topology || undefined,
+    thoughtStructure: options.thoughtStructure || undefined,
+    locale: options.locale || undefined,
+  };
+
+  const finalMeta: Record<string, unknown> = {
+    ...(conversationMeta || {}),
+    settings: mergedSettings,
+  };
+
+  if (parentAgentConversationId) {
+    finalMeta.parentAgentConversationId = parentAgentConversationId;
+    finalMeta.isSubAgent = true;
+  }
+  if (parentConversationId) {
+    finalMeta.parentConversationId = parentConversationId;
+  }
+  if (workspaceRoot) {
+    finalMeta.workspaceRoot = workspaceRoot;
+  }
+  if (agent) {
+    finalMeta.agent = agent;
+  }
+  return finalMeta;
+}
+
+function runFinalizerVerification(
+  context: FinalizerContext,
+  text: string | null,
+): { passed: boolean; reason?: string; evidence_refs: string[] } | null {
+  try {
+    const effectiveRunId =
+      (context as any).runId || TraceContext.runId() || context.agentConversationId || "run_final";
+    const runSpans = RunEvidenceStore.getGlobalInstance().getSpans(effectiveRunId);
+    const recordedSpans =
+      runSpans.length > 0 ? runSpans : TraceExporter.getGlobalInstance().getQueuedSpans();
+    const verResult = DeterministicVerifiers.verifyCompletionClaim(text || "", recordedSpans);
+
+    const effectiveTraceId =
+      TraceContext.traceId() ||
+      (context as any).rootSpan?.trace_id ||
+      context.traceId ||
+      crypto.randomUUID().replaceAll("-", "").slice(0, 32);
+    const effectiveParentSpanId =
+      TraceContext.currentSpanId() || (context as any).rootSpan?.span_id || null;
+
+    const verSpan = new Span({
+      trace_id: effectiveTraceId,
+      parent_span_id: effectiveParentSpanId,
+      run_id: effectiveRunId,
+      name: "verification:completion_claim",
+      kind: "verifier",
+      attributes: {
+        passed: verResult.passed,
+        reason: verResult.reason,
+        evidence_count: verResult.evidence_refs.length,
+      },
+    });
+    verSpan.end(verResult.passed ? "OK" : "ERROR", verResult.reason);
+    TraceExporter.getGlobalInstance().enqueueSpan(verSpan.toJSON());
+    return verResult;
+  } catch (verErr) {
+    logger.debug(`[DeterministicVerifiers] Finalizer verification error: ${verErr}`);
+    return null;
+  }
+}
+
+function resolveFinalizerActiveTraceFields(context: FinalizerContext) {
+  const activeCtx = TraceContext.get();
+  const rootSpan = (context as any).rootSpan;
+  const resolvedTraceId = activeCtx?.trace_id || rootSpan?.trace_id || context.traceId || null;
+  const resolvedRunId = activeCtx?.run_id || (context as any).runId || null;
+  const resolvedSpanId = activeCtx?.current_span_id || rootSpan?.span_id || null;
+  return { resolvedTraceId, resolvedRunId, resolvedSpanId };
+}
+
+function roundOptionalSeconds(val: number | null | undefined): number | null {
+  return val != null ? roundMilliseconds(val) : null;
+}
+
+function emitFinalizerDoneEvent(
+  context: FinalizerContext,
+  usage: TokenUsage | null | undefined,
+  estimatedCost: number | null,
+  tokensPerSec: number | null,
+  audioRef: string | null,
+  timeToGenerationSec: number | null | undefined,
+  generationSec: number | null | undefined,
+  totalSec: number | null | undefined,
+  verResult: { passed: boolean; reason?: string; evidence_refs: string[] } | null,
+): void {
+  if (context.signal?.aborted || !context.emit) return;
+  const { resolvedTraceId, resolvedRunId, resolvedSpanId } =
+    resolveFinalizerActiveTraceFields(context);
+  const doneEvent: Record<string, unknown> = {
+    type: SERVER_SENT_EVENT_TYPES.DONE,
+    provider: context.providerName,
+    model: context.resolvedModel,
+    usage: withTotalInputTokens(usage) || null,
+    estimatedCost,
+    tokensPerSec,
+    timeToGeneration: roundOptionalSeconds(timeToGenerationSec),
+    generationTime: roundOptionalSeconds(generationSec),
+    totalTime: roundOptionalSeconds(totalSec),
+  };
+  if (audioRef) doneEvent.audioRef = audioRef;
+  if (resolvedTraceId) {
+    doneEvent.traceId = resolvedTraceId;
+    doneEvent.trace_id = resolvedTraceId;
+  }
+  if (context.conversationId) doneEvent.conversationId = context.conversationId;
+  if (resolvedRunId) doneEvent.run_id = resolvedRunId;
+  if (resolvedSpanId) doneEvent.span_id = resolvedSpanId;
+  if (verResult) {
+    doneEvent.verification = {
+      passed: verResult.passed,
+      reason: verResult.reason,
+      evidence_count: verResult.evidence_refs.length,
+    };
+  }
+  context.emit(doneEvent as Parameters<NonNullable<FinalizerContext["emit"]>>[0]);
+}
+
 export async function finalizeTextGeneration(
   context: FinalizerContext,
   {
@@ -179,7 +488,6 @@ export async function finalizeTextGeneration(
     generationSec,
     totalSec,
     rateLimits,
-    // Display segment metadata (from AgenticLoopService)
     contentSegments,
     textFragments,
     thinkingFragments,
@@ -197,7 +505,6 @@ export async function finalizeTextGeneration(
     conversationId,
     agentConversationId,
     parentAgentConversationId,
-    parentConversationId,
     userMessage,
     conversationMeta,
     traceId,
@@ -205,141 +512,38 @@ export async function finalizeTextGeneration(
     username,
     clientIp,
     agent,
-    workspaceRoot,
     requestId,
-    emit,
-    signal,
   } = context;
 
-  // Swap content and rawContent if present to ensure the database and caller get clean text
-  if (messages) {
-    for (const message of messages) {
-      swapMessageContent(message);
-    }
-  }
-  if (overrideMessagesToAppend) {
-    for (const message of overrideMessagesToAppend) {
-      swapMessageContent(message);
-    }
-  }
-  if (userMessage) {
-    swapMessageContent(userMessage);
-  }
-  // ── Cost calculation ──────────────────────────────────────────
-  let estimatedCost: number | null = null;
-  let tokensPerSec: number | null = null;
-  if (usage) {
-    const imageCount = images.length;
-    if (imageCount > 0) {
-      const imgPricing =
-        getPricing(TYPES.TEXT, TYPES.IMAGE)[resolvedModel] ||
-        (modelDefinition?.pricing as Record<string, number>);
-      if (imgPricing?.imageOutputPerMillion) {
-        // Derive image tokens dynamically from the API-reported total.
-        // The API's outputTokens already includes both text and image tokens,
-        // so we estimate text tokens from the generated text length (~4 chars/token)
-        // and attribute the remainder to images. This adapts to any resolution
-        // (512px≈747tok, 1024px≈1120tok, 2048px≈1680tok, 4096px≈2520tok).
-        const estimatedTextOutputTokens = Math.ceil((text?.length || 0) / 4);
-        const imageTokens = Math.max(
-          0,
-          (usage.outputTokens || 0) - estimatedTextOutputTokens,
-        );
-        const textOutputTokens = Math.max(
-          0,
-          (usage.outputTokens || 0) - imageTokens,
-        );
-        const inputCost =
-          ((usage.inputTokens || 0) / 1_000_000) *
-          (imgPricing.inputPerMillion || 0);
-        const textOutCost =
-          (textOutputTokens / 1_000_000) * (imgPricing.outputPerMillion || 0);
-        const imageOutCost =
-          (imageTokens / 1_000_000) * imgPricing.imageOutputPerMillion;
-        estimatedCost = parseFloat(
-          (inputCost + textOutCost + imageOutCost).toFixed(8),
-        );
-      } else {
-        const pricing = getPricing(TYPES.TEXT, TYPES.TEXT)[resolvedModel];
-        estimatedCost = calculateTextCost(usage, pricing);
-      }
-    } else {
-      const pricing = getPricing(TYPES.TEXT, TYPES.TEXT)[resolvedModel];
-      estimatedCost = calculateTextCost(usage, pricing);
-    }
-    tokensPerSec = calculateTokensPerSec(
-      usage.outputTokens || 0,
-      generationSec,
-      {
-        providerReported: usage.tokensPerSec as number | undefined,
-        fallbackSec: totalSec,
-      },
-    );
-  }
-  // ── Console logging ───────────────────────────────────────────
-  const inputTokens = usage ? getTotalInputTokens(usage) : 0;
-  const outputTokens = usage?.outputTokens || 0;
-  const tokensPerSecondString =
-    tokensPerSec !== null ? tokensPerSec.toFixed(1) : "N/A";
-  const cacheInfo =
-    usage?.cacheReadInputTokens || usage?.cacheCreationInputTokens
-      ? `, cache_read: ${usage.cacheReadInputTokens || 0}, cache_write: ${usage.cacheCreationInputTokens || 0}`
-      : "";
-  logger.request(
-    project || "",
-    username as string,
-    clientIp || null,
-    `[chat] ${providerName} ${resolvedModel} — ` +
-      `in: ${inputTokens} tokens, out: ${outputTokens} tokens${cacheInfo}, ` +
-      `speed: ${tokensPerSecondString} tok/s, ` +
-      `ttg: ${timeToGenerationSec != null ? timeToGenerationSec.toFixed(2) + "s" : "N/A"}, ` +
-      `generation: ${generationSec != null ? generationSec.toFixed(2) + "s" : "N/A"}, ` +
-      `total: ${totalSec != null ? totalSec.toFixed(2) : "0.00"}s` +
-      formatCostTag(estimatedCost),
+  swapAllMessageContents(messages, overrideMessagesToAppend, userMessage);
+
+  const { estimatedCost, tokensPerSec } = calculateFinalizerCostAndSpeed(
+    usage,
+    images,
+    text,
+    resolvedModel,
+    modelDefinition,
+    generationSec,
+    totalSec,
   );
-  // ── Build WAV from accumulated PCM audio chunks ───────────────
-  let audioRef: string | null = null;
-  if (audioChunks.length > 0) {
-    try {
-      const pcmBuffers = audioChunks.map((b64) => Buffer.from(b64, "base64"));
-      const pcmData = Buffer.concat(pcmBuffers);
-      const numberOfChannels = 1;
-      const bitsPerSample = 16;
-      const byteRate = audioSampleRate * numberOfChannels * (bitsPerSample / 8);
-      const blockAlign = numberOfChannels * (bitsPerSample / 8);
-      const wavHeader = Buffer.alloc(44);
-      wavHeader.write("RIFF", 0);
-      wavHeader.writeUInt32LE(36 + pcmData.length, 4);
-      wavHeader.write("WAVE", 8);
-      wavHeader.write("fmt ", 12);
-      wavHeader.writeUInt32LE(16, 16);
-      wavHeader.writeUInt16LE(1, 20);
-      wavHeader.writeUInt16LE(numberOfChannels, 22);
-      wavHeader.writeUInt32LE(audioSampleRate, 24);
-      wavHeader.writeUInt32LE(byteRate, 28);
-      wavHeader.writeUInt16LE(blockAlign, 32);
-      wavHeader.writeUInt16LE(bitsPerSample, 34);
-      wavHeader.write("data", 36);
-      wavHeader.writeUInt32LE(pcmData.length, 40);
-      const wavBuffer = Buffer.concat([wavHeader, pcmData]);
-      const dataUrl = `data:audio/wav;base64,${wavBuffer.toString("base64")}`;
-      const { ref } = await FileService.uploadFile(
-        dataUrl,
-        FILE_CATEGORIES.GENERATIONS,
-        project as string,
-        username || "system",
-      );
-      audioRef = ref;
-    } catch (error: unknown) {
-      logger.error(
-        `[chat] Failed to build/upload Live API audio WAV: ${getErrorMessage(error)}`,
-      );
-    }
-  }
-  // ── Request logging with sanitized payloads ────────────────────
-  // Placed after audio build so audioRef is available for modality detection.
-  // Agentic requests are logged granularly per-iteration by AgenticLoopService,
-  // so we only log here for non-agentic paths (chat, live).
+
+  logFinalizerConsoleTelemetry(
+    context,
+    usage,
+    tokensPerSec,
+    timeToGenerationSec,
+    generationSec,
+    totalSec,
+    estimatedCost,
+  );
+
+  const audioRef = await buildAndUploadFinalizerAudio(
+    audioChunks,
+    audioSampleRate,
+    project,
+    username,
+  );
+
   if (!options.agenticLoopEnabled) {
     RequestLogger.logChatGeneration({
       requestId,
@@ -373,15 +577,7 @@ export async function finalizeTextGeneration(
       rateLimits,
     });
   }
-  // ── Conversation persistence ──────────────────────────────────
-  // IMPORTANT: Persist BEFORE emitting `done` so the client's post-stream
-  // DB fetch sees the complete conversation. Previously, `done` fired first
-  // and `appendAndFinalize` was fire-and-forget, causing a race condition
-  // where the client fetched stale data from MongoDB.
-  //
-  // Sub-agents share the parent's conversationId for telemetry correlation but
-  // must NOT persist their messages into the parent conversation document —
-  // their output is returned via the create_team tool call result instead.
+
   if (conversationId) {
     const messagesToAppend = assembleMessagesToAppend({
       overrideMessagesToAppend,
@@ -408,80 +604,14 @@ export async function finalizeTextGeneration(
       userMessage,
       conversationMeta,
     });
-    let toolConfig: Record<string, unknown> | undefined = undefined;
-    if (resolvedEnabledTools) {
-      const existingSettings = conversationMeta?.settings as
-        | Record<string, unknown>
-        | undefined;
-      const existingToolConfig = existingSettings?.toolConfig as
-        | Record<string, unknown>
-        | undefined;
-      const disabledTools: string[] =
-        (Array.isArray(options.disabledTools) ? options.disabledTools : null) ||
-        (Array.isArray(existingToolConfig?.disabledTools)
-          ? (existingToolConfig.disabledTools as string[])
-          : null) ||
-        [];
-      let availableTools: string[] = [];
-      if (agent) {
-        const persona = AgentPersonaRegistry.get(agent);
-        if (persona) {
-          const clientSchemas =
-            ToolOrchestratorService.getClientToolSchemas() || [];
-          const resolvedAvailable = resolveToolEntriesToSet(
-            persona.availableTools,
-            clientSchemas,
-          );
-          availableTools = [...resolvedAvailable];
-        }
-      } else {
-        const clientSchemas =
-          ToolOrchestratorService.getClientToolSchemas() || [];
-        availableTools = clientSchemas.map((toolSchema) => toolSchema.name);
-      }
-      toolConfig = {
-        availableTools,
-        disabledTools,
-        enabledTools: resolvedEnabledTools,
-      };
-    }
-
-    const mergedSettings = {
-      ...(conversationMeta?.settings as any || {}),
-      provider: providerName,
-      model: resolvedModel,
-      agent: agent || undefined,
-      workspaceRoot: workspaceRoot || undefined,
-      toolConfig: toolConfig || undefined,
-      harness: options.harness || undefined,
-      topology: options.topology || undefined,
-      thoughtStructure: options.thoughtStructure || undefined,
-      locale: options.locale || undefined,
-    };
-
-    const finalMeta: Record<string, unknown> = {
-      ...(conversationMeta || {}),
-      settings: mergedSettings,
-    };
-
-    if (parentAgentConversationId) {
-      finalMeta.parentAgentConversationId = parentAgentConversationId;
-      finalMeta.isSubAgent = true;
-    }
-    if (parentConversationId) {
-      finalMeta.parentConversationId = parentConversationId;
-    }
-    if (workspaceRoot) {
-      finalMeta.workspaceRoot = workspaceRoot;
-    }
-    if (agent) {
-      finalMeta.agent = agent;
-    }
-    // Ensure all user messages to append are properly swapped/sanitized,
-    // then filter out synthetic compaction artifacts that should never
-    // reach MongoDB (context notes, compaction summaries, cleared stubs).
-    const sanitizedMessagesToAppend =
-      sanitizeMessagesForPersistence(messagesToAppend);
+    const toolConfig = resolvePersistedToolConfig(
+      resolvedEnabledTools,
+      options,
+      conversationMeta,
+      agent,
+    );
+    const finalMeta = buildFinalConversationMeta(context, toolConfig);
+    const sanitizedMessagesToAppend = sanitizeMessagesForPersistence(messagesToAppend);
 
     await appendAndFinalize(
       conversationId || "",
@@ -492,74 +622,20 @@ export async function finalizeTextGeneration(
       getCollectionOpts(project, agent),
     );
   }
-  // ── Verification assertion & Done event ───────────────────────
-  let verResult: { passed: boolean; reason?: string; evidence_refs: string[] } | null = null;
-  try {
-    const effectiveRunId = (context as any).runId || TraceContext.runId() || agentConversationId || "run_final";
-    const runSpans = RunEvidenceStore.getGlobalInstance().getSpans(effectiveRunId);
-    const recordedSpans = runSpans.length > 0 ? runSpans : TraceExporter.getGlobalInstance().getQueuedSpans();
-    verResult = DeterministicVerifiers.verifyCompletionClaim(text || "", recordedSpans);
 
-    const effectiveTraceId = TraceContext.traceId() || (context as any).rootSpan?.trace_id || traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32);
-    const effectiveParentSpanId = TraceContext.currentSpanId() || (context as any).rootSpan?.span_id || null;
+  const verResult = runFinalizerVerification(context, text);
 
-    const verSpan = new Span({
-      trace_id: effectiveTraceId,
-      parent_span_id: effectiveParentSpanId,
-      run_id: effectiveRunId,
-      name: "verification:completion_claim",
-      kind: "verifier",
-      attributes: {
-        passed: verResult.passed,
-        reason: verResult.reason,
-        evidence_count: verResult.evidence_refs.length,
-      },
-    });
-    verSpan.end(verResult.passed ? "OK" : "ERROR", verResult.reason);
-    TraceExporter.getGlobalInstance().enqueueSpan(verSpan.toJSON());
-  } catch (verErr) {
-    logger.debug(`[DeterministicVerifiers] Finalizer verification error: ${verErr}`);
-  }
-
-  // ── Emit done event ───────────────────────────────────────────
-  // Emitted AFTER persistence so the client's post-stream DB fetch
-  // is guaranteed to see the complete, up-to-date conversation.
-  if (!signal?.aborted) {
-    if (emit) {
-      const activeCtx = TraceContext.get();
-      const resolvedTraceId = activeCtx?.trace_id || (context as any).rootSpan?.trace_id || traceId || null;
-      const resolvedRunId = activeCtx?.run_id || (context as any).runId || null;
-      const resolvedSpanId = activeCtx?.current_span_id || (context as any).rootSpan?.span_id || null;
-
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.DONE,
-        provider: providerName,
-        model: resolvedModel,
-        usage: withTotalInputTokens(usage) || null,
-        estimatedCost,
-        tokensPerSec,
-        ...(audioRef ? { audioRef } : {}),
-        timeToGeneration:
-          timeToGenerationSec != null
-            ? roundMilliseconds(timeToGenerationSec)
-            : null,
-        generationTime:
-          generationSec != null ? roundMilliseconds(generationSec) : null,
-        totalTime: totalSec != null ? roundMilliseconds(totalSec) : null,
-        ...(resolvedTraceId && { traceId: resolvedTraceId, trace_id: resolvedTraceId }),
-        ...(conversationId && { conversationId }),
-        ...(resolvedRunId && { run_id: resolvedRunId }),
-        ...(resolvedSpanId && { span_id: resolvedSpanId }),
-        ...(verResult && {
-          verification: {
-            passed: verResult.passed,
-            reason: verResult.reason,
-            evidence_count: verResult.evidence_refs.length,
-          },
-        }),
-      });
-    }
-  }
+  emitFinalizerDoneEvent(
+    context,
+    usage,
+    estimatedCost,
+    tokensPerSec,
+    audioRef,
+    timeToGenerationSec,
+    generationSec,
+    totalSec,
+    verResult,
+  );
 }
 
 export { getCollectionOpts };
@@ -600,6 +676,55 @@ export function sanitizeMessagesForPersistence(
       delete cloned._isInjectedContext;
       return cloned;
     });
+}
+
+function stripIntermediateThinking(
+  overrideMessagesToAppend: MessagePayload[],
+  thinking: string | null | undefined,
+  hasIntermediateToolMessages: boolean,
+): string {
+  let finalThinking = thinking || "";
+  if (!hasIntermediateToolMessages || !finalThinking) return finalThinking;
+  for (const message of overrideMessagesToAppend) {
+    if (
+      message.role === "assistant" &&
+      message.thinking &&
+      finalThinking.startsWith(message.thinking)
+    ) {
+      finalThinking = finalThinking.slice(message.thinking.length).trim();
+    }
+  }
+  return finalThinking;
+}
+
+function buildGenerationSettingsPayload(
+  temperature: number | undefined,
+  maxTokens: number | undefined,
+  thinkingEnabled: boolean | undefined,
+  reasoningEffort: string | undefined,
+  thinkingBudget: number | undefined,
+) {
+  return {
+    temperature,
+    maxTokens,
+    thinkingEnabled: thinkingEnabled || false,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(thinkingBudget ? { thinkingBudget } : {}),
+  };
+}
+
+function buildOptionalDisplayFragments(
+  hasIntermediateToolMessages: boolean,
+  contentSegments?: unknown[],
+  textFragments?: unknown[],
+  thinkingFragments?: unknown[],
+) {
+  if (hasIntermediateToolMessages) return {};
+  return {
+    ...(contentSegments?.length ? { contentSegments } : {}),
+    ...(textFragments?.length ? { textFragments } : {}),
+    ...(thinkingFragments?.length ? { thinkingFragments } : {}),
+  };
 }
 
 /**
@@ -657,28 +782,33 @@ export function assembleMessagesToAppend(options: {
     conversationMeta,
   } = options;
 
-  let messagesToAppend: MessagePayload[] = [];
+  const generationSettings = buildGenerationSettingsPayload(
+    temperature,
+    maxTokens,
+    thinkingEnabled,
+    reasoningEffort,
+    thinkingBudget,
+  );
+  const roundedTotalTime =
+    totalSeconds != null ? roundMilliseconds(totalSeconds as number) : null;
 
   if (overrideMessagesToAppend) {
-    messagesToAppend = [...overrideMessagesToAppend];
+    const messagesToAppend = [...overrideMessagesToAppend];
     const hasIntermediateToolMessages = overrideMessagesToAppend.some(
-      (message) =>
-        message.role === "assistant" &&
-        message.toolCalls &&
-        message.toolCalls.length > 0,
+      (message) => Boolean(message.role === "assistant" && message.toolCalls?.length),
     );
-    let finalThinking = thinking || "";
-    if (hasIntermediateToolMessages && finalThinking) {
-      for (const message of overrideMessagesToAppend) {
-        if (
-          message.role === "assistant" &&
-          message.thinking &&
-          finalThinking.startsWith(message.thinking)
-        ) {
-          finalThinking = finalThinking.slice(message.thinking.length).trim();
-        }
-      }
-    }
+    const finalThinking = stripIntermediateThinking(
+      overrideMessagesToAppend,
+      thinking,
+      hasIntermediateToolMessages,
+    );
+    const displayFragments = buildOptionalDisplayFragments(
+      hasIntermediateToolMessages,
+      contentSegments,
+      textFragments,
+      thinkingFragments,
+    );
+
     messagesToAppend.push({
       role: "assistant",
       content: text,
@@ -686,65 +816,45 @@ export function assembleMessagesToAppend(options: {
       ...(thinkingSignature && { thinkingSignature }),
       ...(images.length > 0 && { images }),
       ...(audioReference && { audio: audioReference }),
-      ...(!hasIntermediateToolMessages &&
-        toolCalls.length > 0 && { toolCalls }),
+      ...(!hasIntermediateToolMessages && toolCalls.length > 0 && { toolCalls }),
       model: resolvedModel,
       provider: providerName,
       timestamp: new Date().toISOString(),
       usage: usage || null,
-      totalTime:
-        totalSeconds != null ? roundMilliseconds(totalSeconds as number) : null,
+      totalTime: roundedTotalTime,
       tokensPerSec: tokensPerSecond,
       estimatedCost,
-      ...(!hasIntermediateToolMessages && contentSegments?.length
-        ? { contentSegments }
-        : {}),
-      ...(!hasIntermediateToolMessages && textFragments?.length
-        ? { textFragments }
-        : {}),
-      ...(!hasIntermediateToolMessages && thinkingFragments?.length
-        ? { thinkingFragments }
-        : {}),
-      generationSettings: {
-        temperature,
-        maxTokens,
-        thinkingEnabled: thinkingEnabled || false,
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(thinkingBudget ? { thinkingBudget } : {}),
-      },
+      ...displayFragments,
+      generationSettings,
     } as MessagePayload);
-  } else {
-    if (userMessage && conversationMeta) {
-      messagesToAppend.push({
-        ...userMessage,
-        role: "user",
-        timestamp: userMessage.timestamp || new Date().toISOString(),
-      });
-    }
-    messagesToAppend.push({
-      role: "assistant",
-      content: text,
-      ...(thinking && { thinking }),
-      ...(thinkingSignature && { thinkingSignature }),
-      ...(images.length > 0 && { images }),
-      ...(audioReference && { audio: audioReference }),
-      ...(toolCalls.length > 0 && { toolCalls }),
-      model: resolvedModel,
-      provider: providerName,
-      timestamp: new Date().toISOString(),
-      usage: usage || null,
-      totalTime: totalSeconds != null ? roundMilliseconds(totalSeconds) : null,
-      tokensPerSec: tokensPerSecond,
-      estimatedCost,
-      generationSettings: {
-        temperature,
-        maxTokens,
-        thinkingEnabled: thinkingEnabled || false,
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(thinkingBudget ? { thinkingBudget } : {}),
-      },
-    } as MessagePayload);
+    return messagesToAppend;
   }
+
+  const messagesToAppend: MessagePayload[] = [];
+  if (userMessage && conversationMeta) {
+    messagesToAppend.push({
+      ...userMessage,
+      role: "user",
+      timestamp: userMessage.timestamp || new Date().toISOString(),
+    });
+  }
+  messagesToAppend.push({
+    role: "assistant",
+    content: text,
+    ...(thinking && { thinking }),
+    ...(thinkingSignature && { thinkingSignature }),
+    ...(images.length > 0 && { images }),
+    ...(audioReference && { audio: audioReference }),
+    ...(toolCalls.length > 0 && { toolCalls }),
+    model: resolvedModel,
+    provider: providerName,
+    timestamp: new Date().toISOString(),
+    usage: usage || null,
+    totalTime: roundedTotalTime,
+    tokensPerSec: tokensPerSecond,
+    estimatedCost,
+    generationSettings,
+  } as MessagePayload);
 
   return messagesToAppend;
 }

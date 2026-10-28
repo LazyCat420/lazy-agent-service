@@ -98,6 +98,109 @@ export async function extractFiles(
   return processed;
 }
 
+const WEB_SEARCH_NAMES: Set<string> = new Set([
+  TOOL_NAMES.SEARCH_WEB,
+  TOOL_NAMES.SEARCH_WEB_PREVIEW,
+]);
+const CODE_EXEC_NAMES: Set<string> = new Set([TOOL_NAMES.CODE_EXECUTION]);
+const VIDEO_EXTENSIONS = [".mp4", ".mov", ".avi", ".webm"];
+
+function classifySingleImageReferenceModality(
+  imageReference: unknown,
+  isUser: boolean,
+  isAssistant: boolean,
+  modalities: Record<string, boolean>,
+): void {
+  if (typeof imageReference !== "string") return;
+  const isDocumentReference =
+    imageReference.startsWith("data:application/") ||
+    imageReference.startsWith("data:text/") ||
+    imageReference.endsWith(".pdf") ||
+    imageReference.endsWith(".txt");
+  if (isDocumentReference) {
+    modalities.docIn = true;
+    return;
+  }
+  const isVideoReference =
+    imageReference.startsWith("data:video/") ||
+    VIDEO_EXTENSIONS.some((extension) => imageReference.endsWith(extension));
+  if (isVideoReference) {
+    if (isUser) modalities.videoIn = true;
+    return;
+  }
+  if (isUser) modalities.imageIn = true;
+  if (isAssistant) modalities.imageOut = true;
+}
+
+function classifyMessageMediaModalities(
+  chatMessage: ChatMessage,
+  isUser: boolean,
+  isAssistant: boolean,
+  modalities: Record<string, boolean>,
+): void {
+  if (chatMessage.images && chatMessage.images.length > 0) {
+    for (const imageReference of chatMessage.images) {
+      classifySingleImageReferenceModality(
+        imageReference,
+        isUser,
+        isAssistant,
+        modalities,
+      );
+    }
+  } else if ((chatMessage as Record<string, unknown>).image) {
+    if (isUser) modalities.imageIn = true;
+    if (isAssistant) modalities.imageOut = true;
+  }
+
+  if (chatMessage.audio) {
+    if (isUser) modalities.audioIn = true;
+    if (isAssistant) modalities.audioOut = true;
+  }
+
+  const docs = (chatMessage as Record<string, unknown>).documents as
+    | string[]
+    | undefined;
+  if (docs?.length) {
+    modalities.docIn = true;
+  }
+}
+
+function classifyMessageToolsAndInlineFeatures(
+  chatMessage: ChatMessage,
+  isAssistant: boolean,
+  modalities: Record<string, boolean>,
+): void {
+  if (chatMessage.toolCalls && chatMessage.toolCalls.length > 0) {
+    if (isAssistant) modalities.textOut = true;
+    for (const toolCall of chatMessage.toolCalls) {
+      const name = (toolCall.name || "").toLowerCase();
+      if (WEB_SEARCH_NAMES.has(name)) {
+        modalities.webSearch = true;
+      } else if (CODE_EXEC_NAMES.has(name)) {
+        modalities.codeExecution = true;
+      } else {
+        modalities.functionCalling = true;
+      }
+    }
+  }
+
+  if (isAssistant && typeof chatMessage.content === "string") {
+    if (chatMessage.content.includes("> **Sources:**")) {
+      modalities.webSearch = true;
+    }
+    if (chatMessage.content.includes("```exec-")) {
+      modalities.codeExecution = true;
+    }
+  }
+
+  if (chatMessage.role === "tool") {
+    modalities.functionCalling = true;
+  }
+  if (isAssistant && chatMessage.thinking) {
+    modalities.thinking = true;
+  }
+}
+
 /**
  * Compute input/output modalities from messages for lightweight querying.
  */
@@ -119,13 +222,6 @@ export function computeModalities(
     thinking: false,
   };
 
-  const WEB_SEARCH_NAMES: Set<string> = new Set([
-    TOOL_NAMES.SEARCH_WEB,
-    TOOL_NAMES.SEARCH_WEB_PREVIEW,
-  ]);
-  const CODE_EXEC_NAMES: Set<string> = new Set([TOOL_NAMES.CODE_EXECUTION]);
-  const VIDEO_EXTENSIONS = [".mp4", ".mov", ".avi", ".webm"];
-
   for (const chatMessage of messages || []) {
     if (chatMessage.deleted) continue;
     const isUser = chatMessage.role === "user";
@@ -135,107 +231,8 @@ export function computeModalities(
         modalities.textIn = true;
       if (isAssistant) modalities.textOut = true;
     }
-    // Tool calls are structured text output
-    if (
-      isAssistant &&
-      chatMessage.toolCalls &&
-      chatMessage.toolCalls.length > 0
-    ) {
-      modalities.textOut = true;
-    }
-
-    // Classify each image reference as image, video, or document
-    if (chatMessage.images && chatMessage.images.length > 0) {
-      for (const imageReference of chatMessage.images) {
-        if (typeof imageReference !== "string") continue;
-        const isDocumentReference =
-          imageReference.startsWith("data:application/") ||
-          imageReference.startsWith("data:text/") ||
-          imageReference.endsWith(".pdf") ||
-          imageReference.endsWith(".txt");
-        const isVideoReference =
-          imageReference.startsWith("data:video/") ||
-          VIDEO_EXTENSIONS.some((extension) =>
-            imageReference.endsWith(extension),
-          );
-        if (isDocumentReference) {
-          modalities.docIn = true;
-        } else if (isVideoReference) {
-          if (isUser) modalities.videoIn = true;
-        } else {
-          if (isUser) modalities.imageIn = true;
-          if (isAssistant) modalities.imageOut = true;
-        }
-      }
-    }
-
-    // Standalone image field (not from images array)
-    if (
-      (chatMessage as Record<string, unknown>).image &&
-      !chatMessage.images?.length
-    ) {
-      if (isUser) modalities.imageIn = true;
-      if (isAssistant) modalities.imageOut = true;
-    }
-
-    if (chatMessage.audio) {
-      if (isUser) modalities.audioIn = true;
-      if (isAssistant) modalities.audioOut = true;
-    }
-
-    // Documents array (separate from image-based document detection)
-    if (
-      (
-        (chatMessage as Record<string, unknown>).documents as
-          | string[]
-          | undefined
-      )?.length
-    ) {
-      modalities.docIn = true;
-    }
-
-    // Classify tool calls by type
-    if (chatMessage.toolCalls && chatMessage.toolCalls.length > 0) {
-      for (const toolCall of chatMessage.toolCalls) {
-        const name = (toolCall.name || "").toLowerCase();
-        if (WEB_SEARCH_NAMES.has(name)) {
-          modalities.webSearch = true;
-        } else if (CODE_EXEC_NAMES.has(name)) {
-          modalities.codeExecution = true;
-        } else {
-          modalities.functionCalling = true;
-        }
-      }
-    }
-
-    // Detect inline web search results (from streaming)
-    if (
-      isAssistant &&
-      typeof chatMessage.content === "string" &&
-      chatMessage.content.includes("> **Sources:**")
-    ) {
-      modalities.webSearch = true;
-    }
-
-    // Detect inline code execution blocks (from streaming)
-    if (
-      isAssistant &&
-      typeof chatMessage.content === "string" &&
-      chatMessage.content.includes("```exec-")
-    ) {
-      modalities.codeExecution = true;
-    }
-
-    // Tool result messages — mark as function calling
-    // (provider-native web_search and code_execution results are inlined, not stored as role:"tool")
-    if (chatMessage.role === "tool") {
-      modalities.functionCalling = true;
-    }
-
-    // Detect thinking / reasoning
-    if (isAssistant && chatMessage.thinking) {
-      modalities.thinking = true;
-    }
+    classifyMessageMediaModalities(chatMessage, isUser, isAssistant, modalities);
+    classifyMessageToolsAndInlineFeatures(chatMessage, isAssistant, modalities);
   }
   return modalities;
 }

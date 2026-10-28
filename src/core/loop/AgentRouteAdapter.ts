@@ -225,161 +225,190 @@ export function protectInitialUserBriefFromMerge(
   return messages;
 }
 
-const coreModelForAgent = (context: AgentRouteAdapterContext): CoreModel => {
-  const baseOptions: Record<string, unknown> = {
-    ...(typeof context.options.systemPrompt === "string" &&
-    context.options.systemPrompt
-      ? { systemPrompt: context.options.systemPrompt }
-      : {}),
-    ...(typeof context.options.temperature === "number"
-      ? { temperature: context.options.temperature }
-      : {}),
-    ...(typeof context.options.reasoningEffort === "string"
-      ? { reasoningEffort: context.options.reasoningEffort }
-      : {}),
-    ...(typeof context.options.thinkingEnabled === "boolean"
-      ? { thinkingEnabled: context.options.thinkingEnabled }
-      : {}),
-    ...(typeof context.options.topP === "number"
-      ? { topP: context.options.topP }
-      : {}),
-    ...(typeof context.options.topK === "number"
-      ? { topK: context.options.topK }
-      : {}),
-    ...(typeof context.options.minP === "number"
-      ? { minP: context.options.minP }
-      : {}),
-    ...(typeof context.options.repeatPenalty === "number"
-      ? { repeatPenalty: context.options.repeatPenalty }
-      : {}),
-    ...(Array.isArray(context.options.stopSequences)
-      ? { stopSequences: context.options.stopSequences }
-      : {}),
-    ...(typeof context.options.seed === "number"
-      ? { seed: context.options.seed }
-      : {}),
-    ...(typeof context.options.presencePenalty === "number"
-      ? { presencePenalty: context.options.presencePenalty }
-      : {}),
-    ...(typeof context.options.frequencyPenalty === "number"
-      ? { frequencyPenalty: context.options.frequencyPenalty }
-      : {}),
-  };
+function buildCoreModelNumericOptions(
+  options: AgentRouteAdapterContext["options"],
+): Record<string, unknown> {
+  const numericFields = [
+    "temperature",
+    "topP",
+    "topK",
+    "minP",
+    "repeatPenalty",
+    "seed",
+    "presencePenalty",
+    "frequencyPenalty",
+  ] as const;
+  const result: Record<string, unknown> = {};
+  for (const key of numericFields) {
+    if (typeof options[key] === "number") {
+      result[key] = options[key];
+    }
+  }
+  return result;
+}
 
-  return (request: CoreModelRequest): AsyncIterable<StreamChunk> =>
-    (async function* () {
-      if (request.finalPass) context.canonicalBudget?.allowFinalPass();
-      let maxTokens = context.options.maxTokens;
-      for (let attempt = 0; ; attempt++) {
-        const internalMessages: ConversationMessage[] =
-          request.messages as unknown as ConversationMessage[];
-        const guardedMessages =
-          protectInitialUserBriefFromMerge(internalMessages);
-        const normalized = normalizeRoleAlternation(guardedMessages);
-        const expandedMessages = expandMessagesForFunctionCall(
-          normalized.messages as unknown as AdminChatMessage[],
-          {
-            filterDeleted: false,
-          },
+function buildCoreModelBaseOptions(
+  options: AgentRouteAdapterContext["options"],
+): Record<string, unknown> {
+  const baseOptions = buildCoreModelNumericOptions(options);
+  if (typeof options.systemPrompt === "string" && options.systemPrompt) {
+    baseOptions.systemPrompt = options.systemPrompt;
+  }
+  if (typeof options.reasoningEffort === "string") {
+    baseOptions.reasoningEffort = options.reasoningEffort;
+  }
+  if (typeof options.thinkingEnabled === "boolean") {
+    baseOptions.thinkingEnabled = options.thinkingEnabled;
+  }
+  if (Array.isArray(options.stopSequences)) {
+    baseOptions.stopSequences = options.stopSequences;
+  }
+  return baseOptions;
+}
+
+function prepareExpandedMessagesForCoreModel(
+  request: CoreModelRequest,
+  context: AgentRouteAdapterContext,
+): ChatMessage[] {
+  const internalMessages: ConversationMessage[] =
+    request.messages as unknown as ConversationMessage[];
+  const guardedMessages = protectInitialUserBriefFromMerge(internalMessages);
+  const normalized = normalizeRoleAlternation(guardedMessages);
+  const expandedMessages = expandMessagesForFunctionCall(
+    normalized.messages as unknown as AdminChatMessage[],
+    { filterDeleted: false },
+  );
+  const expanded: ChatMessage[] = expandedMessages as unknown as ChatMessage[];
+
+  if (context.sessionState) {
+    if (expanded[expanded.length - 1]?.role === "user") {
+      expanded.push({
+        role: "assistant",
+        content: "(continuing)",
+      });
+    }
+    expanded.push({
+      role: "user",
+      content: sessionStateContextBlock(context.sessionState),
+    });
+  }
+  return expanded;
+}
+
+function* yieldNonStreamingResponseChunks(
+  response: Awaited<ReturnType<NonNullable<AgentRouteAdapterContext["provider"]["generateText"]>>>,
+  onContentYielded: () => void,
+): Generator<StreamChunk> {
+  if (response.thinking) {
+    onContentYielded();
+    yield { type: "thinking", content: response.thinking };
+  }
+  if (response.text) {
+    onContentYielded();
+    yield response.text;
+  }
+  if (Array.isArray(response.toolCalls)) {
+    for (const tc of response.toolCalls) {
+      onContentYielded();
+      yield {
+        type: "toolCall",
+        id: tc.id ?? null,
+        name: tc.name,
+        args: tc.args ?? {},
+      };
+    }
+  }
+  if (response.usage) {
+    yield {
+      type: "usage",
+      usage: {
+        inputTokens: response.usage.inputTokens ?? 0,
+        outputTokens: response.usage.outputTokens ?? 0,
+      },
+    };
+  }
+}
+
+async function* streamCoreModelWithRetry(
+  context: AgentRouteAdapterContext,
+  baseOptions: Record<string, unknown>,
+  request: CoreModelRequest,
+): AsyncGenerator<StreamChunk> {
+  if (request.finalPass) context.canonicalBudget?.allowFinalPass();
+  let maxTokens = context.options.maxTokens;
+  for (let attempt = 0; ; attempt++) {
+    const expanded = prepareExpandedMessagesForCoreModel(request, context);
+    const providerCallOptions: Record<string, unknown> = {
+      ...baseOptions,
+      maxTokens,
+      tools: request.tools,
+      toolChoice: request.toolChoice,
+      ...(request.finalPass ? { thinkingEnabled: false } : {}),
+      signal: request.signal,
+    };
+
+    let yielded = false;
+    try {
+      if (typeof context.provider.generateTextStream === "function") {
+        const stream = context.provider.generateTextStream(
+          expanded,
+          context.resolvedModel,
+          providerCallOptions,
         );
-        const expanded: ChatMessage[] =
-          expandedMessages as unknown as ChatMessage[];
-
-        if (context.sessionState) {
-          if (expanded[expanded.length - 1]?.role === "user") {
-            expanded.push({
-              role: "assistant",
-              content: "(continuing)",
-            });
-          }
-          expanded.push({
-            role: "user",
-            content: sessionStateContextBlock(context.sessionState),
-          });
+        for await (const chunk of stream) {
+          yielded = true;
+          yield chunk;
         }
-
-        const providerCallOptions: Record<string, unknown> = {
-          ...baseOptions,
-          maxTokens,
-          tools: request.tools,
-          toolChoice: request.toolChoice,
-          ...(request.finalPass ? { thinkingEnabled: false } : {}),
-          signal: request.signal,
-        };
-
-        let yielded = false;
-        try {
-          if (typeof context.provider.generateTextStream === "function") {
-            const stream = context.provider.generateTextStream(
-              expanded,
-              context.resolvedModel,
-              providerCallOptions,
-            );
-            for await (const chunk of stream) {
-              yielded = true;
-              yield chunk;
-            }
-            return;
-          }
-
-          if (typeof context.provider.generateText === "function") {
-            const response = await context.provider.generateText(
-              expanded,
-              context.resolvedModel,
-              providerCallOptions,
-            );
-            if (response.thinking) {
-              yielded = true;
-              yield { type: "thinking", content: response.thinking };
-            }
-            if (response.text) {
-              yielded = true;
-              yield response.text;
-            }
-            if (Array.isArray(response.toolCalls)) {
-              for (const tc of response.toolCalls) {
-                yielded = true;
-                yield {
-                  type: "toolCall",
-                  id: tc.id ?? null,
-                  name: tc.name,
-                  args: tc.args ?? {},
-                };
-              }
-            }
-            if (response.usage) {
-              yield {
-                type: "usage",
-                usage: {
-                  inputTokens: response.usage.inputTokens ?? 0,
-                  outputTokens: response.usage.outputTokens ?? 0,
-                },
-              };
-            }
-            return;
-          }
-
-          throw new Error("Provider supports neither generateTextStream nor generateText");
-        } catch (error) {
-          if (attempt === 0 && !yielded) {
-            const overflow = parseContextOverflowError(error);
-            const reduced = overflow
-              ? reducedMaxTokensForOverflow(
-                  maxTokens,
-                  overflow,
-                  MINIMUM_CLAMPED_OUTPUT_TOKENS,
-                  OUTPUT_TOKEN_CLAMP_FIXED_HEADROOM_TOKENS,
-                )
-              : null;
-            if (reduced !== null) {
-              maxTokens = reduced;
-              continue;
-            }
-          }
-          throw error;
-        }
+        return;
       }
-    })();
+
+      if (typeof context.provider.generateText === "function") {
+        const response = await context.provider.generateText(
+          expanded,
+          context.resolvedModel,
+          providerCallOptions,
+        );
+        yield* yieldNonStreamingResponseChunks(response, () => {
+          yielded = true;
+        });
+        return;
+      }
+
+      throw new Error(
+        "Provider supports neither generateTextStream nor generateText",
+      );
+    } catch (error) {
+      const reduced =
+        attempt === 0 && !yielded
+          ? resolveOverflowReducedTokens(maxTokens, error)
+          : null;
+      if (reduced !== null) {
+        maxTokens = reduced;
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function resolveOverflowReducedTokens(
+  maxTokens: number | undefined,
+  error: unknown,
+): number | null {
+  const overflow = parseContextOverflowError(error);
+  if (!overflow) return null;
+  return reducedMaxTokensForOverflow(
+    maxTokens,
+    overflow,
+    MINIMUM_CLAMPED_OUTPUT_TOKENS,
+    OUTPUT_TOKEN_CLAMP_FIXED_HEADROOM_TOKENS,
+  );
+}
+
+const coreModelForAgent = (context: AgentRouteAdapterContext): CoreModel => {
+  const baseOptions = buildCoreModelBaseOptions(context.options);
+  return (request: CoreModelRequest): AsyncIterable<StreamChunk> =>
+    streamCoreModelWithRetry(context, baseOptions, request);
 };
 
 const toCoreToolsForAgent = (

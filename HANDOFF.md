@@ -2,7 +2,14 @@
 part: Consumer apps
 status: shipped
 type: record
-updated: 2026-09-06
+updated: 2026-10-28
+---
+
+# HANDOFF — Phase 8 `/lego` CRAP Decomposition (2026-10-28)
+
+- Decomposed all **69 functions** in `lazy-agent-service/src` that exceeded McCabe cyclomatic complexity 30 into single-responsibility helpers (`<= 15` complexity each), reducing max complexity across all 2,644 functions in `lazy-agent-service/src` to **30** (`0` functions `> 30`).
+- Key decomposed modules include `RunExecutionEngine.ts`, `WorkflowExecutionService.ts`, `ChatRoutes.ts`, `ReActHarness.ts`, `BaseAgenticHarness.ts`, `CoreLoop.ts`, `GraphOfThoughtsStrategy.ts`, `TreeOfThoughtsStrategy.ts`, `LmStudioProvider.ts`, `OpenAICompatibleProvider.ts`, `ToolExecutor.ts`, `ContextPressureManager.ts`, and `VllmModelSyncService.ts`.
+
 ---
 
 # HANDOFF — topic roles by batch, a FIT rating, seeds that reach the model (2026-09-06)

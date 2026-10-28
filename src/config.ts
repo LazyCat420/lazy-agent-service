@@ -65,6 +65,83 @@ function getModels(inputType: string, outputType: string): ModelDefinition[] {
   });
 }
 
+function assignModelCapabilityFlags(
+  entry: ModelOptionEntry,
+  model: ModelDefinition,
+  modelRecord: ModelDefinition & Record<string, unknown>,
+): void {
+  if (modelRecord.thinking) entry.thinking = true;
+  if (model.inputTypes?.includes(TYPES.IMAGE)) entry.vision = true;
+  if (modelRecord.webSearch) {
+    entry.webSearch = modelRecord.webSearch as boolean | string;
+  }
+  if (modelRecord.assistantImages === false) entry.assistantImages = false;
+  const supportsJsonMode =
+    model.modelType === MODEL_TYPES.CONVERSATION &&
+    (model.provider === PROVIDERS.OPENAI ||
+      model.provider === PROVIDERS.GOOGLE);
+  if (supportsJsonMode) {
+    entry.jsonMode = true;
+  }
+  if (modelRecord.codeExecution) entry.codeExecution = true;
+  if (modelRecord.webFetch) entry.webFetch = true;
+  if (modelRecord.urlContext) entry.urlContext = true;
+  if (modelRecord.verbosity) entry.verbosity = true;
+  if (modelRecord.reasoningSummary) entry.reasoningSummary = true;
+  if (modelRecord.responsesAPI) entry.responsesAPI = true;
+}
+
+function assignModelMetadataFields(
+  entry: ModelOptionEntry,
+  model: ModelDefinition,
+  modelRecord: ModelDefinition & Record<string, unknown>,
+): void {
+  if (modelRecord.description) {
+    entry.description = modelRecord.description as string;
+  }
+  if (model.inputTypes) entry.inputTypes = model.inputTypes;
+  if (model.outputTypes) entry.outputTypes = model.outputTypes;
+  if (modelRecord.tools) entry.tools = modelRecord.tools as string[];
+  if (modelRecord.pricing) {
+    entry.pricing = modelRecord.pricing as Record<string, number>;
+  }
+  if (modelRecord.arena) {
+    entry.arena = modelRecord.arena as Record<string, number>;
+  }
+  if (modelRecord.maxInputTokens) {
+    entry.contextLength = modelRecord.maxInputTokens as number;
+  }
+  if (modelRecord.maxOutputTokens) {
+    entry.maxOutputTokens = modelRecord.maxOutputTokens as number;
+  }
+}
+
+function assignModelExtendedConfig(
+  entry: ModelOptionEntry,
+  model: ModelDefinition,
+  modelRecord: ModelDefinition & Record<string, unknown>,
+): void {
+  if (modelRecord.defaultTemperature !== undefined) {
+    entry.defaultTemperature = modelRecord.defaultTemperature as number;
+  }
+  if (modelRecord.size) entry.size = modelRecord.size as string;
+  if (model.modelType) entry.modelType = model.modelType;
+  if (modelRecord.liveAPI) entry.liveAPI = true;
+  if (modelRecord.thinkingLevels) {
+    entry.thinkingLevels = modelRecord.thinkingLevels as string[];
+  }
+  if (modelRecord.mediaLimits) {
+    entry.mediaLimits = modelRecord.mediaLimits as Record<string, unknown>;
+  }
+  if (modelRecord.year) entry.year = modelRecord.year as number;
+  if (modelRecord.lockedSampling) entry.lockedSampling = true;
+  if (modelRecord.adaptiveThinking) entry.adaptiveThinking = true;
+  entry.supportsSystemPrompt =
+    modelRecord.supportsSystemPrompt !== undefined
+      ? (modelRecord.supportsSystemPrompt as boolean)
+      : model.outputTypes.includes(TYPES.TEXT);
+}
+
 /**
  * Get listed model options grouped by provider
  * for a given input→output type combination.
@@ -77,58 +154,12 @@ function getModelOptions(
   const optionsMap: Record<string, ModelOptionEntry[]> = {};
   for (const model of getModels(inputType, outputType)) {
     const modelRecord = model as ModelDefinition & Record<string, unknown>;
-    if (modelRecord.listed !== false) {
-      const entry: ModelOptionEntry = { name: model.name, label: model.label };
-      if (modelRecord.description)
-        entry.description = modelRecord.description as string;
-      if (modelRecord.thinking) entry.thinking = true;
-      if (model.inputTypes?.includes(TYPES.IMAGE)) entry.vision = true;
-      if (modelRecord.webSearch)
-        entry.webSearch = modelRecord.webSearch as boolean | string;
-      if (model.inputTypes) entry.inputTypes = model.inputTypes;
-      if (model.outputTypes) entry.outputTypes = model.outputTypes;
-      if (modelRecord.tools) entry.tools = modelRecord.tools as string[];
-      if (modelRecord.pricing)
-        entry.pricing = modelRecord.pricing as Record<string, number>;
-      if (modelRecord.arena)
-        entry.arena = modelRecord.arena as Record<string, number>;
-      if (modelRecord.maxInputTokens)
-        entry.contextLength = modelRecord.maxInputTokens as number;
-      if (modelRecord.maxOutputTokens)
-        entry.maxOutputTokens = modelRecord.maxOutputTokens as number;
-      if (modelRecord.assistantImages === false) entry.assistantImages = false;
-      // JSON mode: OpenAI + Google support response_format / responseMimeType
-      if (
-        model.modelType === MODEL_TYPES.CONVERSATION &&
-        (model.provider === PROVIDERS.OPENAI || model.provider === PROVIDERS.GOOGLE)
-      ) {
-        entry.jsonMode = true;
-      }
-      if (modelRecord.codeExecution) entry.codeExecution = true;
-      if (modelRecord.webFetch) entry.webFetch = true;
-      if (modelRecord.urlContext) entry.urlContext = true;
-      if (modelRecord.defaultTemperature !== undefined)
-        entry.defaultTemperature = modelRecord.defaultTemperature as number;
-      if (modelRecord.verbosity) entry.verbosity = true;
-      if (modelRecord.reasoningSummary) entry.reasoningSummary = true;
-      if (modelRecord.responsesAPI) entry.responsesAPI = true;
-      if (modelRecord.size) entry.size = modelRecord.size as string;
-      if (model.modelType) entry.modelType = model.modelType;
-      if (modelRecord.liveAPI) entry.liveAPI = true;
-      if (modelRecord.thinkingLevels)
-        entry.thinkingLevels = modelRecord.thinkingLevels as string[];
-      if (modelRecord.mediaLimits)
-        entry.mediaLimits = modelRecord.mediaLimits as Record<string, unknown>;
-      if (modelRecord.year) entry.year = modelRecord.year as number;
-      if (modelRecord.lockedSampling) entry.lockedSampling = true;
-      if (modelRecord.adaptiveThinking) entry.adaptiveThinking = true;
-      // System prompt support: true for chat models, false for image-only/TTS/embedding APIs
-      entry.supportsSystemPrompt =
-        modelRecord.supportsSystemPrompt !== undefined
-          ? (modelRecord.supportsSystemPrompt as boolean)
-          : model.outputTypes.includes(TYPES.TEXT);
-      (optionsMap[model.provider] ??= []).push(entry);
-    }
+    if (modelRecord.listed === false) continue;
+    const entry: ModelOptionEntry = { name: model.name, label: model.label };
+    assignModelMetadataFields(entry, model, modelRecord);
+    assignModelCapabilityFlags(entry, model, modelRecord);
+    assignModelExtendedConfig(entry, model, modelRecord);
+    (optionsMap[model.provider] ??= []).push(entry);
   }
   return optionsMap;
 }

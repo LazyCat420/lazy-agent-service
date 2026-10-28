@@ -106,6 +106,143 @@ interface ExpandedMessage {
   pdf?: string[];
 }
 
+function shouldKeepExpandedMessage(messageItem: ChatMessage): boolean {
+  if (messageItem.deleted) return false;
+  if (messageItem.role !== "assistant") return true;
+  return Boolean(
+    messageItem.content?.toString().trim() || messageItem.toolCalls?.length,
+  );
+}
+
+function mapExpandedToolCallEntry(toolCall: ToolCallEntry) {
+  return {
+    id: toolCall.id,
+    name: toolCall.name,
+    args: toolCall.args,
+    ...(toolCall.responsesItemId
+      ? { responsesItemId: toolCall.responsesItemId }
+      : {}),
+    ...(toolCall.thoughtSignature
+      ? { thoughtSignature: toolCall.thoughtSignature }
+      : {}),
+    ...(toolCall.reasoningItem
+      ? { reasoningItem: toolCall.reasoningItem }
+      : {}),
+  };
+}
+
+function stripSubAgentMessagesFromResult(result: unknown): unknown {
+  if (!Array.isArray(result)) return result;
+  return result.map((subAgentResult) => {
+    if (subAgentResult && typeof subAgentResult === "object") {
+      const { messages: _messages, ...rest } = subAgentResult;
+      return rest;
+    }
+    return subAgentResult;
+  });
+}
+
+function formatExpandedToolResultMessage(
+  toolCall: ToolCallEntry,
+): ExpandedMessage {
+  let finalResult = toolCall.result;
+  if (
+    toolCall.name === TOOL_NAMES.CREATE_SUBAGENT ||
+    toolCall.name === "team_create"
+  ) {
+    finalResult = stripSubAgentMessagesFromResult(toolCall.result);
+  }
+
+  const truncatableResult = isTruncatableResult(finalResult)
+    ? finalResult
+    : undefined;
+
+  const serializedContent =
+    typeof finalResult === "string"
+      ? finalResult.length > 8000
+        ? fitForPrism(finalResult).text
+        : finalResult
+      : JSON.stringify(truncateToolResult(truncatableResult));
+
+  return {
+    role: "tool",
+    name: toolCall.name,
+    tool_call_id: toolCall.id,
+    content: serializedContent,
+  };
+}
+
+function expandAssistantToolCallMessage(
+  message: ChatMessage,
+): ExpandedMessage[] {
+  const msgWithReasoning = message as ChatMessage & {
+    reasoning_content?: string;
+  };
+  const reasoning = msgWithReasoning.reasoning_content || message.thinking;
+  const toolCalls = message.toolCalls || [];
+  const assistantMessage: ExpandedMessage = {
+    role: "assistant",
+    content: message.content?.toString().trim() || null,
+    ...(message.thinking && { thinking: message.thinking }),
+    ...(reasoning && { reasoning_content: reasoning }),
+    ...(message.thinkingSignature && {
+      thinkingSignature: message.thinkingSignature,
+    }),
+    toolCalls: toolCalls.map(mapExpandedToolCallEntry),
+  };
+  const toolMessages = toolCalls
+    .filter((toolCall: ToolCallEntry) => toolCall.result !== undefined)
+    .map(formatExpandedToolResultMessage);
+  return [assistantMessage, ...toolMessages];
+}
+
+function hasNonEmptyMediaField(media: unknown): boolean {
+  if (!media) return false;
+  return Array.isArray(media) ? media.length > 0 : Boolean(media);
+}
+
+function attachStandardMessageMedia(
+  target: ExpandedMessage,
+  message: ChatMessage,
+): void {
+  if (hasNonEmptyMediaField(message.images)) target.images = message.images;
+  if (hasNonEmptyMediaField(message.video)) target.video = message.video;
+  if (hasNonEmptyMediaField(message.audio)) target.audio = message.audio;
+  if (hasNonEmptyMediaField(message.pdf)) target.pdf = message.pdf;
+}
+
+function attachAssistantReasoningFields(
+  target: ExpandedMessage,
+  message: ChatMessage,
+): void {
+  if (message.role !== "assistant") return;
+  const msgWithExtras = message as ChatMessage & {
+    reasoning_content?: string;
+    thinkingSignature?: string;
+  };
+  if (message.thinking) {
+    target.thinking = message.thinking;
+  }
+  const reasoning = msgWithExtras.reasoning_content || message.thinking;
+  if (reasoning) {
+    target.reasoning_content = reasoning;
+  }
+  if (msgWithExtras.thinkingSignature) {
+    target.thinkingSignature = msgWithExtras.thinkingSignature;
+  }
+}
+
+function expandStandardMessage(message: ChatMessage): ExpandedMessage[] {
+  const hasContent = Boolean(message.content?.toString().trim());
+  const expanded: ExpandedMessage = {
+    role: message.role,
+    content: hasContent ? message.content : " ",
+  };
+  attachStandardMessageMedia(expanded, message);
+  attachAssistantReasoningFields(expanded, message);
+  return [expanded];
+}
+
 /**
  * Expand a messages array into the format expected by LLM providers for
  * function calling. Assistant messages with toolCalls are expanded into
@@ -117,94 +254,23 @@ export function expandMessagesForFunctionCall(
   { filterDeleted = true }: ExpandOptions = {},
 ): ExpandedMessage[] {
   const filtered = filterDeleted
-    ? messages.filter(
-        (messageItem) =>
-          !messageItem.deleted &&
-          (messageItem.role !== "assistant" ||
-            messageItem.content?.toString().trim() ||
-            messageItem.toolCalls?.length),
-      )
+    ? messages.filter(shouldKeepExpandedMessage)
     : messages;
 
   return filtered.flatMap((message) => {
-    // Expand assistant messages with toolCalls into
-    // [assistant(tool_calls), tool(result1), tool(result2), ...]
     if (
       message.role === "assistant" &&
       message.toolCalls &&
       message.toolCalls.length > 0
     ) {
-      const msgWithReasoning = message as ChatMessage & {
-        reasoning_content?: string;
-      };
-      const reasoning = msgWithReasoning.reasoning_content || message.thinking;
-      const assistantMessage: ExpandedMessage = {
-        role: "assistant",
-        content: message.content?.toString().trim() || null,
-        // Preserve thinking + signature + reasoning_content for multi-turn round-trips (H1)
-        ...(message.thinking && { thinking: message.thinking }),
-        ...(reasoning && { reasoning_content: reasoning }),
-        ...(message.thinkingSignature && {
-          thinkingSignature: message.thinkingSignature,
-        }),
-        toolCalls: message.toolCalls.map((toolCall: ToolCallEntry) => ({
-          id: toolCall.id,
-          name: toolCall.name,
-          args: toolCall.args,
-          ...(toolCall.responsesItemId
-            ? { responsesItemId: toolCall.responsesItemId }
-            : {}),
-          ...(toolCall.thoughtSignature
-            ? { thoughtSignature: toolCall.thoughtSignature }
-            : {}),
-          ...(toolCall.reasoningItem
-            ? { reasoningItem: toolCall.reasoningItem }
-            : {}),
-        })),
-      };
-      const toolMessages: ExpandedMessage[] = message.toolCalls
-        .filter((toolCall: ToolCallEntry) => toolCall.result !== undefined)
-        .map((toolCall: ToolCallEntry) => {
-          let finalResult = toolCall.result;
-          if (
-            (toolCall.name === TOOL_NAMES.CREATE_SUBAGENT ||
-              toolCall.name === "team_create") &&
-            Array.isArray(toolCall.result)
-          ) {
-            finalResult = toolCall.result.map((subAgentResult) => {
-              if (subAgentResult && typeof subAgentResult === "object") {
-                const { messages: _messages, ...rest } = subAgentResult;
-                return rest;
-              }
-              return subAgentResult;
-            });
-          }
-
-          const truncatableResult = isTruncatableResult(finalResult)
-            ? finalResult
-            : undefined;
-
-          return {
-            role: "tool",
-            name: toolCall.name,
-            tool_call_id: toolCall.id,
-            content:
-              typeof finalResult === "string"
-                ? (finalResult.length > 8000
-                    ? fitForPrism(finalResult).text
-                    : finalResult)
-                : JSON.stringify(truncateToolResult(truncatableResult)),
-          };
-        });
-      return [assistantMessage, ...toolMessages];
+      return expandAssistantToolCallMessage(message);
     }
 
-    // Pass through tool messages with their required fields; a large string
-    // result is bounded like every other tool result (ch.06 item 7).
     if (message.role === "tool") {
-      const content = typeof message.content === "string" && message.content.length > 8000
-        ? fitForPrism(message.content).text
-        : message.content;
+      const content =
+        typeof message.content === "string" && message.content.length > 8000
+          ? fitForPrism(message.content).text
+          : message.content;
       return [
         {
           role: "tool",
@@ -215,51 +281,6 @@ export function expandMessagesForFunctionCall(
       ];
     }
 
-    // Standard message — include all media fields (images, video, audio, pdf)
-    // Preserve thinking + thinkingSignature on assistant messages so Anthropic
-    // can receive them back in multi-turn conversations (required by their API).
-    return [
-      {
-        role: message.role,
-        ...(message.content?.toString().trim()
-          ? { content: message.content }
-          : { content: " " }),
-        ...(message.images && message.images.length > 0
-          ? { images: message.images }
-          : {}),
-        ...(message.video && message.video.length > 0
-          ? { video: message.video }
-          : {}),
-        ...(message.audio &&
-        (Array.isArray(message.audio)
-          ? message.audio.length > 0
-          : message.audio)
-          ? { audio: message.audio }
-          : {}),
-        ...(message.pdf && message.pdf.length > 0 ? { pdf: message.pdf } : {}),
-        ...(message.role === "assistant" && message.thinking
-          ? { thinking: message.thinking }
-          : {}),
-        ...(message.role === "assistant" &&
-        ((message as ChatMessage & { reasoning_content?: string })
-          .reasoning_content ||
-          message.thinking)
-          ? {
-              reasoning_content:
-                (message as ChatMessage & { reasoning_content?: string })
-                  .reasoning_content || message.thinking,
-            }
-          : {}),
-        ...(message.role === "assistant" &&
-        (message as ChatMessage & { thinkingSignature?: string })
-          .thinkingSignature
-          ? {
-              thinkingSignature: (
-                message as ChatMessage & { thinkingSignature?: string }
-              ).thinkingSignature,
-            }
-          : {}),
-      },
-    ];
+    return expandStandardMessage(message);
   });
 }

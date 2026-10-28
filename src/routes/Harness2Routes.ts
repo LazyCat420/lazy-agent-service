@@ -31,59 +31,152 @@ function modelRef(value: unknown, role: string): ModelRef | string {
   return { provider: m.provider, model: m.model ?? "", thinkingEnabled: Boolean(m.thinkingEnabled), toolsEnabled: Boolean(m.toolsEnabled) };
 }
 
-/** Every request check that needs no network. */
-function check(body: Record<string, unknown>): Checked {
-  const { taskId, task, domain } = body as { taskId?: unknown; task?: unknown; domain?: unknown };
-  if (typeof taskId !== "string" || typeof task !== "string" || typeof domain !== "string" || !task.trim()) {
+function validateTaskAndDomainIdentifiers(
+  body: Record<string, unknown>,
+): { taskId: string; task: string; domain: string } | { error: string } {
+  const { taskId, task, domain } = body as {
+    taskId?: unknown;
+    task?: unknown;
+    domain?: unknown;
+  };
+  if (
+    typeof taskId !== "string" ||
+    typeof task !== "string" ||
+    typeof domain !== "string" ||
+    !task.trim()
+  ) {
     return { error: "taskId, task and domain are required strings" };
   }
-  if (!ID_RE.test(taskId)) return { error: "taskId must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}" };
-  if (!ID_RE.test(domain)) return { error: "domain must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}" };
-  if (task.length > MAX_TASK_CHARS) return { error: `task is over ${MAX_TASK_CHARS} chars` };
-  const solver = modelRef(body.solver, "solver");
-  if (typeof solver === "string") return { error: solver };
-  if (!solver.model) return { error: "solver.model is required" };
-  const improver = body.improver === undefined ? { ...DEFAULT_IMPROVER } : modelRef(body.improver, "improver");
-  if (typeof improver === "string") return { error: improver };
-  if (!body.baseTree || typeof body.baseTree !== "object" || Array.isArray(body.baseTree)) return { error: "baseTree is required" };
-  const baseTree = body.baseTree as Record<string, unknown>;
-  if (Object.values(baseTree).some((v) => typeof v !== "string")) return { error: "baseTree values must be file text strings" };
+  if (!ID_RE.test(taskId)) {
+    return { error: "taskId must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}" };
+  }
+  if (!ID_RE.test(domain)) {
+    return { error: "domain must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}" };
+  }
+  if (task.length > MAX_TASK_CHARS) {
+    return { error: `task is over ${MAX_TASK_CHARS} chars` };
+  }
+  return { taskId, task, domain };
+}
+
+function validateBaseTreeMap(
+  rawTree: unknown,
+): { baseTree: Record<string, string> } | { error: string } {
+  if (!rawTree || typeof rawTree !== "object" || Array.isArray(rawTree)) {
+    return { error: "baseTree is required" };
+  }
+  const baseTree = rawTree as Record<string, unknown>;
+  if (Object.values(baseTree).some((v) => typeof v !== "string")) {
+    return { error: "baseTree values must be file text strings" };
+  }
   try {
     validateTree(baseTree as Record<string, string>);
   } catch (error) {
-    return { error: `baseTree invalid: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      error: `baseTree invalid: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
+  return { baseTree: baseTree as Record<string, string> };
+}
+
+function validateRecursionAndModeFields(
+  body: Record<string, unknown>,
+): { k: number; width: number } | { error: string } {
   const k = Number(body.k ?? 1);
-  if (!Number.isInteger(k) || k < 1 || k > 4) return { error: "k must be an integer 1..4" };
+  if (!Number.isInteger(k) || k < 1 || k > 4) {
+    return { error: "k must be an integer 1..4" };
+  }
   const width = Number(body.width ?? 2);
-  if (!Number.isInteger(width) || width < 1 || width > 4) return { error: "width must be an integer 1..4" };
-  if (body.mode !== undefined && body.mode !== "parallel" && body.mode !== "sequential") return { error: "mode must be parallel or sequential" };
-  if (body.selectionPool !== undefined && body.selectionPool !== "finals" && body.selectionPool !== "mixed") {
+  if (!Number.isInteger(width) || width < 1 || width > 4) {
+    return { error: "width must be an integer 1..4" };
+  }
+  if (
+    body.mode !== undefined &&
+    body.mode !== "parallel" &&
+    body.mode !== "sequential"
+  ) {
+    return { error: "mode must be parallel or sequential" };
+  }
+  if (
+    body.selectionPool !== undefined &&
+    body.selectionPool !== "finals" &&
+    body.selectionPool !== "mixed"
+  ) {
     return { error: "selectionPool must be finals or mixed" };
   }
-  if (body.seed !== undefined && !Number.isInteger(body.seed)) return { error: "seed must be an integer" };
-  let bench: Harness2Request["bench"];
-  if (body.bench !== undefined) {
-    if (!body.bench || typeof body.bench !== "object" || Array.isArray(body.bench)) return { error: "bench must be an object" };
-    const slots = body.bench as Record<string, unknown>;
-    const unknown = Object.keys(slots).filter((key) => !(BENCH_KEYS as readonly string[]).includes(key));
-    if (unknown.length) return { error: `bench has unknown slots: ${unknown.join(", ")} (allowed: ${BENCH_KEYS.join(", ")})` };
-    for (const [key, value] of Object.entries(slots)) {
-      if (typeof value !== "string" || value.length > 20_000) return { error: `bench.${key} must be a string of at most 20,000 chars` };
-      // `work` restates the task, whose own words may legitimately say "score"; the other slots may not.
-      const word = key === "work" ? undefined : MEASUREMENT_WORDS.find((w) => value.toLowerCase().includes(w));
-      if (word) return { error: `bench.${key} must describe the WORK, not its measurement (found "${word}")` };
-    }
-    bench = slots as Harness2Request["bench"];
+  if (body.seed !== undefined && !Number.isInteger(body.seed)) {
+    return { error: "seed must be an integer" };
   }
+  return { k, width };
+}
+
+function validateBenchSlots(
+  rawBench: unknown,
+): { bench: Harness2Request["bench"] } | { error: string } {
+  if (rawBench === undefined) return { bench: undefined };
+  if (!rawBench || typeof rawBench !== "object" || Array.isArray(rawBench)) {
+    return { error: "bench must be an object" };
+  }
+  const slots = rawBench as Record<string, unknown>;
+  const unknown = Object.keys(slots).filter(
+    (key) => !(BENCH_KEYS as readonly string[]).includes(key),
+  );
+  if (unknown.length) {
+    return {
+      error: `bench has unknown slots: ${unknown.join(", ")} (allowed: ${BENCH_KEYS.join(", ")})`,
+    };
+  }
+  for (const [key, value] of Object.entries(slots)) {
+    if (typeof value !== "string" || value.length > 20_000) {
+      return {
+        error: `bench.${key} must be a string of at most 20,000 chars`,
+      };
+    }
+    const word =
+      key === "work"
+        ? undefined
+        : MEASUREMENT_WORDS.find((w) => value.toLowerCase().includes(w));
+    if (word) {
+      return {
+        error: `bench.${key} must describe the WORK, not its measurement (found "${word}")`,
+      };
+    }
+  }
+  return { bench: slots as Harness2Request["bench"] };
+}
+
+/** Every request check that needs no network. */
+function check(body: Record<string, unknown>): Checked {
+  const idRes = validateTaskAndDomainIdentifiers(body);
+  if ("error" in idRes) return idRes;
+  const { taskId, task, domain } = idRes;
+
+  const solver = modelRef(body.solver, "solver");
+  if (typeof solver === "string") return { error: solver };
+  if (!solver.model) return { error: "solver.model is required" };
+  const improver =
+    body.improver === undefined
+      ? { ...DEFAULT_IMPROVER }
+      : modelRef(body.improver, "improver");
+  if (typeof improver === "string") return { error: improver };
+
+  const treeRes = validateBaseTreeMap(body.baseTree);
+  if ("error" in treeRes) return treeRes;
+
+  const modeRes = validateRecursionAndModeFields(body);
+  if ("error" in modeRes) return modeRes;
+
+  const benchRes = validateBenchSlots(body.bench);
+  if ("error" in benchRes) return benchRes;
+
   const req: Harness2Request = {
     taskId,
     task,
     domain,
-    baseTree: baseTree as Record<string, string>,
-    bench,
-    k,
-    width,
+    baseTree: treeRes.baseTree,
+    bench: benchRes.bench,
+    k: modeRes.k,
+    width: modeRes.width,
     mode: body.mode as Harness2Request["mode"],
     selectionPool: body.selectionPool as Harness2Request["selectionPool"],
     seed: body.seed as number | undefined,

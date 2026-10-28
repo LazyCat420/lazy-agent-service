@@ -149,6 +149,314 @@ function injectToolsIntoSystemPrompt(
   }
 }
 // ─── parameter parsing, validation, model resolution ────────
+
+const NON_NULL_OPTION_KEYS = [
+  "temperature",
+  "maxTokens",
+  "topP",
+  "topK",
+  "frequencyPenalty",
+  "presencePenalty",
+  "minP",
+  "repeatPenalty",
+  "thinkingEnabled",
+  "thinkingBudget",
+  "webSearch",
+  "webFetch",
+  "codeExecution",
+  "urlContext",
+  "functionCallingEnabled",
+  "agenticLoopEnabled",
+  "forceImageGeneration",
+  "responseFormat",
+  "serviceTier",
+  "textOnly",
+  "autoApprove",
+  "planFirst",
+  "maxIterations",
+  "maxSubAgentIterations",
+  "maxRecursionDepth",
+  "agentContext",
+  "enableCriticGate",
+  "criticModel",
+  "workspaceEnabled",
+  "harness",
+  "topology",
+  "thoughtStructure",
+  "parallelToolCalls",
+  "candidateCount",
+  "branchCount",
+  "store",
+  "responseLogprobs",
+] as const;
+
+const TRUTHY_OPTION_KEYS = [
+  "tools",
+  "stopSequences",
+  "reasoningEffort",
+  "thinkingLevel",
+  "verbosity",
+  "reasoningSummary",
+  "enabledTools",
+  "disabledTools",
+  "minContextLength",
+  "evalBatchSize",
+] as const;
+
+const NON_EMPTY_OPTION_KEYS = [
+  "seed",
+  "responseMimeType",
+  "mediaResolution",
+  "locale",
+] as const;
+
+const POSITIVE_NUM_OPTION_KEYS = ["topLogprobs", "logprobs"] as const;
+
+function validateIncomingChatRequest(params: Record<string, unknown>) {
+  const parseResult = ChatRequestSchema.safeParse(params);
+  if (parseResult.success) {
+    return parseResult.data;
+  }
+  const hasProvider = Boolean(
+    params && "provider" in params && params.provider !== undefined && params.provider !== null,
+  );
+  if (!hasProvider) {
+    throw new ProviderError("server", "Missing required field: provider", 400);
+  }
+  const hasMessagesArray = Boolean(
+    params && "messages" in params && Array.isArray(params.messages),
+  );
+  if (!hasMessagesArray) {
+    throw new ProviderError(
+      "server",
+      "Missing or invalid field: messages (must be an array)",
+      400,
+    );
+  }
+  const issueMessages = parseResult.error.issues.map(
+    (issue) => `${issue.path.join(".")}: ${issue.message}`,
+  );
+  throw new ProviderError(
+    "server",
+    `Validation failed: ${issueMessages.join("; ")}`,
+    400,
+  );
+}
+
+function buildOptionsFromValidatedParams(
+  validatedParams: Record<string, unknown>,
+  extraSystemPrompt: unknown,
+): Record<string, unknown> {
+  const options: Record<string, unknown> = {};
+  for (const key of TRUTHY_OPTION_KEYS) {
+    if (validatedParams[key]) {
+      options[key] = validatedParams[key];
+    }
+  }
+  for (const key of NON_NULL_OPTION_KEYS) {
+    if (validatedParams[key] != null) {
+      options[key] = validatedParams[key];
+    }
+  }
+  for (const key of NON_EMPTY_OPTION_KEYS) {
+    const val = validatedParams[key];
+    if (val != null && val !== "") {
+      options[key] = val;
+    }
+  }
+  for (const key of POSITIVE_NUM_OPTION_KEYS) {
+    const val = validatedParams[key];
+    if (typeof val === "number" && val > 0) {
+      options[key] = val;
+    }
+  }
+  if (extraSystemPrompt) {
+    options.systemPrompt = extraSystemPrompt;
+  }
+  return options;
+}
+
+function synchronizeThinkingOptions(
+  options: Record<string, unknown>,
+  thinkingEnabled: boolean | null | undefined,
+): void {
+  if (thinkingEnabled === false) {
+    delete options.reasoningEffort;
+    delete options.thinkingLevel;
+    delete options.thinkingBudget;
+    return;
+  }
+  if (options.thinkingLevel && !options.reasoningEffort) {
+    options.reasoningEffort = options.thinkingLevel;
+  }
+  if (options.reasoningEffort && !options.thinkingLevel) {
+    options.thinkingLevel = options.reasoningEffort;
+  }
+}
+
+async function applyAgentPersonaDefaults(
+  agent: string | undefined,
+  options: Record<string, unknown>,
+  thinkingEnabled: boolean | null | undefined,
+): Promise<boolean | undefined> {
+  if (!agent) return undefined;
+  const { default: AgentPersonaRegistry } = await import("../services/AgentPersonaRegistry.ts");
+  if (!AgentPersonaRegistry.has(agent)) {
+    throw new ProviderError("server", `Unknown agent: "${agent}"`, 400);
+  }
+  const persona = AgentPersonaRegistry.get(agent);
+  const personaThinkingDefault = persona?.thinkingDefault;
+  const personaPolicies = persona?.policies;
+  if (personaPolicies && personaPolicies.length > 0) {
+    options.policies = personaPolicies;
+  }
+  if (personaThinkingDefault !== undefined && thinkingEnabled == null) {
+    options.thinkingEnabled = personaThinkingDefault;
+  }
+  const agentDefaultValues = getAgentDefaults();
+  for (const [parameterKey, defaultValue] of Object.entries(agentDefaultValues)) {
+    if (options[parameterKey] == null) {
+      options[parameterKey] = defaultValue;
+    }
+  }
+  return personaThinkingDefault;
+}
+
+async function resolveDynamicVllmModelIfNeeded(
+  providerName: string,
+  resolvedModel: string | undefined,
+): Promise<{ providerName: string; resolvedModel: string | undefined }> {
+  if (resolvedModel || !providerName.startsWith("vllm")) {
+    return { providerName, resolvedModel };
+  }
+  const siblings = getInstancesByType(providerName);
+  for (const sibling of siblings) {
+    const p = getProvider(sibling.id);
+    if (!p?.listModels) continue;
+    try {
+      const res = (await p.listModels()) as unknown as { models?: Array<Record<string, string>>; data?: Array<Record<string, string>> } | null;
+      const models = res?.models ?? res?.data ?? [];
+      if (models.length > 0) {
+        const first = models[0];
+        return {
+          providerName: sibling.id,
+          resolvedModel: first.id ?? first.key ?? first.name,
+        };
+      }
+    } catch (e) {
+      logger.warn(`[ChatRoutes] Failed to dynamically fetch models for ${sibling.id}:`, e);
+    }
+  }
+  return { providerName, resolvedModel };
+}
+
+function selectLeastLoadedSibling(
+  siblings: Array<{ id: string; concurrency: number }>,
+  defaultId: string,
+): string {
+  let bestId = defaultId;
+  let lowestLoad = Infinity;
+  for (const inst of siblings) {
+    const queueState = localModelQueue._getQueue(inst.id);
+    const load = queueState.totalInflight / inst.concurrency;
+    const bestConcurrency = getInstance(bestId)?.concurrency ?? 0;
+    const isTieBreakerBetter = load === lowestLoad && inst.concurrency > bestConcurrency;
+    if (load < lowestLoad || isTieBreakerBetter) {
+      lowestLoad = load;
+      bestId = inst.id;
+    }
+  }
+  return bestId;
+}
+
+async function resolvePinnedLocalInstance(
+  providerName: string,
+  pinnedInstanceType: string,
+  resolvedModel: string,
+): Promise<string> {
+  const pinnedSiblings = getInstancesByType(pinnedInstanceType).filter(
+    (instance) => instance.id === providerName,
+  );
+  if (pinnedSiblings.length === 0) {
+    return resolvedModel;
+  }
+  const { modelOverrides } = await resolveModelForInstances(resolvedModel, pinnedSiblings);
+  const override = modelOverrides.get(providerName);
+  const nextModel = override ?? resolvedModel;
+  logger.info(
+    `[chat] 📌 Instance pinned: ${pinnedInstanceType} → ${providerName}` +
+      (override ? ` (model="${nextModel}")` : ""),
+  );
+  return nextModel;
+}
+
+async function balanceLocalProviderInstances(
+  providerName: string,
+  resolvedModel: string,
+  requestedModel: string | undefined,
+): Promise<{ providerName: string; resolvedModel: string }> {
+  let siblings = getInstancesByType(providerName);
+  const { usable, modelOverrides } = await resolveModelForInstances(resolvedModel, siblings);
+  if (usable.length > 0) {
+    siblings = usable;
+    const singleOverride = siblings.length === 1 ? modelOverrides.get(siblings[0].id) : undefined;
+    if (singleOverride) {
+      resolvedModel = singleOverride;
+      logger.info(`[chat] Model resolved: "${requestedModel}" → "${resolvedModel}" (single instance)`);
+    }
+  } else {
+    logger.warn(
+      `[chat] Model "${resolvedModel}" not available on any ${providerName} instance — falling back to first`,
+    );
+  }
+  if (siblings.length <= 1) {
+    return { providerName, resolvedModel };
+  }
+  const bestId = selectLeastLoadedSibling(siblings, providerName);
+  if (bestId !== providerName) {
+    resolvedModel = modelOverrides.get(bestId) ?? resolvedModel;
+    logger.info(
+      `[chat] ⚖️ Load balance: ${providerName} → ${bestId} ` +
+        `(model="${resolvedModel}", ${siblings.map((sibling) => `${sibling.id}:active=${localModelQueue._getQueue(sibling.id).activeCount},queued=${localModelQueue._getQueue(sibling.id).pending}`).join(", ")})`,
+    );
+    providerName = bestId;
+  }
+  return { providerName, resolvedModel };
+}
+
+async function resolveLocalInstanceAndModel(
+  providerName: string,
+  resolvedModel: string,
+  requestedModel: string | undefined,
+): Promise<{ providerName: string; resolvedModel: string }> {
+  if (!localModelQueue.isLocal(providerName)) {
+    return { providerName, resolvedModel };
+  }
+  const pinnedInstanceType = getInstanceType(providerName);
+  if (pinnedInstanceType !== null && pinnedInstanceType !== providerName) {
+    const nextModel = await resolvePinnedLocalInstance(providerName, pinnedInstanceType, resolvedModel);
+    return { providerName, resolvedModel: nextModel };
+  }
+  return balanceLocalProviderInstances(providerName, resolvedModel, requestedModel);
+}
+
+async function acquireLocalGpuSlotIfNeeded(
+  providerName: string,
+  resolvedModel: string,
+): Promise<(() => void) | null> {
+  if (!localModelQueue.isLocal(providerName)) {
+    return null;
+  }
+  const localRelease = await localModelQueue.acquire(providerName);
+  const queueState = localModelQueue._getQueue(providerName);
+  logger.info(
+    `[chat] 🔒 Acquired local GPU slot for ${resolvedModel} (${providerName}) ` +
+      `(${queueState.activeCount}/${queueState.maxConcurrency} active` +
+      (queueState.pending > 0 ? `, ${queueState.pending} queued)` : ")"),
+  );
+  return localRelease;
+}
+
 /**
  * Parse and validate incoming request parameters, resolve images,
  * model, and acquire GPU lock if needed.
@@ -163,40 +471,7 @@ async function prepareGenerationContext(
 ) {
   const requestStart = performance.now();
   const requestId = crypto.randomUUID();
-
-  const parseResult = ChatRequestSchema.safeParse(params);
-  if (!parseResult.success) {
-    // Custom error mappings to match the exact ones expected by existing consumers and test cases
-    if (
-      !params ||
-      !("provider" in params) ||
-      params.provider === undefined ||
-      params.provider === null
-    ) {
-      throw new ProviderError(
-        "server",
-        "Missing required field: provider",
-        400,
-      );
-    }
-    if (!params || !("messages" in params) || !Array.isArray(params.messages)) {
-      throw new ProviderError(
-        "server",
-        "Missing or invalid field: messages (must be an array)",
-        400,
-      );
-    }
-    const issueMessages = parseResult.error.issues.map(
-      (issue) => `${issue.path.join(".")}: ${issue.message}`,
-    );
-    throw new ProviderError(
-      "server",
-      `Validation failed: ${issueMessages.join("; ")}`,
-      400,
-    );
-  }
-
-  const validatedParams = parseResult.data;
+  const validatedParams = validateIncomingChatRequest(params);
 
   const {
     provider: _providerName,
@@ -210,350 +485,56 @@ async function prepareGenerationContext(
     username,
     clientIp,
     agent,
-    harness,
-    topology,
-    thoughtStructure,
-    // Generation options — flat at top-level (OpenAI-style)
-    tools,
-    temperature,
-    maxTokens,
-    topP,
-    topK,
-    frequencyPenalty,
-    presencePenalty,
-    stopSequences,
-    seed,
-    minP,
-    repeatPenalty,
     thinkingEnabled,
-    reasoningEffort,
-    thinkingLevel,
-    thinkingBudget,
-    webSearch,
-    webFetch,
-    codeExecution,
-    urlContext,
-    verbosity,
-    reasoningSummary,
-    functionCallingEnabled,
-    agenticLoopEnabled,
-    enabledTools,
-    disabledTools,
-    minContextLength,
-    evalBatchSize,
-    forceImageGeneration,
-    responseFormat,
-    serviceTier,
-    textOnly,
     skipConversation,
-    autoApprove,
-    planFirst,
-    maxIterations,
-    maxSubAgentIterations,
-    maxRecursionDepth,
-    agentContext,
-    // Multi-workspace: user-selected workspace root path (absolute fs path).
     workspaceRoot,
-    // Workspace toggle: when false, workspace tools are excluded from the agent session.
-    workspaceEnabled,
-    // CriticGate: multi-model review of dangerous tool calls.
-    enableCriticGate,
-    criticModel,
-    parallelToolCalls,
-    candidateCount,
-    branchCount,
-    responseMimeType,
-    store,
-    mediaResolution,
-    topLogprobs,
-    responseLogprobs,
-    logprobs,
-    locale,
     ...extraParams
   } = validatedParams;
 
-  let providerName = _providerName;
-  // Build the internal options object that providers expect
-  const options: Record<string, unknown> = {
-    ...(tools && { tools }),
-    ...(temperature != null && { temperature }),
-    ...(maxTokens != null && { maxTokens }),
-    ...(topP != null && { topP }),
-    ...(topK != null && { topK }),
-    ...(frequencyPenalty != null && { frequencyPenalty }),
-    ...(presencePenalty != null && { presencePenalty }),
-    ...(stopSequences && { stopSequences }),
-    ...(seed != null && seed !== "" && { seed }),
-    ...(minP != null && { minP }),
-    ...(repeatPenalty != null && { repeatPenalty }),
-    ...(thinkingEnabled != null && { thinkingEnabled }),
-    ...(reasoningEffort && { reasoningEffort }),
-    ...(thinkingLevel && { thinkingLevel }),
-    ...(thinkingBudget != null && { thinkingBudget }),
-    ...(webSearch != null && { webSearch }),
-    ...(webFetch != null && { webFetch }),
-    ...(codeExecution != null && { codeExecution }),
-    ...(urlContext != null && { urlContext }),
-    ...(verbosity && { verbosity }),
-    ...(reasoningSummary && { reasoningSummary }),
-    ...(functionCallingEnabled != null && { functionCallingEnabled }),
-    ...(agenticLoopEnabled != null && { agenticLoopEnabled }),
-    ...(enabledTools && { enabledTools }),
-    ...(disabledTools && { disabledTools }),
-    ...(minContextLength && { minContextLength }),
-    ...(evalBatchSize && { evalBatchSize }),
-    ...(forceImageGeneration != null && { forceImageGeneration }),
-    ...(responseFormat != null && { responseFormat }),
-    ...(serviceTier != null && { serviceTier }),
-    ...(textOnly != null && { textOnly }),
-    ...(autoApprove != null && { autoApprove }),
-    ...(planFirst != null && { planFirst }),
-    ...(maxIterations != null && { maxIterations }),
-    ...(maxSubAgentIterations != null && { maxSubAgentIterations }),
-    ...(maxRecursionDepth != null && { maxRecursionDepth }),
-    ...(agentContext != null && { agentContext }),
-    ...(enableCriticGate != null && { enableCriticGate }),
-    ...(criticModel != null && { criticModel }),
-    ...(workspaceEnabled != null && { workspaceEnabled }),
-    ...(harness != null && { harness }),
-    ...(topology != null && { topology }),
-    ...(thoughtStructure != null && { thoughtStructure }),
-    ...(parallelToolCalls != null && { parallelToolCalls }),
-    ...(candidateCount != null && { candidateCount }),
-    ...(branchCount != null && { branchCount }),
-    ...(responseMimeType != null &&
-      responseMimeType !== "" && { responseMimeType }),
-    ...(store != null && { store }),
-    ...(mediaResolution != null &&
-      mediaResolution !== "" && { mediaResolution }),
-    ...(topLogprobs != null && topLogprobs > 0 && { topLogprobs }),
-    ...(responseLogprobs != null && { responseLogprobs }),
-    ...(logprobs != null && logprobs > 0 && { logprobs }),
-    ...(locale != null && locale !== "" && { locale }),
-    ...((extraParams as Record<string, unknown>).systemPrompt
-      ? { systemPrompt: (extraParams as Record<string, unknown>).systemPrompt }
-      : {}),
-  };
-  // When thinking is explicitly disabled, strip all thinking sub-params
-  // so providers don't inadvertently enable thinking by detecting them.
-  if (thinkingEnabled === false) {
-    delete options.reasoningEffort;
-    delete options.thinkingLevel;
-    delete options.thinkingBudget;
-  } else {
-    // Synchronize both fields so OpenAI/Anthropic (reasoningEffort) and Gemini (thinkingLevel) both get the correct option
-    if (options.thinkingLevel && !options.reasoningEffort) {
-      options.reasoningEffort = options.thinkingLevel;
-    }
-    if (options.reasoningEffort && !options.thinkingLevel) {
-      options.thinkingLevel = options.reasoningEffort;
-    }
-  }
+  const options = buildOptionsFromValidatedParams(
+    validatedParams as Record<string, unknown>,
+    (extraParams as Record<string, unknown>).systemPrompt,
+  );
+  synchronizeThinkingOptions(options, thinkingEnabled);
 
-  // Apply agent-optimized defaults for parameters not explicitly set by client.
-  // Agent sessions benefit from deterministic, high-output defaults
-  // (e.g., temperature=0, maxTokens=16384, reasoningEffort="high").
-  let personaThinkingDefault: boolean | undefined;
-  if (agent) {
-    const { default: AgentPersonaRegistry } = await import("../services/AgentPersonaRegistry.ts");
-    if (!AgentPersonaRegistry.has(agent)) {
-      throw new ProviderError("server", `Unknown agent: "${agent}"`, 400);
-    }
-    // A persona can declare its own thinking default (router personas set
-    // false — the <think> stream is most of their latency on Qwen-class
-    // models). It fills the same "client sent nothing" gap as the blanket
-    // agent default below, so it must be applied first; an explicit
-    // thinkingEnabled on the request still wins over both.
-    personaThinkingDefault =
-      AgentPersonaRegistry.get(agent)?.thinkingDefault;
-    // The persona's tool policies bind every run of this agent, on /agent
-    // and on /chat function calling alike. The request schema carries no
-    // policies, so the persona is their only source.
-    const personaPolicies = AgentPersonaRegistry.get(agent)?.policies;
-    if (personaPolicies && personaPolicies.length > 0) {
-      options.policies = personaPolicies;
-    }
-    if (
-      personaThinkingDefault !== undefined &&
-      (thinkingEnabled === undefined || thinkingEnabled === null)
-    ) {
-      options.thinkingEnabled = personaThinkingDefault;
-    }
-    const agentDefaultValues = getAgentDefaults();
-    for (const [parameterKey, defaultValue] of Object.entries(
-      agentDefaultValues,
-    )) {
-      if (
-        options[parameterKey] === undefined ||
-        options[parameterKey] === null
-      ) {
-        options[parameterKey] = defaultValue;
-      }
-    }
-  }
+  const personaThinkingDefault = await applyAgentPersonaDefaults(
+    agent,
+    options,
+    thinkingEnabled,
+  );
 
-  // Local models emit thinking tokens (<think> tags) by default. Default
-  // thinkingEnabled ON only when the client didn't send a value (undefined).
-  // When the client explicitly sends false (thinking toggle off), respect it
-  // — models can use tools without thinking. The persona default counts as
-  // "a value" here, otherwise this would re-force thinking on for local
-  // providers and silently undo the persona's choice.
-  LocalProviderGateway.applyLocalDefaults(providerName, options, {
+  LocalProviderGateway.applyLocalDefaults(_providerName, options, {
     thinkingEnabled: thinkingEnabled ?? personaThinkingDefault ?? undefined,
   });
 
-  // ── Strip soft-deleted messages ──────────────────────────────
   const activeMessages = messages.filter((message) => !message.deleted);
-  // ── Resolve image refs ─────────────────────────────────────
   const providerMessages = await resolveMessageMediaReferences(
     activeMessages as ConversationMessage[],
     project,
     username,
   );
-  // ── Multi-instance load balancing ─────────────────────────
-  // When the caller sends a base provider type (e.g. "lm-studio") and
-  // multiple instances are registered, verify the model is available on
-  // each instance (with quant-level fallback) and pick the least-busy
-  // usable instance. Same model resolution logic as OrchestratorService.
-  //
-  // Instance pinning: when the caller sends a specific instance ID
-  // (e.g. "lm-studio-2"), resolve its base type for model resolution
-  // but skip load balancing — the request is pinned to that instance.
-  let resolvedModel =
+
+  const initialModel =
     requestedModel ||
-    getDefaultModels(TYPES.TEXT, TYPES.TEXT)[providerName as string];
+    getDefaultModels(TYPES.TEXT, TYPES.TEXT)[_providerName as string];
 
-  // Dynamic resolution for vLLM: if no model was resolved, fetch whatever is currently loaded
-  if (!resolvedModel && providerName.startsWith("vllm")) {
-    const siblings = getInstancesByType(providerName);
-    for (const sibling of siblings) {
-      const p = getProvider(sibling.id);
-      if (p && p.listModels) {
-        try {
-          const res = await p.listModels();
-          // Type assertion to any since the exact return type might vary slightly but usually has models or data
-          const models = (res as any)?.models || (res as any)?.data || [];
-          if (models.length > 0) {
-            resolvedModel = models[0].id || models[0].key || models[0].name;
-            providerName = sibling.id;
-            break;
-          }
-        } catch (e) {
-          logger.warn(`[ChatRoutes] Failed to dynamically fetch models for ${sibling.id}:`, e);
-        }
-      }
-    }
-  }
-  if (localModelQueue.isLocal(providerName)) {
-    const pinnedInstanceType = getInstanceType(providerName);
-    const isInstancePinned = pinnedInstanceType !== null && pinnedInstanceType !== providerName;
+  const vllmResolved = await resolveDynamicVllmModelIfNeeded(_providerName, initialModel);
+  const { providerName, resolvedModel } = await resolveLocalInstanceAndModel(
+    vllmResolved.providerName,
+    vllmResolved.resolvedModel as string,
+    requestedModel,
+  );
 
-    if (isInstancePinned) {
-      // ── Instance pinning (bypass load balancing) ──────────────
-      // The caller sent a specific instance ID (e.g. "lm-studio-2").
-      // Resolve the base type so we can run model resolution against
-      // this single instance, then skip load balancing entirely.
-      const pinnedSiblings = getInstancesByType(pinnedInstanceType).filter(
-        (instance) => instance.id === providerName,
-      );
-      if (pinnedSiblings.length > 0) {
-        const { modelOverrides } = await resolveModelForInstances(
-          resolvedModel,
-          pinnedSiblings,
-        );
-        const override = modelOverrides.get(providerName);
-        if (override) {
-          resolvedModel = override;
-        }
-        logger.info(
-          `[chat] 📌 Instance pinned: ${pinnedInstanceType} → ${providerName}` +
-            (override ? ` (model="${resolvedModel}")` : ""),
-        );
-      }
-    } else {
-      // ── Standard load balancing path ──────────────────────────
-      let siblings = getInstancesByType(providerName);
-      // ── Model resolution (always) ──────────────────────────────
-      // Resolve model availability across instances with quant-level
-      // fallback. Also handles @quant syntax (e.g. "qwen3-32b@q4_k_m")
-      // by mapping it to the actual LM Studio model key.
-      const { usable, modelOverrides } = await resolveModelForInstances(
-        resolvedModel,
-        siblings,
-      );
-      if (usable.length > 0) {
-        siblings = usable;
-        // For single instance, apply model override directly
-        if (siblings.length === 1) {
-          const override = modelOverrides.get(siblings[0].id);
-          if (override) {
-            resolvedModel = override;
-            logger.info(
-              `[chat] Model resolved: "${requestedModel}" → "${resolvedModel}" (single instance)`,
-            );
-          }
-        }
-      } else {
-        logger.warn(
-          `[chat] Model "${resolvedModel}" not available on any ${providerName} instance — falling back to first`,
-        );
-      }
-      // ── Multi-instance load balancing (least-connections) ────────
-      if (siblings.length > 1) {
-        // Least-connections: pick the instance with the lowest load
-        // normalized by capacity (total in-flight / concurrency). This ensures
-        // the faster device drains its queue and picks up new work
-        // sooner, rather than piling up behind a slower device.
-        let bestId = providerName;
-        let lowestLoad = Infinity;
-        for (const inst of siblings) {
-          const queueState = localModelQueue._getQueue(inst.id);
-          const load = queueState.totalInflight / inst.concurrency;
-          if (
-            load < lowestLoad ||
-            (load === lowestLoad && inst.concurrency > (getInstance(bestId)?.concurrency || 0))
-          ) {
-            lowestLoad = load;
-            bestId = inst.id;
-          }
-        }
-        if (bestId !== providerName) {
-          // Apply model override if this instance uses a different quant
-          const modelOverride = modelOverrides.get(bestId);
-          if (modelOverride) {
-            resolvedModel = modelOverride;
-          }
-          logger.info(
-            `[chat] ⚖️ Load balance: ${providerName} → ${bestId} ` +
-              `(model="${resolvedModel}", ${siblings.map((sibling) => `${sibling.id}:active=${localModelQueue._getQueue(sibling.id).activeCount},queued=${localModelQueue._getQueue(sibling.id).pending}`).join(", ")})`,
-          );
-          providerName = bestId;
-        }
-      }
-    }
-  }
   const provider = getProvider(providerName);
-  // ── Resolve model ─────────────────────────────────────────
-  // resolvedModel is set earlier (before load balancing) and may have
-  // been updated to a quant variant by the model availability check.
   const modelDefinition = getModelByName(resolvedModel);
   const isImageAPIModel =
     (modelDefinition as Record<string, unknown> | null)?.imageAPI &&
     provider.generateImage;
-  // ── Local GPU mutex ──────────────────────────────────────
-  let localRelease: (() => void) | null = null;
-  if (localModelQueue.isLocal(providerName)) {
-    localRelease = await localModelQueue.acquire(providerName);
-    const queueState = localModelQueue._getQueue(providerName);
-    logger.info(
-      `[chat] 🔒 Acquired local GPU slot for ${resolvedModel} (${providerName}) ` +
-        `(${queueState.activeCount}/${queueState.maxConcurrency} active` +
-        (queueState.pending > 0 ? `, ${queueState.pending} queued)` : ")"),
-    );
-  }
-  // Derive userMessage from the last user message
+
+  const localRelease = await acquireLocalGpuSlotIfNeeded(providerName, resolvedModel);
   const userMessage =
     messages?.filter((message) => message.role === "user").pop() || null;
+
   return {
     provider,
     providerName,
@@ -588,7 +569,170 @@ async function prepareGenerationContext(
     localRelease,
   };
 }
+
 // ─── Chat / Conversation persistence path ───────────────────
+
+function resolveChatConversationIdentity(
+  context: Awaited<ReturnType<typeof prepareGenerationContext>>,
+) {
+  let conversationId = context.skipConversation ? null : context.incomingConversationId;
+  let conversationMeta = context.skipConversation ? null : context.incomingConversationMeta;
+  if (!context.skipConversation && !conversationId) {
+    conversationId = crypto.randomUUID();
+    const firstUserMessage = (context.rawMessages as ConversationMessage[])
+      ?.filter((conversationMessage) => conversationMessage.role === "user")
+      .pop();
+    const titleSnippet =
+      (firstUserMessage?.content || "").slice(0, 100).trim() ||
+      DEFAULT_CONVERSATION_TITLE;
+    conversationMeta = conversationMeta || { title: titleSnippet };
+  }
+  const traceId = context.incomingTraceId || null;
+  if (traceId && conversationMeta) {
+    (conversationMeta as Record<string, unknown>).traceId = traceId;
+  } else if (traceId) {
+    conversationMeta = { traceId };
+  }
+  return {
+    conversationId: conversationId || null,
+    conversationMeta,
+    traceId,
+  };
+}
+
+function filterChatFunctionCallingTools(
+  builtInTools: ReturnType<typeof ToolOrchestratorService.getToolSchemas>,
+  options: Record<string, unknown>,
+): ReturnType<typeof ToolOrchestratorService.getToolSchemas> {
+  if (Array.isArray(options.enabledTools)) {
+    const enabledSet = new Set(options.enabledTools as string[]);
+    return builtInTools.filter((toolItem) => enabledSet.has(toolItem.name));
+  }
+  if (Array.isArray(options.disabledTools)) {
+    const disabledSet = new Set(options.disabledTools as string[]);
+    return builtInTools.filter((toolItem) => !disabledSet.has(toolItem.name));
+  }
+  return builtInTools;
+}
+
+async function configureChatFunctionCallingTools(
+  fullContext: GenerationContext,
+): Promise<void> {
+  const { options, providerName, resolvedModel, modelDefinition } = fullContext;
+  if (!options.functionCallingEnabled || options.agenticLoopEnabled) {
+    return;
+  }
+  const useNativeMcp = LocalProviderGateway.isNativeMCP(providerName);
+  const { default: SettingsService } = await import("../services/SettingsService.ts");
+  const settings = await SettingsService.getSection("agents");
+  const defaultTopology =
+    (options.topology as string) || settings?.topology || DEFAULT_TOPOLOGY;
+  const builtInTools = ToolOrchestratorService.getToolSchemas(defaultTopology);
+  const tools = filterChatFunctionCallingTools(builtInTools, options);
+  options.tools = tools;
+
+  injectToolsIntoSystemPrompt(
+    fullContext.messages as Array<{
+      role: string;
+      content?: string;
+      [key: string]: unknown;
+    }>,
+    tools as ToolSchemaWithDomain[],
+  );
+
+  const modelContextLength = (modelDefinition as Record<string, unknown> | null)?.contextLength;
+  if (useNativeMcp && modelContextLength) {
+    options.contextLength = modelContextLength;
+  }
+
+  logger.info(
+    `[chat] FC tools resolved and injected into system prompt: ${tools.length} tools enabled for ${providerName} ${resolvedModel}`,
+  );
+}
+
+async function persistFailedConversationState(
+  fullContext: GenerationContext,
+  error: unknown,
+): Promise<void> {
+  const { conversationId, project, username, conversationMeta, userMessage } = fullContext;
+  if (!conversationId) return;
+  try {
+    const partialAssistantText =
+      ((fullContext as Record<string, unknown>).partialAssistantText as string | undefined) || "";
+    const failureMessages = sanitizeMessagesForPersistence([
+      ...(userMessage ? [userMessage as ConversationMessage] : []),
+      {
+        role: "assistant",
+        content: partialAssistantText,
+        error: getErrorMessage(error),
+      } as ConversationMessage,
+    ]);
+    await appendAndFinalize(
+      conversationId,
+      project,
+      username as string,
+      failureMessages,
+      conversationMeta,
+      getCollectionOpts(project),
+    );
+  } catch (persistError: unknown) {
+    logger.warn(
+      `[chat] Failed to persist error state for ${conversationId}: ${getErrorMessage(persistError)}`,
+    );
+  }
+}
+
+async function handleConversationFailure(
+  fullContext: GenerationContext,
+  error: unknown,
+): Promise<void> {
+  const {
+    conversationId,
+    project,
+    username,
+    clientIp,
+    providerName,
+    resolvedModel,
+    requestedModel,
+    traceId,
+    requestStart,
+    requestId,
+    rawMessages,
+    options,
+    emit,
+  } = fullContext;
+  markGenerating(
+    conversationId,
+    project,
+    username,
+    false,
+    getCollectionOpts(project),
+  );
+  await persistFailedConversationState(fullContext, error);
+  const totalSec = (performance.now() - requestStart) / 1000;
+  RequestLogger.logChatGeneration({
+    requestId,
+    endpoint: "/chat",
+    operation: "chat",
+    project,
+    username,
+    clientIp,
+    provider: providerName,
+    model: resolvedModel || requestedModel || "any",
+    conversationId: conversationId || null,
+    traceId: traceId || null,
+    success: false,
+    errorMessage: getErrorMessage(error),
+    totalSec,
+    messages: rawMessages || [],
+    options,
+  });
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.ERROR,
+    message: getErrorMessage(error),
+  });
+}
+
 /**
  * Handle a conversation request: text generation, image generation,
  * vision/captioning — with conversationId-based persistence.
@@ -612,49 +756,12 @@ export async function handleConversation(
     });
     return;
   }
-  const {
-    providerName,
-    resolvedModel,
-    requestedModel,
-    options,
-    incomingConversationId,
-    incomingConversationMeta,
-    incomingTraceId,
-    skipConversation,
-    project,
-    username,
-    clientIp,
-    requestStart,
-    requestId,
-    modelDefinition,
-    localRelease,
-  } = context;
-  // ── Conversation identity ──────────────────────────────────
-  let conversationId = skipConversation ? null : incomingConversationId;
-  let conversationMeta = skipConversation ? null : incomingConversationMeta;
-  if (!skipConversation && !conversationId) {
-    conversationId = crypto.randomUUID();
-    const firstUserMessage = (context.rawMessages as ConversationMessage[])
-      ?.filter((conversationMessage) => conversationMessage.role === "user")
-      .pop();
-    const titleSnippet =
-      (firstUserMessage?.content || "").slice(0, 100).trim() ||
-      DEFAULT_CONVERSATION_TITLE;
-    conversationMeta = conversationMeta || { title: titleSnippet };
-  }
-  const traceId = incomingTraceId || null;
-  if (traceId && conversationMeta) {
-    (conversationMeta as Record<string, unknown>).traceId = traceId;
-  } else if (traceId) {
-    conversationMeta = { traceId };
-  }
-  // Merge conversation identity into ctx for sub-handlers
-  const fullContext = {
+  const { providerName, resolvedModel, modelDefinition, localRelease } = context;
+  const identity = resolveChatConversationIdentity(context);
+  const fullContext: GenerationContext = {
     ...context,
-    conversationId: conversationId || null,
-    agentConversationId: null as string | null,
-    conversationMeta,
-    traceId,
+    ...identity,
+    agentConversationId: null,
   };
   try {
     try {
@@ -662,69 +769,18 @@ export async function handleConversation(
         await handleImageAPIModel(fullContext);
         return;
       }
-      if (
-        !context.provider.generateTextStream &&
-        !context.provider.generateText
-      ) {
+      if (!context.provider.generateTextStream && !context.provider.generateText) {
         throw new ProviderError(
           providerName,
           `Provider "${providerName}" does not support text generation`,
           400,
         );
       }
-      // Resolve and inject tools for /chat function calling
-      if (options.functionCallingEnabled && !options.agenticLoopEnabled) {
-        const useNativeMcp = LocalProviderGateway.isNativeMCP(providerName);
-        const { default: SettingsService } =
-          await import("../services/SettingsService.ts");
-        const settings = await SettingsService.getSection("agents");
-        const defaultTopology =
-          (options.topology as string) ||
-          settings?.topology ||
-          DEFAULT_TOPOLOGY;
-        const builtInTools =
-          ToolOrchestratorService.getToolSchemas(defaultTopology);
-        let tools = builtInTools;
-        if (options.enabledTools && Array.isArray(options.enabledTools)) {
-          const enabledSet = new Set(options.enabledTools as string[]);
-          tools = tools.filter((toolItem) => enabledSet.has(toolItem.name));
-        } else if (
-          options.disabledTools &&
-          Array.isArray(options.disabledTools)
-        ) {
-          const disabledSet = new Set(options.disabledTools as string[]);
-          tools = tools.filter((toolItem) => !disabledSet.has(toolItem.name));
-        }
-        options.tools = tools;
-
-        // Inject tool descriptions into the system prompt
-        injectToolsIntoSystemPrompt(
-          fullContext.messages as Array<{
-            role: string;
-            content?: string;
-            [key: string]: unknown;
-          }>,
-          tools as ToolSchemaWithDomain[],
-        );
-
-        if (
-          useNativeMcp &&
-          (modelDefinition as Record<string, unknown> | null)?.contextLength
-        ) {
-          options.contextLength = (
-            modelDefinition as Record<string, unknown>
-          ).contextLength;
-        }
-
-        logger.info(
-          `[chat] FC tools resolved and injected into system prompt: ${tools.length} tools enabled for ${providerName} ${resolvedModel}`,
-        );
-      }
+      await configureChatFunctionCallingTools(fullContext);
 
       const useStreaming =
         typeof context.provider.generateTextStream === "function" &&
-        (modelDefinition as Record<string, unknown> | null)?.streaming !==
-          false;
+        (modelDefinition as Record<string, unknown> | null)?.streaming !== false;
       if (useStreaming) {
         await handleStreamingText(fullContext);
       } else {
@@ -737,73 +793,7 @@ export async function handleConversation(
       }
     }
   } catch (error: unknown) {
-    markGenerating(
-      conversationId,
-      project,
-      username,
-      false,
-      getCollectionOpts(project),
-    );
-    // ── Failure persistence ────────────────────────────────────
-    // The finalizer only runs on success; on a thrown provider error (or an
-    // abort surfaced as an error) the user message and any partial assistant
-    // output would be silently dropped. Persist them so the conversation
-    // stays complete regardless of how generation ended. Never skipped on
-    // signal.aborted — the abort reason is recorded in the assistant error.
-    if (conversationId) {
-      try {
-        const partialAssistantText =
-          ((fullContext as Record<string, unknown>).partialAssistantText as
-            | string
-            | undefined) || "";
-        const failureMessages = sanitizeMessagesForPersistence(
-          [
-            ...(context.userMessage
-              ? [context.userMessage as ConversationMessage]
-              : []),
-            {
-              role: "assistant",
-              content: partialAssistantText,
-              error: getErrorMessage(error),
-            } as ConversationMessage,
-          ],
-        );
-        await appendAndFinalize(
-          conversationId,
-          project,
-          username as string,
-          failureMessages,
-          conversationMeta,
-          getCollectionOpts(project),
-        );
-      } catch (persistError: unknown) {
-        logger.warn(
-          `[chat] Failed to persist error state for ${conversationId}: ${getErrorMessage(persistError)}`,
-        );
-      }
-    }
-    const totalSec = (performance.now() - requestStart) / 1000;
-    RequestLogger.logChatGeneration({
-      requestId,
-      endpoint: "/chat",
-      operation: "chat",
-      project,
-      username,
-      clientIp,
-      provider: providerName,
-      model: resolvedModel || requestedModel || "any",
-      conversationId: conversationId || null,
-      traceId: traceId || null,
-      success: false,
-      errorMessage: getErrorMessage(error),
-      totalSec,
-      messages: context.rawMessages || [],
-      options,
-    });
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.ERROR,
-      message: getErrorMessage(error),
-    });
+    await handleConversationFailure(fullContext, error);
   }
 }
 // ─── Agent conversation path (agentConversationId, no conversationId) ─
@@ -1157,325 +1147,309 @@ type GenerationContext = Awaited<
   agentConversationId: string | null;
 };
 
-async function handleStreamingText(context: GenerationContext) {
-  const {
-    provider,
-    providerName,
-    resolvedModel,
-    modelDefinition,
-    messages,
-    options,
-    conversationId,
-    conversationMeta,
-    traceId,
-    project,
-    username,
-    clientIp,
-    agent,
-    requestId,
-    requestStart,
-    emit,
-    signal,
-  } = context;
-  // Mark conversation as generating
-  markGenerating(conversationId, project, username, true, {
-    ...getCollectionOpts(project),
-    title:
-      typeof conversationMeta?.title === "string"
-        ? conversationMeta.title
-        : undefined,
-  });
-  const stream =
-    (modelDefinition as Record<string, unknown> | null)?.liveAPI &&
-    provider.generateTextStreamLive
-      ? provider.generateTextStreamLive(messages as ChatMessage[], resolvedModel, {
-          ...options,
-          signal,
-        })
-      : provider.generateTextStream(messages as ChatMessage[], resolvedModel, {
-          ...options,
-          signal,
-        });
-  const streamState = createStreamState();
-  streamState.requestStart = requestStart;
+type StreamStateType = ReturnType<typeof createStreamState>;
+type StreamToolCallItem = StreamStateType["toolCalls"][number];
+
+function isPendingChatToolCall(toolCall: StreamToolCallItem): boolean {
+  if (toolCall.result) return false;
+  return toolCall.status !== "done" && toolCall.status !== "error";
+}
+
+function getPendingChatToolCalls(streamState: StreamStateType): StreamToolCallItem[] {
+  return streamState.toolCalls.filter(isPendingChatToolCall);
+}
+
+async function consumeChatProviderStream(
+  stream: AsyncIterable<unknown> & { return?: () => unknown },
+  streamState: StreamStateType,
+  context: GenerationContext,
+  logPrefix: string,
+  onUsage?: (usage: TokenUsage) => void,
+): Promise<void> {
+  const { signal, providerName, resolvedModel, emit, project, username } = context;
   try {
     for await (const chunk of stream) {
-      // Client disconnected — abort the upstream provider stream
       if (signal?.aborted) {
         if (typeof stream.return === "function") stream.return();
-        logger.info(
-          `[chat] Client disconnected, aborting stream for ${providerName} ${resolvedModel}`,
-        );
+        if (logPrefix === "chat/stream") {
+          logger.info(
+            `[chat] Client disconnected, aborting stream for ${providerName} ${resolvedModel}`,
+          );
+        }
         break;
       }
       await dispatchChunk(
-        chunk,
+        chunk as Record<string, unknown>,
         streamState,
         { emit, project, username },
-        { logPrefix: "chat/stream" },
+        { onUsage, logPrefix },
       );
     }
   } catch (streamError: unknown) {
-    // Record partial output so the conversation-level catch path can still
-    // persist the user message and whatever the model produced so far.
     (context as Record<string, unknown>).partialAssistantText = streamState.text;
     throw streamError;
   }
-  // ── FC tool execution loop ─────────────────────────────────
-  // When functionCallingEnabled is set on /chat (not the agentic loop),
-  // execute returned tool calls via ToolOrchestratorService and re-call
-  // the provider with tool results. Lightweight loop — no approval
-  // engine, no context manager, just direct execution.
-  const MAX_FUNCTIONCALL_ITERATIONS = 10;
-  let functionCallIteration = 0;
-  const offeredToolNames = new Set(
-    ((options.tools as Array<{ name: string }> | undefined) ?? []).map((tool) => tool.name),
-  );
-  const chatPolicies = (options.policies as PolicyRule[] | undefined) ?? [];
-  while (
-    options.functionCallingEnabled &&
-    streamState.toolCalls.length > 0 &&
-    streamState.toolCalls.some(
-      (toolCall) =>
-        !toolCall.result &&
-        toolCall.status !== "done" &&
-        toolCall.status !== "error",
-    ) &&
-    functionCallIteration < MAX_FUNCTIONCALL_ITERATIONS &&
-    !signal?.aborted
-  ) {
-    functionCallIteration++;
-    const pendingCalls = streamState.toolCalls.filter(
-      (toolCall) =>
-        !toolCall.result &&
-        toolCall.status !== "done" &&
-        toolCall.status !== "error",
-    );
-    if (pendingCalls.length === 0) break;
-    logger.info(
-      `[chat/FC] Iteration ${functionCallIteration}: executing ${pendingCalls.length} tool call(s)`,
-    );
-    // Each call emits its own "calling" event immediately and its result
-    // event on completion; results land on their own toolCall entry, so the
-    // message order stays the model's order whatever the scheduling.
-    const runToolCall = async (toolCall: (typeof pendingCalls)[number]) => {
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-        id: toolCall.id,
-        name: toolCall.name,
-        args: toolCall.args,
-        status: "calling",
-      });
-      // Same decision as the agentic harnesses. This route has no approval
-      // channel and has always run the tools it offered, so asks resolve to
-      // allow (autoApprove); the allow-list and DENY policies still bind.
-      const authorization = decideToolCall({
-        name: String(toolCall.name),
-        args: (toolCall.args ?? {}) as Record<string, unknown>,
-        isAllowListed: offeredToolNames.has(String(toolCall.name)),
-        policies: chatPolicies,
-        autoApprove: true,
-        unattended: false,
-      });
-      if (authorization.verdict === "deny") {
-        toolCall.result = deniedToolResult(String(toolCall.name), authorization);
-        toolCall.status = "error";
-        toolCall.durationMs = 0;
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-          id: toolCall.id,
-          name: toolCall.name,
-          args: toolCall.args,
-          result: toolCall.result,
-          status: "error",
-          durationMs: 0,
-        });
-        return;
-      }
-      const startTime = Date.now();
-      try {
-        const result = await ToolOrchestratorService.executeTool(
-          toolCall.name as string,
-          toolCall.args as Record<string, unknown>,
-          {
-            project,
-            username,
-            agent: agent || null,
-            requestId,
-            conversationId: conversationId || null,
-            traceId: traceId || null,
-            clientIp: clientIp || null,
-            iteration: functionCallIteration,
-            _providerName: providerName,
-            _resolvedModel: resolvedModel,
-          },
-        );
-        const durationMs = Date.now() - startTime;
-        toolCall.result = result;
-        toolCall.status =
-          result &&
-          typeof result === "object" &&
-          "error" in result &&
-          result.error
-            ? "error"
-            : "done";
-        toolCall.durationMs = durationMs;
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-          id: toolCall.id,
-          name: toolCall.name,
-          args: toolCall.args,
-          result,
-          status: toolCall.status,
-          durationMs,
-        });
-      } catch (error: unknown) {
-        const durationMs = Date.now() - startTime;
-        toolCall.result = { error: getErrorMessage(error) };
-        toolCall.status = "error";
-        toolCall.durationMs = durationMs;
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-          id: toolCall.id,
-          name: toolCall.name,
-          args: toolCall.args,
-          result: toolCall.result,
-          status: "error",
-          durationMs,
-        });
-      }
-    };
-    // Read-only tools (approval tier AUTO) run concurrently, at most
-    // CHAT_TOOL_CONCURRENCY (4) at a time; anything that can write runs
-    // one at a time afterwards, in the order the model asked for them.
-    await scheduleToolCalls(
-      pendingCalls,
-      runToolCall,
-      (call) => toolTier(String(call.name)) === APPROVAL_TIERS.AUTO,
-      Math.max(1, Number(process.env.CHAT_TOOL_CONCURRENCY) || 4),
-    );
-    // Build tool result messages for the provider
-    const assistantToolMessage = {
-      role: "assistant",
-      content: streamState.text || "",
-      toolCalls: streamState.toolCalls.map((toolCall) => ({
-        id: toolCall.id,
-        name: toolCall.name,
-        args: toolCall.args,
-        ...(toolCall.responsesItemId
-          ? { responsesItemId: toolCall.responsesItemId }
-          : {}),
-        ...(toolCall.thoughtSignature
-          ? { thoughtSignature: toolCall.thoughtSignature }
-          : {}),
-        ...(toolCall.reasoningItem
-          ? { reasoningItem: toolCall.reasoningItem }
-          : {}),
-      })),
-      ...(streamState.thinking ? { thinking: streamState.thinking } : {}),
-      ...(streamState.thinkingSignature
-        ? { thinkingSignature: streamState.thinkingSignature }
-        : {}),
-    };
-    const toolResultMsgs = streamState.toolCalls
-      .filter((toolCall) => toolCall.result)
-      .map((toolCall) => ({
-        role: "tool",
-        tool_call_id: toolCall.id,
-        name: toolCall.name,
-        content:
-          typeof toolCall.result === "string"
-            ? toolCall.result
-            : JSON.stringify(toolCall.result),
-      }));
-    // Re-call provider with tool results appended
-    const updatedMessages = [
-      ...messages,
-      assistantToolMessage,
-      ...toolResultMsgs,
-    ];
-    // Reset accumulators for the follow-up stream
-    streamState.text = "";
-    streamState.thinking = "";
-    streamState.thinkingSignature = "";
-    streamState.toolCalls.length = 0;
-    const followUpStream = provider.generateTextStream(
-      updatedMessages as ChatMessage[],
-      resolvedModel,
+}
+
+function isErrorToolExecutionResult(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  return Boolean("error" in result && (result as { error?: unknown }).error);
+}
+
+async function executeAuthorizedChatToolCall(
+  toolCall: StreamToolCallItem,
+  context: GenerationContext,
+  functionCallIteration: number,
+): Promise<void> {
+  const {
+    project,
+    username,
+    agent,
+    requestId,
+    conversationId,
+    traceId,
+    clientIp,
+    providerName,
+    resolvedModel,
+    emit,
+  } = context;
+  const startTime = Date.now();
+  try {
+    const result = await ToolOrchestratorService.executeTool(
+      toolCall.name as string,
+      toolCall.args as Record<string, unknown>,
       {
-        ...options,
-        signal,
+        project,
+        username,
+        agent: agent || null,
+        requestId,
+        conversationId: conversationId || null,
+        traceId: traceId || null,
+        clientIp: clientIp || null,
+        iteration: functionCallIteration,
+        _providerName: providerName,
+        _resolvedModel: resolvedModel,
       },
     );
-    // Use dispatchChunk with a custom usage merger for follow-up iteration
-    const usageMerger = (followUpUsage: TokenUsage) => {
-      if (streamState.usage) {
-        mergeUsage(streamState.usage, followUpUsage);
-      } else {
-        streamState.usage = followUpUsage;
-      }
-    };
-    try {
-      for await (const chunk of followUpStream) {
-        if (signal?.aborted) {
-          if (typeof followUpStream.return === "function")
-            followUpStream.return();
-          break;
-        }
-        await dispatchChunk(
-          chunk,
-          streamState,
-          { emit, project, username },
-          { onUsage: usageMerger, logPrefix: "chat/FC" },
-        );
-      }
-    } catch (followUpError: unknown) {
-      (context as Record<string, unknown>).partialAssistantText =
-        streamState.text;
-      throw followUpError;
-    }
-    // Emit intermediate usage update so the frontend has authoritative
-    // per-iteration token counts instead of relying on chunk heuristics
+    const durationMs = Date.now() - startTime;
+    toolCall.result = result;
+    toolCall.status = isErrorToolExecutionResult(result) ? "error" : "done";
+    toolCall.durationMs = durationMs;
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+      id: toolCall.id,
+      name: toolCall.name,
+      args: toolCall.args,
+      result,
+      status: toolCall.status,
+      durationMs,
+    });
+  } catch (error: unknown) {
+    const durationMs = Date.now() - startTime;
+    toolCall.result = { error: getErrorMessage(error) };
+    toolCall.status = "error";
+    toolCall.durationMs = durationMs;
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+      id: toolCall.id,
+      name: toolCall.name,
+      args: toolCall.args,
+      result: toolCall.result,
+      status: "error",
+      durationMs,
+    });
+  }
+}
+
+async function executeSingleChatToolCall(
+  toolCall: StreamToolCallItem,
+  context: GenerationContext,
+  offeredToolNames: Set<string>,
+  chatPolicies: PolicyRule[],
+  functionCallIteration: number,
+): Promise<void> {
+  const { emit } = context;
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+    id: toolCall.id,
+    name: toolCall.name,
+    args: toolCall.args,
+    status: "calling",
+  });
+  const authorization = decideToolCall({
+    name: String(toolCall.name),
+    args: (toolCall.args ?? {}) as Record<string, unknown>,
+    isAllowListed: offeredToolNames.has(String(toolCall.name)),
+    policies: chatPolicies,
+    autoApprove: true,
+    unattended: false,
+  });
+  if (authorization.verdict === "deny") {
+    toolCall.result = deniedToolResult(String(toolCall.name), authorization);
+    toolCall.status = "error";
+    toolCall.durationMs = 0;
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+      id: toolCall.id,
+      name: toolCall.name,
+      args: toolCall.args,
+      result: toolCall.result,
+      status: "error",
+      durationMs: 0,
+    });
+    return;
+  }
+  await executeAuthorizedChatToolCall(toolCall, context, functionCallIteration);
+}
+
+function serializeStreamToolCallEntry(toolCall: StreamToolCallItem): Record<string, unknown> {
+  const entry: Record<string, unknown> = {
+    id: toolCall.id,
+    name: toolCall.name,
+    args: toolCall.args,
+  };
+  if (toolCall.responsesItemId) entry.responsesItemId = toolCall.responsesItemId;
+  if (toolCall.thoughtSignature) entry.thoughtSignature = toolCall.thoughtSignature;
+  if (toolCall.reasoningItem) entry.reasoningItem = toolCall.reasoningItem;
+  return entry;
+}
+
+function buildChatToolFollowUpMessages(streamState: StreamStateType) {
+  const assistantToolMessage: Record<string, unknown> = {
+    role: "assistant",
+    content: streamState.text || "",
+    toolCalls: streamState.toolCalls.map(serializeStreamToolCallEntry),
+  };
+  if (streamState.thinking) {
+    assistantToolMessage.thinking = streamState.thinking;
+  }
+  if (streamState.thinkingSignature) {
+    assistantToolMessage.thinkingSignature = streamState.thinkingSignature;
+  }
+  const toolResultMsgs = streamState.toolCalls
+    .filter((toolCall) => toolCall.result)
+    .map((toolCall) => ({
+      role: "tool",
+      tool_call_id: toolCall.id,
+      name: toolCall.name,
+      content:
+        typeof toolCall.result === "string"
+          ? toolCall.result
+          : JSON.stringify(toolCall.result),
+    }));
+  return { assistantToolMessage, toolResultMsgs };
+}
+
+async function runChatFunctionCallingIteration(
+  context: GenerationContext,
+  streamState: StreamStateType,
+  offeredToolNames: Set<string>,
+  chatPolicies: PolicyRule[],
+  functionCallIteration: number,
+): Promise<boolean> {
+  const { provider, resolvedModel, messages, options, signal, emit } = context;
+  const pendingCalls = getPendingChatToolCalls(streamState);
+  if (pendingCalls.length === 0) return false;
+
+  logger.info(
+    `[chat/FC] Iteration ${functionCallIteration}: executing ${pendingCalls.length} tool call(s)`,
+  );
+  await scheduleToolCalls(
+    pendingCalls,
+    (toolCall) =>
+      executeSingleChatToolCall(
+        toolCall,
+        context,
+        offeredToolNames,
+        chatPolicies,
+        functionCallIteration,
+      ),
+    (call) => toolTier(String(call.name)) === APPROVAL_TIERS.AUTO,
+    Math.max(1, Number(process.env.CHAT_TOOL_CONCURRENCY) || 4),
+  );
+
+  const { assistantToolMessage, toolResultMsgs } = buildChatToolFollowUpMessages(streamState);
+  const updatedMessages = [
+    ...messages,
+    assistantToolMessage,
+    ...toolResultMsgs,
+  ];
+
+  streamState.text = "";
+  streamState.thinking = "";
+  streamState.thinkingSignature = "";
+  streamState.toolCalls.length = 0;
+
+  const followUpStream = provider.generateTextStream(
+    updatedMessages as ChatMessage[],
+    resolvedModel,
+    { ...options, signal },
+  );
+  const usageMerger = (followUpUsage: TokenUsage) => {
     if (streamState.usage) {
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
-        usage: {
-          ...withTotalInputTokens(streamState.usage as TokenUsage),
-          requests: functionCallIteration + 1,
-        },
-      });
+      mergeUsage(streamState.usage, followUpUsage);
+    } else {
+      streamState.usage = followUpUsage;
     }
-    // Update messages ref for potential next iteration
-    (messages as Record<string, unknown>[]).push(
-      assistantToolMessage,
-      ...toolResultMsgs,
-    );
-  }
-  // Surface max_tokens truncation if the model produced no useful output
-  const isChatTruncated =
-    (streamState.stopReason === "length" ||
-      streamState.stopReason === "max_tokens") &&
-    !streamState.text.trim();
-  if (isChatTruncated) {
-    const truncationWarning =
-      `⚠️ The model's response was cut short because the **max_tokens** limit was reached ` +
-      `before it could finish generating. Try increasing the **Max Tokens** setting.`;
+  };
+  await consumeChatProviderStream(followUpStream, streamState, context, "chat/FC", usageMerger);
+
+  if (streamState.usage) {
     emit({
-      type: SERVER_SENT_EVENT_TYPES.CHUNK,
-      content: truncationWarning,
+      type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
+      usage: {
+        ...withTotalInputTokens(streamState.usage as TokenUsage),
+        requests: functionCallIteration + 1,
+      },
     });
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.STATUS,
-      message:
-        (STATUS_MESSAGES as Record<string, string>).MAX_TOKENS_TRUNCATED ||
-        "max_tokens_truncated",
-      phase: "truncated",
-    });
-    streamState.text = truncationWarning;
   }
-  // Build normalized result for shared finalization
-  const now = performance.now();
-  await finalizeTextGeneration(context, {
+  (messages as Record<string, unknown>[]).push(
+    assistantToolMessage,
+    ...toolResultMsgs,
+  );
+  return true;
+}
+
+function applyChatTruncationWarningIfNeeded(
+  streamState: StreamStateType,
+  emit: EmitFunction,
+): void {
+  const isLengthStop =
+    streamState.stopReason === "length" || streamState.stopReason === "max_tokens";
+  if (!isLengthStop || streamState.text.trim()) {
+    return;
+  }
+  const truncationWarning =
+    `⚠️ The model's response was cut short because the **max_tokens** limit was reached ` +
+    `before it could finish generating. Try increasing the **Max Tokens** setting.`;
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.CHUNK,
+    content: truncationWarning,
+  });
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message:
+      (STATUS_MESSAGES as Record<string, string>).MAX_TOKENS_TRUNCATED ||
+      "max_tokens_truncated",
+    phase: "truncated",
+  });
+  streamState.text = truncationWarning;
+}
+
+function buildStreamFinalizationResult(
+  streamState: StreamStateType,
+  options: Record<string, unknown>,
+  requestStart: number,
+  now: number,
+) {
+  const timeToGenerationSec = streamState.firstTokenTime
+    ? (streamState.firstTokenTime - requestStart) / 1000
+    : null;
+  const generationSec =
+    streamState.firstTokenTime && streamState.generationEnd
+      ? (streamState.generationEnd - streamState.firstTokenTime) / 1000
+      : null;
+  return {
     text: streamState.text,
     thinking: streamState.thinking,
     images: streamState.images,
@@ -1498,22 +1472,18 @@ async function handleStreamingText(context: GenerationContext) {
         (toolSchema) => toolSchema.name,
       ) || null,
     outputCharacters: streamState.outputCharacters,
-    timeToGenerationSec: streamState.firstTokenTime
-      ? (streamState.firstTokenTime - requestStart) / 1000
-      : null,
-    generationSec:
-      streamState.firstTokenTime && streamState.generationEnd
-        ? (streamState.generationEnd - streamState.firstTokenTime) / 1000
-        : null,
+    timeToGenerationSec,
+    generationSec,
     totalSec: (now - requestStart) / 1000,
     rateLimits: streamState.rateLimits as Record<string, unknown> | null,
-  });
+  };
 }
-// ─── Dispatch: Non-streaming text generation (fallback) ─────
-async function handleNonStreamingText(context: GenerationContext) {
+
+async function handleStreamingText(context: GenerationContext) {
   const {
     provider,
     resolvedModel,
+    modelDefinition,
     messages,
     options,
     conversationId,
@@ -1522,8 +1492,8 @@ async function handleNonStreamingText(context: GenerationContext) {
     username,
     requestStart,
     emit,
+    signal,
   } = context;
-  // Mark conversation as generating
   markGenerating(conversationId, project, username, true, {
     ...getCollectionOpts(project),
     title:
@@ -1531,37 +1501,60 @@ async function handleNonStreamingText(context: GenerationContext) {
         ? conversationMeta.title
         : undefined,
   });
-  // Track this sub-request in ConversationGenerationTracker if it belongs
-  // to an active agent conversation (e.g., tools-api calling /chat?stream=false
-  // for generate_image prompt-softening or describe_image).
-  const subRequestId = context.agentConversationId
-    ? `sub-${context.requestId || crypto.randomUUID()}`
-    : null;
-  if (subRequestId && context.agentConversationId) {
-    ConversationGenerationTracker.register(context.agentConversationId, subRequestId, {
-      provider: context.providerName,
-      model: resolvedModel,
-      source: "tool-sub-request",
-    });
-  }
-  const generationStart = performance.now();
-  const genResult = await provider.generateText(
-    messages as ChatMessage[],
-    resolvedModel,
-    options,
+  const useLiveStream = Boolean(
+    (modelDefinition as Record<string, unknown> | null)?.liveAPI &&
+      provider.generateTextStreamLive,
   );
-  const now = performance.now();
-  // Complete sub-request tracking with actual token data
-  if (subRequestId && context.agentConversationId) {
-    const outTokens = genResult.usage?.outputTokens || 0;
-    if (outTokens > 0) {
-      ConversationGenerationTracker.update(subRequestId, {
-        outputTokens: outTokens,
+  const stream = useLiveStream
+    ? provider.generateTextStreamLive!(messages as ChatMessage[], resolvedModel, {
+        ...options,
+        signal,
+      })
+    : provider.generateTextStream(messages as ChatMessage[], resolvedModel, {
+        ...options,
+        signal,
       });
-    }
-    ConversationGenerationTracker.complete(subRequestId);
+  const streamState = createStreamState();
+  streamState.requestStart = requestStart;
+  await consumeChatProviderStream(stream, streamState, context, "chat/stream");
+
+  const MAX_FUNCTIONCALL_ITERATIONS = 10;
+  let functionCallIteration = 0;
+  const offeredToolNames = new Set(
+    ((options.tools as Array<{ name: string }> | undefined) ?? []).map((tool) => tool.name),
+  );
+  const chatPolicies = (options.policies as PolicyRule[] | undefined) ?? [];
+  while (
+    options.functionCallingEnabled &&
+    getPendingChatToolCalls(streamState).length > 0 &&
+    functionCallIteration < MAX_FUNCTIONCALL_ITERATIONS &&
+    !signal?.aborted
+  ) {
+    functionCallIteration++;
+    const executed = await runChatFunctionCallingIteration(
+      context,
+      streamState,
+      offeredToolNames,
+      chatPolicies,
+      functionCallIteration,
+    );
+    if (!executed) break;
   }
-  // Emit chunk/thinking/toolCall events before finalization
+
+  applyChatTruncationWarningIfNeeded(streamState, emit);
+  const now = performance.now();
+  await finalizeTextGeneration(
+    context,
+    buildStreamFinalizationResult(streamState, options, requestStart, now),
+  );
+}
+
+// ─── Dispatch: Non-streaming text generation (fallback) ─────
+
+function emitNonStreamingResultEvents(
+  genResult: Awaited<ReturnType<GenerationContext["provider"]["generateText"]>>,
+  emit: EmitFunction,
+): void {
   if (genResult.text) {
     emit({ type: SERVER_SENT_EVENT_TYPES.CHUNK, content: genResult.text });
   }
@@ -1571,53 +1564,69 @@ async function handleNonStreamingText(context: GenerationContext) {
       content: genResult.thinking,
     });
   }
-  if (genResult.toolCalls && genResult.toolCalls.length > 0) {
-    for (const toolCall of genResult.toolCalls) {
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-        id: toolCall.id || null,
-        name: toolCall.name,
-        args: toolCall.args || {},
-        thoughtSignature: toolCall.thoughtSignature || undefined,
-      });
-    }
+  if (!genResult.toolCalls || genResult.toolCalls.length === 0) {
+    return;
   }
-  // Handle images from the generation result (e.g. Gemini image models)
+  for (const toolCall of genResult.toolCalls) {
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+      id: toolCall.id || null,
+      name: toolCall.name,
+      args: toolCall.args || {},
+      thoughtSignature: toolCall.thoughtSignature || undefined,
+    });
+  }
+}
+
+async function uploadAndEmitNonStreamingImages(
+  genResult: Awaited<ReturnType<GenerationContext["provider"]["generateText"]>>,
+  project: string | undefined,
+  username: string | undefined,
+  emit: EmitFunction,
+): Promise<string[]> {
   const images: string[] = [];
-  if (genResult.images && genResult.images.length > 0) {
-    for (const image of genResult.images) {
-      let minioRef: string | null = null;
-      if (image.data) {
-        try {
-          const mimeType = image.mimeType || "image/png";
-          const dataUrl = `data:${mimeType};base64,${image.data}`;
-          const { ref } = await FileService.uploadFile(
-            dataUrl,
-            FILE_CATEGORIES.GENERATIONS,
-            project,
-            username,
-          );
-          minioRef = ref;
-        } catch (uploadError: unknown) {
-          logger.error(
-            `[chat/non-stream] MinIO upload failed: ${getErrorMessage(uploadError)}`,
-          );
-        }
-        images.push(
-          minioRef ||
-            `data:${image.mimeType || "image/png"};base64,${image.data}`,
+  if (!genResult.images || genResult.images.length === 0) {
+    return images;
+  }
+  for (const image of genResult.images) {
+    let minioRef: string | null = null;
+    const mimeType = image.mimeType || "image/png";
+    if (image.data) {
+      const dataUrl = `data:${mimeType};base64,${image.data}`;
+      try {
+        const { ref } = await FileService.uploadFile(
+          dataUrl,
+          FILE_CATEGORIES.GENERATIONS,
+          project,
+          username,
+        );
+        minioRef = ref;
+      } catch (uploadError: unknown) {
+        logger.error(
+          `[chat/non-stream] MinIO upload failed: ${getErrorMessage(uploadError)}`,
         );
       }
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.IMAGE,
-        data: image.data,
-        mimeType: image.mimeType,
-        minioRef,
-      });
+      images.push(minioRef || dataUrl);
     }
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.IMAGE,
+      data: image.data,
+      mimeType: image.mimeType,
+      minioRef,
+    });
   }
-  // Build normalized result for shared finalization
-  await finalizeTextGeneration(context, {
+  return images;
+}
+
+function buildNonStreamingFinalizationResult(
+  genResult: Awaited<ReturnType<GenerationContext["provider"]["generateText"]>>,
+  images: string[],
+  options: Record<string, unknown>,
+  requestStart: number,
+  generationStart: number,
+  now: number,
+) {
+  return {
     text: genResult.text || "",
     thinking: genResult.thinking || "",
     images,
@@ -1641,7 +1650,61 @@ async function handleNonStreamingText(context: GenerationContext) {
     generationSec: (now - generationStart) / 1000,
     totalSec: (now - requestStart) / 1000,
     rateLimits: genResult.rateLimits || null,
+  };
+}
+
+async function handleNonStreamingText(context: GenerationContext) {
+  const {
+    provider,
+    resolvedModel,
+    messages,
+    options,
+    conversationId,
+    conversationMeta,
+    project,
+    username,
+    requestStart,
+    emit,
+  } = context;
+  markGenerating(conversationId, project, username, true, {
+    ...getCollectionOpts(project),
+    title:
+      typeof conversationMeta?.title === "string"
+        ? conversationMeta.title
+        : undefined,
   });
+  const subRequestId = context.agentConversationId
+    ? `sub-${context.requestId || crypto.randomUUID()}`
+    : null;
+  if (subRequestId && context.agentConversationId) {
+    ConversationGenerationTracker.register(context.agentConversationId, subRequestId, {
+      provider: context.providerName,
+      model: resolvedModel,
+      source: "tool-sub-request",
+    });
+  }
+  const generationStart = performance.now();
+  const genResult = await provider.generateText(
+    messages as ChatMessage[],
+    resolvedModel,
+    options,
+  );
+  const now = performance.now();
+  if (subRequestId && context.agentConversationId) {
+    const outTokens = genResult.usage?.outputTokens || 0;
+    if (outTokens > 0) {
+      ConversationGenerationTracker.update(subRequestId, {
+        outputTokens: outTokens,
+      });
+    }
+    ConversationGenerationTracker.complete(subRequestId);
+  }
+  emitNonStreamingResultEvents(genResult, emit);
+  const images = await uploadAndEmitNonStreamingImages(genResult, project, username, emit);
+  await finalizeTextGeneration(
+    context,
+    buildNonStreamingFinalizationResult(genResult, images, options, requestStart, generationStart, now),
+  );
 }
 // ─── SSE streaming or JSON fallback ─────────────────────────
 /**

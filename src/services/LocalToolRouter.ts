@@ -317,20 +317,169 @@ async function routeStrainTool(
   }
 }
 
+async function handlePlanWidget(
+  toolArguments: Record<string, unknown>,
+  cycleId: string,
+): Promise<unknown> {
+  const { default: ToolContext } = await import("./ToolContext.ts");
+  const { evaluateWidgetPlan, CREATE_CONSTRAINTS } = await import("./WidgetPlanGate.ts");
+  const verdict = evaluateWidgetPlan(toolArguments);
+  if (verdict.ok === false) {
+    return {
+      success: false,
+      error: "PLAN_INCOMPLETE",
+      missing: verdict.missing,
+      message: verdict.message,
+    };
+  }
+  if (cycleId) {
+    ToolContext.set(cycleId, "widgetPlan", verdict.plan);
+    ToolContext.set(cycleId, "widgetPlanApproved", true);
+  }
+  return {
+    success: true,
+    plan: verdict.plan,
+    message:
+      `Plan registered for a '${verdict.plan.widgetType}' widget "${verdict.plan.title}". ` +
+      `Now call create_widget with widgetType='${verdict.plan.widgetType}' and the same title. ` +
+      CREATE_CONSTRAINTS,
+  };
+}
+
+async function routeWidgetTool(
+  tName: string,
+  toolArguments: Record<string, unknown>,
+  cycleId: string,
+): Promise<unknown> {
+  if (tName === "plan_widget") {
+    return handlePlanWidget(toolArguments, cycleId);
+  }
+  const { WidgetTemplateRegistry } = await import("./WidgetTemplateRegistry.ts");
+  const { default: ToolContext } = await import("./ToolContext.ts");
+  const { checkCreateAgainstPlan } = await import("./WidgetPlanGate.ts");
+
+  if (tName === "validate_widget_html") {
+    const htmlContent = (toolArguments.htmlContent || "") as string;
+    const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
+    return {
+      valid: validation.valid,
+      errors: validation.errors,
+    };
+  }
+
+  if (tName === "list_widget_types") {
+    return {
+      success: true,
+      types: WidgetTemplateRegistry.list(),
+    };
+  }
+
+  if (tName === "create_widget" && cycleId) {
+    const plan = ToolContext.get<import("./WidgetPlanGate.ts").WidgetPlan>(cycleId, "widgetPlan");
+    const check = checkCreateAgainstPlan(plan, toolArguments);
+    if (check.ok === false) {
+      return { success: false, error: check.error, message: check.message };
+    }
+  }
+
+  const htmlContent = (toolArguments.htmlContent || "") as string;
+  if (tName === "create_widget" || (tName === "update_widget" && htmlContent)) {
+    const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
+    if (!validation.valid) {
+      return {
+        success: false,
+        error: "VALIDATION_FAILED",
+        message: `Widget HTML validation failed: ${validation.errors.join("; ")}`,
+      };
+    }
+  }
+  return forwardToHtmlNotes(tName, toolArguments);
+}
+
+async function routeScrapeUrlTool(
+  toolArguments: Record<string, unknown>,
+  context: LocalToolContext,
+): Promise<unknown> {
+  const url = typeof toolArguments.url === "string" ? toolArguments.url : "";
+  if (url.trim()) {
+    const targetRefusal = scrapeTargetGuard(url, context);
+    if (targetRefusal) return targetRefusal;
+    if (!unscrapableDomainOf(url)) {
+      const refusal = chargeScrape(url, context);
+      if (refusal) return refusal;
+    }
+  }
+  const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
+  return ToolOrchestratorService.executeWebExtract(toolArguments);
+}
+
+async function routeWebSearchTool(
+  toolArguments: Record<string, unknown>,
+  context: LocalToolContext,
+): Promise<unknown> {
+  const query = String(toolArguments.query ?? toolArguments.q ?? "").trim();
+  const found = await webSearch(withSiteSearch(query, toolArguments), Number(toolArguments.limit ?? 6) || 6, undefined, context.signal);
+  const result = { ...found, results: filterResultsByDomain(found.results, toolArguments) };
+  registerRunUrls(result.results.map((r) => r.url), context);
+  return {
+    query,
+    ...result,
+    count: result.results.length,
+    ...(result.status === "ok" ? {} : { is_error: true }),
+    search: webSearchStatus(),
+  };
+}
+
+async function routeNewsSearchTool(
+  toolArguments: Record<string, unknown>,
+  context: LocalToolContext,
+): Promise<unknown> {
+  const topic = String(toolArguments.topic ?? toolArguments.query ?? "").trim();
+  const limit = Number(toolArguments.limit ?? 6) || 6;
+  const country = String(
+    toolArguments.country ?? toolArguments.region ?? "",
+  ).trim().toLowerCase();
+  const rawCategory = String(toolArguments.category ?? toolArguments.section ?? "")
+    .trim()
+    .toLowerCase();
+  const category = (CATEGORIES as readonly string[]).includes(rawCategory)
+    ? rawCategory
+    : "";
+  const debug = {
+    source: String(toolArguments._source ?? "").trim().toLowerCase(),
+    provider: String(toolArguments._provider ?? "").trim().toLowerCase(),
+  };
+  const result = country
+    ? await newsSearch(topic, limit, country, category, debug)
+    : await newsSearch(topic, limit, undefined, category, debug);
+  registerRunUrls(result.items.map((r) => r.url), context);
+  return {
+    topic,
+    country: country || "(default)",
+    category: category || "(top)",
+    source: result.source,
+    count: result.items.length,
+    items: result.items,
+    providers: newsProviderStatus(),
+  };
+}
+
+const WIDGET_TOOL_NAMES = new Set([
+  "create_widget",
+  "update_widget",
+  "validate_widget_html",
+  "list_widget_types",
+  "plan_widget",
+]);
+
 export async function routeLocalTool(
   toolName: string,
   toolArguments: Record<string, unknown>,
   context: LocalToolContext = {}
 ): Promise<unknown> {
-  // Accepts EITHER namespace — see `ACCEPTED_MCP_PREFIXES`. The hand-rolled
-  // single-prefix check this replaced is why the rename needed a helper: the
-  // same strip was open-coded in more than one file, so adding a spelling in
-  // one place left the others answering "Unknown tool" for it.
   const tName = stripMcpPrefix(toolName);
   const cycleId = context.cycleId || "";
 
-  // A tool of a server connected through /mcp-servers (mcp__<server>__<tool>).
-  // Reserved server names keep this service's own namespaces out of reach.
   const remote = MCPClientService.parseMCPToolName(toolName);
   if (remote && MCPClientService.isConnected(remote.serverName)) {
     return MCPClientService.callTool(remote.serverName, remote.toolName, toolArguments);
@@ -344,201 +493,34 @@ export async function routeLocalTool(
     return await routeStrainTool(tName, toolArguments);
   }
 
-  if (
-    tName === "create_widget" ||
-    tName === "update_widget" ||
-    tName === "validate_widget_html" ||
-    tName === "list_widget_types" ||
-    tName === "plan_widget"
-  ) {
-    const { WidgetTemplateRegistry } = await import("./WidgetTemplateRegistry.ts");
-    const { default: ToolContext } = await import("./ToolContext.ts");
-    const { evaluateWidgetPlan, checkCreateAgainstPlan, CREATE_CONSTRAINTS } =
-      await import("./WidgetPlanGate.ts");
-
-    if (tName === "plan_widget") {
-      // A plan is a contract, not a checkbox: type + title + a real
-      // description, remembered so create_widget can be held to it.
-      const verdict = evaluateWidgetPlan(toolArguments);
-      if (verdict.ok === false) {
-        return {
-          success: false,
-          error: "PLAN_INCOMPLETE",
-          missing: verdict.missing,
-          message: verdict.message,
-        };
-      }
-      if (cycleId) {
-        ToolContext.set(cycleId, "widgetPlan", verdict.plan);
-        ToolContext.set(cycleId, "widgetPlanApproved", true);
-      }
-      return {
-        success: true,
-        plan: verdict.plan,
-        message:
-          `Plan registered for a '${verdict.plan.widgetType}' widget "${verdict.plan.title}". ` +
-          `Now call create_widget with widgetType='${verdict.plan.widgetType}' and the same title. ` +
-          CREATE_CONSTRAINTS,
-      };
-    }
-
-    if (tName === "validate_widget_html") {
-      const htmlContent = (toolArguments.htmlContent || "") as string;
-      const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
-      return {
-        valid: validation.valid,
-        errors: validation.errors
-      };
-    }
-
-    if (tName === "list_widget_types") {
-      return {
-        success: true,
-        types: WidgetTemplateRegistry.list()
-      };
-    }
-
-    // create_widget / update_widget
-    if (tName === "create_widget" && cycleId) {
-      // The plan gate is only enforceable when we have a session id to track
-      // the plan against (MCP CallTool and some agent contexts have none).
-      const plan = ToolContext.get<import("./WidgetPlanGate.ts").WidgetPlan>(cycleId, "widgetPlan");
-      const check = checkCreateAgainstPlan(plan, toolArguments);
-      if (check.ok === false) {
-        return { success: false, error: check.error, message: check.message };
-      }
-    }
-
-    const htmlContent = (toolArguments.htmlContent || "") as string;
-    if (tName === "create_widget" || (tName === "update_widget" && htmlContent)) {
-      const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
-      if (!validation.valid) {
-        return {
-          success: false,
-          error: "VALIDATION_FAILED",
-          message: `Widget HTML validation failed: ${validation.errors.join("; ")}`
-        };
-      }
-    }
-    return forwardToHtmlNotes(tName, toolArguments);
+  if (WIDGET_TOOL_NAMES.has(tName)) {
+    return routeWidgetTool(tName, toolArguments, cycleId);
   }
 
-  // scrape_url never falls through to the trading-service bridge: every
-  // caller (agents, trading via dispatchTool, POST /execute/scrape_url) gets
-  // the shared extractor — SSRF guard, `prompt` Q&A, truncate-and-store.
-  // Per-run budget (UnscrapableDomains.chargeScrape): a deny-listed URL is
-  // refused inside executeWebExtract without being charged; only a scrape
-  // that would reach scraper-service counts against the run.
   if (tName === "scrape_url") {
-    const url = typeof toolArguments.url === "string" ? toolArguments.url : "";
-    if (url.trim()) {
-      const targetRefusal = scrapeTargetGuard(url, context);
-      if (targetRefusal) return targetRefusal;
-      if (!unscrapableDomainOf(url)) {
-        const refusal = chargeScrape(url, context);
-        if (refusal) return refusal;
-      }
-    }
-    const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
-    return ToolOrchestratorService.executeWebExtract(toolArguments);
+    return routeScrapeUrlTool(toolArguments, context);
   }
 
-  // lazy_web_search runs in trading-service (Bing News + Google News RSS);
-  // its links to publishers scraper-service cannot read are blanked here so
-  // the model is never handed a scrape that is known to fail.
   if (tName === "lazy_web_search") {
     const filtered = filterSearchResultLinks(await executeToolViaTradingService(tName, toolArguments, context));
     registerSearchResultUrls(filtered, context);
     return filtered;
   }
 
-  // Natively implemented here: one keyless web search (Exa) with one cache and
-  // one rate limit for every service on the network, instead of each project
-  // scraping DuckDuckGo from an IP the search engines bot-block. Services call
-  // POST /execute/web_search. See WebSearchService.
   if (tName === "web_search") {
-    const query = String(toolArguments.query ?? toolArguments.q ?? "").trim();
-    const found = await webSearch(withSiteSearch(query, toolArguments), Number(toolArguments.limit ?? 6) || 6, undefined, context.signal);
-    const result = { ...found, results: filterResultsByDomain(found.results, toolArguments) };
-    registerRunUrls(result.results.map((r) => r.url), context);
-    return {
-      query,
-      ...result,
-      count: result.results.length,
-      // Telemetry counts anything but "ok" as a failure; callers read `status`.
-      ...(result.status === "ok" ? {} : { is_error: true }),
-      search: webSearchStatus(),
-    };
+    return routeWebSearchTool(toolArguments, context);
   }
 
-  // Natively implemented here — not proxied anywhere. news is wanted by more
-  // than one consumer, so it lives in this service rather than being rebuilt
-  // per repo. See NewsSearchService for why Google News RSS and GDELT both
-  // failed the job.
   if (tName === "news_search") {
-    const topic = String(toolArguments.topic ?? toolArguments.query ?? "").trim();
-    const limit = Number(toolArguments.limit ?? 6) || 6;
-    // An empty topic is VALID and means "top headlines" — it routes to each
-    // provider's top-headlines endpoint. Rejecting it forced callers to invent a
-    // query, and html-notes invented the literal string "top stories", which
-    // keyword-matched roundup pages that contain that phrase.
-    // Region, not just language. Every provider was being asked for English and
-    // no country, and English is not a region — a generic query came back
-    // dominated by Indian English-language outlets. Empty string = worldwide.
-    const country = String(
-      toolArguments.country ?? toolArguments.region ?? "",
-    ).trim().toLowerCase();
-    // A SECTION for the top-headlines path: world, business, technology…
-    // Without it every general ask was one undifferentiated call, so "world
-    // news" and "us news today" returned the same three stories as "top
-    // stories". Anything not a known section is ignored rather than passed on,
-    // so a model's invented category degrades to the front page.
-    const rawCategory = String(toolArguments.category ?? toolArguments.section ?? "")
-      .trim()
-      .toLowerCase();
-    const category = (CATEGORIES as readonly string[]).includes(rawCategory)
-      ? rawCategory
-      : "";
-    // Debug-only pins, deliberately absent from the tool schema so no model can
-    // reach them. They exist because the first run of the provider audit printed
-    // six identical "per provider" rows — it had no way to pin anything, and a
-    // comparison whose numbers cannot move is a statement about the probe.
-    const debug = {
-      source: String(toolArguments._source ?? "").trim().toLowerCase(),
-      provider: String(toolArguments._provider ?? "").trim().toLowerCase(),
-    };
-    const result = country
-      ? await newsSearch(topic, limit, country, category, debug)
-      : await newsSearch(topic, limit, undefined, category, debug);
-    registerRunUrls(result.items.map((r) => r.url), context);
-    return {
-      topic,
-      country: country || "(default)",
-      category: category || "(top)",
-      // Which mechanism actually answered — "editorial", "editorial:stale", or a
-      // keyed provider's name. Without it a caller cannot tell a front page from
-      // a recency feed, which is exactly how the wrong one went unnoticed.
-      source: result.source,
-      count: result.items.length,
-      // An empty list is a real answer ("nothing usable right now"), not an
-      // error — the caller has its own fallback and needs to tell the two apart.
-      items: result.items,
-      providers: newsProviderStatus(),
-    };
+    return routeNewsSearchTool(toolArguments, context);
   }
 
-  if (
-    tName.startsWith("html_notes_") ||
-    tName.startsWith("canvas_")
-  ) {
+  if (tName.startsWith("html_notes_") || tName.startsWith("canvas_")) {
     if (tName === "canvas_modify_dom" && !toolArguments.canvas_html) {
       return { success: true, message: "Handled natively by HTML-Notes client" };
     }
     return forwardToHtmlNotes(tName, toolArguments);
   }
 
-  // Python-bridge tools always go over HTTP to trading-service. The old
-  // subprocess bridge (spawn execute_tool.py) could never run in the Node-only
-  // container and was removed; one uniform path for prod and local dev.
   return executeToolViaTradingService(tName, toolArguments, context);
 }

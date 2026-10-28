@@ -110,125 +110,301 @@ interface AfterResponseOutput {
  * Runs in the background (fire-and-forget) after the final response.
  */
 export default class MemoryExtractor {
-  static async extractAndStore({
-    project,
-    username,
-    messages,
-    traceId,
-    agentConversationId,
-    conversationId,
-    endpoint,
-    agent,
-    toolCalls,
-    emit,
-    activeProviderName,
-    activeResolvedModel,
-  }: MemoryExtractionContext): Promise<StoredMemory[]> {
+  private static shouldSkipExtraction(
+    project: string,
+    messages: ConversationMessage[] | undefined,
+    toolCalls: ToolCall[] | undefined,
+  ): boolean {
     if (project === "vllm-trading-bot") {
       logger.info(
         `[MemoryExtractor] Skipping — project "${project}" is isolated from harness memory extraction (B4).`,
       );
-      return [];
+      return true;
     }
     if (!messages || messages.length < MIN_MESSAGES_FOR_EXTRACTION) {
       logger.info(
         `[MemoryExtractor] Skipping — only ${messages?.length || 0} messages (min: ${MIN_MESSAGES_FOR_EXTRACTION})`,
       );
-      return [];
+      return true;
     }
-
-    // ── Mutual Exclusion ──────────────────────────────────────────
-    // If the main agent already wrote memories this turn via save_memory,
-    // skip extraction — the agent's explicit memory writes take precedence.
-    // This prevents duplicate or conflicting memories from the extraction
-    // pipeline when the agent has already decided what to remember.
-    if (
-      toolCalls?.some((toolCall) => toolCall.name === TOOL_NAMES.SAVE_MEMORY)
-    ) {
+    if (toolCalls?.some((toolCall) => toolCall.name === TOOL_NAMES.SAVE_MEMORY)) {
       logger.info(
         `[MemoryExtractor] Skipping — main agent used save_memory this turn (mutual exclusion)`,
       );
+      return true;
+    }
+    return false;
+  }
+
+  private static async resolveExtractionTarget(
+    activeProviderName?: string,
+    activeResolvedModel?: string,
+  ): Promise<{
+    extractionProvider: string;
+    extractionModel: string;
+    targetProviderId: string;
+    resolvedModel: string;
+  } | null> {
+    let extractionProvider = activeProviderName;
+    let extractionModel = activeResolvedModel;
+
+    if (!extractionProvider || !extractionModel) {
+      try {
+        const memorySettings = (await SettingsService.getSection(
+          "memory",
+        )) as MemorySettingsSection;
+        extractionProvider = extractionProvider || memorySettings.extractionProvider;
+        extractionModel = extractionModel || memorySettings.extractionModel;
+      } catch {
+        logger.info(
+          "[MemoryExtractor] Extraction model not configured in Settings → Memory Models. Skipping.",
+        );
+        return null;
+      }
+    }
+
+    if (!extractionProvider || !extractionModel) {
+      logger.info("[MemoryExtractor] Extraction provider/model not set. Skipping.");
+      return null;
+    }
+
+    let resolvedModel = extractionModel;
+    let targetProviderId = extractionProvider;
+
+    const baseType = getInstanceType(extractionProvider);
+    if (baseType) {
+      const siblings = getInstancesByType(baseType);
+      const { usable, modelOverrides } = await resolveModelForInstances(resolvedModel, siblings);
+      if (usable.length > 0) {
+        targetProviderId = usable[0].id;
+        const override = modelOverrides.get(targetProviderId);
+        if (override) resolvedModel = override;
+      } else {
+        logger.warn(
+          `[MemoryExtractor] No active instances found for model "${extractionModel}" on provider type "${baseType}". Falling back to "${targetProviderId}".`,
+        );
+      }
+    }
+
+    return { extractionProvider, extractionModel, targetProviderId, resolvedModel };
+  }
+
+  private static isExtractableMessage(message: ConversationMessage): boolean {
+    if (message.role !== "user" && message.role !== "assistant") return false;
+    const content = (message.content || "").trim();
+    if (!content || content === "[tool-only turn]" || content === "[Component]") return false;
+    if (message._isSystemWarning === true) return false;
+    if (
+      message.role === "user" &&
+      (content.startsWith("[System:") ||
+        content.includes("Your previous response contained only internal reasoning") ||
+        content.includes("Do not repeat your reasoning"))
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private static estimateExtractionTokens(
+    aiMessages: ChatMessage[],
+    result: GenerateTextResult | undefined,
+  ): { approxInputTokens: number; approxOutputTokens: number } {
+    const realUsage = result?.usage || null;
+    if (realUsage) {
+      return {
+        approxInputTokens: getTotalInputTokens(realUsage),
+        approxOutputTokens: realUsage.outputTokens || 0,
+      };
+    }
+    const inputText = aiMessages
+      .map((message) => (typeof message.content === "string" ? message.content : ""))
+      .join("\n");
+    return {
+      approxInputTokens: estimateTokens(inputText),
+      approxOutputTokens: result?.text ? estimateTokens(result.text) : 0,
+    };
+  }
+
+  private static logAndEmitExtractionUsage(
+    ctx: MemoryExtractionContext,
+    extractionProvider: string,
+    extractionModel: string,
+    aiMessages: ChatMessage[],
+    result: GenerateTextResult | undefined,
+    success: boolean,
+    extractionError: string | null,
+    requestId: string,
+    requestStart: number,
+  ): void {
+    const realUsage = result?.usage || null;
+    const { approxInputTokens, approxOutputTokens } = MemoryExtractor.estimateExtractionTokens(
+      aiMessages,
+      result,
+    );
+
+    RequestLogger.logBackgroundLlmCall({
+      requestId,
+      endpoint: ctx.endpoint || "/agent",
+      operation: "memory:extract",
+      project: ctx.project,
+      username: ctx.username || "system",
+      agent: ctx.agent || null,
+      provider: extractionProvider,
+      model: extractionModel,
+      traceId: ctx.traceId || null,
+      conversationId: ctx.conversationId || null,
+      agentConversationId: ctx.agentConversationId || null,
+      aiMessages: aiMessages as MessagePayload[],
+      resultText: result?.text || "",
+      usage: realUsage,
+      success,
+      errorMessage: extractionError,
+      requestStartMs: requestStart,
+      extraRequestPayload: {
+        messageCount: ctx.messages.length,
+      },
+    });
+
+    if (ctx.emit && success) {
+      try {
+        const extractPricing = getPricing(TYPES.TEXT, TYPES.TEXT)[extractionModel];
+        const extractCost = extractPricing
+          ? calculateTextCost(
+              { inputTokens: approxInputTokens, outputTokens: approxOutputTokens },
+              extractPricing,
+            )
+          : null;
+        ctx.emit({
+          type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
+          operation: "memory:extract",
+          usage: {
+            requests: 1,
+            inputTokens: approxInputTokens,
+            outputTokens: approxOutputTokens,
+            estimatedCost: extractCost,
+          },
+        });
+      } catch {
+        /* SSE channel may be closed */
+      }
+    }
+  }
+
+  private static normalizeParsedMemories(rawMemories: unknown): ExtractedMemory[] | null {
+    let memories = rawMemories;
+    if (memories && typeof memories === "object" && !Array.isArray(memories)) {
+      const record = memories as Record<string, unknown>;
+      if (Array.isArray(record.memories)) {
+        memories = record.memories;
+      } else if (Array.isArray(record.extractedMemories)) {
+        memories = record.extractedMemories;
+      } else if (record.type && record.title && record.content) {
+        memories = [record];
+      } else {
+        const arrayKey = Object.keys(record).find((key) => Array.isArray(record[key]));
+        if (arrayKey) memories = record[arrayKey];
+      }
+    }
+    return Array.isArray(memories) ? (memories as ExtractedMemory[]) : null;
+  }
+
+  private static async storeExtractedMemoryList(
+    extractedMemories: ExtractedMemory[],
+    ctx: MemoryExtractionContext,
+  ): Promise<StoredMemory[]> {
+    const agentId = ctx.agent || AGENT_IDS.CODING;
+    const stored: StoredMemory[] = [];
+
+    for (const memoryObject of extractedMemories) {
+      if (!memoryObject.content || !memoryObject.title) continue;
+      const type = CODING_MEMORY_TYPES.includes(memoryObject.type) ? memoryObject.type : "project";
+      try {
+        const storeResult = await MemoryService.store({
+          agent: agentId,
+          project: ctx.project,
+          username: ctx.username,
+          type,
+          title: memoryObject.title,
+          content: memoryObject.content,
+          conversationId: ctx.conversationId || undefined,
+          traceId: ctx.traceId || undefined,
+          agentConversationId: ctx.agentConversationId || undefined,
+          endpoint: ctx.endpoint || "/agent",
+        });
+
+        if (storeResult) {
+          stored.push({ type, id: storeResult.id, title: memoryObject.title });
+          logger.info(
+            `[MemoryExtractor] Stored [${type}] "${memoryObject.title.substring(0, 60)}"`,
+          );
+        } else {
+          logger.info(
+            `[MemoryExtractor] Skipped duplicate [${type}] "${memoryObject.title.substring(0, 60)}"`,
+          );
+        }
+      } catch (error: unknown) {
+        logger.error(`[MemoryExtractor] Storage failed: ${errorMessage(error)}`);
+      }
+    }
+    return stored;
+  }
+
+  private static async emitEmbeddingUsageIfNeeded(
+    emit: EmitFunction | null | undefined,
+    storedCount: number,
+  ): Promise<void> {
+    if (!emit || storedCount <= 0) return;
+    try {
+      const embedTokens = storedCount * 50;
+      const embedPricing = getPricing(TYPES.TEXT, TYPES.EMBEDDING);
+      const embedModel = (
+        (await SettingsService.getSection("memory")) as MemorySettingsSection
+      )?.embeddingModel;
+      const embedModelPricing = embedModel ? embedPricing[embedModel] : null;
+      const embedCost = embedModelPricing?.inputPerMillion
+        ? (embedTokens / 1_000_000) * embedModelPricing.inputPerMillion
+        : null;
+      emit({
+        type: "usage_update",
+        operation: "memory:embed",
+        usage: {
+          requests: storedCount,
+          inputTokens: embedTokens,
+          outputTokens: 0,
+          estimatedCost: embedCost,
+        },
+      });
+    } catch {
+      /* SSE channel may be closed */
+    }
+  }
+
+  static async extractAndStore(ctx: MemoryExtractionContext): Promise<StoredMemory[]> {
+    const {
+      project,
+      messages,
+      agentConversationId,
+      conversationId,
+      toolCalls,
+      emit,
+      activeProviderName,
+      activeResolvedModel,
+    } = ctx;
+
+    if (MemoryExtractor.shouldSkipExtraction(project, messages, toolCalls)) {
       return [];
     }
 
     try {
-      // ── Resolve extraction model from active context or settings ────────────────
-      let extractionProvider: string | undefined = activeProviderName;
-      let extractionModel: string | undefined = activeResolvedModel;
-
-      if (!extractionProvider || !extractionModel) {
-        try {
-          const memorySettings = (await SettingsService.getSection(
-            "memory",
-          )) as MemorySettingsSection;
-          extractionProvider = extractionProvider || memorySettings.extractionProvider;
-          extractionModel = extractionModel || memorySettings.extractionModel;
-        } catch {
-          // Settings not configured — skip extraction silently
-          logger.info(
-            "[MemoryExtractor] Extraction model not configured in Settings → Memory Models. Skipping.",
-          );
-          return [];
-        }
-      }
-
-      if (!extractionProvider || !extractionModel) {
-        logger.info(
-          "[MemoryExtractor] Extraction provider/model not set. Skipping.",
-        );
-        return [];
-      }
-
-      let resolvedModel = extractionModel;
-      let targetProviderId = extractionProvider;
-
-      const baseType = getInstanceType(extractionProvider);
-      if (baseType) {
-        const siblings = getInstancesByType(baseType);
-        const modelRes = await resolveModelForInstances(resolvedModel, siblings);
-        const usable = modelRes.usable;
-        const modelOverrides = modelRes.modelOverrides;
-
-        if (usable.length > 0) {
-          targetProviderId = usable[0].id;
-          const override = modelOverrides.get(targetProviderId);
-          if (override) {
-            resolvedModel = override;
-          }
-        } else {
-          // Fall back to configured target if siblings matching failed
-          logger.warn(`[MemoryExtractor] No active instances found for model "${extractionModel}" on provider type "${baseType}". Falling back to "${targetProviderId}".`);
-        }
-      }
-
+      const target = await MemoryExtractor.resolveExtractionTarget(
+        activeProviderName,
+        activeResolvedModel,
+      );
+      if (!target) return [];
+      const { extractionProvider, extractionModel, targetProviderId, resolvedModel } = target;
       const provider = getProvider(targetProviderId);
 
-      // Build conversation text (compact format to save tokens)
-      // ── Watermark diet (ported from prism-service MemoryExtractor + memory/ExtractionWatermark):
-      // read only the messages after the last one already extracted; a span
-      // with no user-authored message makes no extraction call at all.
-      const transcript = messages.filter((message) => {
-          if (message.role !== "user" && message.role !== "assistant") {
-            return false;
-          }
-          const content = (message.content || "").trim();
-          if (!content) {
-            return false;
-          }
-          if (content === "[tool-only turn]" || content === "[Component]") {
-            return false;
-          }
-          if (
-            message._isSystemWarning === true ||
-            (message.role === "user" &&
-              (content.startsWith("[System:") ||
-                content.includes("Your previous response contained only internal reasoning") ||
-                content.includes("Do not repeat your reasoning")))
-          ) {
-            return false;
-          }
-          return true;
-        });
+      const transcript = messages.filter((msg) => MemoryExtractor.isExtractableMessage(msg));
       const watermarkScopeKey =
         conversationId || agentConversationId || `adhoc:${crypto.randomUUID()}`;
       const watermark = await readWatermark(watermarkScopeKey);
@@ -243,19 +419,15 @@ export default class MemoryExtractor {
         return [];
       }
       if (!extractionSpan.hasUserAuthored) {
-        logger.info(
-          "[MemoryExtractor] Skipping — new span carries nothing the user wrote.",
-        );
+        logger.info("[MemoryExtractor] Skipping — new span carries nothing the user wrote.");
         return [];
       }
-      // selectExtractionSpan returns slices of the transcript array itself.
+
       const spanMessages = extractionSpan.span as ConversationMessage[];
       const conversationText = spanMessages
         .map((message) => {
           const content = message.content || "";
-          // Truncate very long messages to save tokens
-          const truncated =
-            content.length > 500 ? content.slice(0, 500) + "..." : content;
+          const truncated = content.length > 500 ? content.slice(0, 500) + "..." : content;
           return `${message.role}: ${truncated}`;
         })
         .join("\n");
@@ -287,209 +459,35 @@ export default class MemoryExtractor {
         extractionError = errorMessage(error);
         throw error;
       } finally {
-        // Use real API-reported usage when available; fall back to heuristic
-        const realUsage = result?.usage || null;
-        const inputText = aiMessages
-          .map((message) =>
-            typeof message.content === "string" ? message.content : "",
-          )
-          .join("\n");
-        const approxInputTokens = realUsage
-          ? getTotalInputTokens(realUsage)
-          : estimateTokens(inputText);
-        const approxOutputTokens = realUsage
-          ? realUsage.outputTokens || 0
-          : result?.text
-            ? estimateTokens(result.text)
-            : 0;
-
-        RequestLogger.logBackgroundLlmCall({
-          requestId,
-          endpoint: endpoint || "/agent",
-          operation: "memory:extract",
-          project,
-          username: username || "system",
-          agent: agent || null,
-          provider: extractionProvider,
-          model: extractionModel,
-          traceId: traceId || null,
-          conversationId: conversationId || null,
-          agentConversationId: agentConversationId || null,
-          aiMessages: aiMessages as MessagePayload[],
-          resultText: result?.text || "",
-          usage: realUsage,
+        MemoryExtractor.logAndEmitExtractionUsage(
+          ctx,
+          extractionProvider,
+          extractionModel,
+          aiMessages,
+          result,
           success,
-          errorMessage: extractionError,
-          requestStartMs: requestStart,
-          extraRequestPayload: {
-            messageCount: messages.length,
-          },
-        });
-
-        // Emit incremental usage so the UI token badge updates in real-time
-        // instead of jumping when fetchConversationStats runs 2-8s later.
-        // Include estimatedCost so the conversation cost badge is accurate
-        // before the backend aggregation (fetchConversationStats) completes.
-        if (emit && success) {
-          try {
-            const extractPricing = getPricing(TYPES.TEXT, TYPES.TEXT)[
-              extractionModel
-            ];
-            const extractCost = extractPricing
-              ? calculateTextCost(
-                  {
-                    inputTokens: approxInputTokens,
-                    outputTokens: approxOutputTokens,
-                  },
-                  extractPricing,
-                )
-              : null;
-            emit({
-              type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
-              operation: "memory:extract",
-              usage: {
-                requests: 1,
-                inputTokens: approxInputTokens,
-                outputTokens: approxOutputTokens,
-                estimatedCost: extractCost,
-              },
-            });
-          } catch {
-            /* SSE channel may be closed */
-          }
-        }
+          extractionError,
+          requestId,
+          requestStart,
+        );
       }
 
-      // Extraction succeeded — move the watermark past everything this call
-      // read, so the next run extracts only what is new.
-      await writeWatermark(
-        watermarkScopeKey,
-        transcript as Array<Record<string, unknown>>,
-      );
+      await writeWatermark(watermarkScopeKey, transcript as Array<Record<string, unknown>>);
 
-      let memories: unknown = parseJsonFromLargeLanguageModelResponse(
-        result!.text,
-      );
-      if (
-        memories &&
-        typeof memories === "object" &&
-        !Array.isArray(memories)
-      ) {
-        const memoriesRecord = memories as Record<string, unknown>;
-        if (Array.isArray(memoriesRecord.memories)) {
-          memories = memoriesRecord.memories;
-        } else if (Array.isArray(memoriesRecord.extractedMemories)) {
-          memories = memoriesRecord.extractedMemories;
-        } else if (
-          memoriesRecord.type &&
-          memoriesRecord.title &&
-          memoriesRecord.content
-        ) {
-          memories = [memoriesRecord];
-        } else {
-          const arrayKey = Object.keys(memoriesRecord).find((key) =>
-            Array.isArray(memoriesRecord[key]),
-          );
-          if (arrayKey) {
-            memories = memoriesRecord[arrayKey];
-          }
-        }
-      }
-
-      if (!Array.isArray(memories)) {
+      const rawParsed = parseJsonFromLargeLanguageModelResponse(result!.text);
+      const extractedMemories = MemoryExtractor.normalizeParsedMemories(rawParsed);
+      if (!extractedMemories) {
         logger.warn(
           `[MemoryExtractor] Response was not an array or a recognized memory structure. Text: ${result!.text ? result!.text.substring(0, 200) : "empty"}`,
         );
         return [];
       }
 
-      const extractedMemories = memories as ExtractedMemory[];
-
-      // ── Store each memory via MemoryService ─────────────────────
-      const agentId = agent || AGENT_IDS.CODING;
-      const stored: StoredMemory[] = [];
-
-      for (const memoryObject of extractedMemories) {
-        if (!memoryObject.content || !memoryObject.title) continue;
-
-        // Validate type — default to "project" if unknown
-        const type = CODING_MEMORY_TYPES.includes(memoryObject.type)
-          ? memoryObject.type
-          : "project";
-
-        try {
-          const storeResult = await MemoryService.store({
-            agent: agentId,
-            project,
-            username,
-            type,
-            title: memoryObject.title,
-            content: memoryObject.content,
-            conversationId: conversationId || undefined,
-            traceId: traceId || undefined,
-            agentConversationId: agentConversationId || undefined,
-            endpoint: endpoint || "/agent",
-          });
-
-          if (storeResult) {
-            stored.push({
-              type,
-              id: storeResult.id,
-              title: memoryObject.title,
-            });
-            logger.info(
-              `[MemoryExtractor] Stored [${type}] "${memoryObject.title.substring(0, 60)}"`,
-            );
-          } else {
-            logger.info(
-              `[MemoryExtractor] Skipped duplicate [${type}] "${memoryObject.title.substring(0, 60)}"`,
-            );
-          }
-        } catch (error: unknown) {
-          logger.error(
-            `[MemoryExtractor] Storage failed: ${errorMessage(error)}`,
-          );
-        }
-      }
-
+      const stored = await MemoryExtractor.storeExtractedMemoryList(extractedMemories, ctx);
       logger.info(
         `[MemoryExtractor] Stored ${stored.length}/${extractedMemories.length} memories from conversation ${conversationId || "unknown"}`,
       );
-
-      // Emit usage for the embedding calls that happened during storage.
-      // Each MemoryService.store() generates one embedding — report the
-      // aggregate so the UI request count grows incrementally.
-      if (emit && stored.length > 0) {
-        try {
-          const embedTokens = stored.length * 50; // ~50 tokens per memory title+content
-          // Embedding cost: input tokens only (no output tokens)
-          const embedPricing = getPricing(TYPES.TEXT, TYPES.EMBEDDING);
-          const embedModel = (
-            (await SettingsService.getSection(
-              "memory",
-            )) as MemorySettingsSection
-          )?.embeddingModel;
-          const embedModelPricing = embedModel
-            ? embedPricing[embedModel]
-            : null;
-          const embedCost = embedModelPricing?.inputPerMillion
-            ? (embedTokens / 1_000_000) * embedModelPricing.inputPerMillion
-            : null;
-          emit({
-            type: "usage_update",
-            operation: "memory:embed",
-            usage: {
-              requests: stored.length,
-              inputTokens: embedTokens,
-              outputTokens: 0,
-              estimatedCost: embedCost,
-            },
-          });
-        } catch {
-          /* SSE channel may be closed */
-        }
-      }
-
+      await MemoryExtractor.emitEmbeddingUsageIfNeeded(emit, stored.length);
       return stored;
     } catch (error: unknown) {
       logger.error(`[MemoryExtractor] Failed: ${errorMessage(error)}`);

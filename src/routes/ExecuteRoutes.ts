@@ -56,144 +56,211 @@ async function reportUsage(payload: Record<string, unknown>) {
  */
 export { classifyToolResult } from "../services/ToolResult.ts";
 
-const handleExecuteRoute: RequestHandler = async (request, response) => {
-  const { toolName } = request.params;
+interface ResolvedExecuteContext {
+  toolName: string;
+  toolArguments: Record<string, unknown>;
+  agentName: string;
+  cycleId: string;
+  ticker: string;
+  hasCapability: boolean;
+}
+
+function resolveExecuteRequestContext(
+  request: Parameters<RequestHandler>[0],
+): ResolvedExecuteContext {
+  const toolName = String(request.params.toolName || "");
   let toolArguments = (request.body || {}) as Record<string, unknown>;
   if (toolArguments.arguments && typeof toolArguments.arguments === "object") {
     toolArguments = toolArguments.arguments as Record<string, unknown>;
   }
-  const startTime = Date.now();
+  let agentName = String(
+    request.headers["x-agent"] || request.headers["x-username"] || "",
+  );
+  let cycleId = String(
+    request.headers["x-conversation-id"] || request.headers["x-request-id"] || "",
+  );
+  let ticker = String(
+    request.headers["x-ticker"] ||
+      toolArguments.ticker ||
+      toolArguments.Ticker ||
+      "",
+  );
 
-  let agentName = String(request.headers["x-agent"] || request.headers["x-username"] || "");
-  let cycleId = String(request.headers["x-conversation-id"] || request.headers["x-request-id"] || "");
-  let ticker = String(request.headers["x-ticker"] || toolArguments.ticker || toolArguments.Ticker || "");
-
-  // Signed identity is authoritative for attribution. Invalid capabilities are
-  // rejected by dispatchTool; never record their unverified claims as identity.
   const hasCapability = Object.hasOwn(toolArguments, TOOL_CONTEXT_ARG);
   if (hasCapability) {
     try {
       const verified = verifyToolContext(toolArguments[TOOL_CONTEXT_ARG]);
-      agentName = verified.agentName; cycleId = verified.cycleId; ticker = verified.ticker;
-    } catch { /* common dispatch returns the refusal */ }
+      agentName = verified.agentName;
+      cycleId = verified.cycleId;
+      ticker = verified.ticker;
+    } catch {
+      /* common dispatch returns the refusal */
+    }
   }
 
-  // Check if tool is authorized for this conversation session (Prism Proxy)
-  if (!hasCapability && cycleId && !PrismProxyService.isToolAllowed(cycleId as string, (toolName || "") as string)) {
-    const errorMsg = `The tool "${toolName}" is not whitelisted for your agent role. You must reason using the data in the 'Pre-Collected Data Report' instead of calling unauthorized tools.`;
-    logger.warn(`[PrismProxy] Intercepted unauthorized tool call for conversation ${cycleId}: ${toolName}`);
+  return {
+    toolName,
+    toolArguments,
+    agentName,
+    cycleId,
+    ticker,
+    hasCapability,
+  };
+}
 
-    const durationMs = Date.now() - startTime;
-    reportUsage({
-      tool_name: toolName as string,
-      agent_name: agentName,
-      ticker,
-      cycle_id: cycleId,
-      success: false,
-      execution_ms: durationMs,
-      error_message: errorMsg,
-      service_source: "lazy-agent-service"
-    }).catch(() => {});
+function isGatedWidgetRefusal(result: unknown): string | null {
+  if (typeof result !== "object" || result === null) return null;
+  const record = result as { success?: boolean; error?: string };
+  if (record.success !== false) return null;
+  const gatedError = String(record.error ?? "");
+  return ["PLANNING_REQUIRED", "VALIDATION_FAILED"].includes(gatedError)
+    ? gatedError
+    : null;
+}
+
+function reportExecuteUsageFireAndForget(
+  ctx: ResolvedExecuteContext,
+  durationMs: number,
+  success: boolean,
+  errorMessage?: string,
+): void {
+  reportUsage({
+    tool_name: ctx.toolName,
+    agent_name: ctx.agentName,
+    ticker: ctx.ticker,
+    cycle_id: ctx.cycleId,
+    success,
+    execution_ms: durationMs,
+    ...(errorMessage !== undefined ? { error_message: errorMessage } : {}),
+    service_source: "lazy-agent-service",
+  }).catch(() => {});
+}
+
+const handleExecuteRoute: RequestHandler = async (request, response) => {
+  const startTime = Date.now();
+  const ctx = resolveExecuteRequestContext(request);
+  const { toolName, toolArguments, agentName, cycleId, ticker, hasCapability } =
+    ctx;
+
+  if (
+    !hasCapability &&
+    cycleId &&
+    !PrismProxyService.isToolAllowed(cycleId, toolName)
+  ) {
+    const errorMsg = `The tool "${toolName}" is not whitelisted for your agent role. You must reason using the data in the 'Pre-Collected Data Report' instead of calling unauthorized tools.`;
+    logger.warn(
+      `[PrismProxy] Intercepted unauthorized tool call for conversation ${cycleId}: ${toolName}`,
+    );
+
+    reportExecuteUsageFireAndForget(
+      ctx,
+      Date.now() - startTime,
+      false,
+      errorMsg,
+    );
 
     response.json({
       success: false,
       error: "PERMISSION_DENIED",
-      message: errorMsg
+      message: errorMsg,
     });
     return;
   }
 
   try {
-    logger.info(JSON.stringify({ event: "tool_start", toolName, args: Object.fromEntries(Object.entries(toolArguments).filter(([key]) => key !== TOOL_CONTEXT_ARG)) }));
-
-    const result = await dispatchTool(
-      toolName as string,
-      toolArguments,
-      { agentName, cycleId, ticker, project: String(request.headers["x-project"] || ""), transport: "rest" }
+    logger.info(
+      JSON.stringify({
+        event: "tool_start",
+        toolName,
+        args: Object.fromEntries(
+          Object.entries(toolArguments).filter(
+            ([key]) => key !== TOOL_CONTEXT_ARG,
+          ),
+        ),
+      }),
     );
 
-    // Gated widget refusals (planning/validation) are still refusals — report
-    // them as failed telemetry rows so they stop being invisible, then return
-    // the same response the caller always received.
-    const gatedError = String(
-      (result as { error?: string } | null | undefined)?.error ?? ""
-    );
-    const gated =
-      typeof result === "object" &&
-      result !== null &&
-      (result as { success?: boolean }).success === false &&
-      ["PLANNING_REQUIRED", "VALIDATION_FAILED"].includes(gatedError);
-    if (gated) {
+    const result = await dispatchTool(toolName, toolArguments, {
+      agentName,
+      cycleId,
+      ticker,
+      project: String(request.headers["x-project"] || ""),
+      transport: "rest",
+    });
+
+    const gatedError = isGatedWidgetRefusal(result);
+    if (gatedError) {
       const durationMs = Date.now() - startTime;
       logger.info(
-        JSON.stringify({ event: "tool_gated", toolName, gate: gatedError, durationMs })
+        JSON.stringify({
+          event: "tool_gated",
+          toolName,
+          gate: gatedError,
+          durationMs,
+        }),
       );
-      reportUsage({
-        tool_name: toolName as string,
-        agent_name: agentName,
-        ticker,
-        cycle_id: cycleId,
-        success: false,
-        execution_ms: durationMs,
-        error_message: gatedError.toLowerCase(),
-        service_source: "lazy-agent-service"
-      }).catch(() => {});
+      reportExecuteUsageFireAndForget(
+        ctx,
+        durationMs,
+        false,
+        gatedError.toLowerCase(),
+      );
       response.json(result);
       return;
     }
 
     const durationMs = Date.now() - startTime;
-
-    // Classify the result before reporting — many tools resolve (rather than
-    // throw) with an error payload, which used to be reported as success:true.
     const classification = classifyToolResult(result);
 
     if (classification.success) {
-      logger.info(JSON.stringify({ event: "tool_success", toolName, durationMs }));
+      logger.info(
+        JSON.stringify({ event: "tool_success", toolName, durationMs }),
+      );
     } else {
       logger.warn(
         JSON.stringify({
           event: "tool_soft_failure",
           toolName,
           error: classification.errorMessage,
-          durationMs
-        })
+          durationMs,
+        }),
       );
     }
 
-    reportUsage({
-      tool_name: toolName as string,
-      agent_name: agentName,
-      ticker,
-      cycle_id: cycleId,
-      success: classification.success,
-      execution_ms: durationMs,
-      ...(classification.success
-        ? {}
-        : { error_message: classification.errorMessage }),
-      service_source: "lazy-agent-service"
-    }).catch(() => {});
+    reportExecuteUsageFireAndForget(
+      ctx,
+      durationMs,
+      classification.success,
+      classification.success ? undefined : classification.errorMessage,
+    );
 
     response.json(result);
   } catch (error: unknown) {
     const errorMsg = (error as Error).message;
     const durationMs = Date.now() - startTime;
-    logger.error(JSON.stringify({ event: "tool_failure", toolName, error: errorMsg, durationMs }));
+    logger.error(
+      JSON.stringify({
+        event: "tool_failure",
+        toolName,
+        error: errorMsg,
+        durationMs,
+      }),
+    );
 
-    reportUsage({
-      tool_name: toolName as string,
-      agent_name: agentName,
-      ticker,
-      cycle_id: cycleId,
-      success: false,
-      execution_ms: durationMs,
-      error_message: errorMsg,
-      service_source: "lazy-agent-service"
-    }).catch(() => {});
+    reportExecuteUsageFireAndForget(ctx, durationMs, false, errorMsg);
 
     try {
-      const deadLetterQueueEntry = JSON.stringify({ timestamp: new Date().toISOString(), toolName, args: toolArguments, error: errorMsg, durationMs }) + "\n";
-      fs.promises.appendFile(path.join(dataDir, "dlq.jsonl"), deadLetterQueueEntry).catch(() => {});
+      const deadLetterQueueEntry =
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          toolName,
+          args: toolArguments,
+          error: errorMsg,
+          durationMs,
+        }) + "\n";
+      fs.promises
+        .appendFile(path.join(dataDir, "dlq.jsonl"), deadLetterQueueEntry)
+        .catch(() => {});
     } catch {
       // Ignore DLQ append errors silently
     }

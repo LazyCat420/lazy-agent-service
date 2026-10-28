@@ -174,16 +174,211 @@ export class ContextAssembly {
     return { contents, unapprovedImports };
   }
 
+  private resolveAlwaysOnMemoriesForScope(options: AssemblyOptions): {
+    memories: string[];
+    unapprovedImports: Array<{ file: string; importPath: string }>;
+  } {
+    const repoRoot = options.repoRoot || process.cwd();
+    const allowedRoots = [
+      path.resolve(repoRoot),
+      ...(options.allowedRoots ?? []).map((r) => path.resolve(r)),
+    ];
+    if (options.alwaysOnMemories !== undefined) {
+      return { memories: options.alwaysOnMemories, unapprovedImports: [] };
+    }
+    const loaded = ContextAssembly.loadAlwaysOnMemories(repoRoot, allowedRoots);
+    for (const unapproved of loaded.unapprovedImports) {
+      options.onUnapprovedImport?.(unapproved);
+    }
+    return {
+      memories: loaded.contents,
+      unapprovedImports: loaded.unapprovedImports,
+    };
+  }
+
+  private buildProjectScopeLayer(options: AssemblyOptions) {
+    const sortedTools = [...options.selectedToolSchemas].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    const toolIds = sortedTools.map((t) => t.name);
+    const toolDocLines = sortedTools.map(
+      (t) =>
+        `- **${t.name}**: ${t.description || "No description"} (schema: ${JSON.stringify(t.parameters || {})})`,
+    );
+
+    const projectComponents: string[] = [];
+    if (options.approvedProcedures && options.approvedProcedures.length > 0) {
+      projectComponents.push(
+        `# Approved Procedures\n${options.approvedProcedures.join("\n")}`,
+      );
+    }
+
+    const { memories, unapprovedImports } =
+      this.resolveAlwaysOnMemoriesForScope(options);
+    if (memories.length > 0) {
+      projectComponents.push(`# Always-On Memory\n${memories.join("\n\n")}`);
+    }
+
+    const repoRoot = options.repoRoot || process.cwd();
+    const skills =
+      options.skills ??
+      new SkillRegistry(path.join(repoRoot, "skills")).describeAll();
+    if (skills.length > 0) {
+      const skillLines = skills.map(
+        (s) => `- **${s.name}**: ${s.description} (load with \`skill_read\`)`,
+      );
+      projectComponents.push(`# Available Skills\n${skillLines.join("\n")}`);
+    }
+
+    projectComponents.push(
+      `# Active Tool Schemas (${sortedTools.length})\n${toolDocLines.join("\n")}`,
+    );
+    if (toolIds.some((id) => id.startsWith("global.web."))) {
+      projectComponents.push(
+        "# Sources\nWhen your answer uses facts from web search or a fetched page, name where each fact came from (site name or URL) in the answer, and end the answer with a line starting `Sources:` that lists the sites or URLs you used.",
+      );
+    }
+    if (options.repoMapSummary) {
+      projectComponents.push(
+        `# Repository Map (${options.repoCommitSha || "HEAD"})\n${options.repoMapSummary}`,
+      );
+    }
+
+    const rawProjectScope = projectComponents.join("\n\n");
+    const { text: projectScopeText, summary: projectScopeSummary } =
+      this.budget.clampLayer(
+        rawProjectScope,
+        this.budget.projectScopeBudgetChars,
+        projectComponents.length,
+      );
+    const projectScopeHash = ContextAssembly.hash(projectScopeText);
+    return {
+      projectScopeText,
+      projectScopeSummary,
+      projectScopeHash,
+      toolIds,
+      unapprovedImports,
+    };
+  }
+
+  private buildRetrievedEvidenceLayer(
+    options: AssemblyOptions,
+    exclusions: Array<{ id?: string; reason: string; layer: string }>,
+  ) {
+    const evidenceComponents: string[] = [];
+    if (options.seededToolResults && options.seededToolResults.length > 0) {
+      const seededBlocks = options.seededToolResults.map(
+        (seeded) =>
+          `<!-- seeded: replayed prior run -->\n[assistant tool_call] ${seeded.toolName}\n[tool result]\n${seeded.content}`,
+      );
+      evidenceComponents.push(
+        `# Seeded Prior-Run Tool History\n${seededBlocks.join("\n\n")}`,
+      );
+    }
+
+    const memoryIds: string[] = [];
+    const artifactRefs = options.artifactExcerpts
+      ? options.artifactExcerpts.map((_, i) => `artifact_${i}`)
+      : [];
+
+    if (options.verifiedMemories && options.verifiedMemories.length > 0) {
+      const activeMemories = LifecycleMemoryEngine.filterActiveForPrompt(
+        options.verifiedMemories,
+        {
+          domain: "general",
+          project: options.project,
+          agent: options.agentRole,
+        },
+      );
+
+      for (const mem of options.verifiedMemories) {
+        if (!activeMemories.some((a) => a.id === mem.id)) {
+          exclusions.push({
+            id: mem.id,
+            reason: `Lifecycle state '${mem.lifecycle_state}' not eligible for prompt injection`,
+            layer: "retrieved_evidence",
+          });
+        }
+      }
+
+      if (activeMemories.length > 0) {
+        activeMemories.sort((a, b) =>
+          a.content_hash.localeCompare(b.content_hash),
+        );
+        const memLines = activeMemories.map((m) => {
+          memoryIds.push(m.id);
+          return `- [${m.type}] ${m.title ? `${m.title}: ` : ""}${m.content}`;
+        });
+        evidenceComponents.push(
+          `# Verified Memory Context\n${memLines.join("\n")}`,
+        );
+      }
+    }
+
+    if (options.workflowCheckpoints && options.workflowCheckpoints.length > 0) {
+      evidenceComponents.push(
+        `# Workflow Checkpoints\n${options.workflowCheckpoints.join("\n")}`,
+      );
+    }
+    if (options.artifactExcerpts && options.artifactExcerpts.length > 0) {
+      evidenceComponents.push(
+        `# Artifact Excerpts\n${options.artifactExcerpts.join("\n\n")}`,
+      );
+    }
+
+    const rawEvidence = evidenceComponents.join("\n\n");
+    const { text: evidenceText, summary: evidenceSummary } =
+      this.budget.clampLayer(
+        rawEvidence,
+        this.budget.evidenceBudgetChars,
+        evidenceComponents.length,
+      );
+    const evidenceHash = ContextAssembly.hash(evidenceText);
+    return {
+      evidenceText,
+      evidenceSummary,
+      evidenceHash,
+      memoryIds,
+      artifactRefs,
+    };
+  }
+
+  private buildDynamicTailLayer(options: AssemblyOptions) {
+    const tailComponents: string[] = [];
+    tailComponents.push(`# Task Instruction\n${options.userTask.trim()}`);
+    if (options.currentState) {
+      tailComponents.push(
+        `# Current Execution State\n${options.currentState.trim()}`,
+      );
+    }
+    if (options.pathScopedRules && options.pathScopedRules.length > 0) {
+      tailComponents.push(
+        `# Path-Scoped Rules (apply to the files you are touching)\n${options.pathScopedRules.join("\n\n")}`,
+      );
+    }
+    if (options.recentToolOutputs && options.recentToolOutputs.length > 0) {
+      tailComponents.push(
+        `# Recent Tool Outputs\n${options.recentToolOutputs.join("\n\n")}`,
+      );
+    }
+
+    const rawTail = tailComponents.join("\n\n");
+    const { text: dynamicTailText, summary: dynamicTailSummary } =
+      this.budget.clampLayer(
+        rawTail,
+        this.budget.dynamicTailBudgetChars,
+        tailComponents.length,
+      );
+    const dynamicTailHash = ContextAssembly.hash(dynamicTailText);
+    return { dynamicTailText, dynamicTailSummary, dynamicTailHash };
+  }
+
   /**
    * Assembles the 4-layer bounded prompt and generates a cryptographic receipt.
    */
   assemble(options: AssemblyOptions): AssembledContextResult {
     const exclusions: Array<{ id?: string; reason: string; layer: string }> = [];
 
-    // ─────────────────────────────────────────────────────────────
-    // Layer 1: Immutable Prefix
-    // ─────────────────────────────────────────────────────────────
-    // Role rules, stable output contract, stable tool protocol
     const prefixComponents = [
       `# Role & System Rules\n${options.roleRules.trim()}`,
       `# Output Contract\n${options.outputContract.trim()}`,
@@ -197,166 +392,25 @@ export class ContextAssembly {
     );
     const prefixHash = ContextAssembly.hash(prefixText);
 
-    // ─────────────────────────────────────────────────────────────
-    // Layer 2: Scoped Project Layer
-    // ─────────────────────────────────────────────────────────────
-    // Approved procedures, selected tools, repository map
-    const sortedTools = [...options.selectedToolSchemas].sort((a, b) => a.name.localeCompare(b.name));
-    const toolIds = sortedTools.map((t) => t.name);
-    const toolDocLines = sortedTools.map(
-      (t) => `- **${t.name}**: ${t.description || "No description"} (schema: ${JSON.stringify(t.parameters || {})})`
-    );
+    const {
+      projectScopeText,
+      projectScopeSummary,
+      projectScopeHash,
+      toolIds,
+      unapprovedImports,
+    } = this.buildProjectScopeLayer(options);
 
-    const projectComponents: string[] = [];
-    if (options.approvedProcedures && options.approvedProcedures.length > 0) {
-      projectComponents.push(`# Approved Procedures\n${options.approvedProcedures.join("\n")}`);
-    }
+    const {
+      evidenceText,
+      evidenceSummary,
+      evidenceHash,
+      memoryIds,
+      artifactRefs,
+    } = this.buildRetrievedEvidenceLayer(options, exclusions);
 
-    // ── Always-on memory (rules < memory < skills ordering) ────
-    const repoRoot = options.repoRoot || process.cwd();
-    const allowedRoots = [path.resolve(repoRoot), ...(options.allowedRoots ?? []).map((r) => path.resolve(r))];
-    let memories: string[];
-    let unapprovedImports: Array<{ file: string; importPath: string }> = [];
-    if (options.alwaysOnMemories !== undefined) {
-      // Explicitly provided memory bodies carry no source file context,
-      // so @import expansion is only performed on auto-loaded memories.
-      memories = options.alwaysOnMemories;
-    } else {
-      const loaded = ContextAssembly.loadAlwaysOnMemories(repoRoot, allowedRoots);
-      memories = loaded.contents;
-      unapprovedImports = loaded.unapprovedImports;
-      for (const unapproved of unapprovedImports) {
-        options.onUnapprovedImport?.(unapproved);
-      }
-    }
-    if (memories.length > 0) {
-      projectComponents.push(`# Always-On Memory\n${memories.join("\n\n")}`);
-    }
+    const { dynamicTailText, dynamicTailSummary, dynamicTailHash } =
+      this.buildDynamicTailLayer(options);
 
-    // ── Skill descriptions (on-demand bodies via skill_read) ──
-    const skills =
-      options.skills ??
-      new SkillRegistry(path.join(repoRoot, "skills")).describeAll();
-    if (skills.length > 0) {
-      const skillLines = skills.map(
-        (s) => `- **${s.name}**: ${s.description} (load with \`skill_read\`)`,
-      );
-      projectComponents.push(`# Available Skills\n${skillLines.join("\n")}`);
-    }
-
-    projectComponents.push(`# Active Tool Schemas (${sortedTools.length})\n${toolDocLines.join("\n")}`);
-    if (toolIds.some((id) => id.startsWith("global.web."))) {
-      projectComponents.push(
-        "# Sources\nWhen your answer uses facts from web search or a fetched page, name where each fact came from (site name or URL) in the answer, and end the answer with a line starting `Sources:` that lists the sites or URLs you used.",
-      );
-    }
-    if (options.repoMapSummary) {
-      projectComponents.push(`# Repository Map (${options.repoCommitSha || "HEAD"})\n${options.repoMapSummary}`);
-    }
-
-    const rawProjectScope = projectComponents.join("\n\n");
-    const { text: projectScopeText, summary: projectScopeSummary } = this.budget.clampLayer(
-      rawProjectScope,
-      this.budget.projectScopeBudgetChars,
-      projectComponents.length
-    );
-    const projectScopeHash = ContextAssembly.hash(projectScopeText);
-
-    // ─────────────────────────────────────────────────────────────
-    // Layer 3: Retrieved Evidence Layer
-    // ─────────────────────────────────────────────────────────────
-    // Bounded verified memories (ACTIVE only), workflow checkpoints, artifact excerpts
-    const evidenceComponents: string[] = [];
-
-    // ── Synthetic-history seeding (DeepSeek pattern) ───────────
-    // Rendered as assistant tool_call + tool result pairs, each wrapped
-    // with a provenance comment; placed before dynamicTail.
-    if (options.seededToolResults && options.seededToolResults.length > 0) {
-      const seededBlocks = options.seededToolResults.map(
-        (seeded) =>
-          `<!-- seeded: replayed prior run -->\n[assistant tool_call] ${seeded.toolName}\n[tool result]\n${seeded.content}`,
-      );
-      evidenceComponents.push(
-        `# Seeded Prior-Run Tool History\n${seededBlocks.join("\n\n")}`,
-      );
-    }
-
-    const memoryIds: string[] = [];
-    const artifactRefs = options.artifactExcerpts ? options.artifactExcerpts.map((_, i) => `artifact_${i}`) : [];
-
-    if (options.verifiedMemories && options.verifiedMemories.length > 0) {
-      // Filter strictly to ACTIVE memories
-      const activeMemories = LifecycleMemoryEngine.filterActiveForPrompt(options.verifiedMemories, {
-        domain: "general",
-        project: options.project,
-        agent: options.agentRole,
-      });
-
-      for (const mem of options.verifiedMemories) {
-        if (!activeMemories.some((a) => a.id === mem.id)) {
-          exclusions.push({
-            id: mem.id,
-            reason: `Lifecycle state '${mem.lifecycle_state}' not eligible for prompt injection`,
-            layer: "retrieved_evidence",
-          });
-        }
-      }
-
-      if (activeMemories.length > 0) {
-        // Deterministic sort by content hash
-        activeMemories.sort((a, b) => a.content_hash.localeCompare(b.content_hash));
-        const memLines = activeMemories.map((m) => {
-          memoryIds.push(m.id);
-          return `- [${m.type}] ${m.title ? `${m.title}: ` : ""}${m.content}`;
-        });
-        evidenceComponents.push(`# Verified Memory Context\n${memLines.join("\n")}`);
-      }
-    }
-
-    if (options.workflowCheckpoints && options.workflowCheckpoints.length > 0) {
-      evidenceComponents.push(`# Workflow Checkpoints\n${options.workflowCheckpoints.join("\n")}`);
-    }
-    if (options.artifactExcerpts && options.artifactExcerpts.length > 0) {
-      evidenceComponents.push(`# Artifact Excerpts\n${options.artifactExcerpts.join("\n\n")}`);
-    }
-
-    const rawEvidence = evidenceComponents.join("\n\n");
-    const { text: evidenceText, summary: evidenceSummary } = this.budget.clampLayer(
-      rawEvidence,
-      this.budget.evidenceBudgetChars,
-      evidenceComponents.length
-    );
-    const evidenceHash = ContextAssembly.hash(evidenceText);
-
-    // ─────────────────────────────────────────────────────────────
-    // Layer 4: Dynamic Tail
-    // ─────────────────────────────────────────────────────────────
-    // User task, current state, latest tool outputs
-    const tailComponents: string[] = [];
-    tailComponents.push(`# Task Instruction\n${options.userTask.trim()}`);
-    if (options.currentState) {
-      tailComponents.push(`# Current Execution State\n${options.currentState.trim()}`);
-    }
-    if (options.pathScopedRules && options.pathScopedRules.length > 0) {
-      tailComponents.push(
-        `# Path-Scoped Rules (apply to the files you are touching)\n${options.pathScopedRules.join("\n\n")}`,
-      );
-    }
-    if (options.recentToolOutputs && options.recentToolOutputs.length > 0) {
-      tailComponents.push(`# Recent Tool Outputs\n${options.recentToolOutputs.join("\n\n")}`);
-    }
-
-    const rawTail = tailComponents.join("\n\n");
-    const { text: dynamicTailText, summary: dynamicTailSummary } = this.budget.clampLayer(
-      rawTail,
-      this.budget.dynamicTailBudgetChars,
-      tailComponents.length
-    );
-    const dynamicTailHash = ContextAssembly.hash(dynamicTailText);
-
-    // ─────────────────────────────────────────────────────────────
-    // Full Prompt & Receipt Compilation
-    // ─────────────────────────────────────────────────────────────
     const fullPrompt = [prefixText, projectScopeText, evidenceText, dynamicTailText]
       .filter((s) => s.length > 0)
       .join("\n\n---\n\n");

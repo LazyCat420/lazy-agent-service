@@ -467,6 +467,142 @@ export function prependIdentitySystemMessage<T extends { role: string; content?:
   return [{ role: "system", content: identityPrompt } as T, ...messages];
 }
 
+function extractAssistantReasoningContent(message: InputMessage): string {
+  if (
+    typeof message.reasoning_content === "string" &&
+    message.reasoning_content.trim()
+  ) {
+    return message.reasoning_content.trim();
+  }
+  if (typeof message.thinking === "string" && message.thinking.trim()) {
+    return message.thinking.trim();
+  }
+  return "";
+}
+
+function buildCompatAssistantToolMessage(
+  base: { role: string; name?: string },
+  message: InputMessage,
+): PreparedMessage {
+  const reasoningContent = extractAssistantReasoningContent(message);
+  const trimmedText =
+    typeof message.content === "string" ? message.content.trim() : "";
+  const includeReasoning =
+    Boolean(reasoningContent) && process.env.ROUND_TRIP_REASONING !== "0";
+  const toolCalls = message.toolCalls || [];
+  return {
+    ...base,
+    content: trimmedText || null,
+    ...(includeReasoning ? { reasoning_content: reasoningContent } : {}),
+    tool_calls: toolCalls.map((toolCall: ToolCallEntry, i: number) => ({
+      id: toolCall.id || `call_${i}`,
+      type: "function",
+      function: {
+        name: toolCall.name,
+        arguments:
+          typeof toolCall.args === "string"
+            ? toolCall.args
+            : JSON.stringify(toolCall.args || {}),
+      },
+    })),
+  } as PreparedMessage;
+}
+
+function decodeCompatBase64TextPart(dataUrl: string, mime: string): ContentPart {
+  try {
+    const base64 = dataUrl.split(";base64,")[1];
+    const decoded = Buffer.from(base64, "base64").toString("utf-8");
+    return {
+      type: "text",
+      text: `[Attached file (${mime})]:\n${decoded}`,
+    };
+  } catch {
+    return {
+      type: "text",
+      text: `[Attached file (${mime}): unable to decode]`,
+    };
+  }
+}
+
+function convertCompatAudioOrVideoDataUrl(
+  dataUrl: string,
+  mime: string,
+  mediaStrategy: string,
+): ContentPart {
+  const isFullMultimodal = mediaStrategy === MEDIA_STRATEGIES.FULL_MULTIMODAL;
+  if (mime.startsWith("video/")) {
+    if (isFullMultimodal) {
+      return { type: "video_url", video_url: { url: dataUrl } };
+    }
+    return {
+      type: "text",
+      text: "[Attached video file — video input not supported by this model]",
+    };
+  }
+  if (isFullMultimodal) {
+    const base64Data = dataUrl.split(";base64,")[1] || "";
+    const audioFormat = mime.split("/")[1] || "wav";
+    return {
+      type: "input_audio",
+      input_audio: { data: base64Data, format: audioFormat },
+    };
+  }
+  return {
+    type: "text",
+    text: "[Attached audio file — audio input not supported by this model]",
+  };
+}
+
+function convertCompatDataUrlToPart(
+  dataUrl: string,
+  mediaStrategy: string,
+): ContentPart {
+  const mime = getDataUrlMimeType(dataUrl);
+  if (!mime || mime.startsWith("image/")) {
+    return { type: "image_url", image_url: { url: dataUrl } };
+  }
+  if (mime.startsWith("video/") || mime.startsWith("audio/")) {
+    return convertCompatAudioOrVideoDataUrl(dataUrl, mime, mediaStrategy);
+  }
+  if (mime === "application/pdf") {
+    return {
+      type: "text",
+      text: "[Attached PDF document — PDF input not supported by this model]",
+    };
+  }
+  if (mime.startsWith("text/") || mime === "application/json") {
+    return decodeCompatBase64TextPart(dataUrl, mime);
+  }
+  return { type: "image_url", image_url: { url: dataUrl } };
+}
+
+function collectCompatMediaContent(
+  message: InputMessage,
+  mediaStrategy: string,
+): ContentPart[] {
+  const content: ContentPart[] = [];
+  if (mediaStrategy === MEDIA_STRATEGIES.IMAGES_ONLY) {
+    for (const dataUrl of message.images || []) {
+      content.push({ type: "image_url", image_url: { url: dataUrl } });
+    }
+    return content;
+  }
+
+  const mediaArrays = [
+    message.images,
+    message.audio,
+    message.video,
+    message.pdf,
+  ];
+  for (const array of mediaArrays) {
+    if (!array || array.length === 0) continue;
+    for (const dataUrl of array) {
+      content.push(convertCompatDataUrlToPart(dataUrl, mediaStrategy));
+    }
+  }
+  return content;
+}
+
 /**
  * Convert messages with media to OpenAI-compatible multipart content format.
  * Handles images, tool results, assistant tool calls, and optionally
@@ -478,11 +614,10 @@ export function prepareOpenAICompatMessages(
     mediaStrategy = MEDIA_STRATEGIES.IMAGES_ONLY,
   }: { mediaStrategy?: string } = {},
 ): PreparedMessage[] {
-  return messages.map((message, _i) => {
+  return messages.map((message) => {
     const base: { role: string; name?: string } = { role: message.role };
     if (message.name) base.name = message.name;
 
-    // Tool result messages — include tool_call_id for correlation
     if (message.role === "tool") {
       return {
         role: "tool",
@@ -494,130 +629,19 @@ export function prepareOpenAICompatMessages(
       } as PreparedMessage;
     }
 
-    // Assistant messages with tool calls — include tool_calls in OpenAI format
     if (
       message.role === "assistant" &&
       message.toolCalls &&
       message.toolCalls.length > 0
     ) {
-      const reasoningContent =
-        (typeof message.reasoning_content === "string" &&
-          message.reasoning_content.trim()) ||
-        (typeof message.thinking === "string" && message.thinking.trim()) ||
-        "";
-      return {
-        ...base,
-        // Per OpenAI spec, content must be null when tool_calls are present
-        content:
-          (typeof message.content === "string" ? message.content.trim() : "") ||
-          null,
-        // Round-trip the model's reasoning on tool turns: DeepSeek thinking
-        // mode with tools 400s without it, and interleaved-thinking chat
-        // templates (Qwen3, GLM) render it for turns after the last user
-        // message so the chain survives across tool calls. ROUND_TRIP_REASONING=0
-        // disables it for a backend that rejects the field.
-        ...(reasoningContent && process.env.ROUND_TRIP_REASONING !== "0"
-          ? { reasoning_content: reasoningContent }
-          : {}),
-        tool_calls: message.toolCalls.map(
-          (toolCall: ToolCallEntry, i: number) => ({
-            id: toolCall.id || `call_${i}`,
-            type: "function",
-            function: {
-              name: toolCall.name,
-              arguments:
-                typeof toolCall.args === "string"
-                  ? toolCall.args
-                  : JSON.stringify(toolCall.args || {}),
-            },
-          }),
-        ),
-      } as PreparedMessage;
+      return buildCompatAssistantToolMessage(base, message);
     }
 
-    // Collect media content based on strategy
-    const content: ContentPart[] = [];
-
-    if (mediaStrategy === MEDIA_STRATEGIES.IMAGES_ONLY) {
-      // Simple image-only handling (lm-studio)
-      if (message.images && message.images.length > 0) {
-        for (const dataUrl of message.images) {
-          content.push({ type: "image_url", image_url: { url: dataUrl } });
-        }
-      }
-    } else {
-      // Full media handling (vllm, llama-cpp)
-      const mediaFields: Array<{ key: string; values: string[] | undefined }> =
-        [
-          { key: "images", values: message.images },
-          { key: "audio", values: message.audio },
-          { key: "video", values: message.video },
-          { key: "pdf", values: message.pdf },
-        ];
-      for (const { values: array } of mediaFields) {
-        if (!array || array.length === 0) continue;
-
-        for (const dataUrl of array) {
-          const mime = getDataUrlMimeType(dataUrl);
-
-          if (mime && mime.startsWith("image/")) {
-            content.push({ type: "image_url", image_url: { url: dataUrl } });
-          } else if (mime && mime.startsWith("video/")) {
-            if (mediaStrategy === MEDIA_STRATEGIES.FULL_MULTIMODAL) {
-              content.push({ type: "video_url", video_url: { url: dataUrl } });
-            } else {
-              content.push({
-                type: "text",
-                text: "[Attached video file — video input not supported by this model]",
-              });
-            }
-          } else if (mime && mime.startsWith("audio/")) {
-            if (mediaStrategy === MEDIA_STRATEGIES.FULL_MULTIMODAL) {
-              const base64Data = dataUrl.split(";base64,")[1] || "";
-              const audioFormat = mime.split("/")[1] || "wav";
-              content.push({
-                type: "input_audio",
-                input_audio: { data: base64Data, format: audioFormat },
-              });
-            } else {
-              content.push({
-                type: "text",
-                text: "[Attached audio file — audio input not supported by this model]",
-              });
-            }
-          } else if (mime === "application/pdf") {
-            content.push({
-              type: "text",
-              text: "[Attached PDF document — PDF input not supported by this model]",
-            });
-          } else if (
-            mime &&
-            (mime.startsWith("text/") || mime === "application/json")
-          ) {
-            try {
-              const base64 = dataUrl.split(";base64,")[1];
-              const decoded = Buffer.from(base64, "base64").toString("utf-8");
-              content.push({
-                type: "text",
-                text: `[Attached file (${mime})]:\n${decoded}`,
-              });
-            } catch {
-              content.push({
-                type: "text",
-                text: `[Attached file (${mime}): unable to decode]`,
-              });
-            }
-          } else {
-            // Fallback — try image_url passthrough for any types
-            content.push({ type: "image_url", image_url: { url: dataUrl } });
-          }
-        }
-      }
-    }
+    const content = collectCompatMediaContent(message, mediaStrategy);
+    const textContent =
+      typeof message.content === "string" ? message.content : "";
 
     if (content.length > 0) {
-      const textContent =
-        typeof message.content === "string" ? message.content : "";
       if (textContent) {
         content.push({ type: "text", text: textContent });
       }
@@ -626,8 +650,7 @@ export function prepareOpenAICompatMessages(
 
     return {
       ...base,
-      content:
-        (typeof message.content === "string" ? message.content : "") || "",
+      content: textContent || "",
     } as PreparedMessage;
   });
 }
@@ -793,35 +816,301 @@ export function extractMarkupToolCalls(text: string): MarkupToolCall[] {
  * and <think> tag content) is yielded as plain text strings instead of
  * { type: "thinking" } events.
  */
+interface SSEStreamAccumulator {
+  usage: TokenUsage | null;
+  suppressThinking: boolean;
+  thinkParser: ThinkTagParser | null;
+  pendingToolCalls: Record<number, PendingToolCall>;
+  lastFinishReason: string | null;
+  sawTerminalEvent: boolean;
+  partialOutputCharacters: number;
+  partialReasoningCharacters: number;
+  markupContent: string;
+  nativeToolCallsYielded: boolean;
+}
+
+function updateSSEUsageAndCallbacks(
+  json: OpenAICompletionResponse,
+  state: SSEStreamAccumulator,
+  options: SSEParseOptions,
+): void {
+  if (json.usage) {
+    state.usage = normalizeUsage(json.usage);
+    if (options.onUsage) options.onUsage(json, state.usage);
+  }
+  if (options.onChunkJson) options.onChunkJson(json);
+}
+
+function* emitSSEDeltaReasoningAndContent(
+  delta: NonNullable<OpenAICompletionResponse["choices"]>[number]["delta"],
+  state: SSEStreamAccumulator,
+): Generator<SSEStreamChunk> {
+  const reasoning = delta?.reasoning_content || delta?.reasoning || "";
+  if (reasoning) {
+    state.partialReasoningCharacters += reasoning.length;
+    if (state.suppressThinking) {
+      yield reasoning;
+    } else {
+      yield { type: "thinking", content: reasoning };
+    }
+  }
+
+  const content = delta?.content || "";
+  if (!content) return;
+  state.markupContent += content;
+  state.partialOutputCharacters += content.length;
+  if (state.suppressThinking) {
+    yield content;
+    return;
+  }
+  const parts = state.thinkParser!.feed(content);
+  for (const part of parts) {
+    if (part.type === "thinking") {
+      yield { type: "thinking", content: part.content };
+    } else {
+      yield part.content;
+    }
+  }
+}
+
+function updateSinglePendingToolCall(
+  toolCall: NonNullable<
+    NonNullable<
+      NonNullable<OpenAICompletionResponse["choices"]>[number]["delta"]
+    >["tool_calls"]
+  >[number],
+  pendingToolCalls: Record<number, PendingToolCall>,
+): { entry: PendingToolCall; addedChars: number; emitStart: boolean } {
+  const index = toolCall.index ?? 0;
+  if (!pendingToolCalls[index]) {
+    pendingToolCalls[index] = {
+      id: toolCall.id || "",
+      name: toolCall.function?.name || toolCall.name || "",
+      args: "",
+      startEmitted: false,
+    };
+  }
+  const entry = pendingToolCalls[index];
+  if (toolCall.id) entry.id = toolCall.id;
+  const chunkName = toolCall.function?.name || toolCall.name;
+  if (chunkName) entry.name = chunkName;
+  const chunkArgs = toolCall.function?.arguments || toolCall.arguments;
+  let addedChars = 0;
+  if (chunkArgs) {
+    entry.args += chunkArgs;
+    addedChars = chunkArgs.length;
+  }
+  const emitStart = Boolean(!entry.startEmitted && entry.name && entry.id);
+  if (emitStart) {
+    entry.startEmitted = true;
+  }
+  return { entry, addedChars, emitStart };
+}
+
+function* emitSSEDeltaToolCalls(
+  toolCalls: NonNullable<
+    NonNullable<
+      NonNullable<OpenAICompletionResponse["choices"]>[number]["delta"]
+    >["tool_calls"]
+  >,
+  state: SSEStreamAccumulator,
+): Generator<SSEStreamChunk> {
+  let deltaChars = 0;
+  for (const toolCall of toolCalls) {
+    const { entry, addedChars, emitStart } = updateSinglePendingToolCall(
+      toolCall,
+      state.pendingToolCalls,
+    );
+    deltaChars += addedChars;
+    if (emitStart) {
+      yield {
+        type: "toolCallStart" as const,
+        id: entry.id,
+        name: entry.name,
+      };
+    }
+  }
+  if (deltaChars > 0) {
+    yield { type: "toolCallDelta", characters: deltaChars };
+  }
+}
+
+function* emitFinishedSSEToolCalls(
+  state: SSEStreamAccumulator,
+): Generator<SSEStreamChunk> {
+  for (const toolCall of Object.values(state.pendingToolCalls)) {
+    state.nativeToolCallsYielded = true;
+    let args: Record<string, unknown> = {};
+    let argsParseError = false;
+    try {
+      args = JSON.parse(toolCall.args || "{}");
+    } catch {
+      argsParseError = true;
+    }
+    yield {
+      type: "toolCall",
+      id: toolCall.id,
+      name: toolCall.name,
+      args,
+      ...(argsParseError && {
+        argsParseError: true,
+        rawArgs: (toolCall.args || "").slice(0, 2000),
+      }),
+    };
+  }
+}
+
+function* processSingleSSEDataJson(
+  json: OpenAICompletionResponse,
+  state: SSEStreamAccumulator,
+  options: SSEParseOptions,
+): Generator<SSEStreamChunk> {
+  updateSSEUsageAndCallbacks(json, state, options);
+  const delta = json.choices?.[0]?.delta;
+  if (delta) {
+    yield* emitSSEDeltaReasoningAndContent(delta, state);
+    if (delta.tool_calls) {
+      yield* emitSSEDeltaToolCalls(delta.tool_calls, state);
+    }
+  }
+  const finishReason = json.choices?.[0]?.finish_reason;
+  if (finishReason) {
+    state.lastFinishReason = finishReason;
+    state.sawTerminalEvent = true;
+  }
+  if (finishReason === "tool_calls" || finishReason === "tool") {
+    yield* emitFinishedSSEToolCalls(state);
+  }
+}
+
+function* processSingleSSELine(
+  line: string,
+  state: SSEStreamAccumulator,
+  options: SSEParseOptions,
+): Generator<SSEStreamChunk> {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith(":")) return;
+  if (trimmed === "data: [DONE]") {
+    state.sawTerminalEvent = true;
+    return;
+  }
+  if (!trimmed.startsWith("data: ")) return;
+  try {
+    const json = JSON.parse(trimmed.slice(6)) as OpenAICompletionResponse;
+    yield* processSingleSSEDataJson(json, state, options);
+  } catch {
+    // skip malformed JSON lines
+  }
+}
+
+function* finalizeSSEStreamOutput(
+  state: SSEStreamAccumulator,
+  options: SSEParseOptions,
+): Generator<SSEStreamChunk> {
+  if (!state.sawTerminalEvent && !options.signal?.aborted) {
+    const label = options.label ?? "OpenAI-compatible";
+    throw new ProviderError(
+      label,
+      `The ${label} stream ended before the response completed (no finish_reason)`,
+      502,
+    );
+  }
+
+  if (state.thinkParser) {
+    for (const part of state.thinkParser.flush()) {
+      if (part.type === "thinking") {
+        yield { type: "thinking", content: part.content };
+      } else {
+        yield part.content;
+      }
+    }
+  }
+
+  if (!state.nativeToolCallsYielded) {
+    let markupIndex = 0;
+    for (const call of extractMarkupToolCalls(state.markupContent)) {
+      yield {
+        type: "toolCall",
+        id: `call_markup_${markupIndex++}`,
+        ...call,
+      };
+    }
+  }
+
+  if (state.lastFinishReason === "length") {
+    yield { type: "stopReason", stopReason: "length" };
+  }
+
+  logZeroTokenSSEDiagnosticIfNeeded(state, options);
+}
+
+function logZeroTokenSSEDiagnosticIfNeeded(
+  state: SSEStreamAccumulator,
+  options: SSEParseOptions,
+): void {
+  const hasAnyOutput =
+    state.partialOutputCharacters > 0 ||
+    state.partialReasoningCharacters > 0 ||
+    state.nativeToolCallsYielded ||
+    Object.keys(state.pendingToolCalls).length > 0;
+  if (!state.sawTerminalEvent || hasAnyOutput) return;
+  logger.warn(
+    `[${options.label ?? "openai-compat"}] Zero-token SSE completion: finish_reason=${state.lastFinishReason ?? "null"} completion_tokens=${state.usage?.outputTokens ?? 0} thinkingEnabled=${String(options.thinkingEnabled)}`,
+  );
+}
+
+function buildErrorFallbackSSEUsage(
+  state: SSEStreamAccumulator,
+): SSEStreamChunk | null {
+  if (state.usage) {
+    return { type: "usage", usage: state.usage };
+  }
+  if (
+    state.partialOutputCharacters > 0 ||
+    state.partialReasoningCharacters > 0
+  ) {
+    const estimatedOutputTokens = Math.ceil(state.partialOutputCharacters / 4);
+    const estimatedReasoningTokens = Math.ceil(
+      state.partialReasoningCharacters / 4,
+    );
+    return {
+      type: "usage",
+      usage: {
+        inputTokens: 0,
+        outputTokens: estimatedOutputTokens + estimatedReasoningTokens,
+        ...(estimatedReasoningTokens > 0 && {
+          reasoningOutputTokens: estimatedReasoningTokens,
+        }),
+      },
+    };
+  }
+  return null;
+}
+
 export async function* parseSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   options: SSEParseOptions = {},
 ): AsyncGenerator<SSEStreamChunk> {
   const decoder = new TextDecoder();
   let buffer = "";
-  let usage: TokenUsage | null = null;
   const suppressThinking = options.thinkingEnabled === false;
-  // Skip ThinkTagParser entirely when thinking is disabled — no overhead
-  const thinkParser = suppressThinking ? null : new ThinkTagParser();
-  const pendingToolCalls: Record<number, PendingToolCall> = {};
-  let lastFinishReason: string | null = null;
-  // A finish_reason or [DONE] arrived: the reply is complete.
-  let sawTerminalEvent = false;
-  // Track partial output for fallback usage estimation on premature termination
-  let partialOutputCharacters = 0;
-  let partialReasoningCharacters = 0;
+  const state: SSEStreamAccumulator = {
+    usage: null,
+    suppressThinking,
+    thinkParser: suppressThinking ? null : new ThinkTagParser(),
+    pendingToolCalls: {},
+    lastFinishReason: null,
+    sawTerminalEvent: false,
+    partialOutputCharacters: 0,
+    partialReasoningCharacters: 0,
+    markupContent: "",
+    nativeToolCallsYielded: false,
+  };
   let usageYielded = false;
-  // Streamed delta.content text, used to recover tool calls the model emitted
-  // as text markup (the provider cannot parse a call to a tool absent from
-  // the request `tools` array, so it arrives as plain content).
-  let markupContent = "";
-  let nativeToolCallsYielded = false;
 
-  // Reactive abort: when the signal fires, cancel the reader immediately
-  // so the pending reader.read() resolves with { done: true } instead of
-  // blocking until the next chunk arrives from the upstream server.
-  // Without this, llama.cpp keeps generating until the loop-top poll fires.
-  const abortHandler = () => { reader.cancel().catch(() => {}); };
+  const abortHandler = () => {
+    reader.cancel().catch(() => {});
+  };
   if (options.signal && !options.signal.aborted) {
     options.signal.addEventListener("abort", abortHandler, { once: true });
   }
@@ -836,244 +1125,28 @@ export async function* parseSSEStream(
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
-      buffer = lines.pop() || ""; // keep incomplete line in buffer
+      buffer = lines.pop() || "";
 
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith(":")) continue; // skip empty lines / comments
-        if (trimmed === "data: [DONE]") {
-          sawTerminalEvent = true;
-          continue;
-        }
-        if (!trimmed.startsWith("data: ")) continue;
-
-        try {
-          const json = JSON.parse(trimmed.slice(6)) as OpenAICompletionResponse;
-
-          // Extract usage if present (some servers send it on the last chunk)
-          if (json.usage) {
-            usage = normalizeUsage(json.usage);
-            // Let provider handle extensions (e.g. llama.cpp timings)
-            if (options.onUsage) options.onUsage(json, usage);
-          }
-
-          // Let provider handle custom fields
-          if (options.onChunkJson) options.onChunkJson(json);
-
-          const delta = json.choices?.[0]?.delta;
-
-          // Native reasoning fields (Qwen3.5, DeepSeek, etc.)
-          const reasoning = delta?.reasoning_content || delta?.reasoning || "";
-          if (reasoning) {
-            partialReasoningCharacters += reasoning.length;
-            if (suppressThinking) {
-              yield reasoning; // Emit as plain text
-            } else {
-              yield { type: "thinking", content: reasoning };
-            }
-          }
-
-          const content = delta?.content || "";
-          if (content) {
-            markupContent += content;
-            partialOutputCharacters += content.length;
-            if (suppressThinking) {
-              // Pass through raw content without <think> tag parsing
-              yield content;
-            } else {
-              // Parse <think> tags from the streamed content
-              const parts = thinkParser!.feed(content);
-              for (const part of parts) {
-                if (part.type === "thinking") {
-                  yield { type: "thinking", content: part.content };
-                } else {
-                  yield part.content;
-                }
-              }
-            }
-          }
-
-          // Accumulate tool call deltas and yield progress events so
-          // consumers (AgenticLoopService) can track generation throughput
-          // during tool call argument streaming.
-          if (delta?.tool_calls) {
-            let deltaChars = 0;
-            for (const toolCall of delta.tool_calls) {
-              const index = toolCall.index ?? 0;
-              if (!pendingToolCalls[index]) {
-                pendingToolCalls[index] = {
-                  id: toolCall.id || "",
-                  name: toolCall.function?.name || toolCall.name || "",
-                  args: "",
-                  startEmitted: false,
-                };
-              }
-              if (toolCall.id) pendingToolCalls[index].id = toolCall.id;
-              const chunkName = toolCall.function?.name || toolCall.name;
-              if (chunkName) pendingToolCalls[index].name = chunkName;
-              const chunkArgs =
-                toolCall.function?.arguments || toolCall.arguments;
-              if (chunkArgs) {
-                pendingToolCalls[index].args += chunkArgs;
-                deltaChars += chunkArgs.length;
-              }
-              if (
-                !pendingToolCalls[index].startEmitted &&
-                pendingToolCalls[index].name &&
-                pendingToolCalls[index].id
-              ) {
-                pendingToolCalls[index].startEmitted = true;
-                yield {
-                  type: "toolCallStart" as const,
-                  id: pendingToolCalls[index].id,
-                  name: pendingToolCalls[index].name,
-                };
-              }
-            }
-            // Yield a lightweight progress event so the generation tracker
-            // sees continuous output during tool call JSON streaming.
-            if (deltaChars > 0) {
-              yield { type: "toolCallDelta", characters: deltaChars };
-            }
-          }
-
-          // If finish_reason indicates tool calls, yield accumulated tool calls
-          const finishReason = json.choices?.[0]?.finish_reason;
-          if (finishReason) {
-            lastFinishReason = finishReason;
-            sawTerminalEvent = true;
-          }
-          if (finishReason === "tool_calls" || finishReason === "tool") {
-            for (const toolCall of Object.values(pendingToolCalls)) {
-              nativeToolCallsYielded = true;
-              let args: Record<string, unknown> = {};
-              let argsParseError = false;
-              try {
-                args = JSON.parse(toolCall.args || "{}");
-              } catch {
-                // ported from prism-service providers/openai-compat.ts: never
-                // run a call with arguments the model did not write — the
-                // harness hands the raw text back as a malformed call
-                // (MALFORMED_TOOL_CALL_JSON) instead of silently executing {}.
-                argsParseError = true;
-              }
-              yield {
-                type: "toolCall",
-                id: toolCall.id,
-                name: toolCall.name,
-                args,
-                ...(argsParseError && {
-                  argsParseError: true,
-                  rawArgs: (toolCall.args || "").slice(0, 2000),
-                }),
-              };
-            }
-          }
-        } catch {
-          // skip malformed JSON lines
-        }
+        yield* processSingleSSELine(line, state, options);
       }
     }
 
-    // A body that closed without a finish_reason or [DONE] is a cut-off
-    // reply, not a finished one (its pending tool calls are incomplete).
-    // Ported from prism (ProviderStreamResilience.streamEndedEarlyError,
-    // 2026-09-23): 502, an upstream fault, so the harness reports a provider
-    // error instead of booking the partial text as the model's answer. Until
-    // 2026-10-07 ours returned it as the answer (boundary probe cut_stream).
-    if (!sawTerminalEvent && !options.signal?.aborted) {
-      const label = options.label ?? "OpenAI-compatible";
-      throw new ProviderError(
-        label,
-        `The ${label} stream ended before the response completed (no finish_reason)`,
-        502,
-      );
-    }
-
-    // Flush any remaining buffered content from the think parser
-    if (thinkParser) {
-      const remaining = thinkParser.flush();
-      for (const part of remaining) {
-        if (part.type === "thinking") {
-          yield { type: "thinking", content: part.content };
-        } else {
-          yield part.content;
-        }
-      }
-    }
-
-    // Recover tool calls the model emitted as text markup (e.g.
-    // `<tool_call>name<arg_key>k</arg_key><arg_value>v</tool_call>`): the provider cannot parse a call to a tool that is
-    // absent from the request `tools` array, so it arrives as plain content
-    // with finish_reason "stop". Yield each complete block as a toolCall
-    // chunk; unparseable bodies stay as text.
-    if (!nativeToolCallsYielded) {
-      let markupIndex = 0;
-      for (const call of extractMarkupToolCalls(markupContent)) {
-        yield {
-          type: "toolCall",
-          id: `call_markup_${markupIndex++}`,
-          ...call,
-        };
-      }
-    }
-
-    // Surface max_tokens truncation so harnesses can detect and warn the user
-    if (lastFinishReason === "length") {
-      yield { type: "stopReason", stopReason: "length" };
-    }
-
-    // B25: Log finish_reason diagnostic when a stream finishes with 0 output tokens/chars and no tool calls
-    if (
-      sawTerminalEvent &&
-      partialOutputCharacters === 0 &&
-      partialReasoningCharacters === 0 &&
-      !nativeToolCallsYielded &&
-      Object.keys(pendingToolCalls).length === 0
-    ) {
-      logger.warn(
-        `[${options.label ?? "openai-compat"}] Zero-token SSE completion: finish_reason=${lastFinishReason ?? "null"} completion_tokens=${usage?.outputTokens ?? 0} thinkingEnabled=${String(options.thinkingEnabled)}`,
-      );
-    }
+    yield* finalizeSSEStreamOutput(state, options);
   } catch (streamError) {
-    // Yield partial usage BEFORE re-throwing so the consumer captures
-    // whatever tokens were generated before the stream terminated.
     if (!usageYielded) {
-      usageYielded = true;
-      if (usage) {
-        yield { type: "usage", usage };
-      } else if (
-        partialOutputCharacters > 0 ||
-        partialReasoningCharacters > 0
-      ) {
-        const estimatedOutputTokens = Math.ceil(partialOutputCharacters / 4);
-        const estimatedReasoningTokens = Math.ceil(
-          partialReasoningCharacters / 4,
-        );
-        yield {
-          type: "usage",
-          usage: {
-            inputTokens: 0,
-            outputTokens: estimatedOutputTokens + estimatedReasoningTokens,
-            ...(estimatedReasoningTokens > 0 && {
-              reasoningOutputTokens: estimatedReasoningTokens,
-            }),
-          },
-        };
+      const fallbackUsage = buildErrorFallbackSSEUsage(state);
+      if (fallbackUsage) {
+        usageYielded = true;
+        yield fallbackUsage;
       }
     }
     throw streamError;
   } finally {
-    // Clean up the reactive abort listener
     options.signal?.removeEventListener("abort", abortHandler);
-    // Happy path: yield final usage if stream completed normally
     if (!usageYielded) {
       usageYielded = true;
-      if (usage) {
-        yield { type: "usage", usage };
-      } else {
-        yield { type: "usage", usage: EMPTY_USAGE };
-      }
+      yield { type: "usage", usage: state.usage || EMPTY_USAGE };
     }
   }
 }

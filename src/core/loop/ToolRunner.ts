@@ -313,6 +313,483 @@ function resolveBareToolName(tools: ReadonlyMap<string, CoreTool>, name: string)
   return match ?? name;
 }
 
+function unwrapOrRepairRawArgs(
+  call: CoreToolCall,
+  start: number,
+  now: () => number,
+): { args: Record<string, unknown>; errorResult?: CoreToolResult } {
+  const args = call.args;
+  if (
+    args !== null &&
+    typeof args === "object" &&
+    !Array.isArray(args) &&
+    Object.keys(args).length === 1 &&
+    typeof args.__raw === "string"
+  ) {
+    const raw = args.__raw;
+    const repaired = repairJson(raw);
+    if (repaired === undefined) {
+      return {
+        args,
+        errorResult: {
+          toolCallId: call.id,
+          name: call.name,
+          content: `Arguments were not valid JSON: ${raw.slice(0, 200)}`,
+          isError: true,
+          errorCode: "TOOL_BAD_ARGS",
+          durationMs: now() - start,
+        },
+      };
+    }
+    return { args: repaired };
+  }
+  return { args };
+}
+
+function tryHandleBuiltInSpillRead(
+  call: CoreToolCall,
+  args: Record<string, unknown>,
+  opts: ToolRunnerOptions,
+  start: number,
+): CoreToolResult {
+  const spillId = typeof args?.spill_id === "string" ? args.spill_id.trim() : "";
+  if (!spillId) {
+    return {
+      toolCallId: call.id,
+      name: call.name,
+      content: 'Invalid arguments for "read_tool_spill": missing required "spill_id".',
+      isError: true,
+      errorCode: "TOOL_BAD_ARGS",
+      durationMs: opts.now() - start,
+    };
+  }
+  const offset = typeof args.offset === "number" ? args.offset : 0;
+  const length = typeof args.length === "number" ? args.length : 8_000;
+  const readOutcome = opts.spillBuffer!.read(spillId, offset, length);
+  if (readOutcome.ok === false) {
+    const errText = (readOutcome as { ok: false; error: string }).error;
+    return {
+      toolCallId: call.id,
+      name: call.name,
+      content: JSON.stringify({ error: errText }),
+      isError: true,
+      errorCode: "TOOL_BAD_ARGS",
+      durationMs: opts.now() - start,
+    };
+  }
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    content: JSON.stringify(readOutcome),
+    isError: false,
+    durationMs: opts.now() - start,
+  };
+}
+
+function validateAndCheckStallBeforeExec(
+  call: CoreToolCall,
+  initialArgs: Record<string, unknown>,
+  tool: CoreTool | undefined,
+  opts: ToolRunnerOptions,
+  history: ToolCallHistory,
+  start: number,
+): {
+  args: Record<string, unknown>;
+  earlyResult?: CoreToolResult;
+  stallRecord?: { wasStall: boolean; stalledCount: number };
+} {
+  let args = initialArgs;
+  if (tool === undefined) {
+    if (call.name === READ_TOOL_SPILL_NAME && opts.spillBuffer !== undefined) {
+      return { args, earlyResult: tryHandleBuiltInSpillRead(call, args, opts, start) };
+    }
+    const available = [...opts.tools.keys()];
+    if (opts.spillBuffer !== undefined && !available.includes(READ_TOOL_SPILL_NAME)) {
+      available.push(READ_TOOL_SPILL_NAME);
+    }
+    return {
+      args,
+      earlyResult: {
+        toolCallId: call.id,
+        name: call.name,
+        content: notFoundContent(call.name, available.sort()),
+        isError: true,
+        errorCode: "TOOL_NOT_FOUND",
+        durationMs: opts.now() - start,
+      },
+    };
+  }
+
+  args = coerceArgs(tool, args);
+  const problems = validateArgs(tool, args);
+  if (problems.length > 0) {
+    return {
+      args,
+      earlyResult: {
+        toolCallId: call.id,
+        name: call.name,
+        content: `Invalid arguments for "${call.name}": ${problems.join("; ")}.`,
+        isError: true,
+        errorCode: "TOOL_BAD_ARGS",
+        durationMs: opts.now() - start,
+      },
+    };
+  }
+
+  const streak = opts.failureStreak.get(call.name) ?? 0;
+  if (streak >= opts.maxConsecutiveToolErrors) {
+    return {
+      args,
+      earlyResult: {
+        toolCallId: call.id,
+        name: call.name,
+        content: `"${call.name}" failed ${streak} times in a row; stop calling it and answer with what you have or use another tool.`,
+        isError: true,
+        errorCode: "TOOL_REPEATED_FAILURE",
+        durationMs: opts.now() - start,
+      },
+    };
+  }
+
+  const fingerprint = computeToolCallFingerprint(call.name, args);
+  const stallCheck = checkSemanticStallOrOscillation(history, call.name, fingerprint);
+  if (stallCheck.blocked) {
+    return {
+      args,
+      stallRecord: {
+        wasStall: true,
+        stalledCount: stallCheck.stalledCount ?? 1,
+      },
+      earlyResult: {
+        toolCallId: call.id,
+        name: call.name,
+        content: (stallCheck.content ?? '{"error":"tool call stalled"}').slice(0, opts.toolErrorCap),
+        isError: true,
+        errorCode: stallCheck.errorCode ?? "TOOL_STALL",
+        durationMs: opts.now() - start,
+      },
+    };
+  }
+
+  return { args };
+}
+
+async function runBeforeToolCallHooks(
+  call: CoreToolCall,
+  initialArgs: Record<string, unknown>,
+  hooks: ToolRunnerOptions["hooks"],
+  opts: ToolRunnerOptions,
+  start: number,
+): Promise<{ args: Record<string, unknown>; deniedResult?: CoreToolResult }> {
+  let args = initialArgs;
+  for (const hook of hooks?.beforeToolCall ?? []) {
+    try {
+      const decision = await hook({ ...call, args }, opts.signal);
+      if (decision.action === "deny") {
+        return {
+          args,
+          deniedResult: {
+            toolCallId: call.id,
+            name: call.name,
+            content: `Tool call denied: ${decision.reason}`,
+            isError: true,
+            errorCode: "TOOL_DENIED",
+            durationMs: opts.now() - start,
+          },
+        };
+      }
+      if (decision.args !== undefined) args = decision.args;
+    } catch (error) {
+      return {
+        args,
+        deniedResult: {
+          toolCallId: call.id,
+          name: call.name,
+          content: `Tool call denied: policy check failed: ${errorMessage(error)}`,
+          isError: true,
+          errorCode: "TOOL_DENIED",
+          durationMs: opts.now() - start,
+        },
+      };
+    }
+  }
+  return { args };
+}
+
+function capToolOutputContent(rawValue: unknown, opts: ToolRunnerOptions): string {
+  const raw =
+    typeof rawValue === "string"
+      ? rawValue
+      : rawValue === undefined || rawValue === null
+        ? ""
+        : JSON.stringify(rawValue);
+  const content = raw === "" ? "(tool returned no output)" : raw;
+  if (content.length <= opts.toolOutputCap) return content;
+
+  const fullLength = content.length;
+  const spillId = opts.spillBuffer?.store(content) ?? null;
+  const head = Math.floor(opts.toolOutputCap * 0.7);
+  if (spillId !== null) {
+    const prelimTail = Math.max(100, opts.toolOutputCap - head - 240);
+    const cut = fullLength - head - prelimTail;
+    const note = `\n…[cut ${cut} chars of ${fullLength} — full output stored in spill_id="${spillId}"; call read_tool_spill({"spill_id":"${spillId}","offset":${head},"length":8000}) to read middle sections]…\n`;
+    const tail = Math.max(100, opts.toolOutputCap - head - note.length);
+    return content.slice(0, head) + note + content.slice(fullLength - tail);
+  }
+  const tail = opts.toolOutputCap - head - 120;
+  const cut = fullLength - head - tail;
+  return (
+    content.slice(0, head) +
+    `\n…[cut ${cut} chars of ${fullLength}; ask for a narrower range if you need the middle]…\n` +
+    content.slice(fullLength - tail)
+  );
+}
+
+function buildThrownToolErrorResult(
+  call: CoreToolCall,
+  args: Record<string, unknown>,
+  error: unknown,
+  opts: ToolRunnerOptions,
+  start: number,
+): CoreToolResult {
+  const errMsg = errorMessage(error);
+  const attempt = (opts.failureStreak.get(call.name) ?? 0) + 1;
+  let compactArgs = "{}";
+  try {
+    compactArgs = JSON.stringify(args ?? {}).slice(0, 160);
+  } catch {
+    compactArgs = "{}";
+  }
+  const retryGuidance = `Attempt ${attempt}/${opts.maxConsecutiveToolErrors} failed for ${call.name} with args ${compactArgs}: ${errMsg.slice(0, 200)}. Identify which argument caused this error and modify it, or use a different tool. Do not repeat identical arguments.`;
+  const payload = JSON.stringify({
+    error: errMsg,
+    retry_guidance: retryGuidance,
+  });
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    content: payload.slice(0, opts.toolErrorCap),
+    isError: true,
+    errorCode: "TOOL_THREW",
+    durationMs: opts.now() - start,
+  };
+}
+
+async function executeToolWithRace(
+  call: CoreToolCall,
+  args: Record<string, unknown>,
+  tool: CoreTool,
+  opts: ToolRunnerOptions,
+  timeoutSignalFor: (toolName: string, ms: number) => AbortSignal,
+  start: number,
+): Promise<CoreToolResult> {
+  const timeoutMs = tool.timeoutMs ?? opts.defaultToolTimeoutMs;
+  const timeoutSignal = timeoutSignalFor(tool.name, timeoutMs);
+  const signal = AbortSignal.any([opts.signal, timeoutSignal]);
+  let outcome: { ok: true; value: unknown } | { ok: false; error: unknown } | undefined;
+  const exec = tool.execute(args, { toolCallId: call.id, signal }).then(
+    (value) => {
+      outcome = { ok: true, value };
+    },
+    (error: unknown) => {
+      outcome = { ok: false, error };
+    },
+  );
+  const aborted = Promise.withResolvers<"abort">();
+  if (signal.aborted) {
+    aborted.resolve("abort");
+  } else {
+    signal.addEventListener("abort", () => aborted.resolve("abort"), { once: true });
+  }
+  const winner = await Promise.race([exec.then(() => "exec" as const), aborted.promise]);
+
+  if (opts.signal.aborted) {
+    return {
+      toolCallId: call.id,
+      name: call.name,
+      content: '{"error":"cancelled"}',
+      isError: true,
+      errorCode: "TOOL_CANCELLED",
+      durationMs: opts.now() - start,
+    };
+  }
+  if (timeoutSignal.aborted) {
+    return {
+      toolCallId: call.id,
+      name: call.name,
+      content: `{"error":"timed out after ${timeoutMs} ms"}`,
+      isError: true,
+      errorCode: "TOOL_TIMEOUT",
+      durationMs: opts.now() - start,
+    };
+  }
+  if (winner === "exec" && outcome !== undefined) {
+    if (outcome.ok) {
+      return {
+        toolCallId: call.id,
+        name: call.name,
+        content: capToolOutputContent(outcome.value, opts),
+        isError: false,
+        durationMs: opts.now() - start,
+      };
+    }
+    const errVal = (outcome as { ok: false; error: unknown }).error;
+    return buildThrownToolErrorResult(call, args, errVal, opts, start);
+  }
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    content: '{"error":"cancelled"}',
+    isError: true,
+    errorCode: "TOOL_CANCELLED",
+    durationMs: opts.now() - start,
+  };
+}
+
+function recordToolHistoryAndStreak(
+  call: CoreToolCall,
+  args: Record<string, unknown>,
+  result: CoreToolResult,
+  stallRecord: { wasStall: boolean; stalledCount: number } | undefined,
+  history: ToolCallHistory,
+  opts: ToolRunnerOptions,
+): void {
+  if (result.errorCode !== "TOOL_CANCELLED" && result.errorCode !== "TOOL_DENIED") {
+    (history.entries as InternalHistoryEntry[]).push({
+      name: call.name,
+      fingerprint: computeToolCallFingerprint(call.name, args),
+      isError: result.isError,
+      wasStall: stallRecord?.wasStall ?? false,
+      stalledCount: stallRecord?.stalledCount ?? 0,
+    });
+  }
+
+  const isNonStreakError =
+    result.errorCode === "TOOL_DENIED" ||
+    result.errorCode === "TOOL_CANCELLED" ||
+    result.errorCode === "TOOL_STALL" ||
+    result.errorCode === "TOOL_OSCILLATION";
+
+  if (result.isError && !isNonStreakError) {
+    opts.failureStreak.set(call.name, (opts.failureStreak.get(call.name) ?? 0) + 1);
+  } else if (!result.isError) {
+    opts.failureStreak.delete(call.name);
+  }
+}
+
+async function processSingleToolCall(
+  call: CoreToolCall,
+  index: number,
+  opts: ToolRunnerOptions,
+  timeoutSignalFor: (toolName: string, ms: number) => AbortSignal,
+  history: ToolCallHistory,
+  results: CoreToolResult[],
+  onExecSettled?: () => Promise<void>,
+): Promise<void> {
+  const start = opts.now();
+  const unwrapped = unwrapOrRepairRawArgs(call, start, opts.now);
+  let args = unwrapped.args;
+  let result: CoreToolResult | undefined = unwrapped.errorResult;
+  let stallRecord: { wasStall: boolean; stalledCount: number } | undefined;
+
+  const tool = opts.tools.get(call.name);
+  if (result === undefined) {
+    const preCheck = validateAndCheckStallBeforeExec(call, args, tool, opts, history, start);
+    args = preCheck.args;
+    result = preCheck.earlyResult;
+    stallRecord = preCheck.stallRecord;
+  }
+
+  if (result === undefined) {
+    const hookOutcome = await runBeforeToolCallHooks(call, args, opts.hooks, opts, start);
+    args = hookOutcome.args;
+    result = hookOutcome.deniedResult;
+  }
+
+  if (result === undefined && opts.signal.aborted) {
+    result = {
+      toolCallId: call.id,
+      name: call.name,
+      content: '{"error":"cancelled"}',
+      isError: true,
+      errorCode: "TOOL_CANCELLED",
+      durationMs: 0,
+    };
+  }
+
+  if (result === undefined && tool !== undefined) {
+    result = await executeToolWithRace(call, args, tool, opts, timeoutSignalFor, start);
+  }
+
+  if (result === undefined) {
+    result = {
+      toolCallId: call.id,
+      name: call.name,
+      content: '{"error":"cancelled"}',
+      isError: true,
+      errorCode: "TOOL_CANCELLED",
+      durationMs: opts.now() - start,
+    };
+  }
+
+  recordToolHistoryAndStreak(call, args, result, stallRecord, history, opts);
+
+  if (onExecSettled) {
+    await onExecSettled();
+  }
+
+  for (const hook of opts.hooks?.afterToolCall ?? []) {
+    try {
+      result = (await hook(call, result)) ?? result;
+    } catch {
+      // A throwing after-hook leaves the result unchanged.
+    }
+  }
+
+  results[index] = result;
+}
+
+async function runParallelIndicesWithSemaphore(
+  parallelIndices: number[],
+  maxConcurrency: number,
+  runAt: (callIndex: number, onSettled: () => Promise<void>) => Promise<void>,
+): Promise<void> {
+  let activeCount = 0;
+  const waitQueue: Array<() => void> = [];
+  let unenteredCount = parallelIndices.length;
+
+  const acquireSlot = async (): Promise<void> => {
+    if (activeCount < maxConcurrency) {
+      activeCount += 1;
+      unenteredCount -= 1;
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      waitQueue.push(resolve);
+    });
+    unenteredCount -= 1;
+  };
+
+  const releaseSlotAndYieldIfQueued = async (): Promise<void> => {
+    const next = waitQueue.shift();
+    if (next) {
+      next();
+    } else {
+      activeCount = Math.max(0, activeCount - 1);
+    }
+    if (unenteredCount > 0 || next !== undefined) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  };
+
+  await Promise.all(
+    parallelIndices.map(async (callIndex) => {
+      await acquireSlot();
+      await runAt(callIndex, releaseSlotAndYieldIfQueued);
+    }),
+  );
+}
+
 export const runToolBatch: RunToolBatch = async (requestedCalls, options) => {
   const opts = options as ToolRunnerOptions;
   const calls = requestedCalls.map((call) => {
@@ -323,379 +800,9 @@ export const runToolBatch: RunToolBatch = async (requestedCalls, options) => {
     typeof opts.timeoutSignalFor === "function"
       ? opts.timeoutSignalFor
       : (_toolName: string, ms: number) => AbortSignal.timeout(ms);
-  const hooks = opts.hooks;
   const history = resolveCallHistory(opts);
   const results: CoreToolResult[] = new Array(calls.length);
 
-  const processCall = async (
-    call: CoreToolCall,
-    index: number,
-    onExecSettled?: () => Promise<void>,
-  ): Promise<void> => {
-    const start = opts.now();
-    let result: CoreToolResult | undefined;
-
-    let args = call.args;
-    if (
-      args !== null &&
-      typeof args === "object" &&
-      !Array.isArray(args) &&
-      Object.keys(args).length === 1 &&
-      typeof args.__raw === "string"
-    ) {
-      const raw = args.__raw;
-      const repaired = repairJson(raw);
-      if (repaired === undefined) {
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content: `Arguments were not valid JSON: ${raw.slice(0, 200)}`,
-          isError: true,
-          errorCode: "TOOL_BAD_ARGS",
-          durationMs: opts.now() - start,
-        };
-      } else {
-        args = repaired;
-      }
-    }
-
-    // H5: Built-in handling of `read_tool_spill` when SpillBuffer is attached and no custom tool overrides it
-    const tool = opts.tools.get(call.name);
-    if (
-      result === undefined &&
-      tool === undefined &&
-      call.name === READ_TOOL_SPILL_NAME &&
-      opts.spillBuffer !== undefined
-    ) {
-      const spillId =
-        typeof args?.spill_id === "string" ? args.spill_id.trim() : "";
-      if (!spillId) {
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content:
-            'Invalid arguments for "read_tool_spill": missing required "spill_id".',
-          isError: true,
-          errorCode: "TOOL_BAD_ARGS",
-          durationMs: opts.now() - start,
-        };
-      } else {
-        const offset = typeof args.offset === "number" ? args.offset : 0;
-        const length = typeof args.length === "number" ? args.length : 8_000;
-        const readOutcome = opts.spillBuffer.read(spillId, offset, length);
-        if (readOutcome.ok === false) {
-          const errText = (readOutcome as { ok: false; error: string }).error;
-          result = {
-            toolCallId: call.id,
-            name: call.name,
-            content: JSON.stringify({ error: errText }),
-            isError: true,
-            errorCode: "TOOL_BAD_ARGS",
-            durationMs: opts.now() - start,
-          };
-        } else {
-          result = {
-            toolCallId: call.id,
-            name: call.name,
-            content: JSON.stringify(readOutcome),
-            isError: false,
-            durationMs: opts.now() - start,
-          };
-        }
-      }
-    }
-
-    if (result === undefined && tool === undefined) {
-      const available = [...opts.tools.keys()];
-      if (opts.spillBuffer !== undefined && !available.includes(READ_TOOL_SPILL_NAME)) {
-        available.push(READ_TOOL_SPILL_NAME);
-      }
-      result = {
-        toolCallId: call.id,
-        name: call.name,
-        content: notFoundContent(call.name, available.sort()),
-        isError: true,
-        errorCode: "TOOL_NOT_FOUND",
-        durationMs: opts.now() - start,
-      };
-    }
-
-    if (result === undefined && tool !== undefined) {
-      args = coerceArgs(tool, args);
-      const problems = validateArgs(tool, args);
-      if (problems.length > 0) {
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content: `Invalid arguments for "${call.name}": ${problems.join("; ")}.`,
-          isError: true,
-          errorCode: "TOOL_BAD_ARGS",
-          durationMs: opts.now() - start,
-        };
-      }
-    }
-
-    if (result === undefined) {
-      const streak = opts.failureStreak.get(call.name) ?? 0;
-      if (streak >= opts.maxConsecutiveToolErrors) {
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content: `"${call.name}" failed ${streak} times in a row; stop calling it and answer with what you have or use another tool.`,
-          isError: true,
-          errorCode: "TOOL_REPEATED_FAILURE",
-          durationMs: opts.now() - start,
-        };
-      }
-    }
-
-    // H2: Semantic stall & oscillation check before executing the tool
-    const fingerprint = computeToolCallFingerprint(call.name, args);
-    let stallRecord:
-      | { wasStall: boolean; stalledCount: number }
-      | undefined;
-
-    if (result === undefined) {
-      const stallCheck = checkSemanticStallOrOscillation(
-        history,
-        call.name,
-        fingerprint,
-      );
-      if (stallCheck.blocked) {
-        stallRecord = {
-          wasStall: true,
-          stalledCount: stallCheck.stalledCount ?? 1,
-        };
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content: (stallCheck.content ?? '{"error":"tool call stalled"}').slice(
-            0,
-            opts.toolErrorCap,
-          ),
-          isError: true,
-          errorCode: stallCheck.errorCode ?? "TOOL_STALL",
-          durationMs: opts.now() - start,
-        };
-      }
-    }
-
-    if (result === undefined) {
-      for (const hook of hooks?.beforeToolCall ?? []) {
-        try {
-          const decision = await hook({ ...call, args }, opts.signal);
-          if (decision.action === "deny") {
-            result = {
-              toolCallId: call.id,
-              name: call.name,
-              content: `Tool call denied: ${decision.reason}`,
-              isError: true,
-              errorCode: "TOOL_DENIED",
-              durationMs: opts.now() - start,
-            };
-            break;
-          }
-          if (decision.args !== undefined) args = decision.args;
-        } catch (error) {
-          result = {
-            toolCallId: call.id,
-            name: call.name,
-            content: `Tool call denied: policy check failed: ${errorMessage(error)}`,
-            isError: true,
-            errorCode: "TOOL_DENIED",
-            durationMs: opts.now() - start,
-          };
-          break;
-        }
-      }
-    }
-
-    if (result === undefined && opts.signal.aborted) {
-      result = {
-        toolCallId: call.id,
-        name: call.name,
-        content: '{"error":"cancelled"}',
-        isError: true,
-        errorCode: "TOOL_CANCELLED",
-        durationMs: 0,
-      };
-    }
-
-    if (result === undefined && tool !== undefined) {
-      const timeoutMs = tool.timeoutMs ?? opts.defaultToolTimeoutMs;
-      const timeoutSignal = timeoutSignalFor(tool.name, timeoutMs);
-      const signal = AbortSignal.any([opts.signal, timeoutSignal]);
-      let outcome:
-        | { ok: true; value: unknown }
-        | { ok: false; error: unknown }
-        | undefined;
-      const exec = tool.execute(args, { toolCallId: call.id, signal }).then(
-        (value) => {
-          outcome = { ok: true, value };
-        },
-        (error: unknown) => {
-          outcome = { ok: false, error };
-        },
-      );
-      const aborted = Promise.withResolvers<"abort">();
-      if (signal.aborted) aborted.resolve("abort");
-      else
-        signal.addEventListener("abort", () => aborted.resolve("abort"), {
-          once: true,
-        });
-      const winner = await Promise.race([
-        exec.then(() => "exec" as const),
-        aborted.promise,
-      ]);
-
-      if (opts.signal.aborted) {
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content: '{"error":"cancelled"}',
-          isError: true,
-          errorCode: "TOOL_CANCELLED",
-          durationMs: opts.now() - start,
-        };
-      } else if (timeoutSignal.aborted) {
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content: `{"error":"timed out after ${timeoutMs} ms"}`,
-          isError: true,
-          errorCode: "TOOL_TIMEOUT",
-          durationMs: opts.now() - start,
-        };
-      } else if (winner === "exec" && outcome !== undefined && outcome.ok) {
-        const raw =
-          typeof outcome.value === "string"
-            ? outcome.value
-            : outcome.value === undefined || outcome.value === null
-              ? ""
-              : JSON.stringify(outcome.value);
-        let content = raw === "" ? "(tool returned no output)" : raw;
-        if (content.length > opts.toolOutputCap) {
-          const fullLength = content.length;
-          const spillId = opts.spillBuffer?.store(content) ?? null;
-          const head = Math.floor(opts.toolOutputCap * 0.7);
-          if (spillId !== null) {
-            const prelimTail = Math.max(100, opts.toolOutputCap - head - 240);
-            const cut = fullLength - head - prelimTail;
-            const note = `\n…[cut ${cut} chars of ${fullLength} — full output stored in spill_id="${spillId}"; call read_tool_spill({"spill_id":"${spillId}","offset":${head},"length":8000}) to read middle sections]…\n`;
-            const tail = Math.max(100, opts.toolOutputCap - head - note.length);
-            content =
-              content.slice(0, head) + note + content.slice(fullLength - tail);
-          } else {
-            const tail = opts.toolOutputCap - head - 120;
-            const cut = fullLength - head - tail;
-            content =
-              content.slice(0, head) +
-              `\n…[cut ${cut} chars of ${fullLength}; ask for a narrower range if you need the middle]…\n` +
-              content.slice(fullLength - tail);
-          }
-        }
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content,
-          isError: false,
-          durationMs: opts.now() - start,
-        };
-      } else if (
-        winner === "exec" &&
-        outcome !== undefined &&
-        outcome.ok === false
-      ) {
-        // H4: Fission-GRPO Structured Tool-Failure Retry Guidance
-        const errMsg = errorMessage(outcome.error);
-        const attempt = (opts.failureStreak.get(call.name) ?? 0) + 1;
-        let compactArgs = "{}";
-        try {
-          compactArgs = JSON.stringify(args ?? {}).slice(0, 160);
-        } catch {
-          compactArgs = "{}";
-        }
-        const retryGuidance = `Attempt ${attempt}/${opts.maxConsecutiveToolErrors} failed for ${call.name} with args ${compactArgs}: ${errMsg.slice(0, 200)}. Identify which argument caused this error and modify it, or use a different tool. Do not repeat identical arguments.`;
-        const payload = JSON.stringify({
-          error: errMsg,
-          retry_guidance: retryGuidance,
-        });
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content: payload.slice(0, opts.toolErrorCap),
-          isError: true,
-          errorCode: "TOOL_THREW",
-          durationMs: opts.now() - start,
-        };
-      } else {
-        result = {
-          toolCallId: call.id,
-          name: call.name,
-          content: '{"error":"cancelled"}',
-          isError: true,
-          errorCode: "TOOL_CANCELLED",
-          durationMs: opts.now() - start,
-        };
-      }
-    }
-
-    if (result === undefined) {
-      result = {
-        toolCallId: call.id,
-        name: call.name,
-        content: '{"error":"cancelled"}',
-        isError: true,
-        errorCode: "TOOL_CANCELLED",
-        durationMs: opts.now() - start,
-      };
-    }
-
-    // Record into H2 history for semantic stall / oscillation detection
-    if (
-      result.errorCode !== "TOOL_CANCELLED" &&
-      result.errorCode !== "TOOL_DENIED"
-    ) {
-      (history.entries as InternalHistoryEntry[]).push({
-        name: call.name,
-        fingerprint: computeToolCallFingerprint(call.name, args),
-        isError: result.isError,
-        wasStall: stallRecord?.wasStall ?? false,
-        stalledCount: stallRecord?.stalledCount ?? 0,
-      });
-    }
-
-    if (
-      result.isError &&
-      result.errorCode !== "TOOL_DENIED" &&
-      result.errorCode !== "TOOL_CANCELLED" &&
-      result.errorCode !== "TOOL_STALL" &&
-      result.errorCode !== "TOOL_OSCILLATION"
-    ) {
-      opts.failureStreak.set(
-        call.name,
-        (opts.failureStreak.get(call.name) ?? 0) + 1,
-      );
-    } else if (!result.isError) {
-      opts.failureStreak.delete(call.name);
-    }
-
-    if (onExecSettled) {
-      await onExecSettled();
-    }
-
-    for (const hook of hooks?.afterToolCall ?? []) {
-      try {
-        result = (await hook(call, result)) ?? result;
-      } catch {
-        // A throwing after-hook leaves the result unchanged.
-      }
-    }
-
-    results[index] = result;
-  };
-
-  // H10: Bounded concurrency semaphore for parallel non-exclusive tool calls
   const maxConcurrency = Math.max(
     1,
     opts.parallelToolMaxConcurrency ?? DEFAULT_PARALLEL_TOOL_CONCURRENCY,
@@ -704,53 +811,30 @@ export const runToolBatch: RunToolBatch = async (requestedCalls, options) => {
   const parallelIndices: number[] = [];
 
   for (let i = 0; i < calls.length; i++) {
-    const call = calls[i];
-    const tool = opts.tools.get(call.name);
+    const tool = opts.tools.get(calls[i].name);
     if (tool?.exclusive === true) exclusiveIndices.push(i);
     else parallelIndices.push(i);
   }
 
   if (parallelIndices.length > 0) {
-    let activeCount = 0;
-    const waitQueue: Array<() => void> = [];
-    let unenteredCount = parallelIndices.length;
-
-    const acquireSlot = async (): Promise<void> => {
-      if (activeCount < maxConcurrency) {
-        activeCount += 1;
-        unenteredCount -= 1;
-        return;
-      }
-      await new Promise<void>((resolve) => {
-        waitQueue.push(resolve);
-      });
-      unenteredCount -= 1;
-    };
-
-    const releaseSlotAndYieldIfQueued = async (): Promise<void> => {
-      const next = waitQueue.shift();
-      if (next) {
-        next();
-      } else {
-        activeCount = Math.max(0, activeCount - 1);
-      }
-      // If later calls in the batch had not yet entered execute() because of the
-      // concurrency cap, yield one tick so they enter execute() before afterToolCall runs.
-      if (unenteredCount > 0 || next !== undefined) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-    };
-
-    await Promise.all(
-      parallelIndices.map(async (callIndex) => {
-        await acquireSlot();
-        await processCall(calls[callIndex], callIndex, releaseSlotAndYieldIfQueued);
-      }),
+    await runParallelIndicesWithSemaphore(
+      parallelIndices,
+      maxConcurrency,
+      (callIndex, onSettled) =>
+        processSingleToolCall(
+          calls[callIndex],
+          callIndex,
+          opts,
+          timeoutSignalFor,
+          history,
+          results,
+          onSettled,
+        ),
     );
   }
 
   for (const i of exclusiveIndices) {
-    await processCall(calls[i], i);
+    await processSingleToolCall(calls[i], i, opts, timeoutSignalFor, history, results);
   }
 
   return results;
