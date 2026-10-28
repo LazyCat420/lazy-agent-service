@@ -1040,7 +1040,7 @@
   },
   {
     "name": "buy_stock",
-    "description": "Execute a buy order for a stock ticker. Requires user confirmation.",
+    "description": "Propose a paper buy order for a stock ticker. Supports size_pct (portfolio fraction), quantity (share count), or amount_usd (dollar amount). Sizing and approval are subject to deterministic policy validation.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1050,7 +1050,15 @@
         },
         "size_pct": {
           "type": "number",
-          "description": "The percentage of available cash to use (e.g., 0.10 for 10%, 1.0 for 100%). Default is 0.10."
+          "description": "The percentage of portfolio equity to target (0.01 to 0.25). Default is 0.10 when quantity/amount_usd are omitted."
+        },
+        "quantity": {
+          "type": "number",
+          "description": "Optional number of shares to buy (alternative to size_pct)."
+        },
+        "amount_usd": {
+          "type": "number",
+          "description": "Optional dollar notional to buy (alternative to size_pct)."
         }
       },
       "required": [
@@ -2274,13 +2282,25 @@
   },
   {
     "name": "sell_stock",
-    "description": "Execute a sell order for a stock ticker. Closes the ENTIRE position — there is no partial sell. Requires user confirmation.",
+    "description": "Execute a paper sell order to close or trim a position for a stock ticker. Supports full close (default), quantity (shares), amount_usd (dollars), or size_pct (fraction of holding).",
     "parameters": {
       "type": "object",
       "properties": {
         "ticker": {
           "type": "string",
           "description": "The stock ticker symbol to sell (e.g., AAPL)."
+        },
+        "quantity": {
+          "type": "number",
+          "description": "Optional number of shares to sell (omit to close full position)."
+        },
+        "amount_usd": {
+          "type": "number",
+          "description": "Optional dollar notional of shares to sell."
+        },
+        "size_pct": {
+          "type": "number",
+          "description": "Optional fraction of the position to sell (0.01 to 1.0)."
         }
       },
       "required": [
