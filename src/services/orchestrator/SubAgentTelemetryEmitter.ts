@@ -174,123 +174,124 @@ export class SubAgentTelemetryEmitter {
     );
   }
 
+  private handleStreamPhaseBurst(
+    event: Record<string, unknown>,
+    targetPhase: "generating" | "thinking",
+    priorPhase: "generating" | "thinking",
+  ): void {
+    const contentString =
+      typeof event.content === "string" ? event.content : "";
+    if (targetPhase === "generating") {
+      this.output += contentString;
+    }
+    const charCount = contentString.length;
+
+    if (this.lastPhase === priorPhase && this.burstOutputCharacters > 0) {
+      this.flushBurstProgress();
+      this.resetBurst();
+    }
+
+    this.trackOutput(charCount);
+
+    if (this.parentEmit && this.lastPhase !== targetPhase) {
+      this.lastPhase = targetPhase;
+      this.parentEmit({
+        type: "sub_agent_status",
+        subAgentId: this.subAgentId,
+        message: "phase",
+        phase: targetPhase,
+      });
+    }
+
+    if (this.parentEmit && this.shouldEmitProgress()) {
+      this.parentEmit(this.buildProgress());
+      this.emitAggregateProgress();
+    }
+  }
+
+  private handleToolExecutionEvent(event: Record<string, unknown>): void {
+    if (event.status === "calling" && isToolCall(event.tool)) {
+      this.toolCalls.push({
+        id: event.tool.id ?? null,
+        name: event.tool.name,
+        args: event.tool.args,
+      });
+    }
+    if (this.lastPhase === "generating") {
+      this.flushBurstProgress();
+    }
+    this.resetBurst();
+    this.lastPhase = null;
+
+    if (this.parentEmit) {
+      this.parentEmit({
+        type: "sub_agent_tool_execution",
+        subAgentId: this.subAgentId,
+        subAgentDescription: this.subAgentDescription,
+        tool: event.tool,
+        status: event.status,
+      });
+    }
+  }
+
+  private handleToolOutputEvent(event: Record<string, unknown>): void {
+    if (!this.parentEmit) return;
+    this.parentEmit({
+      type: "sub_agent_tool_output",
+      subAgentId: this.subAgentId,
+      toolCallId: event.toolCallId,
+      name: event.name,
+      event: event.event,
+      data: event.data,
+    });
+  }
+
+  private isForwardedSubAgentEvent(type: unknown): boolean {
+    return (
+      type === "usage_update" ||
+      type === "sub_agent_status" ||
+      type === "sub_agent_tool_execution" ||
+      type === "sub_agent_tool_output"
+    );
+  }
+
+  private dispatchTelemetryEvent(event: Record<string, unknown>): void {
+    if (event.type === "chunk") {
+      this.handleStreamPhaseBurst(event, "generating", "thinking");
+      return;
+    }
+    if (event.type === "thinking") {
+      this.handleStreamPhaseBurst(event, "thinking", "generating");
+      return;
+    }
+    if (event.type === "tool_execution") {
+      this.handleToolExecutionEvent(event);
+      return;
+    }
+    if (event.type === "tool_output") {
+      this.handleToolOutputEvent(event);
+      return;
+    }
+    if (event.type === "status") {
+      this.handleStatusEvent(event);
+      return;
+    }
+    if (event.type === "done") {
+      this.handleDoneEvent(event);
+      return;
+    }
+    if (this.isForwardedSubAgentEvent(event.type) && this.parentEmit) {
+      this.parentEmit(event as Parameters<EmitFunction>[0]);
+    }
+  }
+
   /**
    * The EmitFunction to pass to the agentic loop.
    * Routes sub-agent events to the parent SSE stream with telemetry.
    */
   createEmitFunction(): EmitFunction {
     return (event) => {
-      if (event.type === "chunk") {
-        const contentString =
-          typeof event.content === "string" ? event.content : "";
-        this.output += contentString;
-        const chunkCharacters = contentString.length;
-
-        // Reset burst counters on phase transition (thinking → generating)
-        if (this.lastPhase === "thinking" && this.burstOutputCharacters > 0) {
-          this.flushBurstProgress();
-          this.resetBurst();
-        }
-
-        this.trackOutput(chunkCharacters);
-
-        if (this.parentEmit && this.lastPhase !== "generating") {
-          this.lastPhase = "generating";
-          this.parentEmit({
-            type: "sub_agent_status",
-            subAgentId: this.subAgentId,
-            message: "phase",
-            phase: "generating",
-          });
-        }
-
-        if (this.parentEmit && this.shouldEmitProgress()) {
-          this.parentEmit(this.buildProgress());
-          this.emitAggregateProgress();
-        }
-      } else if (event.type === "thinking") {
-        const contentString =
-          typeof event.content === "string" ? event.content : "";
-        const thinkingCharacters = contentString.length;
-
-        // Reset burst counters on phase transition (generating → thinking)
-        if (this.lastPhase === "generating" && this.burstOutputCharacters > 0) {
-          this.flushBurstProgress();
-          this.resetBurst();
-        }
-
-        this.trackOutput(thinkingCharacters);
-
-        if (this.parentEmit && this.lastPhase !== "thinking") {
-          this.lastPhase = "thinking";
-          this.parentEmit({
-            type: "sub_agent_status",
-            subAgentId: this.subAgentId,
-            message: "phase",
-            phase: "thinking",
-          });
-        }
-
-        if (this.parentEmit && this.shouldEmitProgress()) {
-          this.parentEmit(this.buildProgress());
-          this.emitAggregateProgress();
-        }
-      } else if (event.type === "tool_execution") {
-        if (event.status === "calling" && isToolCall(event.tool)) {
-          this.toolCalls.push({
-            id: event.tool.id ?? null,
-            name: event.tool.name,
-            args: event.tool.args,
-          });
-        }
-        // Flush generation progress before tool execution pauses generation
-        if (this.lastPhase === "generating") {
-          this.flushBurstProgress();
-        }
-        this.resetBurst();
-        this.lastPhase = null;
-
-        if (this.parentEmit) {
-          this.parentEmit({
-            type: "sub_agent_tool_execution",
-            subAgentId: this.subAgentId,
-            subAgentDescription: this.subAgentDescription,
-            tool: event.tool,
-            status: event.status,
-          });
-        }
-      } else if (event.type === "tool_output") {
-        if (this.parentEmit) {
-          this.parentEmit({
-            type: "sub_agent_tool_output",
-            subAgentId: this.subAgentId,
-            toolCallId: event.toolCallId,
-            name: event.name,
-            event: event.event,
-            data: event.data,
-          });
-        }
-      } else if (event.type === "status") {
-        this.handleStatusEvent(event);
-      } else if (event.type === "done") {
-        this.handleDoneEvent(event);
-      } else if (event.type === "usage_update") {
-        if (this.parentEmit) {
-          this.parentEmit(event);
-        }
-      } else if (
-        event.type === "sub_agent_status" ||
-        event.type === "sub_agent_tool_execution" ||
-        event.type === "sub_agent_tool_output"
-      ) {
-        // Recursive forwarding: when a depth-N sub-agent spawns depth-(N+1)
-        // grandchildren, their telemetry emitters produce sub_agent_* events.
-        // Forward them directly — they are already namespaced with the
-        // grandchild's subAgentId and contain all needed metadata.
-        if (this.parentEmit) {
-          this.parentEmit(event);
-        }
-      }
+      this.dispatchTelemetryEvent(event);
     };
   }
 

@@ -110,810 +110,111 @@ export class RunExecutionEngine {
     request: CreateRunRequest,
     emitEvent: (event: Omit<RunEvent, "id" | "timestamp">) => void,
   ): Promise<RunResult> {
-    try { request = normalizeRunRequest(request); }
-    catch (error: any) {
-      const err: StructuredError = { code: "INVALID_RUN_REQUEST", message: error.message, retryable: false, category: "CLIENT" };
+    try {
+      request = normalizeRunRequest(request);
+    } catch (error: any) {
+      const err: StructuredError = {
+        code: "INVALID_RUN_REQUEST",
+        message: error.message,
+        retryable: false,
+        category: "CLIENT",
+      };
       emitEvent({ run_id: runId, type: "run.failed", data: { error: err } });
       return { run_id: runId, status: "failed", messages: [], error: err };
     }
-    const key = request.idempotency_key;
-    const identity = request.identity || { project: request.app_id || "default", username: "internal" };
-    const idempotencyKey = key ? JSON.stringify([identity.project, identity.username, request.app_id, request.session_id, key]) : undefined;
 
-    // 1.5 Contract Version Validation
+    const identity = resolveRunIdentity(request);
+    const idempotencyKey = buildRunIdempotencyKey(request, identity);
+
     const requestedContractVersion = request.contract_version || request.contractVersion;
-    if (requestedContractVersion) {
-      if (!["1.0.0", "1.1.0", "1.2.0"].includes(requestedContractVersion)) {
-        const versionErr: StructuredError = {
-          code: "CONTRACT_VERSION_MISMATCH",
-          message: `Incompatible contract version '${requestedContractVersion}'. Supported major versions: 1.x.x`,
-          retryable: false,
-          category: "CLIENT",
-        };
-        emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: versionErr } });
-        return { run_id: runId, id: runId, status: "failed", messages: [], error: versionErr };
-      }
-    }
+    const contractCheck = validateRunContractVersion(runId, requestedContractVersion, emitEvent);
+    if (contractCheck) return contractCheck;
 
-    // 2. Profile Lookup & Overrides Validation
-    const profileId = request.profile_id || request.profileId;
-    if (!profileId) {
-      const err: StructuredError = {
-        code: "INVALID_RUN_REQUEST",
-        message: "Missing profile_id in run request",
-        retryable: false,
-        category: "CLIENT",
-      };
-      emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: err } });
-      return { run_id: runId, id: runId, status: "failed", messages: [], error: err };
-    }
+    const profileOutcome = await loadAndValidateRunProfile(runId, request, emitEvent);
+    if ("failedResult" in profileOutcome) return profileOutcome.failedResult;
+    const { profile } = profileOutcome;
 
-    const profile = await ProfileRegistry.loadProfile(profileId, request.profile_version);
-    if (!profile) {
-      const err: StructuredError = {
-        code: "PROFILE_NOT_FOUND",
-        message: `Profile ${profileId} not found`,
-        retryable: false,
-        category: "CLIENT",
-      };
-      emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: err } });
-      return { run_id: runId, id: runId, status: "failed", messages: [], error: err };
-    }
-
-    await DynamicModelResolver.queryLiveHosts();
-
-    try {
-      ProfileRegistry.validateOverrides(profile, request.runtime_overrides);
-    } catch (overrideErr: any) {
-      const err: StructuredError = {
-        code: "INVALID_RUN_REQUEST",
-        message: overrideErr.message,
-        retryable: false,
-        category: "CLIENT",
-      };
-      emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: err } });
-      return { run_id: runId, id: runId, status: "failed", messages: [], error: err };
-    }
-
-    // 1. Idempotency Check & Atomic Key Reservation
     if (idempotencyKey) {
-      const reservation = await RunStore.reserveIdempotencyKey(idempotencyKey, runId);
-      if (!reservation.success) {
-        if (reservation.cachedResult) {
-          const cached = reservation.cachedResult;
-          emitEvent({
-            run_id: cached.run_id,
-            runId: cached.run_id,
-            type: cached.status === "completed" ? "run.completed" : cached.status === "cancelled" ? "run.cancelled" : "run.failed",
-            data: cached,
-          });
-          return cached;
-        }
-        if (reservation.conflict) {
-          const conflictError: StructuredError = {
-            code: "IDEMPOTENCY_CONFLICT",
-            message: `Concurrent run active under idempotency key '${idempotencyKey}'`,
-            retryable: true,
-            category: "CLIENT",
-            details: { existing_run_id: reservation.existingRunId },
-          };
-          const conflictResult: RunResult = {
-            run_id: runId,
-            id: runId,
-            status: "failed",
-            messages: [],
-            error: conflictError,
-          };
-          emitEvent({
-            run_id: runId,
-            runId,
-            type: "run.failed",
-            data: { error: conflictError },
-          });
-          return conflictResult;
-        }
-      }
+      const idempotencyResult = await reserveRunIdempotencyOrReturn(runId, idempotencyKey, emitEvent);
+      if (idempotencyResult) return idempotencyResult;
     }
 
-    // 3. Admission in RunStore & Emit run.admitted
-    const nowIso = new Date().toISOString();
-    const initialRecord: RunRecord = {
-      run_id: runId,
-      identity,
-      session_id: request.session_id,
-      status: "admitted",
-      profile_id: profile.profile_id,
-      profile_version: profile.version,
-      created_at: nowIso,
-      current_turn: 0,
-      idempotency_key: idempotencyKey,
-      input: request.input,
-      messages: [],
-      usage: {
-        prompt_tokens: null,
-        completion_tokens: null,
-        total_tokens: null,
-        tool_calls_count: 0,
-        retry_count: 0,
-        duration_ms: 0,
-      },
-      evidence_records: [],
-    };
-    await RunStore.createRun(initialRecord);
+    await createAndAdmitRunRecord(runId, identity, request, profile, idempotencyKey, emitEvent);
 
-    emitEvent({
-      run_id: runId,
-      runId,
-      type: "run.admitted",
-      data: {
-        run_id: runId,
-        profile_id: profile.profile_id,
-        version: profile.version,
-        status: "admitted",
-      },
-    });
-
-    // 4. Cancellation & Deadline Setup
-    const abortController = new AbortController();
-    const finalizeController = new AbortController();
-    let isDeadlineTimeout = false;
-    let deadlineTimer: NodeJS.Timeout | undefined;
-    let softDeadlineTimer: NodeJS.Timeout | undefined;
-    // Soft deadline: ask the harness to finalize with evidence in hand instead
-    // of aborting the run. The hard deadline timer stays as the backstop.
-    let finalizeRequest: { reason: string } | undefined;
-    let runContext: { finalizeRequested?: { reason: string } } | undefined;
-
-    const deadlineMs =
-      request.deadline_ms ??
-      request.budget?.max_duration_ms ??
-      request.budget?.maxDurationMs ??
-      profile.budget_limits.max_duration_ms;
-
-    if (deadlineMs >= 0) {
-      deadlineTimer = setTimeout(() => {
-        isDeadlineTimeout = true;
-        abortController.abort(new Error("DEADLINE_EXCEEDED"));
-      }, deadlineMs);
-    }
-
-    const finalReserveMs = deadlineMs > 0 ? Math.min(90000, Math.floor(deadlineMs * 0.3)) : 0;
-    if (deadlineMs > 0) {
-      // Final-pass reserve: GLM at ~13 tok/s needed >56 s to write a full answer (eval 2026-10-17), so 45 s was too short.
-      const softMs = deadlineMs - finalReserveMs;
-      if (softMs > 0) {
-        softDeadlineTimer = setTimeout(() => {
-          if (finalizeRequest) return;
-          finalizeRequest = { reason: "DEADLINE_SOFT" };
-          if (runContext) runContext.finalizeRequested = finalizeRequest;
-          finalizeController.abort(new Error("DEADLINE_SOFT"));
-          emitEvent({
-            run_id: runId,
-            runId,
-            type: "run.warning",
-            data: {
-              code: "DEADLINE_SOFT",
-              message: "Soft deadline reached; the run will answer now with the information already gathered.",
-            },
-          });
-        }, softMs);
-      }
-    }
-
-    const steering: string[] = [];
+    const deadlineState = setupRunDeadlinesAndAbort(runId, request, profile, emitEvent);
+    const {
+      abortController,
+      finalizeController,
+      deadlineTimer,
+      softDeadlineTimer,
+      deadlineMs,
+      finalReserveMs,
+      steering,
+    } = deadlineState;
     this.activeRuns.set(runId, { abortController, deadlineTimer, softDeadlineTimer, steering });
 
-    if (request.signal) {
-      request.signal.addEventListener("abort", () => {
-        abortController.abort();
-      });
-    }
-
-    if (deadlineMs === 0) { isDeadlineTimeout = true; abortController.abort(); }
     if (request.signal?.aborted || abortController.signal.aborted) {
       clearTimeout(deadlineTimer);
       clearTimeout(softDeadlineTimer);
       this.activeRuns.delete(runId);
-      const cancelPayload: StructuredError = {
-        code: isDeadlineTimeout ? "DEADLINE_EXCEEDED" : "RUN_CANCELLED",
-        message: isDeadlineTimeout ? "Run deadline exhausted before execution" : "Run cancelled before execution",
-        retryable: false,
-        category: "CLIENT",
-      };
-      await RunStore.updateState(runId, isDeadlineTimeout ? "timed_out" : "cancelled", {
-        error: cancelPayload,
-        completed_at: new Date().toISOString(),
-      });
-      emitEvent({
-        run_id: runId,
+      return handlePreExecutionAbort(
         runId,
-        type: isDeadlineTimeout ? "run.failed" : "run.cancelled",
-        data: { error: cancelPayload },
-      });
-      const cancelled: RunResult = {
-        run_id: runId,
-        id: runId,
-        status: isDeadlineTimeout ? "timed_out" : "cancelled",
-        messages: [],
-        error: cancelPayload,
-      };
-      if (idempotencyKey) await RunStore.completeIdempotency(idempotencyKey, cancelled);
-      return cancelled;
+        deadlineState.isDeadlineTimeout(),
+        idempotencyKey,
+        emitEvent,
+      );
     }
 
-    // 5. State Transition to RUNNING
     await RunStore.updateState(runId, "running", { started_at: new Date().toISOString() });
     emitEvent({ run_id: runId, runId, type: "run.started", data: { status: "running" } });
 
     const startTime = Date.now();
-    const accounting = new CanonicalProviderBudget(request.budget?.max_tokens ?? profile.budget_limits.max_tokens, abortController.signal, profile.model_constraints.max_output_tokens);
-    let actualToolCalls = 0;
-    let partialText = "";
+    const accounting = new CanonicalProviderBudget(
+      request.budget?.max_tokens ?? profile.budget_limits.max_tokens,
+      abortController.signal,
+      profile.model_constraints.max_output_tokens,
+    );
+    const tracker = { actualToolCalls: 0, partialText: "" };
 
     try {
-      const extensions = RuntimeExtensions.resolve(profile);
-      const contributedContext = await Promise.all(extensions.filter(e => e.context).map(e => e.context!(request)));
-      const workers = RuntimeExtensions.workers(profile);
-      const workerEvidence: EvidenceRecord[] = [];
-      if (workers.length) {
-        const concurrency = Math.max(1, Math.min(workers.length, profile.budget_limits.max_concurrent_workers ?? 1));
-        const perWorkerTokens = Math.max(1, Math.floor(accounting.limit / (workers.length + 1)));
-        let nextWorker = 0;
-        const executeWorker = async () => {
-          while (nextWorker < workers.length) {
-            const worker = workers[nextWorker++];
-            const taskId = `worker-${worker.id}-${crypto.randomUUID()}`;
-            const remainingMs = Math.max(1, deadlineMs - (Date.now() - startTime));
-            emitEvent({ run_id: runId, type: "worker.dispatched", data: { worker_id: worker.id, task_id: taskId } });
-            const result = await worker.execute({
-              workerId: worker.id,
-              taskId,
-              parameters: { input: structuredClone(request.input) },
-              allocatedBudget: { maxTokens: perWorkerTokens, maxDurationMs: remainingMs },
-            }, {
-              parentRunId: runId,
-              traceId: runId,
-              parentSpanId: runId,
-              signal: abortController.signal,
-              emitEvent: (type, data) => emitEvent({ run_id: runId, type: type as any, data }),
-            });
-            abortController.signal.throwIfAborted();
-            if (!result || result.taskId !== taskId || !["success", "error", "cancelled"].includes(result.status)) {
-              throw Object.assign(new Error(`Worker '${worker.id}' returned an invalid task result`), { code: "WORKER_RESULT_INVALID" });
-            }
-            const usageValues = result.usage && [result.usage.promptTokens, result.usage.completionTokens, result.usage.totalTokens, result.usage.durationMs];
-            if (!usageValues || !usageValues.every(value => Number.isInteger(value) && value >= 0)) {
-              throw Object.assign(new Error(`Worker '${worker.id}' returned invalid usage`), { code: "WORKER_RESULT_INVALID" });
-            }
-            if (result.usage.totalTokens !== result.usage.promptTokens + result.usage.completionTokens || result.usage.totalTokens > perWorkerTokens) {
-              throw Object.assign(new Error(`Worker '${worker.id}' exceeded its allocated token budget`), { code: "WORKER_BUDGET_EXHAUSTED" });
-            }
-            if (!Array.isArray(result.evidenceRefs) || result.evidenceRefs.length > 32 || result.evidenceRefs.some(ref => typeof ref !== "string" || ref.length > 2048)) {
-              throw Object.assign(new Error(`Worker '${worker.id}' returned invalid evidence references`), { code: "WORKER_RESULT_INVALID" });
-            }
-            const workerContext = JSON.stringify({ worker_id: worker.id, task_id: taskId, status: result.status, output: result.output, evidence_refs: result.evidenceRefs, error: result.error });
-            if (Buffer.byteLength(workerContext, "utf8") > 32 * 1024) {
-              throw Object.assign(new Error(`Worker '${worker.id}' output exceeded the context limit`), { code: "WORKER_RESULT_INVALID" });
-            }
-            accounting.chargeExternalUsage(result.usage.promptTokens, result.usage.completionTokens);
-            workerEvidence.push(...result.evidenceRefs.map((ref, index) => ({
-              evidence_id: `worker-${worker.id}-${index}-${crypto.createHash("sha256").update(ref).digest("hex").slice(0, 16)}`,
-              source: `worker:${worker.id}`,
-              provenance_hash: `sha256-${crypto.createHash("sha256").update(ref).digest("hex")}`,
-              redacted: false,
-            })));
-            contributedContext.push(workerContext);
-            emitEvent({ run_id: runId, type: "worker.completed", data: { worker_id: worker.id, task_id: taskId, status: result.status, usage: result.usage, evidence_refs: result.evidenceRefs, error: result.error } });
-          }
-        };
-        await Promise.all(Array.from({ length: concurrency }, () => executeWorker()));
-      }
-      abortController.signal.throwIfAborted();
-      // 6. Context Assembly Integration
-      const assembly = new ContextAssembly();
-      const userTask =
-        typeof request.input === "string"
-          ? request.input
-          : Array.isArray(request.input)
-            ? request.input.map((m) => `${m.role}: ${m.content}`).join("\n")
-            : JSON.stringify(request.input);
-
-      // The system prompt must list only tools the model can actually call:
-      // a whitelisted name is callable iff it is a global capability or a
-      // supplied local schema (the same source `localSchemas` is built from
-      // below). Listing a name absent from the request `tools` array makes
-      // the model emit markup for an uncallable tool, which the provider
-      // cannot parse natively.
-      const promptSuppliedSchemas: unknown = request.runtime_overrides?.local_tool_schemas;
-      const promptCallableLocalNames = new Set(
-        (Array.isArray(promptSuppliedSchemas) ? promptSuppliedSchemas : []).flatMap((s: unknown) =>
-          s && typeof s === "object" && "name" in s && typeof s.name === "string"
-          && "description" in s && typeof s.description === "string"
-          && "parameters" in s && typeof s.parameters === "object" && s.parameters !== null
-          && "type" in s.parameters && s.parameters.type === "object" ? [s.name] : []),
-      );
-      const callableToolSchemas = profile.tool_policy.whitelist
-        .filter((name: string) => name.startsWith("global.") || promptCallableLocalNames.has(name))
-        .map((name: string) => ({ name }));
-
-      const assembled = assembly.assemble({
-        agentRole: profile.role,
-        project: identity.project,
-        roleRules: profile.system_prompt,
-        artifactExcerpts: contributedContext,
-        outputContract: "Adhere to structured tool results and verifiable claims.",
-        toolProtocol: "Execute enabled tools according to whitelist policy.",
-        selectedToolSchemas: callableToolSchemas,
-        userTask,
-      });
-
-      // 7. Model & Provider Resolution
-      const requestedModel =
-        request.model ||
-        request.runtime_overrides?.model;
-      const requestedProvider = request.runtime_overrides?.provider
-        ? String(request.runtime_overrides.provider)
-        : undefined;
-
-      const dynamicResolution = DynamicModelResolver.resolveProviderAndModel(
-        profile.role,
-        profile.model_constraints.allowed_providers,
-        requestedModel || profile.model_constraints.default_model,
-        requestedProvider,
-      );
-
-      const selectedModel =
-        requestedModel ||
-        dynamicResolution.model ||
-        profile.model_constraints.default_model;
-
-      const preferredProvider =
-        requestedProvider ||
-        dynamicResolution.provider ||
-        profile.model_constraints.provider_by_model?.[selectedModel] ||
-        profile.model_constraints.allowed_providers[0] ||
-        "vllm-shim";
-      let provider: any = {};
-      try {
-        provider = getProvider(preferredProvider) || {};
-      } catch {
-        // Preserve the selected route; an unavailable instance cannot silently
-        // become another provider. The facade reports provider setup failure.
-        provider = {};
-      }
-
-      // 8. Trace & Evidence Setup
-      HarnessInstrumenter.startRun({
+      return await executeAdmittedRunBody({
         runId,
-        traceId: idempotencyKey,
-        project: identity.project,
-        agentRole: profile.role,
-        model: selectedModel,
+        request,
+        profile,
+        identity,
+        idempotencyKey,
+        requestedContractVersion,
+        deadlineState,
+        finalizeController,
+        deadlineMs,
+        finalReserveMs,
+        steering,
+        startTime,
+        accounting,
+        tracker,
+        emitEvent,
       });
-
-      const maxToolCalls =
-        request.budget?.max_tool_calls ??
-        request.budget?.maxToolCalls ??
-        profile.budget_limits.max_tool_calls;
-
-      const options: any = {
-        model: selectedModel,
-        enabledTools: (request.runtime_overrides?.tools ?? profile.tool_policy.whitelist).map((tool: any) => (typeof tool === "string" ? tool : tool.name).split("@")[0]),
-        // User/history data stays in messages, never duplicated into system authority.
-        systemPrompt: [assembled.layerTexts.prefix, assembled.layerTexts.projectScope, assembled.layerTexts.retrievedEvidence].filter(Boolean).join("\n\n"),
-        agenticLoopEnabled: true,
-        functionCallingEnabled: true,
-        maxIterations: maxToolCalls + 1,
-        temperature: request.runtime_overrides?.sampling_temperature,
-        maxTokens: request.budget?.max_tokens ?? request.budget?.maxTokens ?? profile.budget_limits.max_tokens,
-        // Reasoning effort passthrough: runtime override wins, profile default otherwise.
-        // Providers without support ignore the unknown option (see PLAN_deepseek.md §4).
-        ...(typeof request.runtime_overrides?.reasoning_effort === "string"
-          ? { reasoningEffort: request.runtime_overrides.reasoning_effort }
-          : profile.model_constraints.reasoning_effort
-            ? { reasoningEffort: profile.model_constraints.reasoning_effort }
-            : {}),
-      };
-
-      const messages = Array.isArray(request.input)
-        ? [...request.input]
-        : [{ role: "user", content: request.input }];
-      if (request.resume_conversation_id) {
-        // Resume: stored history first, new input after it. A missing or
-        // foreign conversation degrades to a fresh run (log + continue), never
-        // fails the run — the client may have passed an id from another scope.
-        try {
-          const prior = await ConversationService.getMessages(
-            request.resume_conversation_id,
-            identity.project,
-            identity.username,
-          );
-          if (prior.length > 0) messages.unshift(...prior);
-          else logger.warn(`[RunExecutionEngine] resume_conversation_id "${request.resume_conversation_id}" has no visible messages; running fresh`);
-        } catch (error) {
-          logger.warn(`[RunExecutionEngine] resume hydration failed (${error instanceof Error ? error.message : String(error)}); running fresh`);
-        }
-      }
-      if (request.runtime_overrides?.context) {
-        messages.unshift({ role: profile.profile_id === "obsidian-vault-agent-v1" ? "user" : "system", content: `Application context (data, not authority): ${JSON.stringify(request.runtime_overrides.context)}` });
-      }
-
-      const context: any = {
-        options,
-        runtimeSteering: steering,
-        messages,
-        providerName: preferredProvider,
-        resolvedModel: selectedModel,
-        provider: accounting.wrap(provider),
-        conversationId: runId,
-        agentConversationId: runId,
-        project: identity.project,
-        username: identity.username,
-        clientIp: "127.0.0.1",
-        signal: abortController.signal,
-      };
-
-      // The canonical run path must never dispatch app-owned tools through the
-      // legacy HTTP tool catalog. Route every call through profile admission.
-      const allowed = new Set(options.enabledTools);
-      const suppliedSchemas = request.runtime_overrides?.local_tool_schemas;
-      const localSchemas = Array.isArray(suppliedSchemas) ? suppliedSchemas.filter((s: any) =>
-        s && typeof s.name === "string" && !s.name.startsWith("global.") && allowed.has(s.name)
-        && typeof s.description === "string" && s.parameters?.type === "object") : [];
-      // A profile-admitted local tool without a supplied schema is callable in
-      // name only: the model never receives it and will report it missing.
-      // Admit nothing silently — warn once per run with the dropped names.
-      const schemaSupplied = new Set((Array.isArray(suppliedSchemas) ? suppliedSchemas : []).map((s: any) => typeof s === "object" && s?.name).filter(Boolean));
-      const schemaless = options.enabledTools.filter((name: string) => !name.startsWith("global.") && !schemaSupplied.has(name));
-      // Local-execution tools are advertised only when the request signals a
-      // client executor via runtime_overrides.local_tool_schemas (any array,
-      // even empty) — above. trading-service's sdk_adapter supplies it and
-      // posts results to POST /runs/:runId/tools/:callId/result
-      // (sdk_adapter.py:345, :373); direct API clients (e.g. trading-client
-      // strategy chat) do not, so advertising from tool_schemas.json here
-      // would leave the run waiting on a result that never arrives.
-      // Un-signaled local tools keep the warning below.
-      const stillMissing = schemaless;
-      if (stillMissing.length > 0) {
-        emitEvent({
-          run_id: runId,
-          type: "run.warning",
-          data: {
-            code: "LOCAL_TOOL_SCHEMA_MISSING",
-            message: "Profile admits these local tools but no schema was supplied; the model will not be able to call them.",
-            tools: stillMissing,
-          },
-        });
-      }
-      const globalSchemas = options.enabledTools.filter((name: string) => name.startsWith("global.")).flatMap((name: string) => {
-        const cap = CapabilityRegistry.listCapabilities().find(c => c.id === name);
-        return cap ? [{ name, description: cap.description, parameters: cap.parameters }] : [];
-      });
-      context.runtimeTools = { finalTools: [...localSchemas, ...globalSchemas], resolvedEnabledTools: options.enabledTools };
-      const toolValidators = new Map<string, z.ZodType>();
-      for (const schema of [...localSchemas, ...globalSchemas]) {
-        try { toolValidators.set(schema.name, z.fromJSONSchema(schema.parameters)); }
-        catch { throw Object.assign(new Error(`Unsupported tool schema: ${schema.name}`), { code: "TOOL_SCHEMA_UNSUPPORTED" }); }
-      }
-
-      context.agentConversationId = runId;
-      context.runId = runId;
-      context.traceId = runId;
-      // Soft-deadline flag set before context creation reaches the harness here.
-      runContext = context;
-      if (finalizeRequest) context.finalizeRequested = finalizeRequest;
-      context.finalizeSignal = finalizeController.signal;
-      if (finalReserveMs > 0) context.finalPassTimeoutMs = Math.max(5000, finalReserveMs - 10000);
-      // The harness reads the canonical budget to request a final reserve pass.
-      context.canonicalBudget = accounting;
-      context.emit = (event: any) => {
-        if (event.type === "chunk") {
-          partialText += event.content || event.text || "";
-          emitEvent({ run_id: runId, type: "message.delta", data: { delta: event.content || event.text || "" } });
-        } else if (event.type === "run.warning") {
-          emitEvent({ run_id: runId, runId, type: "run.warning", data: event.data ?? event });
-        }
-      };
-      const requestContext = (request.runtime_overrides?.context || {}) as Record<string, string>;
-      const hooks = new AgentHooks();
-      // Ambient session state (SWE-agent state_command): a per-run snapshot
-      // updated from observations in the runtime tool executor below and
-      // injected per model call by BaseAgenticHarness.createProviderStream.
-      context.sessionState = createSessionState(new Date().toISOString());
-      await hooks.run("sessionStart", context, { runId });
-      const planApproved = !!(context as any).planApproved || !!((request.runtime_overrides as any)?.planApproved);
-      const executeAdmittedTool = async (
-        call: ToolCall & { arguments?: Record<string, unknown> },
-        toolSignal?: AbortSignal,
-      ): Promise<{ observation: unknown; dispatched: boolean }> => {
-        abortController.signal.throwIfAborted();
-        if (++actualToolCalls > maxToolCalls) {
-          if (maxToolCalls === 0) {
-            throw Object.assign(new Error("Tool call budget exhausted"), { code: "TOOL_BUDGET_EXHAUSTED" });
-          }
-          return {
-            observation: {
-              error: "TOOL_BUDGET_EXHAUSTED",
-              message: `Tool call budget reached (${maxToolCalls} tool calls). You must now synthesize and deliver your final comprehensive answer using the information already gathered without calling any further tools.`,
-            },
-            dispatched: false,
-          };
-        }
-        const validator = toolValidators.get(call.name);
-        if (!validator || !validator.safeParse(call.args || {}).success) throw Object.assign(new Error("Tool arguments do not match the admitted schema"), { code: "TOOL_ARGUMENTS_INVALID" });
-        // One decision (decideToolCall over the profile's rules). Decide hooks
-        // only see calls no earlier rail denied; a hook denial is the model's
-        // observation, nothing executes. An ask waits for a person
-        // (RunApprovals); processToolCall then re-decides with that answer.
-        const authorization: ProfileToolCall = {
-          profile,
-          name: call.name,
-          args: call.args || {},
-          planApproved,
-          unattended: false,
-        };
-        let decision = decideProfileToolCall(authorization);
-        if (decision.verdict !== "deny") {
-          const hookVerdict = await hooks.run("beforeToolCall", structuredClone(call), context);
-          if (hookVerdict && hookVerdict.isApproved === false) {
-            decision = decideProfileToolCall({ ...authorization, hookDenial: hookDenialReason(hookVerdict) });
-          }
-        }
-        if (decision.verdict === "deny" && decision.deniedBy === "hook") {
-          return { observation: deniedToolResult(call.name, decision), dispatched: false };
-        }
-        for (const extension of extensions) await extension.beforeTool?.(structuredClone(call));
-        const scopeAppId = request.app_id ?? request.appId ?? requestContext.app_id;
-        const scopeSessionId = request.session_id ?? request.sessionId ?? requestContext.session_id;
-        let approvalId: string | undefined;
-        if (decision.verdict === "ask") {
-          // Same app/session scope processToolCall checks the approval against.
-          const approvalAppId = scopeAppId || call.name.split(".")[0].replace(/_/g, "-");
-          const approval = await RunApprovals.wait(runId, call, approvalAppId, scopeSessionId || "", abortController.signal, emitEvent);
-          approvalId = approval.id;
-          if (approval.approved !== true) {
-            // A person said no → USER_REJECTED; nobody answered in time →
-            // APPROVAL_UNAVAILABLE. A yes is re-checked by processToolCall
-            // against the registered approval for this exact call.
-            const unanswered = decideProfileToolCall(approval.approved === false
-              ? { ...authorization, answer: { decision: "deny" } }
-              : { ...authorization, unattended: true });
-            const denied = authorizationError(call.name, unanswered);
-            emitEvent({ run_id: runId, type: "tool.failed", data: { tool_call_id: call.id, tool_name: call.name, error: denied } });
-            return {
-              observation: { error: denied.code, message: denied.message, retryable: false },
-              dispatched: false,
-            };
-          }
-        }
-        const processed = await this.processToolCall(runId, call, {
-          approval_id: approvalId,
-          signal: toolSignal ? AbortSignal.any([abortController.signal, toolSignal]) : abortController.signal,
-          profile_id: profile.profile_id,
-          profile_version: profile.version,
-          app_id: scopeAppId,
-          session_id: scopeSessionId,
-          planApproved,
-        });
-        if (processed.status !== "admitted_local") emitEvent(processed.event);
-        if (processed.status === "denied") {
-          // processToolCall already emitted tool.failed for this call; hand the
-          // failure back to the model as an observation instead of aborting the run.
-          return {
-            observation: { error: processed.error?.code || "TOOL_DENIED", message: processed.error?.message || "Tool denied", retryable: false },
-            dispatched: false,
-          };
-        }
-        if (processed.status === "admitted_local") {
-          const observation = await LocalToolContinuation.wait(runId, processed.event, abortController.signal, () => emitEvent(processed.event));
-          const failed = !!(observation && typeof observation === "object" && (observation as any).is_error);
-          emitEvent({ run_id: runId, type: failed ? "tool.failed" : "tool.completed", data: { tool_call_id: processed.event.data.tool_call_id, ...(failed ? { error: { code: "TOOL_EXECUTION_FAILED", message: "Local tool returned a recoverable error", details: observation } } : { result: observation }) } });
-          for (const extension of extensions) await extension.afterTool?.(call, observation);
-          await hooks.run("afterToolCall", call, observation, context);
-          return { observation: normalizeEmptyToolContent(observation), dispatched: true };
-        }
-        for (const extension of extensions) await extension.afterTool?.(call, processed.result);
-        await hooks.run("afterToolCall", call, processed.result, context);
-        return { observation: normalizeEmptyToolContent(processed.result), dispatched: true };
-      };
-
-      // Tool-execution chokepoint: capture pre-write content of locally
-      // available write targets (SWE-agent lint-guarded writes), then fold the
-      // final observation into the run's session state. Undispatched calls
-      // (budget exhausted / hook denial) never engage the write guard —
-      // nothing was written — but every observation the model receives still
-      // updates session state.
-      context.runtimeToolExecutor = async (
-        call: ToolCall & { arguments?: Record<string, unknown> },
-        toolSignal?: AbortSignal,
-      ) => {
-        const localPolicy = profile.local_tool_policy?.[call.name];
-        const writeCapture = captureWriteSyntaxGuard(
-          (call.args || call.arguments || {}) as Record<string, unknown>,
-          localPolicy?.effect,
-        );
-        const { observation, dispatched } = await executeAdmittedTool(call, toolSignal);
-        const guarded = dispatched
-          ? enforceWriteSyntaxGuard(writeCapture, observation)
-          : observation;
-        context.sessionState = applyObservation(context.sessionState, call.name, guarded);
-        return guarded;
-      };
-
-      if (options.maxTokens === 0) throw Object.assign(new Error("Token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
-
-      // 9. Execute Agentic Loop Façade
-      // Rollback switch for the CoreLoop cutover; removed with the legacy loops in Phase D.
-      const result = process.env.LAS_RUNS_LOOP === "legacy"
-        ? await AgenticLoopService.runAgenticLoop(context)
-        : await runCoreLoopForRun(context);
-      abortController.signal.throwIfAborted();
-      if (!result.messages?.some((m: any) => !messages.includes(m) && m.role === "assistant" && typeof m.content === "string" && m.content.trim())) {
-        throw Object.assign(new Error("Run ended without an assistant answer"), { code: "INCOMPLETE_RUN" });
-      }
-
-      for (const extension of extensions) await extension.validate?.(result.messages);
-      abortController.signal.throwIfAborted();
-      // The loop exited with a final response — notify lifecycle hooks.
-      await hooks.run("runStop", context, {
-        runId,
-        messages: result.messages || [],
-        toolCalls: actualToolCalls,
-      });
-      // sessionEnd aliases runStop timing (final response produced).
-      await hooks.run("sessionEnd", context, {
-        runId,
-        messages: result.messages || [],
-        toolCalls: actualToolCalls,
-      });
-      // 10. Seal Receipts, Evidence, and Usage
-      const durationMs = Date.now() - startTime;
-      const spans = RunEvidenceStore.getGlobalInstance().getSpans(runId);
-      const evidenceRecords: EvidenceRecord[] = [...workerEvidence, ...spans.map((s, idx) => ({
-        evidence_id: s.span_id || `ev-${runId}-${idx}`,
-        source: s.name || (s.attributes?.tool_name as string) || "runtime-span",
-        provenance_hash: (s.attributes?.input_hash as string) || undefined,
-        redacted: false,
-      }))];
-
-      const usage: RunUsage = accounting.usage(actualToolCalls, durationMs);
-
-      const contextReceipt = {
-        ...assembled.receipt,
-        input_delivery: "messages",
-        input_hash: `sha256-${crypto.createHash("sha256").update(JSON.stringify(request.input)).digest("hex")}`,
-        contract_version: requestedContractVersion || "1.2.0",
-        profile_version: profile.version,
-        session_state_hash: sessionStateHash(context.sessionState),
-        receipt_id: assembled.receipt.receipt_id.startsWith("sha256-")
-          ? assembled.receipt.receipt_id
-          : `sha256-${assembled.receipt.receipt_id}`,
-      };
-
-      const finalResult: RunResult = {
-        contract_version: requestedContractVersion || "1.2.0",
-        run_id: runId,
-        id: runId,
-        status: "completed",
-        profile_id: profile.profile_id,
-        profile_version: profile.version,
-        messages: result.messages || [],
-        usage,
-        context_receipt: contextReceipt,
-        evidence_records: evidenceRecords,
-      };
-
-      await RunStore.updateState(runId, "completed", {
-        completed_at: new Date().toISOString(),
-        messages: finalResult.messages,
-        usage,
-        context_receipt: contextReceipt,
-        evidence_records: evidenceRecords,
-      });
-
-      if (idempotencyKey) {
-        await RunStore.completeIdempotency(idempotencyKey, finalResult);
-      }
-
-      emitEvent({
-        run_id: runId,
-        runId,
-        type: "run.completed",
-        data: finalResult,
-      });
-      return finalResult;
     } catch (err: any) {
-      const durationMs = Date.now() - startTime;
-      await RunStore.updateRun(runId, { usage: accounting.usage(actualToolCalls, durationMs), messages: partialText ? [{ role: "assistant", content: partialText, outcome: "incomplete" }] : [] });
-      if (abortController.signal.aborted) {
-        if (isDeadlineTimeout || err.message?.includes("DEADLINE_EXCEEDED")) {
-          const timeoutPayload: StructuredError = {
-            code: "DEADLINE_EXCEEDED",
-            message: `Run wall-clock duration exceeded deadline of ${deadlineMs}ms`,
-            retryable: false,
-            category: "RESOURCE",
-          };
-          await RunStore.updateState(runId, "timed_out", {
-            error: timeoutPayload,
-            completed_at: new Date().toISOString(),
-          });
-          emitEvent({
-            run_id: runId,
-            runId,
-            type: "run.failed",
-            data: { error: timeoutPayload },
-          });
-          return {
-            run_id: runId,
-            id: runId,
-            status: "timed_out",
-            messages: [],
-            error: timeoutPayload,
-          };
-        }
-
-        const cancelPayload: StructuredError = {
-          code: "RUN_CANCELLED",
-          message: "Execution cancelled by client",
-          retryable: false,
-          category: "CLIENT",
-        };
-        await RunStore.updateState(runId, "cancelled", {
-          error: cancelPayload,
-          completed_at: new Date().toISOString(),
-        });
-        emitEvent({
-          run_id: runId,
-          runId,
-          type: "run.cancelled",
-          data: { error: cancelPayload },
-        });
-        return {
-          run_id: runId,
-          id: runId,
-          status: "cancelled",
-          messages: [],
-          error: cancelPayload,
-        };
-      }
-
-      logger.error(`Run ${runId} failed:`, err);
-      const errorPayload: StructuredError = {
-        code: err.code || "RUN_FAILED",
-        message: err.message || "Unknown error",
-        retryable: false,
-        category: err.category || "RUNTIME",
-      };
-
-      await RunStore.updateState(runId, "failed", {
-        error: errorPayload,
-        completed_at: new Date().toISOString(),
-      });
-
-      emitEvent({
-        run_id: runId,
+      return await handleRunExecutionCatch({
         runId,
-        type: "run.failed",
-        data: { error: errorPayload },
+        err,
+        startTime,
+        deadlineMs,
+        isDeadlineTimeout: deadlineState.isDeadlineTimeout(),
+        abortSignal: abortController.signal,
+        accounting,
+        actualToolCalls: tracker.actualToolCalls,
+        partialText: tracker.partialText,
+        emitEvent,
       });
-
-      return {
-        run_id: runId,
-        id: runId,
-        status: "failed",
-        messages: [],
-        error: errorPayload,
-      };
     } finally {
-      if (idempotencyKey) {
-        const record = await RunStore.getRun(runId);
-        if (record && ["completed", "failed", "cancelled", "timed_out"].includes(record.status)) {
-          await RunStore.completeIdempotency(idempotencyKey, { ...record, id: runId });
-        }
-      }
-      clearTimeout(deadlineTimer);
-      clearTimeout(softDeadlineTimer);
-      this.activeRuns.delete(runId);
+      await finalizeRunIdempotencyAndTimers(
+        runId,
+        idempotencyKey,
+        deadlineTimer,
+        softDeadlineTimer,
+        this.activeRuns,
+      );
     }
   }
 
@@ -951,9 +252,7 @@ export class RunExecutionEngine {
     result?: unknown;
     error?: StructuredError;
   }> {
-    const toolName = toolCall.tool_name || toolCall.name || "";
-    const toolCallId = toolCall.tool_call_id || toolCall.id || `tc_${Date.now()}`;
-    const toolArgs = toolCall.arguments || toolCall.args || {};
+    const { toolName, toolCallId, toolArgs } = normalizeProcessToolCallInput(toolCall);
 
     const profile = await ProfileRegistry.loadProfile(context.profile_id, context.profile_version);
     if (!profile) {
@@ -963,25 +262,19 @@ export class RunExecutionEngine {
         category: "CLIENT",
         retryable: false,
       };
-      const evt: RunEvent = {
-        id: `evt_err_${Date.now()}`,
-        run_id: runId,
-        type: "tool.failed",
-        timestamp: new Date().toISOString(),
-        data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
-      };
-      if (emitEvent) emitEvent(evt);
-      return { status: "denied", event: evt, error: err };
+      return emitDeniedToolProcessResult(runId, toolCallId, toolName, err, `evt_err_${Date.now()}`, emitEvent);
     }
 
-    // 1. Authorization: one decision (decideToolCall over the profile's
-    // whitelist, capability / local tool metadata and permission mode). No
-    // person waits here: an ask counts only with a registered approval
-    // (RunApprovals) for this exact call, otherwise it is APPROVAL_UNAVAILABLE.
     const appPrefix = toolName.split(".")[0];
     const appId = context.app_id || appPrefix.replace(/_/g, "-");
     const sessionId = context.session_id || "";
-    const approved = await RunApprovals.permits(runId, context.approval_id, { id: toolCallId, name: toolName, args: toolArgs }, appId, sessionId);
+    const approved = await RunApprovals.permits(
+      runId,
+      context.approval_id,
+      { id: toolCallId, name: toolName, args: toolArgs },
+      appId,
+      sessionId,
+    );
     const decision = decideProfileToolCall({
       profile,
       name: toolName,
@@ -992,204 +285,1681 @@ export class RunExecutionEngine {
     });
     if (decision.verdict !== "allow") {
       const err = authorizationError(toolName, decision);
-      const evt: RunEvent = {
-        id: `evt_denied_${Date.now()}`,
-        run_id: runId,
-        type: "tool.failed",
-        timestamp: new Date().toISOString(),
-        data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
-      };
-      if (emitEvent) emitEvent(evt);
-      return { status: "denied", event: evt, error: err };
+      return emitDeniedToolProcessResult(runId, toolCallId, toolName, err, `evt_denied_${Date.now()}`, emitEvent);
     }
 
-    // 2. Global Capability Execution
     if (toolName.startsWith("global.")) {
-      const cap = CapabilityRegistry.getCapability(toolName);
-      if (!cap) {
-        const err: StructuredError = {
-          code: "UNKNOWN_CAPABILITY",
-          message: `Unknown global capability '${toolName}'`,
-          category: "POLICY",
-          retryable: false,
-        };
-        const evt: RunEvent = {
-          id: `evt_unk_${Date.now()}`,
-          run_id: runId,
-          type: "tool.failed",
-          timestamp: new Date().toISOString(),
-          data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
-        };
-        if (emitEvent) emitEvent(evt);
-        return { status: "denied", event: evt, error: err };
-      }
-
-      const execResult = await GlobalCapabilityExecutor.execute(toolName, toolArgs, context.signal);
-      if (!execResult.success) {
-        const err: StructuredError = {
-          code: execResult.error?.code || "TOOL_EXECUTION_FAILED",
-          message: execResult.error?.message || "Execution failed",
-          category: "TOOL",
-          retryable: false,
-        };
-        const evt: RunEvent = {
-          id: `evt_fail_${Date.now()}`,
-          run_id: runId,
-          type: "tool.failed",
-          timestamp: new Date().toISOString(),
-          data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
-        };
-        if (emitEvent) emitEvent(evt);
-        return { status: "denied", event: evt, error: err };
-      }
-
-      let evidenceRecords: EvidenceRecord[] = [];
-      if (cap.supports_evidence) {
-        const evidenceId = `ev_${runId}_${Date.now()}`;
-        evidenceRecords = [
-          {
-            evidence_id: evidenceId,
-            source: toolName,
-            provenance_hash: `sha256-${crypto.createHash("sha256").update(JSON.stringify(execResult.result)).digest("hex")}`,
-          },
-        ];
-        RunEvidenceStore.getGlobalInstance().record({
-          trace_id: runId,
-          span_id: evidenceId,
-          run_id: runId,
-          name: `capability:${toolName}`,
-          kind: "tool_execution",
-          status: "OK",
-          start_time: new Date().toISOString(),
-          attributes: { tool_name: toolName },
-          events: [],
-          links: [],
-        });
-      }
-
-      const completedEvent: RunEvent = {
-        id: `evt_comp_${Date.now()}`,
-        run_id: runId,
-        type: "tool.completed",
-        timestamp: new Date().toISOString(),
-        data: {
-          tool_call_id: toolCallId,
-          tool_name: toolName,
-          execution: "shared",
-          result: execResult.result,
-          evidence_records: evidenceRecords,
-        },
-      };
-      if (emitEvent) emitEvent(completedEvent);
-      return { status: "executed_shared", event: completedEvent, result: execResult.result };
+      return executeSharedGlobalCapability(runId, toolCallId, toolName, toolArgs, context.signal, emitEvent);
     }
 
-    // 3. Local Application Tool Admission
-    if (!context.session_id) {
+    return admitLocalApplicationTool({
+      runId,
+      toolCallId,
+      toolName,
+      toolArgs,
+      appPrefix,
+      appId,
+      sessionId,
+      profile,
+      context,
+      emitEvent,
+    });
+  }
+}
+
+type RunEventEmitter = (event: Omit<RunEvent, "id" | "timestamp">) => void;
+type LoadedProfile = NonNullable<Awaited<ReturnType<typeof ProfileRegistry.loadProfile>>>;
+
+function resolveRunIdentity(request: CreateRunRequest): { project: string; username: string } {
+  if (request.identity) return request.identity;
+  return { project: request.app_id || "default", username: "internal" };
+}
+
+function buildRunIdempotencyKey(
+  request: CreateRunRequest,
+  identity: { project: string; username: string },
+): string | undefined {
+  const key = request.idempotency_key;
+  if (!key) return undefined;
+  return JSON.stringify([identity.project, identity.username, request.app_id, request.session_id, key]);
+}
+
+function emitFailedRunWithId(
+  runId: string,
+  err: StructuredError,
+  emitEvent: RunEventEmitter,
+): RunResult {
+  emitEvent({ run_id: runId, runId, type: "run.failed", data: { error: err } });
+  return { run_id: runId, id: runId, status: "failed", messages: [], error: err };
+}
+
+function validateRunContractVersion(
+  runId: string,
+  requestedContractVersion: string | undefined,
+  emitEvent: RunEventEmitter,
+): RunResult | null {
+  if (!requestedContractVersion) return null;
+  if (["1.0.0", "1.1.0", "1.2.0"].includes(requestedContractVersion)) return null;
+  const versionErr: StructuredError = {
+    code: "CONTRACT_VERSION_MISMATCH",
+    message: `Incompatible contract version '${requestedContractVersion}'. Supported major versions: 1.x.x`,
+    retryable: false,
+    category: "CLIENT",
+  };
+  return emitFailedRunWithId(runId, versionErr, emitEvent);
+}
+
+async function loadAndValidateRunProfile(
+  runId: string,
+  request: CreateRunRequest,
+  emitEvent: RunEventEmitter,
+): Promise<{ profile: LoadedProfile } | { failedResult: RunResult }> {
+  const profileId = request.profile_id || request.profileId;
+  if (!profileId) {
+    const err: StructuredError = {
+      code: "INVALID_RUN_REQUEST",
+      message: "Missing profile_id in run request",
+      retryable: false,
+      category: "CLIENT",
+    };
+    return { failedResult: emitFailedRunWithId(runId, err, emitEvent) };
+  }
+
+  const profile = await ProfileRegistry.loadProfile(profileId, request.profile_version);
+  if (!profile) {
+    const err: StructuredError = {
+      code: "PROFILE_NOT_FOUND",
+      message: `Profile ${profileId} not found`,
+      retryable: false,
+      category: "CLIENT",
+    };
+    return { failedResult: emitFailedRunWithId(runId, err, emitEvent) };
+  }
+
+  await DynamicModelResolver.queryLiveHosts();
+
+  try {
+    ProfileRegistry.validateOverrides(profile, request.runtime_overrides);
+  } catch (overrideErr: any) {
+    const err: StructuredError = {
+      code: "INVALID_RUN_REQUEST",
+      message: overrideErr.message,
+      retryable: false,
+      category: "CLIENT",
+    };
+    return { failedResult: emitFailedRunWithId(runId, err, emitEvent) };
+  }
+  return { profile };
+}
+
+function cachedStatusToEventType(status: string): "run.completed" | "run.cancelled" | "run.failed" {
+  if (status === "completed") return "run.completed";
+  if (status === "cancelled") return "run.cancelled";
+  return "run.failed";
+}
+
+async function reserveRunIdempotencyOrReturn(
+  runId: string,
+  idempotencyKey: string,
+  emitEvent: RunEventEmitter,
+): Promise<RunResult | null> {
+  const reservation = await RunStore.reserveIdempotencyKey(idempotencyKey, runId);
+  if (reservation.success) return null;
+  if (reservation.cachedResult) {
+    const cached = reservation.cachedResult;
+    emitEvent({
+      run_id: cached.run_id,
+      runId: cached.run_id,
+      type: cachedStatusToEventType(cached.status),
+      data: cached,
+    });
+    return cached;
+  }
+  if (reservation.conflict) {
+    const conflictError: StructuredError = {
+      code: "IDEMPOTENCY_CONFLICT",
+      message: `Concurrent run active under idempotency key '${idempotencyKey}'`,
+      retryable: true,
+      category: "CLIENT",
+      details: { existing_run_id: reservation.existingRunId },
+    };
+    return emitFailedRunWithId(runId, conflictError, emitEvent);
+  }
+  return null;
+}
+
+async function createAndAdmitRunRecord(
+  runId: string,
+  identity: { project: string; username: string },
+  request: CreateRunRequest,
+  profile: LoadedProfile,
+  idempotencyKey: string | undefined,
+  emitEvent: RunEventEmitter,
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const initialRecord: RunRecord = {
+    run_id: runId,
+    identity,
+    session_id: request.session_id,
+    status: "admitted",
+    profile_id: profile.profile_id,
+    profile_version: profile.version,
+    created_at: nowIso,
+    current_turn: 0,
+    idempotency_key: idempotencyKey,
+    input: request.input,
+    messages: [],
+    usage: {
+      prompt_tokens: null,
+      completion_tokens: null,
+      total_tokens: null,
+      tool_calls_count: 0,
+      retry_count: 0,
+      duration_ms: 0,
+    },
+    evidence_records: [],
+  };
+  await RunStore.createRun(initialRecord);
+
+  emitEvent({
+    run_id: runId,
+    runId,
+    type: "run.admitted",
+    data: {
+      run_id: runId,
+      profile_id: profile.profile_id,
+      version: profile.version,
+      status: "admitted",
+    },
+  });
+}
+
+function setupRunDeadlinesAndAbort(
+  runId: string,
+  request: CreateRunRequest,
+  profile: LoadedProfile,
+  emitEvent: RunEventEmitter,
+) {
+  const abortController = new AbortController();
+  const finalizeController = new AbortController();
+  let deadlineTimedOut = false;
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  let softDeadlineTimer: NodeJS.Timeout | undefined;
+  let finalizeRequest: { reason: string } | undefined;
+  let runContextRef: { finalizeRequested?: { reason: string } } | undefined;
+
+  const deadlineMs =
+    request.deadline_ms ??
+    request.budget?.max_duration_ms ??
+    request.budget?.maxDurationMs ??
+    profile.budget_limits.max_duration_ms;
+
+  if (deadlineMs >= 0) {
+    deadlineTimer = setTimeout(() => {
+      deadlineTimedOut = true;
+      abortController.abort(new Error("DEADLINE_EXCEEDED"));
+    }, deadlineMs);
+  }
+
+  const finalReserveMs = deadlineMs > 0 ? Math.min(90000, Math.floor(deadlineMs * 0.3)) : 0;
+  const softMs = deadlineMs > 0 ? deadlineMs - finalReserveMs : 0;
+  if (softMs > 0) {
+    softDeadlineTimer = setTimeout(() => {
+      if (finalizeRequest) return;
+      finalizeRequest = { reason: "DEADLINE_SOFT" };
+      if (runContextRef) runContextRef.finalizeRequested = finalizeRequest;
+      finalizeController.abort(new Error("DEADLINE_SOFT"));
+      emitEvent({
+        run_id: runId,
+        runId,
+        type: "run.warning",
+        data: {
+          code: "DEADLINE_SOFT",
+          message: "Soft deadline reached; the run will answer now with the information already gathered.",
+        },
+      });
+    }, softMs);
+  }
+
+  if (request.signal) {
+    request.signal.addEventListener("abort", () => {
+      abortController.abort();
+    });
+  }
+  if (deadlineMs === 0) {
+    deadlineTimedOut = true;
+    abortController.abort();
+  }
+
+  return {
+    abortController,
+    finalizeController,
+    deadlineTimer,
+    softDeadlineTimer,
+    deadlineMs,
+    finalReserveMs,
+    steering: [] as string[],
+    isDeadlineTimeout: () => deadlineTimedOut,
+    getFinalizeRequest: () => finalizeRequest,
+    bindRunContext: (ctx: { finalizeRequested?: { reason: string } }) => {
+      runContextRef = ctx;
+      if (finalizeRequest) ctx.finalizeRequested = finalizeRequest;
+    },
+  };
+}
+
+async function handlePreExecutionAbort(
+  runId: string,
+  isDeadlineTimeout: boolean,
+  idempotencyKey: string | undefined,
+  emitEvent: RunEventEmitter,
+): Promise<RunResult> {
+  const status = isDeadlineTimeout ? "timed_out" : "cancelled";
+  const cancelPayload: StructuredError = {
+    code: isDeadlineTimeout ? "DEADLINE_EXCEEDED" : "RUN_CANCELLED",
+    message: isDeadlineTimeout
+      ? "Run deadline exhausted before execution"
+      : "Run cancelled before execution",
+    retryable: false,
+    category: "CLIENT",
+  };
+  await RunStore.updateState(runId, status, {
+    error: cancelPayload,
+    completed_at: new Date().toISOString(),
+  });
+  emitEvent({
+    run_id: runId,
+    runId,
+    type: isDeadlineTimeout ? "run.failed" : "run.cancelled",
+    data: { error: cancelPayload },
+  });
+  const cancelled: RunResult = {
+    run_id: runId,
+    id: runId,
+    status,
+    messages: [],
+    error: cancelPayload,
+  };
+  if (idempotencyKey) {
+    await RunStore.completeIdempotency(idempotencyKey, cancelled);
+  }
+  return cancelled;
+}
+
+function validateWorkerTaskEnvelope(workerId: string, taskId: string, result: any): void {
+  const isValidStatus = Boolean(
+    result &&
+      result.taskId === taskId &&
+      ["success", "error", "cancelled"].includes(result.status),
+  );
+  if (!isValidStatus) {
+    throw Object.assign(new Error(`Worker '${workerId}' returned an invalid task result`), {
+      code: "WORKER_RESULT_INVALID",
+    });
+  }
+}
+
+function validateWorkerUsageAndBudget(
+  workerId: string,
+  result: any,
+  perWorkerTokens: number,
+): void {
+  const usage = result.usage;
+  const usageValues = usage
+    ? [usage.promptTokens, usage.completionTokens, usage.totalTokens, usage.durationMs]
+    : null;
+  const allNonNegInts = Boolean(
+    usageValues && usageValues.every((value) => Number.isInteger(value) && value >= 0),
+  );
+  if (!allNonNegInts) {
+    throw Object.assign(new Error(`Worker '${workerId}' returned invalid usage`), {
+      code: "WORKER_RESULT_INVALID",
+    });
+  }
+  const sumMatches = usage.totalTokens === usage.promptTokens + usage.completionTokens;
+  if (!sumMatches || usage.totalTokens > perWorkerTokens) {
+    throw Object.assign(
+      new Error(`Worker '${workerId}' exceeded its allocated token budget`),
+      { code: "WORKER_BUDGET_EXHAUSTED" },
+    );
+  }
+}
+
+function validateWorkerEvidenceRefs(workerId: string, evidenceRefs: unknown): void {
+  const isInvalid =
+    !Array.isArray(evidenceRefs) ||
+    evidenceRefs.length > 32 ||
+    evidenceRefs.some((ref) => typeof ref !== "string" || ref.length > 2048);
+  if (isInvalid) {
+    throw Object.assign(
+      new Error(`Worker '${workerId}' returned invalid evidence references`),
+      { code: "WORKER_RESULT_INVALID" },
+    );
+  }
+}
+
+async function runSingleWorkerTask(params: {
+  runId: string;
+  worker: ReturnType<typeof RuntimeExtensions.workers>[number];
+  request: CreateRunRequest;
+  perWorkerTokens: number;
+  deadlineMs: number;
+  startTime: number;
+  abortSignal: AbortSignal;
+  accounting: CanonicalProviderBudget;
+  workerEvidence: EvidenceRecord[];
+  contributedContext: string[];
+  emitEvent: RunEventEmitter;
+}): Promise<void> {
+  const {
+    runId,
+    worker,
+    request,
+    perWorkerTokens,
+    deadlineMs,
+    startTime,
+    abortSignal,
+    accounting,
+    workerEvidence,
+    contributedContext,
+    emitEvent,
+  } = params;
+  const taskId = `worker-${worker.id}-${crypto.randomUUID()}`;
+  const remainingMs = Math.max(1, deadlineMs - (Date.now() - startTime));
+  emitEvent({
+    run_id: runId,
+    type: "worker.dispatched",
+    data: { worker_id: worker.id, task_id: taskId },
+  });
+  const result = await worker.execute(
+    {
+      workerId: worker.id,
+      taskId,
+      parameters: { input: structuredClone(request.input) },
+      allocatedBudget: { maxTokens: perWorkerTokens, maxDurationMs: remainingMs },
+    },
+    {
+      parentRunId: runId,
+      traceId: runId,
+      parentSpanId: runId,
+      signal: abortSignal,
+      emitEvent: (type, data) => emitEvent({ run_id: runId, type: type as any, data }),
+    },
+  );
+  abortSignal.throwIfAborted();
+  validateWorkerTaskEnvelope(worker.id, taskId, result);
+  validateWorkerUsageAndBudget(worker.id, result, perWorkerTokens);
+  validateWorkerEvidenceRefs(worker.id, result.evidenceRefs);
+
+  const workerContext = JSON.stringify({
+    worker_id: worker.id,
+    task_id: taskId,
+    status: result.status,
+    output: result.output,
+    evidence_refs: result.evidenceRefs,
+    error: result.error,
+  });
+  if (Buffer.byteLength(workerContext, "utf8") > 32 * 1024) {
+    throw Object.assign(
+      new Error(`Worker '${worker.id}' output exceeded the context limit`),
+      { code: "WORKER_RESULT_INVALID" },
+    );
+  }
+  accounting.chargeExternalUsage(result.usage.promptTokens, result.usage.completionTokens);
+  workerEvidence.push(
+    ...result.evidenceRefs.map((ref: string, index: number) => ({
+      evidence_id: `worker-${worker.id}-${index}-${crypto.createHash("sha256").update(ref).digest("hex").slice(0, 16)}`,
+      source: `worker:${worker.id}`,
+      provenance_hash: `sha256-${crypto.createHash("sha256").update(ref).digest("hex")}`,
+      redacted: false,
+    })),
+  );
+  contributedContext.push(workerContext);
+  emitEvent({
+    run_id: runId,
+    type: "worker.completed",
+    data: {
+      worker_id: worker.id,
+      task_id: taskId,
+      status: result.status,
+      usage: result.usage,
+      evidence_refs: result.evidenceRefs,
+      error: result.error,
+    },
+  });
+}
+
+async function executeRunWorkers(params: {
+  runId: string;
+  request: CreateRunRequest;
+  profile: LoadedProfile;
+  deadlineMs: number;
+  startTime: number;
+  abortSignal: AbortSignal;
+  accounting: CanonicalProviderBudget;
+  contributedContext: string[];
+  emitEvent: RunEventEmitter;
+}): Promise<EvidenceRecord[]> {
+  const { profile, accounting } = params;
+  const workers = RuntimeExtensions.workers(profile);
+  const workerEvidence: EvidenceRecord[] = [];
+  if (workers.length === 0) return workerEvidence;
+
+  const concurrency = Math.max(
+    1,
+    Math.min(workers.length, profile.budget_limits.max_concurrent_workers ?? 1),
+  );
+  const perWorkerTokens = Math.max(1, Math.floor(accounting.limit / (workers.length + 1)));
+  let nextWorker = 0;
+  const executeWorkerLane = async () => {
+    while (nextWorker < workers.length) {
+      const worker = workers[nextWorker++];
+      await runSingleWorkerTask({
+        ...params,
+        worker,
+        perWorkerTokens,
+        workerEvidence,
+      });
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, () => executeWorkerLane()));
+  return workerEvidence;
+}
+
+function isObjectTypeParameterBlock(parameters: unknown): boolean {
+  if (!parameters || typeof parameters !== "object") return false;
+  return "type" in parameters && (parameters as { type?: unknown }).type === "object";
+}
+
+function isValidSuppliedLocalSchemaObject(s: unknown): s is {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+} {
+  if (!s || typeof s !== "object") return false;
+  const candidate = s as Record<string, unknown>;
+  if (typeof candidate.name !== "string" || typeof candidate.description !== "string") {
+    return false;
+  }
+  return isObjectTypeParameterBlock(candidate.parameters);
+}
+
+function formatRunUserTask(input: CreateRunRequest["input"]): string {
+  if (typeof input === "string") return input;
+  if (Array.isArray(input)) {
+    return input.map((m) => `${m.role}: ${m.content}`).join("\n");
+  }
+  return JSON.stringify(input);
+}
+
+function assembleRunSystemContext(
+  request: CreateRunRequest,
+  profile: LoadedProfile,
+  identity: { project: string; username: string },
+  contributedContext: string[],
+) {
+  const assembly = new ContextAssembly();
+  const userTask = formatRunUserTask(request.input);
+  const promptSuppliedSchemas: unknown = request.runtime_overrides?.local_tool_schemas;
+  const suppliedList = Array.isArray(promptSuppliedSchemas) ? promptSuppliedSchemas : [];
+  const promptCallableLocalNames = new Set(
+    suppliedList.filter(isValidSuppliedLocalSchemaObject).map((s) => s.name),
+  );
+  const callableToolSchemas = profile.tool_policy.whitelist
+    .filter((name: string) => name.startsWith("global.") || promptCallableLocalNames.has(name))
+    .map((name: string) => ({ name }));
+
+  return assembly.assemble({
+    agentRole: profile.role,
+    project: identity.project,
+    roleRules: profile.system_prompt,
+    artifactExcerpts: contributedContext,
+    outputContract: "Adhere to structured tool results and verifiable claims.",
+    toolProtocol: "Execute enabled tools according to whitelist policy.",
+    selectedToolSchemas: callableToolSchemas,
+    userTask,
+  });
+}
+
+function resolveRunModelAndProvider(request: CreateRunRequest, profile: LoadedProfile) {
+  const requestedModel = request.model || request.runtime_overrides?.model;
+  const requestedProvider = request.runtime_overrides?.provider
+    ? String(request.runtime_overrides.provider)
+    : undefined;
+
+  const dynamicResolution = DynamicModelResolver.resolveProviderAndModel(
+    profile.role,
+    profile.model_constraints.allowed_providers,
+    requestedModel || profile.model_constraints.default_model,
+    requestedProvider,
+  );
+
+  const selectedModel =
+    requestedModel || dynamicResolution.model || profile.model_constraints.default_model;
+
+  const preferredProvider =
+    requestedProvider ||
+    dynamicResolution.provider ||
+    profile.model_constraints.provider_by_model?.[selectedModel] ||
+    profile.model_constraints.allowed_providers[0] ||
+    "vllm-shim";
+
+  let provider: any = {};
+  try {
+    provider = getProvider(preferredProvider) || {};
+  } catch {
+    provider = {};
+  }
+  return { selectedModel, preferredProvider, provider };
+}
+
+function resolveRunMaxToolCalls(request: CreateRunRequest, profile: LoadedProfile): number {
+  return (
+    request.budget?.max_tool_calls ??
+    request.budget?.maxToolCalls ??
+    profile.budget_limits.max_tool_calls
+  );
+}
+
+function resolveRunMaxTokens(request: CreateRunRequest, profile: LoadedProfile): number {
+  return (
+    request.budget?.max_tokens ??
+    request.budget?.maxTokens ??
+    profile.budget_limits.max_tokens
+  );
+}
+
+function resolveRunReasoningEffort(
+  request: CreateRunRequest,
+  profile: LoadedProfile,
+): string | undefined {
+  if (typeof request.runtime_overrides?.reasoning_effort === "string") {
+    return request.runtime_overrides.reasoning_effort;
+  }
+  return profile.model_constraints.reasoning_effort || undefined;
+}
+
+function buildRunExecutionOptions(
+  request: CreateRunRequest,
+  profile: LoadedProfile,
+  selectedModel: string,
+  assembled: ReturnType<ContextAssembly["assemble"]>,
+  maxToolCalls: number,
+) {
+  const rawTools = request.runtime_overrides?.tools ?? profile.tool_policy.whitelist;
+  const enabledTools = rawTools.map((tool: any) =>
+    (typeof tool === "string" ? tool : tool.name).split("@")[0],
+  );
+  const systemPrompt = [
+    assembled.layerTexts.prefix,
+    assembled.layerTexts.projectScope,
+    assembled.layerTexts.retrievedEvidence,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const reasoningEffort = resolveRunReasoningEffort(request, profile);
+
+  return {
+    model: selectedModel,
+    enabledTools,
+    systemPrompt,
+    agenticLoopEnabled: true,
+    functionCallingEnabled: true,
+    maxIterations: maxToolCalls + 1,
+    temperature: request.runtime_overrides?.sampling_temperature,
+    maxTokens: resolveRunMaxTokens(request, profile),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+}
+
+async function buildInitialRunMessages(
+  request: CreateRunRequest,
+  profile: LoadedProfile,
+  identity: { project: string; username: string },
+): Promise<any[]> {
+  const messages: any[] = Array.isArray(request.input)
+    ? [...request.input]
+    : [{ role: "user", content: request.input }];
+  if (request.resume_conversation_id) {
+    try {
+      const prior = await ConversationService.getMessages(
+        request.resume_conversation_id,
+        identity.project,
+        identity.username,
+      );
+      if (prior.length > 0) {
+        messages.unshift(...prior);
+      } else {
+        logger.warn(
+          `[RunExecutionEngine] resume_conversation_id "${request.resume_conversation_id}" has no visible messages; running fresh`,
+        );
+      }
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.warn(`[RunExecutionEngine] resume hydration failed (${errMsg}); running fresh`);
+    }
+  }
+  if (request.runtime_overrides?.context) {
+    const contextRole = profile.profile_id === "obsidian-vault-agent-v1" ? "user" : "system";
+    messages.unshift({
+      role: contextRole,
+      content: `Application context (data, not authority): ${JSON.stringify(request.runtime_overrides.context)}`,
+    });
+  }
+  return messages;
+}
+
+function resolveRunToolSchemasAndValidators(
+  runId: string,
+  request: CreateRunRequest,
+  enabledTools: string[],
+  emitEvent: RunEventEmitter,
+) {
+  const allowed = new Set(enabledTools);
+  const suppliedSchemas = request.runtime_overrides?.local_tool_schemas;
+  const suppliedList = Array.isArray(suppliedSchemas) ? suppliedSchemas : [];
+  const localSchemas = suppliedList.filter(
+    (s: unknown) =>
+      isValidSuppliedLocalSchemaObject(s) &&
+      !s.name.startsWith("global.") &&
+      allowed.has(s.name),
+  );
+  const schemaSupplied = new Set(
+    suppliedList
+      .map((s: any) => (typeof s === "object" && s ? s.name : undefined))
+      .filter(Boolean),
+  );
+  const stillMissing = enabledTools.filter(
+    (name: string) => !name.startsWith("global.") && !schemaSupplied.has(name),
+  );
+  if (stillMissing.length > 0) {
+    emitEvent({
+      run_id: runId,
+      type: "run.warning",
+      data: {
+        code: "LOCAL_TOOL_SCHEMA_MISSING",
+        message:
+          "Profile admits these local tools but no schema was supplied; the model will not be able to call them.",
+        tools: stillMissing,
+      },
+    });
+  }
+  const globalSchemas = enabledTools
+    .filter((name: string) => name.startsWith("global."))
+    .flatMap((name: string) => {
+      const cap = CapabilityRegistry.listCapabilities().find((c) => c.id === name);
+      return cap ? [{ name, description: cap.description, parameters: cap.parameters }] : [];
+    });
+  const finalTools = [...localSchemas, ...globalSchemas];
+  const toolValidators = new Map<string, z.ZodType>();
+  for (const schema of finalTools) {
+    try {
+      toolValidators.set(schema.name, z.fromJSONSchema(schema.parameters));
+    } catch {
+      throw Object.assign(new Error(`Unsupported tool schema: ${schema.name}`), {
+        code: "TOOL_SCHEMA_UNSUPPORTED",
+      });
+    }
+  }
+  return {
+    runtimeTools: { finalTools, resolvedEnabledTools: enabledTools },
+    toolValidators,
+  };
+}
+
+function createRunContextEmitter(
+  runId: string,
+  tracker: { partialText: string },
+  emitEvent: RunEventEmitter,
+) {
+  return (event: any) => {
+    if (event.type === "chunk") {
+      const delta = event.content || event.text || "";
+      tracker.partialText += delta;
+      emitEvent({ run_id: runId, type: "message.delta", data: { delta } });
+    } else if (event.type === "run.warning") {
+      emitEvent({ run_id: runId, runId, type: "run.warning", data: event.data ?? event });
+    }
+  };
+}
+
+function checkAdmittedToolBudgetAndSchema(
+  tracker: { actualToolCalls: number },
+  maxToolCalls: number,
+  toolValidators: Map<string, z.ZodType>,
+  call: ToolCall & { arguments?: Record<string, unknown> },
+): { observation: unknown; dispatched: boolean } | null {
+  if (++tracker.actualToolCalls > maxToolCalls) {
+    if (maxToolCalls === 0) {
+      throw Object.assign(new Error("Tool call budget exhausted"), {
+        code: "TOOL_BUDGET_EXHAUSTED",
+      });
+    }
+    return {
+      observation: {
+        error: "TOOL_BUDGET_EXHAUSTED",
+        message: `Tool call budget reached (${maxToolCalls} tool calls). You must now synthesize and deliver your final comprehensive answer using the information already gathered without calling any further tools.`,
+      },
+      dispatched: false,
+    };
+  }
+  const validator = toolValidators.get(call.name);
+  if (!validator || !validator.safeParse(call.args || {}).success) {
+    throw Object.assign(new Error("Tool arguments do not match the admitted schema"), {
+      code: "TOOL_ARGUMENTS_INVALID",
+    });
+  }
+  return null;
+}
+
+async function evaluateAdmittedToolDecision(
+  profile: LoadedProfile,
+  planApproved: boolean,
+  hooks: AgentHooks,
+  context: any,
+  call: ToolCall & { arguments?: Record<string, unknown> },
+) {
+  const authorization: ProfileToolCall = {
+    profile,
+    name: call.name,
+    args: call.args || {},
+    planApproved,
+    unattended: false,
+  };
+  let decision = decideProfileToolCall(authorization);
+  if (decision.verdict !== "deny") {
+    const hookVerdict = await hooks.run("beforeToolCall", structuredClone(call), context);
+    if (hookVerdict && hookVerdict.isApproved === false) {
+      decision = decideProfileToolCall({
+        ...authorization,
+        hookDenial: hookDenialReason(hookVerdict),
+      });
+    }
+  }
+  return { authorization, decision };
+}
+
+async function awaitRunToolApprovalIfNeeded(params: {
+  runId: string;
+  decision: ToolAuthorization;
+  authorization: ProfileToolCall;
+  call: ToolCall & { arguments?: Record<string, unknown> };
+  scopeAppId: string | undefined;
+  scopeSessionId: string | undefined;
+  abortSignal: AbortSignal;
+  emitEvent: RunEventEmitter;
+}): Promise<
+  | { approved: true; approvalId: string | undefined }
+  | { approved: false; rejectedResult: { observation: unknown; dispatched: boolean } }
+> {
+  const {
+    runId,
+    decision,
+    authorization,
+    call,
+    scopeAppId,
+    scopeSessionId,
+    abortSignal,
+    emitEvent,
+  } = params;
+  if (decision.verdict !== "ask") {
+    return { approved: true, approvalId: undefined };
+  }
+  const approvalAppId = scopeAppId || call.name.split(".")[0].replace(/_/g, "-");
+  const approval = await RunApprovals.wait(
+    runId,
+    call,
+    approvalAppId,
+    scopeSessionId || "",
+    abortSignal,
+    emitEvent,
+  );
+  if (approval.approved === true) {
+    return { approved: true, approvalId: approval.id };
+  }
+  const unanswered = decideProfileToolCall(
+    approval.approved === false
+      ? { ...authorization, answer: { decision: "deny" } }
+      : { ...authorization, unattended: true },
+  );
+  const denied = authorizationError(call.name, unanswered);
+  emitEvent({
+    run_id: runId,
+    type: "tool.failed",
+    data: { tool_call_id: call.id, tool_name: call.name, error: denied },
+  });
+  return {
+    approved: false,
+    rejectedResult: {
+      observation: { error: denied.code, message: denied.message, retryable: false },
+      dispatched: false,
+    },
+  };
+}
+
+async function handleLocalToolContinuationResult(params: {
+  runId: string;
+  processedEvent: RunEvent;
+  call: ToolCall & { arguments?: Record<string, unknown> };
+  extensions: ReturnType<typeof RuntimeExtensions.resolve>;
+  hooks: AgentHooks;
+  context: any;
+  abortSignal: AbortSignal;
+  emitEvent: RunEventEmitter;
+}): Promise<{ observation: unknown; dispatched: boolean }> {
+  const { runId, processedEvent, call, extensions, hooks, context, abortSignal, emitEvent } = params;
+  const observation = await LocalToolContinuation.wait(
+    runId,
+    processedEvent,
+    abortSignal,
+    () => emitEvent(processedEvent),
+  );
+  const failed = Boolean(
+    observation && typeof observation === "object" && (observation as any).is_error,
+  );
+  emitEvent({
+    run_id: runId,
+    type: failed ? "tool.failed" : "tool.completed",
+    data: {
+      tool_call_id: processedEvent.data.tool_call_id,
+      ...(failed
+        ? {
+            error: {
+              code: "TOOL_EXECUTION_FAILED",
+              message: "Local tool returned a recoverable error",
+              details: observation,
+            },
+          }
+        : { result: observation }),
+    },
+  });
+  for (const extension of extensions) {
+    await extension.afterTool?.(call, observation);
+  }
+  await hooks.run("afterToolCall", call, observation, context);
+  return { observation: normalizeEmptyToolContent(observation), dispatched: true };
+}
+
+async function finalizeProcessedRunToolCall(params: {
+  runId: string;
+  processed: Awaited<ReturnType<typeof RunExecutionEngine.processToolCall>>;
+  call: ToolCall & { arguments?: Record<string, unknown> };
+  extensions: ReturnType<typeof RuntimeExtensions.resolve>;
+  hooks: AgentHooks;
+  context: any;
+  abortSignal: AbortSignal;
+  emitEvent: RunEventEmitter;
+}): Promise<{ observation: unknown; dispatched: boolean }> {
+  const { runId, processed, call, extensions, hooks, context, abortSignal, emitEvent } = params;
+  if (processed.status !== "admitted_local") {
+    emitEvent(processed.event);
+  }
+  if (processed.status === "denied") {
+    return {
+      observation: {
+        error: processed.error?.code || "TOOL_DENIED",
+        message: processed.error?.message || "Tool denied",
+        retryable: false,
+      },
+      dispatched: false,
+    };
+  }
+  if (processed.status === "admitted_local") {
+    return handleLocalToolContinuationResult({
+      runId,
+      processedEvent: processed.event,
+      call,
+      extensions,
+      hooks,
+      context,
+      abortSignal,
+      emitEvent,
+    });
+  }
+  for (const extension of extensions) {
+    await extension.afterTool?.(call, processed.result);
+  }
+  await hooks.run("afterToolCall", call, processed.result, context);
+  return { observation: normalizeEmptyToolContent(processed.result), dispatched: true };
+}
+
+async function executeAdmittedRunTool(params: {
+  runId: string;
+  request: CreateRunRequest;
+  profile: LoadedProfile;
+  planApproved: boolean;
+  maxToolCalls: number;
+  tracker: { actualToolCalls: number };
+  toolValidators: Map<string, z.ZodType>;
+  extensions: ReturnType<typeof RuntimeExtensions.resolve>;
+  hooks: AgentHooks;
+  context: any;
+  requestContext: Record<string, string>;
+  abortSignal: AbortSignal;
+  emitEvent: RunEventEmitter;
+  call: ToolCall & { arguments?: Record<string, unknown> };
+  toolSignal?: AbortSignal;
+}): Promise<{ observation: unknown; dispatched: boolean }> {
+  const {
+    runId,
+    request,
+    profile,
+    planApproved,
+    maxToolCalls,
+    tracker,
+    toolValidators,
+    extensions,
+    hooks,
+    context,
+    requestContext,
+    abortSignal,
+    emitEvent,
+    call,
+    toolSignal,
+  } = params;
+  abortSignal.throwIfAborted();
+  const budgetOrSchemaResult = checkAdmittedToolBudgetAndSchema(
+    tracker,
+    maxToolCalls,
+    toolValidators,
+    call,
+  );
+  if (budgetOrSchemaResult) return budgetOrSchemaResult;
+
+  const { authorization, decision } = await evaluateAdmittedToolDecision(
+    profile,
+    planApproved,
+    hooks,
+    context,
+    call,
+  );
+  if (decision.verdict === "deny" && decision.deniedBy === "hook") {
+    return { observation: deniedToolResult(call.name, decision), dispatched: false };
+  }
+  for (const extension of extensions) {
+    await extension.beforeTool?.(structuredClone(call));
+  }
+  const scopeAppId = request.app_id ?? request.appId ?? requestContext.app_id;
+  const scopeSessionId = request.session_id ?? request.sessionId ?? requestContext.session_id;
+  const approvalOutcome = await awaitRunToolApprovalIfNeeded({
+    runId,
+    decision,
+    authorization,
+    call,
+    scopeAppId,
+    scopeSessionId,
+    abortSignal,
+    emitEvent,
+  });
+  if (!approvalOutcome.approved) {
+    return (approvalOutcome as { approved: false; rejectedResult: { observation: unknown; dispatched: boolean } }).rejectedResult;
+  }
+
+  const combinedSignal = toolSignal ? AbortSignal.any([abortSignal, toolSignal]) : abortSignal;
+  const processed = await RunExecutionEngine.processToolCall(runId, call, {
+    approval_id: approvalOutcome.approvalId,
+    signal: combinedSignal,
+    profile_id: profile.profile_id,
+    profile_version: profile.version,
+    app_id: scopeAppId,
+    session_id: scopeSessionId,
+    planApproved,
+  });
+  return finalizeProcessedRunToolCall({
+    runId,
+    processed,
+    call,
+    extensions,
+    hooks,
+    context,
+    abortSignal,
+    emitEvent,
+  });
+}
+
+function hasAssistantAnswerAfterInitial(resultMessages: any[] | undefined, initialMessages: any[]): boolean {
+  if (!resultMessages) return false;
+  return resultMessages.some(
+    (m: any) =>
+      !initialMessages.includes(m) &&
+      m.role === "assistant" &&
+      typeof m.content === "string" &&
+      Boolean(m.content.trim()),
+  );
+}
+
+async function sealAndCompleteRun(params: {
+  runId: string;
+  request: CreateRunRequest;
+  profile: LoadedProfile;
+  requestedContractVersion: string | undefined;
+  idempotencyKey: string | undefined;
+  startTime: number;
+  actualToolCalls: number;
+  accounting: CanonicalProviderBudget;
+  assembled: ReturnType<ContextAssembly["assemble"]>;
+  context: any;
+  workerEvidence: EvidenceRecord[];
+  resultMessages: any[];
+  emitEvent: RunEventEmitter;
+}): Promise<RunResult> {
+  const {
+    runId,
+    request,
+    profile,
+    requestedContractVersion,
+    idempotencyKey,
+    startTime,
+    actualToolCalls,
+    accounting,
+    assembled,
+    context,
+    workerEvidence,
+    resultMessages,
+    emitEvent,
+  } = params;
+  const durationMs = Date.now() - startTime;
+  const spans = RunEvidenceStore.getGlobalInstance().getSpans(runId);
+  const evidenceRecords: EvidenceRecord[] = [
+    ...workerEvidence,
+    ...spans.map((s, idx) => ({
+      evidence_id: s.span_id || `ev-${runId}-${idx}`,
+      source: s.name || (s.attributes?.tool_name as string) || "runtime-span",
+      provenance_hash: (s.attributes?.input_hash as string) || undefined,
+      redacted: false,
+    })),
+  ];
+
+  const usage: RunUsage = accounting.usage(actualToolCalls, durationMs);
+  const rawReceiptId = assembled.receipt.receipt_id;
+  const contractVersion = requestedContractVersion || "1.2.0";
+
+  const contextReceipt = {
+    ...assembled.receipt,
+    input_delivery: "messages",
+    input_hash: `sha256-${crypto.createHash("sha256").update(JSON.stringify(request.input)).digest("hex")}`,
+    contract_version: contractVersion,
+    profile_version: profile.version,
+    session_state_hash: sessionStateHash(context.sessionState),
+    receipt_id: rawReceiptId.startsWith("sha256-") ? rawReceiptId : `sha256-${rawReceiptId}`,
+  };
+
+  const finalResult: RunResult = {
+    contract_version: contractVersion,
+    run_id: runId,
+    id: runId,
+    status: "completed",
+    profile_id: profile.profile_id,
+    profile_version: profile.version,
+    messages: resultMessages,
+    usage,
+    context_receipt: contextReceipt,
+    evidence_records: evidenceRecords,
+  };
+
+  await RunStore.updateState(runId, "completed", {
+    completed_at: new Date().toISOString(),
+    messages: finalResult.messages,
+    usage,
+    context_receipt: contextReceipt,
+    evidence_records: evidenceRecords,
+  });
+
+  if (idempotencyKey) {
+    await RunStore.completeIdempotency(idempotencyKey, finalResult);
+  }
+
+  emitEvent({
+    run_id: runId,
+    runId,
+    type: "run.completed",
+    data: finalResult,
+  });
+  return finalResult;
+}
+
+async function executeAdmittedRunBody(params: {
+  runId: string;
+  request: CreateRunRequest;
+  profile: LoadedProfile;
+  identity: { project: string; username: string };
+  idempotencyKey: string | undefined;
+  requestedContractVersion: string | undefined;
+  deadlineState: ReturnType<typeof setupRunDeadlinesAndAbort>;
+  finalizeController: AbortController;
+  deadlineMs: number;
+  finalReserveMs: number;
+  steering: string[];
+  startTime: number;
+  accounting: CanonicalProviderBudget;
+  tracker: { actualToolCalls: number; partialText: string };
+  emitEvent: RunEventEmitter;
+}): Promise<RunResult> {
+  const {
+    runId,
+    request,
+    profile,
+    identity,
+    idempotencyKey,
+    requestedContractVersion,
+    deadlineState,
+    finalizeController,
+    deadlineMs,
+    finalReserveMs,
+    steering,
+    startTime,
+    accounting,
+    tracker,
+    emitEvent,
+  } = params;
+  const abortSignal = deadlineState.abortController.signal;
+  const extensions = RuntimeExtensions.resolve(profile);
+  const contributedContext = await Promise.all(
+    extensions.filter((e) => e.context).map((e) => e.context!(request)),
+  );
+  const workerEvidence = await executeRunWorkers({
+    runId,
+    request,
+    profile,
+    deadlineMs,
+    startTime,
+    abortSignal,
+    accounting,
+    contributedContext,
+    emitEvent,
+  });
+  abortSignal.throwIfAborted();
+
+  const assembled = assembleRunSystemContext(request, profile, identity, contributedContext);
+  const { selectedModel, preferredProvider, provider } = resolveRunModelAndProvider(request, profile);
+
+  HarnessInstrumenter.startRun({
+    runId,
+    traceId: idempotencyKey,
+    project: identity.project,
+    agentRole: profile.role,
+    model: selectedModel,
+  });
+
+  const maxToolCalls = resolveRunMaxToolCalls(request, profile);
+  const options = buildRunExecutionOptions(request, profile, selectedModel, assembled, maxToolCalls);
+  const messages = await buildInitialRunMessages(request, profile, identity);
+  const { runtimeTools, toolValidators } = resolveRunToolSchemasAndValidators(
+    runId,
+    request,
+    options.enabledTools,
+    emitEvent,
+  );
+
+  const context: any = {
+    options,
+    runtimeSteering: steering,
+    messages,
+    providerName: preferredProvider,
+    resolvedModel: selectedModel,
+    provider: accounting.wrap(provider),
+    conversationId: runId,
+    agentConversationId: runId,
+    runId,
+    traceId: runId,
+    project: identity.project,
+    username: identity.username,
+    clientIp: "127.0.0.1",
+    signal: abortSignal,
+    runtimeTools,
+    finalizeSignal: finalizeController.signal,
+    ...(finalReserveMs > 0 ? { finalPassTimeoutMs: Math.max(5000, finalReserveMs - 10000) } : {}),
+    canonicalBudget: accounting,
+    emit: createRunContextEmitter(runId, tracker, emitEvent),
+    sessionState: createSessionState(new Date().toISOString()),
+  };
+  deadlineState.bindRunContext(context);
+
+  const requestContext = (request.runtime_overrides?.context || {}) as Record<string, string>;
+  const hooks = new AgentHooks();
+  await hooks.run("sessionStart", context, { runId });
+  const planApproved =
+    Boolean(context.planApproved) || Boolean((request.runtime_overrides as any)?.planApproved);
+
+  context.runtimeToolExecutor = async (
+    call: ToolCall & { arguments?: Record<string, unknown> },
+    toolSignal?: AbortSignal,
+  ) => {
+    const localPolicy = profile.local_tool_policy?.[call.name];
+    const writeCapture = captureWriteSyntaxGuard(
+      (call.args || call.arguments || {}) as Record<string, unknown>,
+      localPolicy?.effect,
+    );
+    const { observation, dispatched } = await executeAdmittedRunTool({
+      runId,
+      request,
+      profile,
+      planApproved,
+      maxToolCalls,
+      tracker,
+      toolValidators,
+      extensions,
+      hooks,
+      context,
+      requestContext,
+      abortSignal,
+      emitEvent,
+      call,
+      toolSignal,
+    });
+    const guarded = dispatched
+      ? enforceWriteSyntaxGuard(writeCapture, observation)
+      : observation;
+    context.sessionState = applyObservation(context.sessionState, call.name, guarded);
+    return guarded;
+  };
+
+  if (options.maxTokens === 0) {
+    throw Object.assign(new Error("Token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+  }
+
+  const result =
+    process.env.LAS_RUNS_LOOP === "legacy"
+      ? await AgenticLoopService.runAgenticLoop(context)
+      : await runCoreLoopForRun(context);
+  abortSignal.throwIfAborted();
+  if (!hasAssistantAnswerAfterInitial(result.messages, messages)) {
+    throw Object.assign(new Error("Run ended without an assistant answer"), {
+      code: "INCOMPLETE_RUN",
+    });
+  }
+
+  for (const extension of extensions) {
+    await extension.validate?.(result.messages);
+  }
+  abortSignal.throwIfAborted();
+
+  const stopPayload = {
+    runId,
+    messages: result.messages || [],
+    toolCalls: tracker.actualToolCalls,
+  };
+  await hooks.run("runStop", context, stopPayload);
+  await hooks.run("sessionEnd", context, stopPayload);
+
+  return sealAndCompleteRun({
+    runId,
+    request,
+    profile,
+    requestedContractVersion,
+    idempotencyKey,
+    startTime,
+    actualToolCalls: tracker.actualToolCalls,
+    accounting,
+    assembled,
+    context,
+    workerEvidence,
+    resultMessages: result.messages || [],
+    emitEvent,
+  });
+}
+
+async function handleAbortedRunCatch(
+  runId: string,
+  err: any,
+  deadlineMs: number,
+  isDeadlineTimeout: boolean,
+  emitEvent: RunEventEmitter,
+): Promise<RunResult> {
+  if (isDeadlineTimeout || err.message?.includes("DEADLINE_EXCEEDED")) {
+    const timeoutPayload: StructuredError = {
+      code: "DEADLINE_EXCEEDED",
+      message: `Run wall-clock duration exceeded deadline of ${deadlineMs}ms`,
+      retryable: false,
+      category: "RESOURCE",
+    };
+    await RunStore.updateState(runId, "timed_out", {
+      error: timeoutPayload,
+      completed_at: new Date().toISOString(),
+    });
+    emitEvent({
+      run_id: runId,
+      runId,
+      type: "run.failed",
+      data: { error: timeoutPayload },
+    });
+    return {
+      run_id: runId,
+      id: runId,
+      status: "timed_out",
+      messages: [],
+      error: timeoutPayload,
+    };
+  }
+
+  const cancelPayload: StructuredError = {
+    code: "RUN_CANCELLED",
+    message: "Execution cancelled by client",
+    retryable: false,
+    category: "CLIENT",
+  };
+  await RunStore.updateState(runId, "cancelled", {
+    error: cancelPayload,
+    completed_at: new Date().toISOString(),
+  });
+  emitEvent({
+    run_id: runId,
+    runId,
+    type: "run.cancelled",
+    data: { error: cancelPayload },
+  });
+  return {
+    run_id: runId,
+    id: runId,
+    status: "cancelled",
+    messages: [],
+    error: cancelPayload,
+  };
+}
+
+async function handleRunExecutionCatch(params: {
+  runId: string;
+  err: any;
+  startTime: number;
+  deadlineMs: number;
+  isDeadlineTimeout: boolean;
+  abortSignal: AbortSignal;
+  accounting: CanonicalProviderBudget;
+  actualToolCalls: number;
+  partialText: string;
+  emitEvent: RunEventEmitter;
+}): Promise<RunResult> {
+  const {
+    runId,
+    err,
+    startTime,
+    deadlineMs,
+    isDeadlineTimeout,
+    abortSignal,
+    accounting,
+    actualToolCalls,
+    partialText,
+    emitEvent,
+  } = params;
+  const durationMs = Date.now() - startTime;
+  await RunStore.updateRun(runId, {
+    usage: accounting.usage(actualToolCalls, durationMs),
+    messages: partialText
+      ? [{ role: "assistant", content: partialText, outcome: "incomplete" }]
+      : [],
+  });
+  if (abortSignal.aborted) {
+    return handleAbortedRunCatch(runId, err, deadlineMs, isDeadlineTimeout, emitEvent);
+  }
+
+  logger.error(`Run ${runId} failed:`, err);
+  const errorPayload: StructuredError = {
+    code: err.code || "RUN_FAILED",
+    message: err.message || "Unknown error",
+    retryable: false,
+    category: err.category || "RUNTIME",
+  };
+  await RunStore.updateState(runId, "failed", {
+    error: errorPayload,
+    completed_at: new Date().toISOString(),
+  });
+  return emitFailedRunWithId(runId, errorPayload, emitEvent);
+}
+
+async function finalizeRunIdempotencyAndTimers(
+  runId: string,
+  idempotencyKey: string | undefined,
+  deadlineTimer: NodeJS.Timeout | undefined,
+  softDeadlineTimer: NodeJS.Timeout | undefined,
+  activeRuns: Map<string, unknown>,
+): Promise<void> {
+  if (idempotencyKey) {
+    const record = await RunStore.getRun(runId);
+    if (record && ["completed", "failed", "cancelled", "timed_out"].includes(record.status)) {
+      await RunStore.completeIdempotency(idempotencyKey, { ...record, id: runId });
+    }
+  }
+  clearTimeout(deadlineTimer);
+  clearTimeout(softDeadlineTimer);
+  activeRuns.delete(runId);
+}
+
+function normalizeProcessToolCallInput(toolCall: {
+  tool_call_id?: string;
+  id?: string | null;
+  tool_name?: string;
+  name?: string;
+  arguments?: Record<string, unknown>;
+  args?: Record<string, unknown>;
+}) {
+  return {
+    toolName: toolCall.tool_name || toolCall.name || "",
+    toolCallId: toolCall.tool_call_id || toolCall.id || `tc_${Date.now()}`,
+    toolArgs: toolCall.arguments || toolCall.args || {},
+  };
+}
+
+function emitDeniedToolProcessResult(
+  runId: string,
+  toolCallId: string,
+  toolName: string,
+  err: StructuredError,
+  eventId: string,
+  emitEvent?: (event: RunEvent) => void,
+  timestamp: string = new Date().toISOString(),
+): { status: "denied"; event: RunEvent; error: StructuredError } {
+  const evt: RunEvent = {
+    id: eventId,
+    run_id: runId,
+    type: "tool.failed",
+    timestamp,
+    data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
+  };
+  if (emitEvent) emitEvent(evt);
+  return { status: "denied", event: evt, error: err };
+}
+
+async function executeSharedGlobalCapability(
+  runId: string,
+  toolCallId: string,
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+  emitEvent?: (event: RunEvent) => void,
+): Promise<{
+  status: "executed_shared" | "denied";
+  event: RunEvent;
+  result?: unknown;
+  error?: StructuredError;
+}> {
+  const cap = CapabilityRegistry.getCapability(toolName);
+  if (!cap) {
+    const err: StructuredError = {
+      code: "UNKNOWN_CAPABILITY",
+      message: `Unknown global capability '${toolName}'`,
+      category: "POLICY",
+      retryable: false,
+    };
+    return emitDeniedToolProcessResult(runId, toolCallId, toolName, err, `evt_unk_${Date.now()}`, emitEvent);
+  }
+
+  const execResult = await GlobalCapabilityExecutor.execute(toolName, toolArgs, signal);
+  if (!execResult.success) {
+    const err: StructuredError = {
+      code: execResult.error?.code || "TOOL_EXECUTION_FAILED",
+      message: execResult.error?.message || "Execution failed",
+      category: "TOOL",
+      retryable: false,
+    };
+    return emitDeniedToolProcessResult(runId, toolCallId, toolName, err, `evt_fail_${Date.now()}`, emitEvent);
+  }
+
+  let evidenceRecords: EvidenceRecord[] = [];
+  if (cap.supports_evidence) {
+    const evidenceId = `ev_${runId}_${Date.now()}`;
+    evidenceRecords = [
+      {
+        evidence_id: evidenceId,
+        source: toolName,
+        provenance_hash: `sha256-${crypto.createHash("sha256").update(JSON.stringify(execResult.result)).digest("hex")}`,
+      },
+    ];
+    RunEvidenceStore.getGlobalInstance().record({
+      trace_id: runId,
+      span_id: evidenceId,
+      run_id: runId,
+      name: `capability:${toolName}`,
+      kind: "tool_execution",
+      status: "OK",
+      start_time: new Date().toISOString(),
+      attributes: { tool_name: toolName },
+      events: [],
+      links: [],
+    });
+  }
+
+  const completedEvent: RunEvent = {
+    id: `evt_comp_${Date.now()}`,
+    run_id: runId,
+    type: "tool.completed",
+    timestamp: new Date().toISOString(),
+    data: {
+      tool_call_id: toolCallId,
+      tool_name: toolName,
+      execution: "shared",
+      result: execResult.result,
+      evidence_records: evidenceRecords,
+    },
+  };
+  if (emitEvent) emitEvent(completedEvent);
+  return { status: "executed_shared", event: completedEvent, result: execResult.result };
+}
+
+function admitLocalApplicationTool(params: {
+  runId: string;
+  toolCallId: string;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  appPrefix: string;
+  appId: string;
+  sessionId: string;
+  profile: LoadedProfile;
+  context: {
+    profile_id: string;
+    approval_id?: string;
+    app_id?: string;
+    session_id?: string;
+  };
+  emitEvent?: (event: RunEvent) => void;
+}): {
+  status: "admitted_local" | "denied";
+  event: RunEvent;
+  error?: StructuredError;
+} {
+  const {
+    runId,
+    toolCallId,
+    toolName,
+    toolArgs,
+    appPrefix,
+    appId,
+    sessionId,
+    profile,
+    context,
+    emitEvent,
+  } = params;
+  if (!context.session_id) {
+    const err: StructuredError = {
+      code: "SCOPE_VIOLATION",
+      message: `Local tool '${toolName}' requires valid session_id`,
+      category: "POLICY",
+      retryable: false,
+    };
+    return emitDeniedToolProcessResult(runId, toolCallId, toolName, err, `evt_nosess_${Date.now()}`, emitEvent);
+  }
+
+  if (context.app_id) {
+    const normalizedCallerApp = context.app_id.replace(/-/g, "_");
+    if (normalizedCallerApp !== appPrefix) {
       const err: StructuredError = {
         code: "SCOPE_VIOLATION",
-        message: `Local tool '${toolName}' requires valid session_id`,
+        message: `Local tool '${toolName}' namespace does not match caller app_id '${context.app_id}'`,
         category: "POLICY",
         retryable: false,
       };
-      const evt: RunEvent = {
-        id: `evt_nosess_${Date.now()}`,
-        run_id: runId,
-        type: "tool.failed",
-        timestamp: new Date().toISOString(),
-        data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
-      };
-      if (emitEvent) emitEvent(evt);
-      return { status: "denied", event: evt, error: err };
+      return emitDeniedToolProcessResult(runId, toolCallId, toolName, err, `evt_badapp_${Date.now()}`, emitEvent);
     }
+  }
 
-    if (context.app_id) {
-      const normalizedCallerApp = context.app_id.replace(/-/g, "_");
-      if (normalizedCallerApp !== appPrefix) {
-        const err: StructuredError = {
-          code: "SCOPE_VIOLATION",
-          message: `Local tool '${toolName}' namespace does not match caller app_id '${context.app_id}'`,
-          category: "POLICY",
-          retryable: false,
-        };
-        const evt: RunEvent = {
-          id: `evt_badapp_${Date.now()}`,
-          run_id: runId,
-          type: "tool.failed",
-          timestamp: new Date().toISOString(),
-          data: { tool_call_id: toolCallId, tool_name: toolName, error: err },
-        };
-        if (emitEvent) emitEvent(evt);
-        return { status: "denied", event: evt, error: err };
-      }
-    }
+  const receiptId = `auth_rec_${runId}_${crypto.randomUUID()}`;
+  const issuedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 300000).toISOString();
+  const profileId = context.profile_id || "";
+  const effect = profile.local_tool_policy?.[toolName]?.effect;
 
-    const receiptId = `auth_rec_${runId}_${crypto.randomUUID()}`;
-    const issuedAt = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 300000).toISOString(); // 5 min TTL
-    const profileId = context.profile_id || "";
-    // decideProfileToolCall above denied any local tool without
-    // local_tool_policy, so its effect metadata is registered here.
-    const effect = profile.local_tool_policy?.[toolName]?.effect;
+  const secret = process.env.RUNTIME_AUTH_SECRET || process.env.INTERNAL_EXECUTE_TOKEN;
+  if (!secret) {
+    const error: StructuredError = {
+      code: "AUTH_SIGNING_UNAVAILABLE",
+      message: "Runtime receipt signing is not configured",
+      category: "POLICY",
+      retryable: false,
+    };
+    return emitDeniedToolProcessResult(
+      runId,
+      toolCallId,
+      toolName,
+      error,
+      `evt_denied_${crypto.randomUUID()}`,
+      emitEvent,
+      issuedAt,
+    );
+  }
 
-    const secret = process.env.RUNTIME_AUTH_SECRET || process.env.INTERNAL_EXECUTE_TOKEN;
-    if (!secret) {
-      const error: StructuredError = {
-        code: "AUTH_SIGNING_UNAVAILABLE", message: "Runtime receipt signing is not configured",
-        category: "POLICY", retryable: false,
-      };
-      const event: RunEvent = {
-        id: `evt_denied_${crypto.randomUUID()}`, run_id: runId, type: "tool.failed",
-        timestamp: issuedAt, data: { tool_call_id: toolCallId, tool_name: toolName, error },
-      };
-      emitEvent?.(event);
-      return { status: "denied", event, error };
-    }
-    const argumentsJson = JSON.stringify(toolArgs);
-    const argumentsHash = crypto.createHash("sha256").update(argumentsJson).digest("hex");
-    const sigPayload = `${runId}:${toolCallId}:${toolName}:${argumentsHash}:${appId}:${sessionId}:${profileId}:${receiptId}:${expiresAt}`;
-    const signature = `hmac-sha256-${crypto.createHmac("sha256", secret).update(sigPayload).digest("hex")}`;
+  const argumentsJson = JSON.stringify(toolArgs);
+  const argumentsHash = crypto.createHash("sha256").update(argumentsJson).digest("hex");
+  const sigPayload = `${runId}:${toolCallId}:${toolName}:${argumentsHash}:${appId}:${sessionId}:${profileId}:${receiptId}:${expiresAt}`;
+  const signature = `hmac-sha256-${crypto.createHmac("sha256", secret).update(sigPayload).digest("hex")}`;
 
-    const authorizationReceipt = {
-      receipt_id: receiptId,
-      arguments_json: argumentsJson,
-      arguments_hash: argumentsHash,
-      nonce: receiptId,
-      run_id: runId,
+  const authorizationReceipt = {
+    receipt_id: receiptId,
+    arguments_json: argumentsJson,
+    arguments_hash: argumentsHash,
+    nonce: receiptId,
+    run_id: runId,
+    tool_call_id: toolCallId,
+    tool_name: toolName,
+    canonical_tool_id: toolName,
+    app_id: appId,
+    session_id: sessionId,
+    profile_id: profileId,
+    execution: "local" as const,
+    effect,
+    approval_id: context.approval_id,
+    issued_at: issuedAt,
+    expires_at: expiresAt,
+    signature,
+  };
+
+  const localInvokedEvent: RunEvent = {
+    id: `evt_loc_${Date.now()}`,
+    run_id: runId,
+    type: "tool.invoked",
+    timestamp: issuedAt,
+    data: {
       tool_call_id: toolCallId,
       tool_name: toolName,
-      canonical_tool_id: toolName,
-      app_id: appId,
-      session_id: sessionId,
-      profile_id: profileId,
-      execution: "local" as const,
+      execution: "local",
       effect,
-      approval_id: context.approval_id,
-      issued_at: issuedAt,
-      expires_at: expiresAt,
-      signature,
-    };
-
-    const localInvokedEvent: RunEvent = {
-      id: `evt_loc_${Date.now()}`,
-      run_id: runId,
-      type: "tool.invoked",
-      timestamp: issuedAt,
-      data: {
-        tool_call_id: toolCallId,
-        tool_name: toolName,
-        execution: "local",
-        effect,
-        arguments: toolArgs,
-        authorization_receipt: authorizationReceipt,
-        required_scope: {
-          app_id: appId,
-          session_id: sessionId,
-        },
+      arguments: toolArgs,
+      authorization_receipt: authorizationReceipt,
+      required_scope: {
+        app_id: appId,
+        session_id: sessionId,
       },
-    };
+    },
+  };
 
-    if (emitEvent) emitEvent(localInvokedEvent);
-    return { status: "admitted_local", event: localInvokedEvent };
-  }
+  if (emitEvent) emitEvent(localInvokedEvent);
+  return { status: "admitted_local", event: localInvokedEvent };
 }

@@ -172,6 +172,96 @@ const OPENAI_ALLOWED_SCHEMA_KEYWORDS = new Set([
  * - Forbidden keywords (pattern, minimum, maximum, default, etc.) must be stripped
  * - `anyOf` branches must each be independently valid
  */
+function convertArrayTypeSchemaToAnyOf(
+  types: string[],
+  restProperties: Record<string, unknown>,
+  ensureNullable: boolean,
+): Record<string, unknown> {
+  if (ensureNullable && !types.includes("null")) {
+    return {
+      anyOf: [
+        ...types.map((typeValue: string) => ({
+          type: typeValue,
+          ...restProperties,
+        })),
+        { type: "null" },
+      ],
+    };
+  }
+  return {
+    anyOf: types.map((typeValue: string) => ({
+      type: typeValue,
+      ...(typeValue !== "null" ? restProperties : {}),
+    })),
+  };
+}
+
+function makePropertySchemaNullable(propertySchema: unknown): unknown {
+  if (
+    !propertySchema ||
+    typeof propertySchema !== "object" ||
+    Array.isArray(propertySchema)
+  ) {
+    return propertySchema;
+  }
+  const typedPropertySchema = propertySchema as Record<string, unknown>;
+  if (typedPropertySchema.anyOf) {
+    return propertySchema;
+  }
+  if (typeof typedPropertySchema.type === "string") {
+    const { type: originalType, ...restProperties } = typedPropertySchema;
+    return {
+      anyOf: [
+        { type: originalType, ...restProperties },
+        { type: "null" },
+      ],
+    };
+  }
+  if (Array.isArray(typedPropertySchema.type)) {
+    const types = typedPropertySchema.type as string[];
+    const { type: _discardedType, ...restProperties } = typedPropertySchema;
+    return convertArrayTypeSchemaToAnyOf(types, restProperties, true);
+  }
+  return propertySchema;
+}
+
+function enforceStrictObjectProperties(cleaned: Record<string, unknown>): void {
+  cleaned.additionalProperties = false;
+  if (!cleaned.properties || typeof cleaned.properties !== "object") {
+    cleaned.properties = {};
+    cleaned.required = [];
+    return;
+  }
+  const propertiesMap = cleaned.properties as Record<string, unknown>;
+  const propertyKeys = Object.keys(propertiesMap);
+  const originalRequired = Array.isArray(cleaned.required)
+    ? (cleaned.required as string[])
+    : [];
+  const newRequired = [...originalRequired];
+
+  for (const propertyKey of propertyKeys) {
+    if (!newRequired.includes(propertyKey)) {
+      newRequired.push(propertyKey);
+      propertiesMap[propertyKey] = makePropertySchemaNullable(
+        propertiesMap[propertyKey],
+      );
+    }
+  }
+
+  if (newRequired.length > 0) {
+    cleaned.required = newRequired;
+  }
+}
+
+function isPropertiesSchemaMap(
+  isInsidePropertiesMap: boolean,
+  key: string,
+  value: unknown,
+): boolean {
+  if (isInsidePropertiesMap || key !== "properties") return false;
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function sanitizeSchemaForOpenAI(
   schema: unknown,
   isInsidePropertiesMap = false,
@@ -186,131 +276,34 @@ function sanitizeSchemaForOpenAI(
   const cleaned: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(source)) {
-    // Inside a `properties` map, keys are user-defined field names (e.g. "count", "name"),
-    // NOT JSON Schema keywords — so we skip the allowlist filter and recurse into each
-    // property schema. At all other levels, strip unrecognized keywords.
     if (!isInsidePropertiesMap && !OPENAI_ALLOWED_SCHEMA_KEYWORDS.has(key))
       continue;
 
-    // When we encounter the schema keyword "properties" at the SCHEMA level (not inside
-    // a properties map), its value is a map of field-name → schema. We recurse with
-    // isInsidePropertiesMap = true so field names aren't filtered by the allowlist.
-    // If we're ALREADY inside a properties map and a field is named "properties",
-    // it's just a regular field name whose value is a schema — recurse normally.
-    if (
-      !isInsidePropertiesMap &&
-      key === "properties" &&
-      value &&
-      typeof value === "object" &&
-      !Array.isArray(value)
-    ) {
-      cleaned[key] = sanitizeSchemaForOpenAI(value, true);
-    } else {
-      cleaned[key] = sanitizeSchemaForOpenAI(value);
-    }
+    const recurseAsProperties = isPropertiesSchemaMap(
+      isInsidePropertiesMap,
+      key,
+      value,
+    );
+    cleaned[key] = sanitizeSchemaForOpenAI(value, recurseAsProperties);
   }
 
-  // Sanitize anyOf branches (each must be a valid strict-mode schema)
   if (Array.isArray(cleaned.anyOf)) {
     cleaned.anyOf = (cleaned.anyOf as unknown[]).map((branch: unknown) =>
       sanitizeSchemaForOpenAI(branch),
     );
   }
 
-  // Handle type:"object" — enforce strict mode properties/required/additionalProperties.
-  // Only apply at the schema level, NOT when processing a properties map (where keys are
-  // field names). A field named "properties" would trigger `cleaned.properties !== undefined`
-  // and corrupt the map with injected additionalProperties/required keys.
-  if (
+  const isObjectSchema =
     !isInsidePropertiesMap &&
-    (cleaned.type === "object" || cleaned.properties !== undefined)
-  ) {
-    cleaned.additionalProperties = false;
-
-    if (!cleaned.properties || typeof cleaned.properties !== "object") {
-      cleaned.properties = {};
-      cleaned.required = [];
-    } else {
-      const propertiesMap = cleaned.properties as Record<string, unknown>;
-      const propertyKeys = Object.keys(propertiesMap);
-      const originalRequired = Array.isArray(cleaned.required)
-        ? (cleaned.required as string[])
-        : [];
-      const newRequired = [...originalRequired];
-
-      for (const propertyKey of propertyKeys) {
-        if (!newRequired.includes(propertyKey)) {
-          newRequired.push(propertyKey);
-
-          // Make newly-required properties nullable via anyOf (not array type)
-          const propertySchema = propertiesMap[propertyKey];
-          if (
-            propertySchema &&
-            typeof propertySchema === "object" &&
-            !Array.isArray(propertySchema)
-          ) {
-            const typedPropertySchema = propertySchema as Record<
-              string,
-              unknown
-            >;
-
-            // Skip if it already has anyOf (it's already a union type)
-            if (!typedPropertySchema.anyOf) {
-              if (typeof typedPropertySchema.type === "string") {
-                const { type: originalType, ...restProperties } =
-                  typedPropertySchema;
-                propertiesMap[propertyKey] = {
-                  anyOf: [
-                    { type: originalType, ...restProperties },
-                    { type: "null" },
-                  ],
-                };
-              }
-              // If type is already an array (from source schema), convert to anyOf
-              else if (Array.isArray(typedPropertySchema.type)) {
-                const types = typedPropertySchema.type as string[];
-                const { type: _discardedType, ...restProperties } =
-                  typedPropertySchema;
-                if (!types.includes("null")) {
-                  propertiesMap[propertyKey] = {
-                    anyOf: [
-                      ...types.map((typeValue: string) => ({
-                        type: typeValue,
-                        ...restProperties,
-                      })),
-                      { type: "null" },
-                    ],
-                  };
-                } else {
-                  propertiesMap[propertyKey] = {
-                    anyOf: types.map((typeValue: string) => ({
-                      type: typeValue,
-                      ...(typeValue !== "null" ? restProperties : {}),
-                    })),
-                  };
-                }
-              }
-            }
-          }
-        }
-      }
-
-      if (newRequired.length > 0) {
-        cleaned.required = newRequired;
-      }
-    }
+    (cleaned.type === "object" || cleaned.properties !== undefined);
+  if (isObjectSchema) {
+    enforceStrictObjectProperties(cleaned);
   }
 
-  // Fix array type values anywhere else (not just in properties)
   if (Array.isArray(cleaned.type) && !cleaned.anyOf) {
     const types = cleaned.type as string[];
     const { type: _discardedType, ...restProperties } = cleaned;
-    return {
-      anyOf: types.map((typeValue: string) => ({
-        type: typeValue,
-        ...(typeValue !== "null" ? restProperties : {}),
-      })),
-    };
+    return convertArrayTypeSchemaToAnyOf(types, restProperties, false);
   }
 
   return cleaned;
@@ -399,143 +392,279 @@ export function normalizeResponsesUsage(
 
   return usage;
 }
+function decodeBase64AttachmentText(mediaRef: string, mime: string): string {
+  try {
+    const base64 = mediaRef.split(";base64,")[1];
+    const decoded = Buffer.from(base64, "base64").toString("utf-8");
+    return `[Attached file (${mime})]:\n${decoded}`;
+  } catch {
+    return `[Attached file (${mime}): unable to decode]`;
+  }
+}
+
+function isTextOrJsonMime(mime: string | null | undefined): mime is string {
+  if (!mime) return false;
+  return mime.startsWith("text/") || mime === "application/json";
+}
+
+function convertChatCompletionDataUrlPart(
+  mediaRef: string,
+): OpenAI.Chat.ChatCompletionContentPart {
+  const mime = getDataUrlMimeType(mediaRef);
+  if (mime && mime.startsWith("image/")) {
+    return { type: "image_url", image_url: { url: mediaRef } };
+  }
+  if (mime === "application/pdf") {
+    return {
+      type: "file",
+      file: { file_data: mediaRef, filename: "document.pdf" },
+    } as OpenAI.Chat.ChatCompletionContentPart;
+  }
+  if (isTextOrJsonMime(mime)) {
+    return {
+      type: "text",
+      text: decodeBase64AttachmentText(mediaRef, mime),
+    };
+  }
+  return {
+    type: "file",
+    file: { file_data: mediaRef, filename: "attachment" },
+  } as OpenAI.Chat.ChatCompletionContentPart;
+}
+
+function convertChatCompletionMediaRef(
+  mediaRef: string,
+): OpenAI.Chat.ChatCompletionContentPart | null {
+  const urlType = getUrlType(mediaRef);
+  if (urlType === "data") {
+    return convertChatCompletionDataUrlPart(mediaRef);
+  }
+  if (urlType === "http") {
+    const inferredType = inferMimeFromUrl(mediaRef);
+    if (inferredType === "image") {
+      return { type: "image_url", image_url: { url: mediaRef } };
+    }
+    return {
+      type: "file",
+      file: { file_data: mediaRef, filename: "attachment" },
+    } as OpenAI.Chat.ChatCompletionContentPart;
+  }
+  logger.warn(
+    `[openai] Skipping unresolved media ref in Chat Completions input: ${mediaRef.substring(0, 60)}...`,
+  );
+  return null;
+}
+
+function buildOpenAIAssistantMessage(
+  message: OpenAIMessage,
+): OpenAI.Chat.ChatCompletionMessageParam {
+  const nameField = message.name ? { name: message.name } : {};
+  if (message.toolCalls && message.toolCalls.length > 0) {
+    return {
+      role: "assistant",
+      ...nameField,
+      content: message.content?.trim() || null,
+      tool_calls: message.toolCalls.map((toolCall, i) => ({
+        id: toolCall.id || `call_${i}`,
+        type: "function" as const,
+        function: {
+          name: toolCall.name,
+          arguments:
+            typeof toolCall.args === "string"
+              ? toolCall.args
+              : JSON.stringify(toolCall.args || {}),
+        },
+      })),
+    };
+  }
+  return {
+    role: "assistant",
+    ...nameField,
+    content: message.content ?? "",
+  };
+}
+
+function buildOpenAIUserMessage(
+  message: OpenAIMessage,
+  nameField: { name?: string },
+): OpenAI.Chat.ChatCompletionMessageParam {
+  if (message.images && message.images.length > 0) {
+    const content: OpenAI.Chat.ChatCompletionContentPart[] = [];
+    for (const mediaRef of message.images) {
+      const part = convertChatCompletionMediaRef(mediaRef);
+      if (part) content.push(part);
+    }
+    if (message.content) {
+      content.push({ type: "text", text: message.content });
+    }
+    return { role: "user", ...nameField, content };
+  }
+
+  return {
+    role: "user",
+    ...nameField,
+    content: message.content ?? "",
+  };
+}
+
+function prepareSingleOpenAIMessage(
+  message: OpenAIMessage,
+): OpenAI.Chat.ChatCompletionMessageParam {
+  if (message.role === "tool") {
+    return {
+      role: "tool",
+      tool_call_id: message.tool_call_id || message.id || "",
+      content:
+        typeof message.content === "string"
+          ? message.content
+          : JSON.stringify(message.content ?? ""),
+    };
+  }
+
+  if (message.role === "assistant") {
+    return buildOpenAIAssistantMessage(message);
+  }
+
+  const nameField = message.name ? { name: message.name } : {};
+  if (message.role === "system" || message.role === "developer") {
+    return {
+      role: message.role,
+      ...nameField,
+      content: message.content ?? "",
+    };
+  }
+
+  return buildOpenAIUserMessage(message, nameField);
+}
+
 function prepareOpenAIMessages(
   messages: OpenAIMessage[],
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
-  return messages.map(
-    (message: OpenAIMessage): OpenAI.Chat.ChatCompletionMessageParam => {
-      // Tool result messages — include tool_call_id for correlation
-      if (message.role === "tool") {
-        return {
-          role: "tool",
-          tool_call_id: message.tool_call_id || message.id || "",
-          content:
-            typeof message.content === "string"
-              ? message.content
-              : JSON.stringify(message.content ?? ""),
-        };
-      }
+  return messages.map(prepareSingleOpenAIMessage);
+}
 
-      // Assistant messages with tool calls — include tool_calls in OpenAI format
-      if (message.role === "assistant") {
-        if (message.toolCalls && message.toolCalls.length > 0) {
-          return {
-            role: "assistant",
-            ...(message.name ? { name: message.name } : {}),
-            content: message.content?.trim() || null,
-            tool_calls: message.toolCalls.map((toolCall, i) => ({
-              id: toolCall.id || `call_${i}`,
-              type: "function" as const,
-              function: {
-                name: toolCall.name,
-                arguments:
-                  typeof toolCall.args === "string"
-                    ? toolCall.args
-                    : JSON.stringify(toolCall.args || {}),
-              },
-            })),
-          };
-        }
-        return {
-          role: "assistant",
-          ...(message.name ? { name: message.name } : {}),
-          content: message.content ?? "",
-        };
-      }
+function resolveResponsesFunctionCallId(
+  toolCall: NonNullable<OpenAIMessage["toolCalls"]>[number],
+): string {
+  if (toolCall.responsesItemId?.startsWith("fc")) {
+    return toolCall.responsesItemId;
+  }
+  if (toolCall.id?.startsWith("fc")) {
+    return toolCall.id;
+  }
+  if (toolCall.id?.startsWith("call_")) {
+    return toolCall.id.replace(/^call_/, "fc_");
+  }
+  const secureRandomString = Math.random().toString(36).substring(2, 10);
+  return `fc_${toolCall.id || secureRandomString}`;
+}
 
-      if (message.role === "system") {
-        return {
-          role: "system",
-          ...(message.name ? { name: message.name } : {}),
-          content: message.content ?? "",
-        };
-      }
+function appendResponsesAssistantToolCallItems(
+  message: OpenAIMessage,
+  result: OpenAI.Responses.ResponseInputItem[],
+): void {
+  if (message.content?.trim()) {
+    result.push({
+      role: "assistant",
+      content: message.content,
+    } as OpenAI.Responses.ResponseInputItem);
+  }
+  const toolCalls = message.toolCalls || [];
+  for (const toolCall of toolCalls) {
+    if (toolCall.reasoningItem) {
+      result.push({
+        type: "reasoning",
+        id: toolCall.reasoningItem.id,
+        summary: toolCall.reasoningItem.summary,
+      } as unknown as OpenAI.Responses.ResponseInputItem);
+    }
+    const functionCallId = resolveResponsesFunctionCallId(toolCall);
+    result.push({
+      type: "function_call",
+      id: functionCallId,
+      call_id: toolCall.id || functionCallId,
+      name: toolCall.name,
+      arguments:
+        typeof toolCall.args === "string"
+          ? toolCall.args
+          : JSON.stringify(toolCall.args || {}),
+    } as OpenAI.Responses.ResponseFunctionToolCall as unknown as OpenAI.Responses.ResponseInputItem);
+  }
+  for (const toolCall of toolCalls) {
+    if (toolCall.result === undefined) continue;
+    const fallbackFcId = toolCall.responsesItemId?.startsWith("fc")
+      ? toolCall.responsesItemId
+      : `fc_${toolCall.responsesItemId || ""}`;
+    const outputCallId = toolCall.id || fallbackFcId;
+    const resultString =
+      typeof toolCall.result === "string"
+        ? toolCall.result
+        : JSON.stringify(toolCall.result);
+    result.push({
+      type: "function_call_output",
+      call_id: outputCallId,
+      output: resultString,
+    } as unknown as OpenAI.Responses.ResponseInputItem);
+  }
+}
 
-      if (message.role === "developer") {
-        return {
-          role: "developer",
-          ...(message.name ? { name: message.name } : {}),
-          content: message.content ?? "",
-        };
-      }
+function convertResponsesDataUrlContent(
+  mediaRef: string,
+): OpenAI.Responses.ResponseInputContent {
+  const mime = getDataUrlMimeType(mediaRef);
+  if (mime && mime.startsWith("image/")) {
+    return {
+      type: "input_image",
+      image_url: mediaRef,
+      detail: "auto",
+    };
+  }
+  const isDocxOrPdf =
+    mime === "application/pdf" ||
+    mime ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (isDocxOrPdf) {
+    return {
+      type: "input_file",
+      file_data: mediaRef,
+      filename: "document.pdf",
+    };
+  }
+  if (isTextOrJsonMime(mime)) {
+    return {
+      type: "input_text",
+      text: decodeBase64AttachmentText(mediaRef, mime),
+    };
+  }
+  return {
+    type: "input_file",
+    file_data: mediaRef,
+    filename: "attachment",
+  };
+}
 
-      // User messages (can be multimodal)
-      if (message.images && message.images.length > 0) {
-        const content: OpenAI.Chat.ChatCompletionContentPart[] = [];
-        for (const mediaRef of message.images) {
-          const urlType = getUrlType(mediaRef);
-
-          if (urlType === "data") {
-            // Base64 data URL — use MIME type to route
-            const mime = getDataUrlMimeType(mediaRef);
-            if (mime && mime.startsWith("image/")) {
-              content.push({ type: "image_url", image_url: { url: mediaRef } });
-            } else if (mime === "application/pdf") {
-              content.push({
-                type: "file",
-                file: { file_data: mediaRef, filename: "document.pdf" },
-              } as OpenAI.Chat.ChatCompletionContentPart);
-            } else if (
-              mime &&
-              (mime.startsWith("text/") || mime === "application/json")
-            ) {
-              // Decode text files and inline as text
-              try {
-                const base64 = mediaRef.split(";base64,")[1];
-                const decoded = Buffer.from(base64, "base64").toString("utf-8");
-                content.push({
-                  type: "text",
-                  text: `[Attached file (${mime})]:\n${decoded}`,
-                });
-              } catch {
-                content.push({
-                  type: "text",
-                  text: `[Attached file (${mime}): unable to decode]`,
-                });
-              }
-            } else {
-              // Other data URL file types
-              content.push({
-                type: "file",
-                file: { file_data: mediaRef, filename: "attachment" },
-              } as OpenAI.Chat.ChatCompletionContentPart);
-            }
-          } else if (urlType === "http") {
-            // HTTP(S) URL — the Chat Completions API accepts URLs in image_url
-            const inferredType = inferMimeFromUrl(mediaRef);
-            if (inferredType === "image") {
-              content.push({ type: "image_url", image_url: { url: mediaRef } });
-            } else {
-              // Chat Completions file type via URL — use file_data with the URL
-              content.push({
-                type: "file",
-                file: { file_data: mediaRef, filename: "attachment" },
-              } as OpenAI.Chat.ChatCompletionContentPart);
-            }
-          } else {
-            // Unknown ref type (e.g. minio://) — skip with warning
-            logger.warn(
-              `[openai] Skipping unresolved media ref in Chat Completions input: ${mediaRef.substring(0, 60)}...`,
-            );
-          }
-        }
-        if (message.content) {
-          content.push({ type: "text", text: message.content });
-        }
-        return {
-          role: "user",
-          ...(message.name ? { name: message.name } : {}),
-          content,
-        };
-      }
-
+function convertResponsesMediaRef(
+  mediaRef: string,
+): OpenAI.Responses.ResponseInputContent | null {
+  const urlType = getUrlType(mediaRef);
+  if (urlType === "data") {
+    return convertResponsesDataUrlContent(mediaRef);
+  }
+  if (urlType === "http") {
+    const inferredType = inferMimeFromUrl(mediaRef);
+    if (inferredType === "image") {
       return {
-        role: "user",
-        ...(message.name ? { name: message.name } : {}),
-        content: message.content ?? "",
+        type: "input_image",
+        image_url: mediaRef,
+        detail: "auto",
       };
-    },
+    }
+    return { type: "input_file", file_url: mediaRef };
+  }
+  logger.warn(
+    `[openai] Skipping unresolved media ref in Responses API input: ${mediaRef.substring(0, 60)}...`,
   );
+  return null;
 }
 
 /**
@@ -547,80 +676,15 @@ export function prepareResponsesInput(
 ): OpenAI.Responses.ResponseInputItem[] {
   const result: OpenAI.Responses.ResponseInputItem[] = [];
   for (const message of messages) {
-    // Assistant message with tool calls → expand into function_call items
     if (
       message.role === "assistant" &&
       message.toolCalls &&
       message.toolCalls.length > 0
     ) {
-      // If the assistant also produced text, include it first
-      if (message.content?.trim()) {
-        result.push({
-          role: "assistant",
-          content: message.content,
-        } as OpenAI.Responses.ResponseInputItem);
-      }
-      // Each tool call becomes a function_call output item, preceded by its
-      // paired reasoning item when present (required by the Responses API for
-      // reasoning models — omitting it triggers a 400 referential integrity error).
-      for (const toolCall of message.toolCalls) {
-        if (toolCall.reasoningItem) {
-          result.push({
-            type: "reasoning",
-            id: toolCall.reasoningItem.id,
-            summary: toolCall.reasoningItem.summary,
-          } as unknown as OpenAI.Responses.ResponseInputItem);
-        }
-        let functionCallId = toolCall.responsesItemId;
-        if (!functionCallId || !functionCallId.startsWith("fc")) {
-          if (toolCall.id && toolCall.id.startsWith("fc")) {
-            functionCallId = toolCall.id;
-          } else if (toolCall.id && toolCall.id.startsWith("call_")) {
-            functionCallId = toolCall.id.replace(/^call_/, "fc_");
-          } else {
-            const secureRandomString = Math.random()
-              .toString(36)
-              .substring(2, 10);
-            functionCallId = `fc_${toolCall.id || secureRandomString}`;
-          }
-        }
-        result.push({
-          type: "function_call",
-          id: functionCallId,
-          call_id: toolCall.id || functionCallId,
-          name: toolCall.name,
-          arguments:
-            typeof toolCall.args === "string"
-              ? toolCall.args
-              : JSON.stringify(toolCall.args || {}),
-        } as OpenAI.Responses.ResponseFunctionToolCall as unknown as OpenAI.Responses.ResponseInputItem);
-      }
-      // Generate function_call_output items for compact-format messages where
-      // tool results are embedded inside toolCalls[].result (not pre-expanded
-      // into separate role="tool" messages by expandMessagesForFC). This path
-      // is hit by the non-streaming generateText route which bypasses expansion.
-      for (const toolCall of message.toolCalls) {
-        if (toolCall.result !== undefined) {
-          const outputCallId =
-            toolCall.id ||
-            (toolCall.responsesItemId?.startsWith("fc")
-              ? toolCall.responsesItemId
-              : `fc_${toolCall.responsesItemId || ""}`);
-          const resultString =
-            typeof toolCall.result === "string"
-              ? toolCall.result
-              : JSON.stringify(toolCall.result);
-          result.push({
-            type: "function_call_output",
-            call_id: outputCallId,
-            output: resultString,
-          } as unknown as OpenAI.Responses.ResponseInputItem);
-        }
-      }
+      appendResponsesAssistantToolCallItems(message, result);
       continue;
     }
 
-    // Tool result message → function_call_output item
     if (message.role === "tool") {
       result.push({
         type: "function_call_output",
@@ -633,7 +697,6 @@ export function prepareResponsesInput(
       continue;
     }
 
-    // Standard message (system, user, assistant without tools)
     const role =
       message.role === "system"
         ? ("developer" as const)
@@ -643,71 +706,8 @@ export function prepareResponsesInput(
     if (message.images && message.images.length > 0) {
       const content: OpenAI.Responses.ResponseInputContent[] = [];
       for (const mediaRef of message.images) {
-        const urlType = getUrlType(mediaRef);
-
-        if (urlType === "data") {
-          // Base64 data URL — use MIME type to route
-          const mime = getDataUrlMimeType(mediaRef);
-          if (mime && mime.startsWith("image/")) {
-            content.push({
-              type: "input_image",
-              image_url: mediaRef,
-              detail: "auto",
-            });
-          } else if (
-            mime === "application/pdf" ||
-            mime ===
-              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          ) {
-            content.push({
-              type: "input_file",
-              file_data: mediaRef,
-              filename: "document.pdf",
-            });
-          } else if (
-            mime &&
-            (mime.startsWith("text/") || mime === "application/json")
-          ) {
-            // Decode text files and inline as text
-            try {
-              const base64 = mediaRef.split(";base64,")[1];
-              const decoded = Buffer.from(base64, "base64").toString("utf-8");
-              content.push({
-                type: "input_text",
-                text: `[Attached file (${mime})]:\n${decoded}`,
-              });
-            } catch {
-              content.push({
-                type: "input_text",
-                text: `[Attached file (${mime}): unable to decode]`,
-              });
-            }
-          } else {
-            // Other data URL file types
-            content.push({
-              type: "input_file",
-              file_data: mediaRef,
-              filename: "attachment",
-            });
-          }
-        } else if (urlType === "http") {
-          // HTTP(S) URL — infer type from extension, use URL-based fields
-          const inferredType = inferMimeFromUrl(mediaRef);
-          if (inferredType === "image") {
-            content.push({
-              type: "input_image",
-              image_url: mediaRef,
-              detail: "auto",
-            });
-          } else {
-            content.push({ type: "input_file", file_url: mediaRef });
-          }
-        } else {
-          // Unknown ref type (e.g. minio://) — skip with warning
-          logger.warn(
-            `[openai] Skipping unresolved media ref in Responses API input: ${mediaRef.substring(0, 60)}...`,
-          );
-        }
+        const part = convertResponsesMediaRef(mediaRef);
+        if (part) content.push(part);
       }
       if (message.content) {
         content.push({ type: "input_text", text: message.content });
@@ -719,7 +719,7 @@ export function prepareResponsesInput(
       } as OpenAI.Responses.ResponseInputItem);
       continue;
     }
-    // Responses API requires content to be a string or array, never null
+
     result.push({
       role,
       ...nameObject,

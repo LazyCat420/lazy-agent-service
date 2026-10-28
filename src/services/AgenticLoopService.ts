@@ -26,7 +26,7 @@ import { applyModelProfile } from "../platform/models/applyModelProfile.ts";
 import { retrieveOffloadedContentTool } from "../platform/offload/retrieveOffloadedContent.ts";
 import { getSharedOffloadStore } from "../platform/offload/OffloadStore.ts";
 
-import type { AgenticContext, ConversationMessage } from "./harnesses/types.ts";
+import type { AgenticContext, ConversationMessage, ResolvedTools } from "./harnesses/types.ts";
 import RequestLogger from "./RequestLogger.ts";
 import { getPricing, TYPES } from "../config.ts";
 import { calculateTextCost } from "../utils/CostCalculator.ts";
@@ -298,6 +298,432 @@ export const SKILL_READ_TOOL_SCHEMA = {
  */
 const APPROVAL_KINDS = ["tool", "plan"] as const;
 
+function readOptionalStringProp(obj: unknown, key: string): string | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const val = (obj as Record<string, unknown>)[key];
+  return typeof val === "string" ? val : undefined;
+}
+
+function resolveInstrumenterRoleAndModel(context: AgenticContext) {
+  const { options, agent, modelDefinition } = context;
+  const optRole = readOptionalStringProp(options, "agentRole") || "assistant";
+  const resolvedRole = typeof agent === "string" ? agent : readOptionalStringProp(agent, "name") || optRole;
+  const resolvedModelName =
+    context.resolvedModel || readOptionalStringProp(modelDefinition, "model") || "default";
+  return { resolvedRole, resolvedModelName };
+}
+
+function startAgenticRunInstrumenter(
+  context: AgenticContext,
+  resolvedAgentConversationId: string,
+  resolvedParentAgentConversationId: string | null,
+) {
+  const { options, project, conversationId } = context;
+  const optTrace = readOptionalStringProp(options, "traceId");
+  const ctxTrace = typeof context.traceId === "string" ? context.traceId : undefined;
+  const { resolvedRole, resolvedModelName } = resolveInstrumenterRoleAndModel(context);
+  const optParentSpanId = readOptionalStringProp(options, "parentSpanId");
+
+  const instrumenter = HarnessInstrumenter.startRun({
+    runId: (context as any).runId,
+    traceId: optTrace || ctxTrace,
+    conversationId: resolvedAgentConversationId || conversationId || undefined,
+    parentRunId: resolvedParentAgentConversationId || null,
+    parentSpanId: optParentSpanId || (context as any).parentSpanId || null,
+    project: project || "default",
+    agentRole: String(resolvedRole),
+    environment: process.env.NODE_ENV || "production",
+    model: String(resolvedModelName),
+  });
+  context.traceId = instrumenter.runManifest.trace_id;
+  context.runId = instrumenter.runManifest.run_id;
+  (context as any).rootSpan = instrumenter.rootSpan;
+  return { instrumenter, resolvedModelName, optParentSpanId };
+}
+
+function injectInternalAgenticTools(resolvedTools: ResolvedTools, resolvedAgentConversationId: string): void {
+  const toolContextStore = ToolContext.getStore(resolvedAgentConversationId);
+  try {
+    const hasSkills = new SkillRegistry().discover().length > 0;
+    const internalTools: Array<{ name: string }> = [];
+    if (hasSkills) internalTools.push({ ...SKILL_READ_TOOL_SCHEMA });
+    internalTools.push({ ...TAKE_NOTE_TOOL_SCHEMA });
+    internalTools.push({ ...ASK_USER_TOOL_SCHEMA });
+    internalTools.push({ ...retrieveOffloadedContentTool(getSharedOffloadStore()).definition });
+    if (internalTools.length > 0) {
+      resolvedTools.finalTools = [...resolvedTools.finalTools, ...(internalTools as any)];
+    }
+  } catch (skillErr: unknown) {
+    logger.debug(
+      `[AgenticLoop] Skill discovery failed: ${skillErr instanceof Error ? skillErr.message : String(skillErr)}`,
+    );
+  }
+  if (!toolContextStore.has("dynamicEnabledTools")) {
+    const initialNames =
+      resolvedTools.resolvedEnabledTools || resolvedTools.finalTools.map((tool) => tool.name);
+    ToolContext.set(resolvedAgentConversationId, "dynamicEnabledTools", initialNames);
+  }
+}
+
+function applyAgenticModelProfile(
+  resolvedModelName: unknown,
+  options: AgenticContext["options"],
+  resolvedTools: ResolvedTools,
+): void {
+  try {
+    const toolNames = resolvedTools.finalTools.map((tool: { name: string }) => tool.name);
+    const applied = applyModelProfile(
+      String(resolvedModelName),
+      options as unknown as Record<string, unknown>,
+      { toolNames },
+    );
+    const sanitized = applied.options as Record<string, unknown> | undefined;
+    if (sanitized && sanitized !== (options as unknown)) {
+      const keys = [
+        "temperature",
+        "topP",
+        "topK",
+        "presencePenalty",
+        "frequencyPenalty",
+        "reasoningEffort",
+        "thinkingLevel",
+        "toolChoice",
+        "maxTokens",
+        "toolNames",
+      ];
+      for (const key of keys) {
+        if (key in sanitized) (options as Record<string, unknown>)[key] = sanitized[key];
+      }
+    }
+    if (applied.clampOutputTo !== undefined) {
+      options.maxTokens = Math.min(options.maxTokens ?? applied.clampOutputTo, applied.clampOutputTo);
+    }
+    if (applied.strippedPrompt) {
+      (options as Record<string, unknown>).lightweightPrompt = true;
+    }
+    if (applied.maxTools !== null && toolNames.length > applied.maxTools) {
+      const kept = new Set((sanitized?.toolNames as string[] | undefined) ?? toolNames.slice(0, applied.maxTools));
+      resolvedTools.finalTools = resolvedTools.finalTools.filter(
+        (tool: { name: string }) => kept.has(tool.name) || kept.has(tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "")),
+      );
+      logger.info(
+        `[AgenticLoop] Model profile (${resolvedModelName}): trimmed tool catalog to ${resolvedTools.finalTools.length} (budget ${applied.maxTools})`,
+      );
+    }
+  } catch (profileErr: unknown) {
+    logger.debug(
+      `[AgenticLoop] Model profile application skipped: ${profileErr instanceof Error ? profileErr.message : String(profileErr)}`,
+    );
+  }
+}
+
+function preloadExplicitToolsIntoState(
+  options: AgenticContext["options"],
+  resolvedTools: ResolvedTools,
+  state: AgenticLoopState,
+): void {
+  const explicitToolList: string[] | null =
+    Array.isArray(options.enabledTools) && options.enabledTools.length > 0
+      ? (options.enabledTools as string[])
+      : Array.isArray(resolvedTools.resolvedEnabledTools) && resolvedTools.resolvedEnabledTools.length > 0
+        ? resolvedTools.resolvedEnabledTools
+        : null;
+  if (!explicitToolList) return;
+  const explicitlyEnabled = new Set(
+    explicitToolList.map((name: string) => name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "")),
+  );
+  for (const tool of resolvedTools.finalTools) {
+    const cleanName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+    if (explicitlyEnabled.has(cleanName)) {
+      state.loadedTools.add(cleanName);
+    }
+  }
+}
+
+function applyAgentSettingsModelsToOptions(
+  options: AgenticContext["options"],
+  agentSettings: Record<string, any> | null | undefined,
+): void {
+  if (!agentSettings) return;
+  if (options.enableCriticGate === undefined && agentSettings.criticModel) {
+    options.enableCriticGate = true;
+    options.criticModel = options.criticModel || agentSettings.criticModel;
+  }
+  if (agentSettings.reminderModel) {
+    options.reminderModel = (options.reminderModel as string) || agentSettings.reminderModel;
+    options.reminderProvider = (options.reminderProvider as string) || agentSettings.reminderProvider;
+  }
+}
+
+async function resolveAgenticHarnessSettings(options: AgenticContext["options"]) {
+  let harnessId = options.harness;
+  let topologyId = options.topology;
+  let thoughtStructure = options.thoughtStructure;
+  const needsSettingsLookup = Boolean(
+    !harnessId || !topologyId || !thoughtStructure || options.enableCriticGate === undefined,
+  );
+  if (needsSettingsLookup) {
+    try {
+      const { default: SettingsService } = await import("./SettingsService.js");
+      const agentSettings = await SettingsService.getSection("agents");
+      harnessId = harnessId || agentSettings?.harness || "standard";
+      topologyId = topologyId || agentSettings?.topology || DEFAULT_TOPOLOGY;
+      thoughtStructure =
+        thoughtStructure || (agentSettings?.thoughtStructure as string) || DEFAULT_THOUGHT_STRUCTURE;
+      applyAgentSettingsModelsToOptions(options, agentSettings);
+    } catch {
+      harnessId = harnessId || "standard";
+      topologyId = topologyId || DEFAULT_TOPOLOGY;
+      thoughtStructure = thoughtStructure || DEFAULT_THOUGHT_STRUCTURE;
+    }
+  }
+  options.harness = harnessId;
+  options.topology = topologyId;
+  options.thoughtStructure = thoughtStructure;
+  return { harnessId, thoughtStructure };
+}
+
+async function executeCoreLoopAdapterPath(
+  context: AgenticContext,
+  options: AgenticContext["options"],
+  state: AgenticLoopState,
+  resolvedTools: ResolvedTools,
+  harness: unknown,
+  resolvedParentAgentConversationId: string | null,
+): Promise<{ messages: ConversationMessage[] }> {
+  const coreOut = await runCoreLoopForAgent({
+    project: context.project,
+    username: context.username,
+    agent: context.agent,
+    conversationId: context.conversationId,
+    agentConversationId: context.agentConversationId,
+    traceId: context.traceId,
+    workspaceRoot: context.workspaceRoot,
+    skipMemoryExtraction: (context as any).skipMemoryExtraction,
+    skipWorkflowExtraction: (context as any).skipWorkflowExtraction,
+    options: options as Record<string, unknown>,
+    messages: context.messages as any,
+    provider: context.provider as any,
+    providerName: context.providerName,
+    resolvedModel: String(context.resolvedModel),
+    signal: context.signal || new AbortController().signal,
+    runtimeTools: resolvedTools as any,
+    runtimeToolExecutor: (context as any).runtimeToolExecutor,
+    finalizeRequested: context.finalizeRequested as { reason?: string } | null | undefined,
+    finalizeSignal: (context as any).finalizeSignal,
+    finalPassTimeoutMs: (context as any).finalPassTimeoutMs,
+    timeoutSignalFor: (context as any).timeoutSignalFor,
+    canonicalBudget: context.canonicalBudget as any,
+    emit: context.emit as any,
+    sessionState: (context as any).sessionState,
+  });
+  state.finalStreamedText = coreOut.result.text;
+  state.iterations = coreOut.result.modelCalls;
+  state.overallUsage = coreOut.usage;
+  state.overallGenerationEnd = performance.now();
+  state.streamedToolCalls = coreOut.toolCalls.map((tc) => ({
+    id: tc.id,
+    name: tc.name,
+    args: tc.args,
+    result: tc.result,
+  })) as any;
+  const { hooks } = createStandardHooks({
+    workspaceRoot: context.workspaceRoot || undefined,
+    enableCriticGate: Boolean(options.enableCriticGate),
+    criticModel: options.criticModel as string | undefined,
+  });
+  const preFinalMessages =
+    coreOut.messages.length > 0 && coreOut.messages[coreOut.messages.length - 1]?.role === "assistant"
+      ? (coreOut.messages.slice(0, -1) as unknown as ConversationMessage[])
+      : (coreOut.messages as unknown as ConversationMessage[]);
+  const agentRunText = coreOut.result.text;
+  RequestLogger.logChatGeneration({
+    requestId: `${context.requestId ?? "unknown"}-${coreOut.result.modelCalls}`,
+    endpoint: "/agent",
+    operation: "agent:iteration",
+    project: context.project,
+    username: context.username,
+    clientIp: context.clientIp ?? null,
+    agent: context.agent ?? null,
+    harness: "coreloop",
+    provider: context.providerName,
+    model: String(context.resolvedModel),
+    conversationId: context.conversationId ?? null,
+    agentConversationId: context.agentConversationId ?? null,
+    parentAgentConversationId: resolvedParentAgentConversationId,
+    traceId: context.traceId ?? null,
+    success: true,
+    usage: coreOut.usage,
+    estimatedCost: calculateTextCost(
+      coreOut.usage,
+      getPricing(TYPES.TEXT, TYPES.TEXT)[String(context.resolvedModel)],
+    ),
+    tokensPerSec: coreOut.usage.tokensPerSec ?? null,
+    options: options as Record<string, unknown>,
+    messages: preFinalMessages,
+    text: agentRunText,
+    toolCalls: coreOut.toolCalls.map((tc) => ({
+      id: tc.id,
+      name: tc.name,
+      args: tc.args,
+      result: tc.result,
+    })),
+    outputCharacters: agentRunText.length,
+    agenticIteration: coreOut.result.modelCalls,
+  }).catch((error: unknown) =>
+    logger.error(
+      `[AgenticLoopService] Failed to log CoreLoop /agent request: ${error instanceof Error ? error.message : String(error)}`,
+    ),
+  );
+  await (harness as any).finalize(preFinalMessages, hooks);
+  return { messages: preFinalMessages };
+}
+
+async function runLoopVerificationContract(
+  runResult: { messages: ConversationMessage[] },
+  context: AgenticContext,
+  options: AgenticContext["options"],
+  HarnessClass: NonNullable<ReturnType<typeof HarnessRegistry.get>>,
+  resolvedTools: ResolvedTools,
+): Promise<{ messages: ConversationMessage[]; verification?: VerificationResult }> {
+  try {
+    const verificationInput = {
+      messages: runResult.messages,
+      options: options as Record<string, unknown>,
+      warn: (message: string) => logger.warn(message),
+      ...(options.requireEvidence === true
+        ? {
+            runExtraTurn: async (currentMessages: ConversationMessage[]) => {
+              const extraContext: AgenticContext = { ...context, messages: currentMessages };
+              const extraState = new AgenticLoopState({
+                originalMessageCount: currentMessages.length,
+                planModeActive: false,
+              });
+              const continuationHarness = new HarnessClass(extraContext, extraState, resolvedTools);
+              const extra = await continuationHarness.run();
+              return extra.messages;
+            },
+          }
+        : {}),
+    };
+    const outcome = await enforceVerificationContract(verificationInput);
+    if (outcome.verification.status === "no-evidence") {
+      logger.warn(`[AgenticLoop] Verification contract: ${outcome.verification.reason}`);
+    }
+    return { ...runResult, messages: outcome.messages, verification: outcome.verification };
+  } catch (verifyErr: unknown) {
+    logger.debug(
+      `[AgenticLoop] Verification contract check failed (non-blocking): ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`,
+    );
+    return runResult;
+  }
+}
+
+async function cleanupAgenticRunFinally(
+  context: AgenticContext,
+  instrumenter: ReturnType<typeof HarnessInstrumenter.startRun>,
+  runStatus: "completed" | "failed" | "cancelled" | "setup_error",
+  stopReason: string | undefined,
+  resolvedAgentConversationId: string,
+  conversationId: string,
+  resolvedParentAgentConversationId: string | null,
+): Promise<void> {
+  try {
+    if (context.signal?.aborted && runStatus !== "cancelled") {
+      runStatus = "cancelled";
+      stopReason = "Execution cancelled by client";
+    }
+    instrumenter.complete(runStatus, stopReason);
+  } catch (instErr: unknown) {
+    logger.debug(`[HarnessInstrumenter] Run completion export failed: ${instErr}`);
+  }
+  ToolContext.cleanupInMemory(resolvedAgentConversationId);
+  pendingApprovals.delete(conversationId);
+  pendingQuestions.delete(conversationId);
+  try {
+    await pendingApprovalStore.cancelPending(conversationId, "turn_ended");
+  } catch (storeError: unknown) {
+    logger.warn(`[Approvals] Could not cancel pending approvals for ${conversationId}: ${storeError}`);
+  }
+  ConversationGenerationTracker.cleanup(resolvedAgentConversationId);
+  if (!resolvedParentAgentConversationId) {
+    try {
+      const { default: OrchestratorService } = await import("./OrchestratorService.js");
+      OrchestratorService.cleanupConversation(resolvedAgentConversationId);
+    } catch {
+      /* OrchestratorService may not be used */
+    }
+  }
+}
+
+async function resolveEmptyPendingApprovalStatus(
+  conversationId: string,
+  toolCallId?: string,
+): Promise<{ status: "already_decided" } | { status: "not_found" }> {
+  if (toolCallId) {
+    const settled = await pendingApprovalStore.findByItem(conversationId, toolCallId);
+    if (settled) return { status: "already_decided" };
+  }
+  return (await pendingApprovalStore.hasSettled(conversationId, APPROVAL_KINDS))
+    ? { status: "already_decided" }
+    : { status: "not_found" };
+}
+
+async function validateTargetApprovalSelection(
+  conversationId: string,
+  input: {
+    isApproved: boolean;
+    toolCallId?: string;
+    batchWide?: boolean;
+    editedArgs?: Record<string, unknown>;
+  },
+  pending: Awaited<ReturnType<typeof pendingApprovalStore.listPending>>,
+  type: "tool" | "plan",
+): Promise<
+  | {
+      ok: false;
+      outcome:
+        | { status: "already_decided" }
+        | { status: "not_found" }
+        | { status: "ambiguous"; pendingToolCallIds: string[] }
+        | { status: "invalid"; error: string };
+    }
+  | {
+      ok: true;
+      pendingIds: string[];
+      target: (typeof pending)[number] | undefined;
+    }
+> {
+  const pendingIds = pending.map((record) => record.itemId);
+  if (input.toolCallId) {
+    const settled = await pendingApprovalStore.findByItem(conversationId, input.toolCallId);
+    if (settled && settled.status !== "pending") return { ok: false, outcome: { status: "already_decided" } };
+    if (!pendingIds.includes(input.toolCallId)) return { ok: false, outcome: { status: "not_found" } };
+  } else if (!input.batchWide && pending.length > 1) {
+    return { ok: false, outcome: { status: "ambiguous", pendingToolCallIds: pendingIds } };
+  }
+  const target = input.toolCallId
+    ? pending.find((record) => record.itemId === input.toolCallId)
+    : pending.length === 1
+      ? pending[0]
+      : undefined;
+
+  if (input.editedArgs !== undefined) {
+    if (!input.isApproved) {
+      return { ok: false, outcome: { status: "invalid", error: "editedArgs can only accompany an allow" } };
+    }
+    if (type === "plan") {
+      return { ok: false, outcome: { status: "invalid", error: "a plan's arguments cannot be edited" } };
+    }
+    if (!target) return { ok: false, outcome: { status: "invalid", error: "editedArgs needs a toolCallId" } };
+    const validation = validateToolArgs(target.argsSchema, input.editedArgs);
+    if (validation.ok === false) {
+      return { ok: false, outcome: { status: "invalid", error: `editedArgs rejected: ${validation.error}` } };
+    }
+  }
+  return { ok: true, pendingIds, target };
+}
+
 export default class AgenticLoopService {
   /** Run an agentic loop using the specified (or default) harness. */
   static async runAgenticLoop(
@@ -318,204 +744,47 @@ export default class AgenticLoopService {
     const resolvedAgentConversationId = agentConversationId || "";
     const resolvedParentAgentConversationId = parentAgentConversationId || null;
 
-    const optTrace = typeof (options as any)?.traceId === "string" ? String((options as any).traceId) : undefined;
-    const ctxTrace = typeof context.traceId === "string" ? context.traceId : undefined;
-    const optRole = typeof (options as any)?.agentRole === "string" ? String((options as any).agentRole) : "assistant";
-    const resolvedRole = typeof agent === "string" ? agent : (agent as any)?.name || optRole;
-    const resolvedModelName = context.resolvedModel || (modelDefinition && (modelDefinition as any).model) || "default";
+    const { instrumenter, resolvedModelName, optParentSpanId } = startAgenticRunInstrumenter(
+      context,
+      resolvedAgentConversationId,
+      resolvedParentAgentConversationId,
+    );
 
-    const optParentSpanId = typeof (options as any)?.parentSpanId === "string" ? String((options as any).parentSpanId) : undefined;
-    const instrumenter = HarnessInstrumenter.startRun({
-      runId: (context as any).runId,
-      traceId: optTrace || ctxTrace,
-      conversationId: resolvedAgentConversationId || conversationId || undefined,
-      parentRunId: resolvedParentAgentConversationId || null,
-      parentSpanId: optParentSpanId || (context as any).parentSpanId || null,
-      project: project || "default",
-      agentRole: String(resolvedRole),
-      environment: process.env.NODE_ENV || "production",
-      model: String(resolvedModelName),
-    });
-    context.traceId = instrumenter.runManifest.trace_id;
-    context.runId = instrumenter.runManifest.run_id;
-    (context as any).rootSpan = instrumenter.rootSpan;
-
-    // Load any persisted tool state from MongoDB (e.g. after server restart or previous turn)
     await ToolContext.ensureLoaded(resolvedAgentConversationId);
 
-    // 1. Resolve tools (passing agentConversationId so dynamicEnabledTools is merged)
-    const resolvedTools = context.runtimeTools || await AgenticToolResolver.resolve({
-      options,
-      agent: agent || undefined,
-      project,
-      username,
-      modelDefinition: modelDefinition || undefined,
-      agentConversationId: resolvedAgentConversationId,
-      providerName: context.providerName,
-      resolvedModel: context.resolvedModel,
-    });
+    const resolvedTools = (context.runtimeTools ||
+      (await AgenticToolResolver.resolve({
+        options,
+        agent: agent || undefined,
+        project,
+        username,
+        modelDefinition: modelDefinition || undefined,
+        agentConversationId: resolvedAgentConversationId,
+        providerName: context.providerName,
+        resolvedModel: context.resolvedModel,
+      }))) as ResolvedTools;
 
-    // If dynamicEnabledTools is not in ToolContext, populate it with the resolved tools
-    const toolContextStore = ToolContext.getStore(resolvedAgentConversationId);
+    injectInternalAgenticTools(resolvedTools, resolvedAgentConversationId);
+    applyAgenticModelProfile(resolvedModelName, options, resolvedTools);
 
-    // ── Inject internal tools (skill_read, take_note, ask_user) ──────────
-    // skill_read: bodies load from <repoRoot>/skills/<name>/SKILL.md on
-    //   demand (handled in harnesses/lifecycle/ToolExecutor.ts).
-    // take_note: persists per-run notes to <repoRoot>/data/notes/<runId>.md
-    //   (handled in harnesses/lifecycle/ToolExecutor.ts).
-    try {
-      const hasSkills = new SkillRegistry().discover().length > 0;
-      const internalTools: Array<{ name: string }> = [];
-      if (hasSkills) internalTools.push({ ...SKILL_READ_TOOL_SCHEMA });
-      internalTools.push({ ...TAKE_NOTE_TOOL_SCHEMA });
-      internalTools.push({ ...ASK_USER_TOOL_SCHEMA });
-      internalTools.push({ ...retrieveOffloadedContentTool(getSharedOffloadStore()).definition });
-      if (internalTools.length > 0) {
-        resolvedTools.finalTools = [...resolvedTools.finalTools, ...internalTools];
-      }
-    } catch (skillErr: unknown) {
-      logger.debug(`[AgenticLoop] Skill discovery failed: ${skillErr instanceof Error ? skillErr.message : String(skillErr)}`);
-    }
-
-    if (!toolContextStore.has("dynamicEnabledTools")) {
-      const initialNames =
-        resolvedTools.resolvedEnabledTools ||
-        resolvedTools.finalTools.map((tool) => tool.name);
-      ToolContext.set(resolvedAgentConversationId, "dynamicEnabledTools", initialNames);
-    }
-
-    // ── Model profile: per-model sampling/tool budgets + lightweight preset ──
-    // Local <=14B models get a 12-tool budget (discovery tools count inside),
-    // no sub-agent tools, a stripped system prompt, and an output clamp —
-    // prism's ModelProfiles port. Sanitized sampling parameters are written
-    // back onto options; the clamped tool list is applied to finalTools.
-    try {
-      const toolNames = resolvedTools.finalTools.map((tool: { name: string }) => tool.name);
-      const applied = applyModelProfile(
-        String(resolvedModelName),
-        options as unknown as Record<string, unknown>,
-        { toolNames },
-      );
-      const sanitized = applied.options as Record<string, unknown> | undefined;
-      if (sanitized && sanitized !== (options as unknown)) {
-        for (const key of ["temperature", "topP", "topK", "presencePenalty", "frequencyPenalty", "reasoningEffort", "thinkingLevel", "toolChoice", "maxTokens", "toolNames"]) {
-          if (key in sanitized) (options as Record<string, unknown>)[key] = sanitized[key];
-        }
-      }
-      if (applied.clampOutputTo !== undefined) {
-        options.maxTokens = Math.min(options.maxTokens ?? applied.clampOutputTo, applied.clampOutputTo);
-      }
-      if (applied.strippedPrompt) {
-        (options as Record<string, unknown>).lightweightPrompt = true;
-      }
-      if (applied.maxTools !== null && toolNames.length > applied.maxTools) {
-        const kept = new Set((sanitized?.toolNames as string[] | undefined) ?? toolNames.slice(0, applied.maxTools));
-        resolvedTools.finalTools = resolvedTools.finalTools.filter(
-          (tool: { name: string }) => kept.has(tool.name) || kept.has(tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "")),
-        );
-        logger.info(
-          `[AgenticLoop] Model profile (${resolvedModelName}): trimmed tool catalog to ${resolvedTools.finalTools.length} (budget ${applied.maxTools})`,
-        );
-      }
-    } catch (profileErr: unknown) {
-      logger.debug(`[AgenticLoop] Model profile application skipped: ${profileErr instanceof Error ? profileErr.message : String(profileErr)}`);
-    }
-
-    // If this is a top-level agent request with an existing conversation,
-    // all messages except the last one (the triggering input) are already
-    // persisted in the database. For new conversations (e.g. Discord channel
-    // history passed as ephemeral context), nothing has been persisted yet.
     if (!options.isSubAgent && !context.isNewConversation && messages.length > 0) {
       for (let i = 0; i < messages.length - 1; i++) {
         (messages[i] as any)._alreadyPersisted = true;
       }
     }
 
-    // 2. Initialize shared state
     const state = new AgenticLoopState({
       originalMessageCount: messages.length,
       planModeActive: !!options.planFirst,
     });
+    preloadExplicitToolsIntoState(options, resolvedTools, state);
 
-    // When the request carries an explicit tool set, pre-load it so the tools
-    // are sent to the provider natively from iteration 1 — the describe_tools
-    // lazy-loading dance is for catalog browsing, not for small explicit sets
-    // the caller already committed to. "Explicit" means either enabledTools on
-    // the request (e.g. HTML-Notes' mcp__lazy-agent-service__* widget tools) or
-    // a persona's non-wildcard availableTools (resolvedEnabledTools) — a
-    // tailor-made client persona is exactly as committed as a request list,
-    // and without this a persona-only caller regresses into the discovery
-    // dance that small local models never complete.
-    const explicitToolList: string[] | null =
-      Array.isArray(options.enabledTools) && options.enabledTools.length > 0
-        ? (options.enabledTools as string[])
-        : Array.isArray(resolvedTools.resolvedEnabledTools) &&
-            resolvedTools.resolvedEnabledTools.length > 0
-          ? resolvedTools.resolvedEnabledTools
-          : null;
-    if (explicitToolList) {
-      const explicitlyEnabled = new Set(
-        explicitToolList.map((name: string) =>
-          name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, ""),
-        ),
-      );
-      for (const tool of resolvedTools.finalTools) {
-        const cleanName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
-        if (explicitlyEnabled.has(cleanName)) {
-          state.loadedTools.add(cleanName);
-        }
-      }
-    }
-
-    // 3. Select harness, topology, and thought structure
-    let harnessId = options.harness;
-    let topologyId = options.topology;
-    let thoughtStructure = options.thoughtStructure;
-    if (!harnessId || !topologyId || !thoughtStructure || options.enableCriticGate === undefined) {
-      try {
-        const { default: SettingsService } =
-          await import("./SettingsService.js");
-        const agentSettings = await SettingsService.getSection("agents");
-        if (!harnessId) harnessId = agentSettings?.harness || "standard";
-        if (!topologyId)
-          topologyId = agentSettings?.topology || DEFAULT_TOPOLOGY;
-        if (!thoughtStructure)
-          thoughtStructure = (agentSettings?.thoughtStructure as string) || DEFAULT_THOUGHT_STRUCTURE;
-
-        // CriticGate: auto-enable from settings when a critic model is configured
-        // and the request didn't explicitly set enableCriticGate.
-        if (
-          options.enableCriticGate === undefined &&
-          agentSettings?.criticModel
-        ) {
-          options.enableCriticGate = true;
-          options.criticModel =
-            options.criticModel || agentSettings.criticModel;
-        }
-
-        // SystemReminderInjector: auto-populate from settings when a reminder model is configured
-        if (agentSettings?.reminderModel) {
-          options.reminderModel =
-            (options.reminderModel as string) || agentSettings.reminderModel;
-          options.reminderProvider =
-            (options.reminderProvider as string) || agentSettings.reminderProvider;
-        }
-      } catch {
-        if (!harnessId) harnessId = "standard";
-        if (!topologyId) topologyId = DEFAULT_TOPOLOGY;
-        if (!thoughtStructure) thoughtStructure = DEFAULT_THOUGHT_STRUCTURE;
-      }
-    }
-
-    options.harness = harnessId;
-    options.topology = topologyId;
-    options.thoughtStructure = thoughtStructure;
+    const { harnessId, thoughtStructure } = await resolveAgenticHarnessSettings(options);
     const HarnessClass = HarnessRegistry.get(harnessId)!;
     logger.info(
       `[AgenticLoop] Using harness: "${HarnessClass.id}" (${HarnessClass.label}), thoughtStructure: "${thoughtStructure}"`,
     );
 
-    // 4. Instantiate and run
     const harness = new HarnessClass(context, state, resolvedTools);
     let runStatus: "completed" | "failed" | "cancelled" | "setup_error" = "completed";
     let stopReason: string | undefined;
@@ -539,144 +808,20 @@ export default class AgenticLoopService {
               unattended: (options as Record<string, unknown>).unattended === true,
             })
           ) {
-            const coreOut = await runCoreLoopForAgent({
-              project: context.project,
-              username: context.username,
-              agent: context.agent,
-              conversationId: context.conversationId,
-              agentConversationId: context.agentConversationId,
-              traceId: context.traceId,
-              workspaceRoot: context.workspaceRoot,
-              skipMemoryExtraction: (context as any).skipMemoryExtraction,
-              skipWorkflowExtraction: (context as any).skipWorkflowExtraction,
-              options: options as Record<string, unknown>,
-              messages: context.messages as any,
-              provider: context.provider as any,
-              providerName: context.providerName,
-              resolvedModel: String(context.resolvedModel),
-              signal: context.signal || new AbortController().signal,
-              runtimeTools: resolvedTools as any,
-              runtimeToolExecutor: (context as any).runtimeToolExecutor,
-              finalizeRequested: context.finalizeRequested as { reason?: string } | null | undefined,
-              finalizeSignal: (context as any).finalizeSignal,
-              finalPassTimeoutMs: (context as any).finalPassTimeoutMs,
-              timeoutSignalFor: (context as any).timeoutSignalFor,
-              canonicalBudget: context.canonicalBudget as any,
-              emit: context.emit as any,
-              sessionState: (context as any).sessionState,
-            });
-            state.finalStreamedText = coreOut.result.text;
-            state.iterations = coreOut.result.modelCalls;
-            state.overallUsage = coreOut.usage;
-            state.overallGenerationEnd = performance.now();
-            state.streamedToolCalls = coreOut.toolCalls.map((tc) => ({
-              id: tc.id,
-              name: tc.name,
-              args: tc.args,
-              result: tc.result,
-            })) as any;
-            const { hooks } = createStandardHooks({
-              workspaceRoot: context.workspaceRoot || undefined,
-              enableCriticGate: Boolean(options.enableCriticGate),
-              criticModel: options.criticModel as string | undefined,
-            });
-            const preFinalMessages =
-              coreOut.messages.length > 0 &&
-              coreOut.messages[coreOut.messages.length - 1]?.role === "assistant"
-                ? (coreOut.messages.slice(0, -1) as unknown as ConversationMessage[])
-                : (coreOut.messages as unknown as ConversationMessage[]);
-            // L7: restore the success `/agent` request row on the CoreLoop
-            // path — the legacy harness wrote `agent:iteration` rows per run
-            // (BaseAgenticHarness.legacyPayload shape); the Option B cutover
-            // (b47f790) lost them. Same document shape, aggregate usage.
-            const agentRunText = coreOut.result.text;
-            RequestLogger.logChatGeneration({
-              requestId: `${context.requestId ?? "unknown"}-${coreOut.result.modelCalls}`,
-              endpoint: "/agent",
-              operation: "agent:iteration",
-              project: context.project,
-              username: context.username,
-              clientIp: context.clientIp ?? null,
-              agent: context.agent ?? null,
-              harness: "coreloop",
-              provider: context.providerName,
-              model: String(context.resolvedModel),
-              conversationId: context.conversationId ?? null,
-              agentConversationId: context.agentConversationId ?? null,
-              parentAgentConversationId: resolvedParentAgentConversationId,
-              traceId: context.traceId ?? null,
-              success: true,
-              usage: coreOut.usage,
-              estimatedCost: calculateTextCost(
-                coreOut.usage,
-                getPricing(TYPES.TEXT, TYPES.TEXT)[
-                  String(context.resolvedModel)
-                ],
-              ),
-              tokensPerSec: coreOut.usage.tokensPerSec ?? null,
-              options: options as Record<string, unknown>,
-              messages: preFinalMessages,
-              text: agentRunText,
-              toolCalls: coreOut.toolCalls.map((tc) => ({
-                id: tc.id,
-                name: tc.name,
-                args: tc.args,
-                result: tc.result,
-              })),
-              outputCharacters: agentRunText.length,
-              agenticIteration: coreOut.result.modelCalls,
-            }).catch((error: unknown) =>
-              logger.error(
-                `[AgenticLoopService] Failed to log CoreLoop /agent request: ${error instanceof Error ? error.message : String(error)}`,
-              ),
+            return executeCoreLoopAdapterPath(
+              context,
+              options,
+              state,
+              resolvedTools,
+              harness,
+              resolvedParentAgentConversationId,
             );
-            await (harness as any).finalize(preFinalMessages, hooks);
-            return { messages: preFinalMessages };
           }
           return await harness.run();
         },
       );
 
-      // ── Verification contract (omp pattern) at the loop exit point ──
-      // Soft mode: warn + attach verification status. Strict mode
-      // (options.requireEvidence): grant ONE evidence-demand turn.
-      try {
-        const verificationInput = {
-          messages: runResult.messages,
-          options: options as Record<string, unknown>,
-          warn: (message: string) => logger.warn(message),
-          ...(options.requireEvidence === true
-            ? {
-                runExtraTurn: async (currentMessages: ConversationMessage[]) => {
-                  const extraContext: AgenticContext = {
-                    ...context,
-                    messages: currentMessages,
-                  };
-                  const extraState = new AgenticLoopState({
-                    originalMessageCount: currentMessages.length,
-                    planModeActive: false,
-                  });
-                  const continuationHarness = new HarnessClass(extraContext, extraState, resolvedTools);
-                  const extra = await continuationHarness.run();
-                  return extra.messages;
-                },
-              }
-            : {}),
-        };
-        const outcome = await enforceVerificationContract(verificationInput);
-        if (outcome.verification.status === "no-evidence") {
-          logger.warn(
-            `[AgenticLoop] Verification contract: ${outcome.verification.reason}`,
-          );
-        }
-
-        return { ...runResult, messages: outcome.messages, verification: outcome.verification };
-      } catch (verifyErr: unknown) {
-        logger.debug(
-          `[AgenticLoop] Verification contract check failed (non-blocking): ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`,
-        );
-        return runResult;
-      }
+      return await runLoopVerificationContract(runResult, context, options, HarnessClass, resolvedTools);
     } catch (err: unknown) {
       if (context.signal?.aborted) {
         runStatus = "cancelled";
@@ -687,42 +832,15 @@ export default class AgenticLoopService {
       }
       throw err;
     } finally {
-      try {
-        if (context.signal?.aborted && runStatus !== "cancelled") {
-          runStatus = "cancelled";
-          stopReason = "Execution cancelled by client";
-        }
-        instrumenter.complete(runStatus, stopReason);
-      } catch (instErr: unknown) {
-        logger.debug(`[HarnessInstrumenter] Run completion export failed: ${instErr}`);
-      }
-      // Clean up in-memory cache keyed by agentConversationId (keeps MongoDB state for next turn)
-      ToolContext.cleanupInMemory(resolvedAgentConversationId);
-
-      // Clean up in-memory state keyed by conversationId (client-facing)
-      pendingApprovals.delete(conversationId);
-      pendingQuestions.delete(conversationId);
-      try {
-        await pendingApprovalStore.cancelPending(conversationId, "turn_ended");
-      } catch (storeError: unknown) {
-        logger.warn(`[Approvals] Could not cancel pending approvals for ${conversationId}: ${storeError}`);
-      }
-
-      // Always clean up per-session tracker entries to prevent memory leaks —
-      // sub-agent sessions have their own agentConversationId that must be released.
-      ConversationGenerationTracker.cleanup(resolvedAgentConversationId);
-
-      // Only clean up orchestrator state for root sessions — sub-agents are
-      // cleaned by the parent session's OrchestratorService.cleanupConversation().
-      if (!resolvedParentAgentConversationId) {
-        try {
-          const { default: OrchestratorService } =
-            await import("./OrchestratorService.js");
-          OrchestratorService.cleanupConversation(resolvedAgentConversationId);
-        } catch {
-          /* OrchestratorService may not be used */
-        }
-      }
+      await cleanupAgenticRunFinally(
+        context,
+        instrumenter,
+        runStatus,
+        stopReason,
+        resolvedAgentConversationId,
+        conversationId,
+        resolvedParentAgentConversationId,
+      );
     }
   }
 
@@ -794,51 +912,21 @@ export default class AgenticLoopService {
     const pending = await pendingApprovalStore.listPending(conversationId, APPROVAL_KINDS);
 
     if (pending.length === 0) {
-      if (input.toolCallId) {
-        const settled = await pendingApprovalStore.findByItem(conversationId, input.toolCallId);
-        if (settled) return { status: "already_decided" };
-      }
-      return (await pendingApprovalStore.hasSettled(conversationId, APPROVAL_KINDS))
-        ? { status: "already_decided" }
-        : { status: "not_found" };
+      return resolveEmptyPendingApprovalStatus(conversationId, input.toolCallId);
     }
     const type = pending[0].kind === "plan" ? "plan" : "tool";
 
-    const pendingIds = pending.map((record) => record.itemId);
-    if (input.toolCallId) {
-      const settled = await pendingApprovalStore.findByItem(conversationId, input.toolCallId);
-      if (settled && settled.status !== "pending") return { status: "already_decided" };
-      if (!pendingIds.includes(input.toolCallId)) return { status: "not_found" };
-    } else if (!input.batchWide && pending.length > 1) {
-      return { status: "ambiguous", pendingToolCallIds: pendingIds };
+    const selection = await validateTargetApprovalSelection(conversationId, input, pending, type);
+    if (!selection.ok) {
+      return (selection as { ok: false; outcome: any }).outcome;
     }
-    const target = input.toolCallId
-      ? pending.find((record) => record.itemId === input.toolCallId)
-      : pending.length === 1
-        ? pending[0]
-        : undefined;
-
-    if (input.editedArgs !== undefined) {
-      if (!input.isApproved) {
-        return { status: "invalid", error: "editedArgs can only accompany an allow" };
-      }
-      if (type === "plan") {
-        return { status: "invalid", error: "a plan's arguments cannot be edited" };
-      }
-      if (!target) return { status: "invalid", error: "editedArgs needs a toolCallId" };
-      const validation = validateToolArgs(target.argsSchema, input.editedArgs);
-      if (validation.ok === false) {
-        return { status: "invalid", error: `editedArgs rejected: ${validation.error}` };
-      }
-    }
+    const { pendingIds, target } = selection;
 
     const reason = input.isApproved
       ? undefined
       : input.reason?.trim().slice(0, PENDING_DECISIONS.MAX_REASON_CHARS) || undefined;
     const scope = input.batchWide ? "batch" : "call";
     const delivered = entry?.type === type;
-    // Settle the targeted call first: losing that conditional write means
-    // someone decided it already.
     const ordered = target ? [target, ...pending.filter((record) => record !== target)] : pending;
     for (const [index, record] of ordered.entries()) {
       const isTarget = record === target;

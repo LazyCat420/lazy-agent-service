@@ -319,6 +319,160 @@ function filterAvailableModels(models: ModelEntry[]): ModelEntry[] {
     }
   });
 }
+const LIVE_PREVIEW_EVENT_TYPES = new Set([
+  "chunk",
+  "thinking",
+  "toolCall",
+  "tool_execution",
+  "tool_output",
+]);
+
+function handleBenchmarkStreamEvent(
+  event: SseEvent,
+  modelName: string,
+  events: BenchmarkEvent[],
+  onEvent?: (event: BenchmarkEvent) => void,
+): void {
+  const benchmarkEvent = event as SseEvent & BenchmarkEvent;
+  events.push(benchmarkEvent);
+
+  if (LIVE_PREVIEW_EVENT_TYPES.has(benchmarkEvent.type) && onEvent) {
+    try {
+      onEvent(benchmarkEvent);
+    } catch {
+      /* noop */
+    }
+  }
+
+  if (benchmarkEvent.type === "chunk") {
+    logger.info(
+      `[benchmark]   📦 ${modelName} chunk (${benchmarkEvent.content?.length || 0} chars)`,
+    );
+  } else if (benchmarkEvent.type === "error") {
+    logger.error(
+      `[benchmark]   ❌ ${modelName} error: ${benchmarkEvent.message}`,
+    );
+  } else if (benchmarkEvent.type === "done") {
+    logger.info(
+      `[benchmark]   ✅ ${modelName} done — usage: ${JSON.stringify(benchmarkEvent.usage || null)}, cost: ${benchmarkEvent.estimatedCost ?? "N/A"}`,
+    );
+  } else {
+    logger.info(
+      `[benchmark]   📨 ${modelName} event: ${benchmarkEvent.type}`,
+    );
+  }
+}
+
+function buildBenchmarkModelRequestParams(
+  benchmark: BenchmarkDoc,
+  model: ModelEntry,
+  messages: Array<{ role: string; content: string }>,
+  project: string | null,
+  username: string,
+) {
+  const isAgentOrTools = Boolean(model.agent || model.toolsEnabled);
+  return {
+    provider: model.provider,
+    model: model.model,
+    messages,
+    temperature: benchmark.temperature ?? 0,
+    maxTokens: Math.max(benchmark.maxTokens ?? 2048, 2048),
+    project,
+    username,
+    skipConversation: true,
+    thinkingEnabled: model.thinkingEnabled || false,
+    ...(isAgentOrTools && {
+      ...(model.agent && { agent: model.agent }),
+      agenticLoopEnabled: true,
+      autoApprove: true,
+      maxIterations: 10,
+    }),
+    ...(model.toolsEnabled && {
+      functionCallingEnabled: true,
+      enabledTools: [TOOL_NAMES.CALCULATE_PRECISE],
+    }),
+  };
+}
+
+function extractBenchmarkToolCalls(events: BenchmarkEvent[]): ToolCallResult[] {
+  const nativeToolCalls: ToolCallResult[] = events
+    .filter((e) => e.type === "toolCall" && e.status === "done")
+    .map((toolCall) => ({
+      id: toolCall.id,
+      name: toolCall.name,
+      args: toolCall.args,
+      result: toolCall.result,
+      status: "done",
+    }));
+  const agenticToolCalls: ToolCallResult[] = events
+    .filter(
+      (e) =>
+        e.type === "tool_execution" &&
+        (e.status === "done" || e.status === "error"),
+    )
+    .map((e) => ({
+      id: e.tool?.id,
+      name: e.tool?.name,
+      args: e.tool?.args,
+      result: e.tool?.result,
+      status: e.status || "done",
+    }));
+  return [...nativeToolCalls, ...agenticToolCalls];
+}
+
+function evaluateBenchmarkModeResult(
+  benchmark: BenchmarkDoc,
+  text: string,
+  thinkingText: string,
+  toolCalls: ToolCallResult[],
+  turnCount: number,
+): boolean {
+  const mode = benchmark.benchmarkMode || "model";
+  if (mode === "agent") {
+    return evaluateAgentAssertions(benchmark, {
+      response: text,
+      thinking: thinkingText,
+      toolCalls,
+      turnCount,
+    });
+  }
+  if (mode === "combined") {
+    const textPassed = evaluateAssertions(text, benchmark);
+    const agentPassed = evaluateAgentAssertions(benchmark, {
+      response: text,
+      thinking: thinkingText,
+      toolCalls,
+      turnCount,
+    });
+    return textPassed && agentPassed;
+  }
+  return evaluateAssertions(text, benchmark);
+}
+
+function buildFailedBenchmarkModelResult(
+  benchmark: BenchmarkDoc,
+  model: ModelEntry,
+  configFlags: { thinkingEnabled: boolean; toolsEnabled: boolean; agent?: string },
+  latency: number,
+  error: string,
+): ModelResult {
+  return {
+    provider: model.provider,
+    model: model.model,
+    label: model.label,
+    ...configFlags,
+    response: null,
+    thinking: null,
+    passed: false,
+    matchMode: benchmark.matchMode || MATCH_MODES.CONTAINS,
+    latency: latency > 0 ? roundMilliseconds(latency) : 0,
+    usage: null,
+    estimatedCost: null,
+    error,
+    completedAt: new Date().toISOString(),
+  };
+}
+
 // ─── Run a single model against a benchmark prompt ──────────
 export async function runSingleModel(
   benchmark: BenchmarkDoc,
@@ -330,36 +484,25 @@ export async function runSingleModel(
     onEvent,
   }: { signal?: AbortSignal; onEvent?: (event: BenchmarkEvent) => void } = {},
 ): Promise<ModelResult> {
-  // Config flags carried on every result for stats differentiation
   const configFlags = {
     thinkingEnabled: model.thinkingEnabled || false,
     toolsEnabled: model.toolsEnabled || false,
     ...(model.agent && { agent: model.agent }),
   };
-  // Bail immediately if already aborted
   if (signal?.aborted) {
     logger.info(
       `[benchmark] ⏭ Skipping ${model.provider}/${model.model} — already aborted`,
     );
-    return {
-      provider: model.provider,
-      model: model.model,
-      label: model.label,
-      ...configFlags,
-      response: null,
-      thinking: null,
-      passed: false,
-      matchMode: benchmark.matchMode || MATCH_MODES.CONTAINS,
-      latency: 0,
-      usage: null,
-      estimatedCost: null,
-      error: "Aborted",
-      completedAt: new Date().toISOString(),
-    };
+    return buildFailedBenchmarkModelResult(
+      benchmark,
+      model,
+      configFlags,
+      0,
+      "Aborted",
+    );
   }
   const start = performance.now();
   const messages: Array<{ role: string; content: string }> = [];
-  // Optional system prompt
   if (benchmark.systemPrompt) {
     messages.push({ role: "system", content: benchmark.systemPrompt });
   }
@@ -369,97 +512,39 @@ export async function runSingleModel(
     const events: BenchmarkEvent[] = [];
     const handler =
       model.agent || model.toolsEnabled ? handleAgent : handleConversation;
+    const reqParams = buildBenchmarkModelRequestParams(
+      benchmark,
+      model,
+      messages,
+      project,
+      username,
+    );
     await handler(
-      {
-        provider: model.provider,
-        model: model.model,
-        messages,
-        temperature: benchmark.temperature ?? 0,
-        maxTokens: Math.max(benchmark.maxTokens ?? 2048, 2048),
-        project,
-        username,
-        skipConversation: true,
-        thinkingEnabled: model.thinkingEnabled || false,
-        ...((model.agent || model.toolsEnabled) && {
-          ...(model.agent && { agent: model.agent }),
-          agenticLoopEnabled: true,
-          autoApprove: true,
-          maxIterations: 10,
-        }),
-        ...(model.toolsEnabled && {
-          functionCallingEnabled: true,
-          enabledTools: [TOOL_NAMES.CALCULATE_PRECISE],
-        }),
-      },
-      (event: SseEvent) => {
-        const benchmarkEvent = event as SseEvent & BenchmarkEvent;
-        events.push(benchmarkEvent);
-        // Forward chunk/thinking/tool events in real-time for live preview
-        if (
-          benchmarkEvent.type === "chunk" ||
-          benchmarkEvent.type === "thinking" ||
-          benchmarkEvent.type === "toolCall" ||
-          benchmarkEvent.type === "tool_execution" ||
-          benchmarkEvent.type === "tool_output"
-        ) {
-          if (onEvent) {
-            try {
-              onEvent(benchmarkEvent);
-            } catch {
-              /* noop */
-            }
-          }
-        }
-        // Log every event for debugging
-        if (benchmarkEvent.type === "chunk") {
-          logger.info(
-            `[benchmark]   📦 ${model.model} chunk (${benchmarkEvent.content?.length || 0} chars)`,
-          );
-        } else if (benchmarkEvent.type === "error") {
-          logger.error(
-            `[benchmark]   ❌ ${model.model} error: ${benchmarkEvent.message}`,
-          );
-        } else if (benchmarkEvent.type === "done") {
-          logger.info(
-            `[benchmark]   ✅ ${model.model} done — usage: ${JSON.stringify(benchmarkEvent.usage || null)}, cost: ${benchmarkEvent.estimatedCost ?? "N/A"}`,
-          );
-        } else {
-          logger.info(
-            `[benchmark]   📨 ${model.model} event: ${benchmarkEvent.type}`,
-          );
-        }
-      },
+      reqParams,
+      (event: SseEvent) =>
+        handleBenchmarkStreamEvent(event, model.model, events, onEvent),
       { signal },
     );
     const latency = (performance.now() - start) / 1000;
-    // Log all event types received
     const eventTypes = events.map((e) => e.type);
     logger.info(
       `[benchmark] ◀ ${model.model} finished in ${latency.toFixed(2)}s — events: [${eventTypes.join(", ")}]`,
     );
-    // Check for errors
+
     const errorEvent = events.find((e) => e.type === "error");
     if (errorEvent) {
       logger.warn(
         `[benchmark]   ⚠ ${model.model} returned error event: ${errorEvent.message}`,
       );
-      return {
-        provider: model.provider,
-        model: model.model,
-        label: model.label,
-        ...configFlags,
-        response: null,
-        thinking: null,
-        passed: false,
-        matchMode: benchmark.matchMode || MATCH_MODES.CONTAINS,
-        latency: roundMilliseconds(latency),
-        usage: null,
-        estimatedCost: null,
-        error: errorEvent.message || "Unknown error",
-        completedAt: new Date().toISOString(),
-      };
+      return buildFailedBenchmarkModelResult(
+        benchmark,
+        model,
+        configFlags,
+        latency,
+        errorEvent.message || "Unknown error",
+      );
     }
-    // Extract text response
+
     const text = events
       .filter((e) => e.type === "chunk")
       .map((e) => e.content)
@@ -472,66 +557,21 @@ export async function runSingleModel(
     const doneEvent =
       events.find((e) => e.type === "done") || ({} as BenchmarkEvent);
     const matchMode = benchmark.matchMode || MATCH_MODES.CONTAINS;
-    // Extract thinking content (emitted as type: "thinking")
     const thinkingText = events
       .filter((e) => e.type === "thinking")
       .map((e) => e.content)
       .join("");
-    // Extract tool calls from both event paths:
-    // - "toolCall" with status "done" — native MCP path (e.g. LM Studio)
-    // - "tool_execution" with status "done" — standard agentic path (cloud providers)
-    const nativeToolCalls: ToolCallResult[] = events
-      .filter((e) => e.type === "toolCall" && e.status === "done")
-      .map((toolCall) => ({
-        id: toolCall.id,
-        name: toolCall.name,
-        args: toolCall.args,
-        result: toolCall.result,
-        status: "done",
-      }));
-    const agenticToolCalls: ToolCallResult[] = events
-      .filter(
-        (e) =>
-          e.type === "tool_execution" &&
-          (e.status === "done" || e.status === "error"),
-      )
-      .map((e) => ({
-        id: e.tool?.id,
-        name: e.tool?.name,
-        args: e.tool?.args,
-        result: e.tool?.result,
-        status: e.status || "done",
-      }));
-    const toolCalls = [...nativeToolCalls, ...agenticToolCalls];
+    const toolCalls = extractBenchmarkToolCalls(events);
     const toolCallsResult = toolCalls.length > 0 ? toolCalls : null;
-    // Count agentic loop turns (each chunk of tool calls + response = 1 turn)
-    // A turn is roughly: user→model→(tools)→model. Count "done" events as turn markers.
     const turnCount = events.filter((e) => e.type === "done").length || 1;
-    // ── Mode-aware pass/fail evaluation ──────────────────────
-    const mode = benchmark.benchmarkMode || "model";
-    let passed: boolean;
-    if (mode === "agent") {
-      // Agent mode: only behavioral assertions
-      passed = evaluateAgentAssertions(benchmark, {
-        response: text,
-        thinking: thinkingText,
-        toolCalls,
-        turnCount,
-      });
-    } else if (mode === "combined") {
-      // Combined mode: both text + behavioral assertions must pass
-      const textPassed = evaluateAssertions(text, benchmark);
-      const agentPassed = evaluateAgentAssertions(benchmark, {
-        response: text,
-        thinking: thinkingText,
-        toolCalls,
-        turnCount,
-      });
-      passed = textPassed && agentPassed;
-    } else {
-      // Model mode (default): text assertions only
-      passed = evaluateAssertions(text, benchmark);
-    }
+    const passed = evaluateBenchmarkModeResult(
+      benchmark,
+      text,
+      thinkingText,
+      toolCalls,
+      turnCount,
+    );
+
     return {
       provider: model.provider,
       model: model.model,
@@ -554,21 +594,13 @@ export async function runSingleModel(
     logger.error(
       `[benchmark]   💥 ${model.model} threw: ${getErrorMessage(error)}`,
     );
-    return {
-      provider: model.provider,
-      model: model.model,
-      label: model.label,
-      ...configFlags,
-      response: null,
-      thinking: null,
-      passed: false,
-      matchMode: benchmark.matchMode || MATCH_MODES.CONTAINS,
-      latency: roundMilliseconds(latency),
-      usage: null,
-      estimatedCost: null,
-      error: getErrorMessage(error),
-      completedAt: new Date().toISOString(),
-    };
+    return buildFailedBenchmarkModelResult(
+      benchmark,
+      model,
+      configFlags,
+      latency,
+      getErrorMessage(error),
+    );
   }
 }
 // ─── public API ─────────────────────────────────────────────

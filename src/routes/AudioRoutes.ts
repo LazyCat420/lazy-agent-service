@@ -45,6 +45,138 @@ interface VoiceParams {
 }
 
 const router = express.Router();
+function resolveVoiceConversationContext(params: VoiceParams): {
+  conversationId: string | null | undefined;
+  conversationMeta: ConversationMeta | null;
+  traceId: string | null;
+} {
+  const {
+    text,
+    conversationId: incomingConversationId,
+    conversationMeta: incomingConversationMeta,
+    traceId: incomingTraceId,
+    skipConversation,
+  } = params;
+  let conversationId = skipConversation ? null : incomingConversationId;
+  let conversationMeta: ConversationMeta | null = skipConversation
+    ? null
+    : incomingConversationMeta || null;
+  if (!skipConversation && !conversationId) {
+    conversationId = crypto.randomUUID();
+    const titleSnippet = (text || "").slice(0, 100).trim() || "TTS Request";
+    conversationMeta = conversationMeta || { title: titleSnippet };
+  }
+  const traceId = incomingTraceId || null;
+  if (traceId && conversationMeta) {
+    conversationMeta.traceId = traceId;
+  } else if (traceId) {
+    conversationMeta = { traceId };
+  }
+  return { conversationId, conversationMeta, traceId };
+}
+
+async function consumeSpeechStreamToBinary(
+  stream: unknown,
+  audioChunks: Buffer[] | null,
+  emitBinary: (chunk: Buffer | Uint8Array) => void,
+): Promise<void> {
+  if (!stream) {
+    throw new Error("Speech generation returned no stream");
+  }
+  if (
+    typeof stream === "object" &&
+    "pipe" in stream &&
+    typeof (stream as import("stream").Readable).pipe === "function"
+  ) {
+    const nodeStream = stream as import("stream").Readable;
+    if (audioChunks) {
+      nodeStream.on("data", (chunk: Buffer) => audioChunks.push(chunk));
+    }
+    for await (const chunk of nodeStream) {
+      emitBinary(chunk as Buffer);
+    }
+    return;
+  }
+
+  const webStream = stream as ReadableStream<Uint8Array>;
+  const reader = webStream.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (audioChunks && value) audioChunks.push(Buffer.from(value));
+    emitBinary(value);
+  }
+}
+
+async function persistVoiceConversationMessages(
+  conversationId: string,
+  audioChunks: Buffer[],
+  contentType: string,
+  text: string,
+  providerName: string,
+  model: string | undefined,
+  voice: string | undefined,
+  totalSec: number,
+  project: string,
+  username: string,
+  conversationMeta: ConversationMeta | null,
+): Promise<void> {
+  let audioRef: string | null = null;
+  try {
+    const audioBuffer = Buffer.concat(audioChunks);
+    const dataUrl = `data:${contentType};base64,${audioBuffer.toString("base64")}`;
+    const { ref } = await FileService.uploadFile(
+      dataUrl,
+      FILE_CATEGORIES.GENERATIONS,
+      project,
+      username,
+    );
+    audioRef = ref;
+  } catch (error: unknown) {
+    logger.error(`Failed to upload TTS audio: ${errorMessage(error)}`);
+  }
+  const messagesToAppend: ChatMessage[] = [
+    {
+      role: "user",
+      content: text,
+      timestamp: new Date().toISOString(),
+    },
+    {
+      role: "assistant",
+      content: "",
+      ...(audioRef && { audio: audioRef }),
+      model: model || undefined,
+      provider: providerName,
+      voice: voice || undefined,
+      timestamp: new Date().toISOString(),
+      totalTime: roundMilliseconds(totalSec),
+    },
+  ];
+  const meta = conversationMeta
+    ? { ...conversationMeta, settings: { provider: providerName, model } }
+    : undefined;
+  ConversationService.appendMessages(
+    conversationId,
+    project,
+    username,
+    messagesToAppend,
+    meta,
+  )
+    .then(() =>
+      ConversationService.setGenerating(
+        conversationId,
+        project,
+        username,
+        false,
+      ),
+    )
+    .catch((error: unknown) =>
+      logger.error(
+        `Failed to append messages to conversation ${conversationId}: ${getErrorMessage(error)}`,
+      ),
+    );
+}
+
 // ─── used by both REST and WebSocket ────────────────────────
 export async function handleVoice(
   params: VoiceParams,
@@ -60,33 +192,13 @@ export async function handleVoice(
     instructions,
     model,
     options: extraOptions,
-    conversationId: incomingConversationId,
-    conversationMeta: incomingConversationMeta,
-    traceId: incomingTraceId,
-    skipConversation,
     project = "any",
     username = "any",
     clientIp = null,
   } = params;
-  // ── Auto-conversation: every AI request gets tracked ────────────
-  let conversationId = skipConversation ? null : incomingConversationId;
-  let conversationMeta: ConversationMeta | null = skipConversation
-    ? null
-    : incomingConversationMeta || null;
-  if (!skipConversation && !conversationId) {
-    conversationId = crypto.randomUUID();
-    const titleSnippet = (text || "").slice(0, 100).trim() || "TTS Request";
-    conversationMeta = conversationMeta || { title: titleSnippet };
-  }
-  // ── Trace: passthrough ────────────────────────────────────
-  // TraceId is generated client-side and passed on every request.
-  const traceId = incomingTraceId || null;
-  // Inject traceId into conversationMeta for storage
-  if (traceId && conversationMeta) {
-    conversationMeta.traceId = traceId;
-  } else if (traceId) {
-    conversationMeta = { traceId };
-  }
+  const { conversationId, conversationMeta, traceId } =
+    resolveVoiceConversationContext(params);
+
   try {
     if (!providerName) {
       throw new ProviderError(
@@ -106,7 +218,6 @@ export async function handleVoice(
         400,
       );
     }
-    // Mark conversation as generating (creates a stub doc via upsert)
     if (conversationId) {
       ConversationService.setGenerating(
         conversationId,
@@ -127,32 +238,10 @@ export async function handleVoice(
     const result = await provider.generateSpeech(text, voice, options);
     const totalSec = (performance.now() - requestStart) / 1000;
     const contentType = result.contentType || "audio/mpeg";
-    // Collect audio chunks for MinIO upload when conversationId is provided
     const audioChunks: Buffer[] | null = conversationId ? [] : null;
-    if (!result.stream) {
-      throw new Error("Speech generation returned no stream");
-    }
-    const stream = result.stream;
-    if ("pipe" in stream && typeof (stream as import("stream").Readable).pipe === "function") {
-      // Node.js readable stream
-      const nodeStream = stream as import("stream").Readable;
-      if (audioChunks) {
-        nodeStream.on("data", (chunk: Buffer) => audioChunks.push(chunk));
-      }
-      for await (const chunk of nodeStream) {
-        emitBinary(chunk as Buffer);
-      }
-    } else {
-      // Web ReadableStream (from fetch)
-      const webStream = stream as ReadableStream<Uint8Array>;
-      const reader = webStream.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (audioChunks && value) audioChunks.push(Buffer.from(value));
-        emitBinary(value);
-      }
-    }
+
+    await consumeSpeechStreamToBinary(result.stream, audioChunks, emitBinary);
+
     logger.request(
       project,
       username,
@@ -175,66 +264,23 @@ export async function handleVoice(
       totalTime: roundMilliseconds(totalSec),
     });
     emitJSON({ type: "done" });
-    // Auto-append to conversation
     if (conversationId && audioChunks) {
-      let audioRef: string | null = null;
-      try {
-        const audioBuffer = Buffer.concat(audioChunks);
-        const dataUrl = `data:${contentType};base64,${audioBuffer.toString("base64")}`;
-        const { ref } = await FileService.uploadFile(
-          dataUrl,
-          FILE_CATEGORIES.GENERATIONS,
-          project,
-          username,
-        );
-        audioRef = ref;
-      } catch (error: unknown) {
-        logger.error(`Failed to upload TTS audio: ${errorMessage(error)}`);
-      }
-      const messagesToAppend: ChatMessage[] = [];
-      // Derive user message from text
-      messagesToAppend.push({
-        role: "user",
-        content: text,
-        timestamp: new Date().toISOString(),
-      });
-      messagesToAppend.push({
-        role: "assistant",
-        content: "",
-        ...(audioRef && { audio: audioRef }),
-        model: model || undefined,
-        provider: providerName,
-        voice: voice || undefined,
-        timestamp: new Date().toISOString(),
-        totalTime: roundMilliseconds(totalSec),
-      });
-      const meta = conversationMeta
-        ? { ...conversationMeta, settings: { provider: providerName, model } }
-        : undefined;
-      ConversationService.appendMessages(
+      await persistVoiceConversationMessages(
         conversationId,
+        audioChunks,
+        contentType,
+        text,
+        providerName,
+        model,
+        voice,
+        totalSec,
         project,
         username,
-        messagesToAppend,
-        meta,
-      )
-        .then(() =>
-          ConversationService.setGenerating(
-            conversationId!,
-            project,
-            username,
-            false,
-          ),
-        )
-        .catch((error: unknown) =>
-          logger.error(
-            `Failed to append messages to conversation ${conversationId}: ${getErrorMessage(error)}`,
-          ),
-        );
+        conversationMeta,
+      );
     }
     return contentType;
   } catch (error: unknown) {
-    // Clear isGenerating flag on error
     if (conversationId) {
       ConversationService.setGenerating(
         conversationId,

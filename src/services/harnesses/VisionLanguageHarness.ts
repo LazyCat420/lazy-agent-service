@@ -76,9 +76,34 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
   static description =
     "Reason→Act→Observe tool-use loop with real-time rolling webcam/screen streaming injection.";
 
-  async run(): Promise<{ messages: ConversationMessage[] }> {
-    const context = this.context;
-    const state = this.state;
+  private resolveMaxIterations(clientMaxIterations: number | undefined): number {
+    if (clientMaxIterations === 0) return Infinity;
+    if (clientMaxIterations) return Math.min(100, Math.max(1, clientMaxIterations));
+    return MAX_TOOL_ITERATIONS;
+  }
+
+  private injectVisionFeedInstruction(currentMessages: ConversationMessage[]): void {
+    const systemMessage = currentMessages.find((message) => message.role === "system");
+    const visionInstruction = PromptLocaleService.get(
+      (this.context.options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
+      "harness.visionFeed.instruction",
+    );
+    if (systemMessage) {
+      if (!systemMessage.content?.includes("LIVE VISION FEED ACTIVE")) {
+        systemMessage.content = (systemMessage.content || "") + visionInstruction;
+      }
+    } else {
+      currentMessages.unshift({
+        role: "system",
+        content: visionInstruction.trim(),
+      });
+    }
+  }
+
+  private async runFirstIterationSetup(
+    currentMessages: ConversationMessage[],
+    hooks: ReturnType<typeof createStandardHooks>["hooks"],
+  ): Promise<void> {
     const {
       options,
       conversationId,
@@ -89,25 +114,389 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
       agent,
       workspaceRoot,
       emit,
-      signal,
-    } = context;
+    } = this.context;
+
+    const hookContext: BeforePromptHookContext = {
+      messages: currentMessages,
+      project,
+      username,
+      agent,
+      traceId,
+      conversationId,
+      agentConversationId: agentConversationId || "",
+      parentAgentConversationId: this.context.parentAgentConversationId,
+      agentContext: options.agentContext,
+      enabledTools: this.tools.resolvedEnabledTools,
+      resolvedToolNames: this.tools.finalTools.map((tool: ToolSchema) => tool.name),
+      workspaceRoot: workspaceRoot || undefined,
+      workspaceEnabled: options.workspaceEnabled as boolean | undefined,
+      locale: options.locale as string | undefined,
+      loadedTools: this.state.loadedTools,
+    };
+    await hooks.run("beforePrompt", hookContext);
+
+    if (hookContext._assembledSystemPrompt) {
+      const assembledPrompt = hookContext._assembledSystemPrompt as string;
+      this.context.conversationMeta = {
+        ...(this.context.conversationMeta || {}),
+        systemPrompt: assembledPrompt,
+      };
+      applyAssembledSystemPrompt(options, assembledPrompt);
+    }
+
+    if (Array.isArray(hookContext._injectedSkills) && hookContext._injectedSkills.length > 0) {
+      emit({
+        type: SERVER_SENT_EVENT_TYPES.STATUS,
+        message: STATUS_MESSAGES.SKILLS_INJECTED,
+        skills: hookContext._injectedSkills,
+      });
+    }
+
+    if (this.state.planModeActive) {
+      await PlanningModeService.injectPlanningInstruction(currentMessages);
+    }
+  }
+
+  private buildPassTools(): ToolSchema[] {
+    if (this.state.planModeActive) {
+      const planModeTools = this.tools.finalTools.filter(
+        (tool: ToolSchema) => tool.name === TOOL_NAMES.EXIT_PLAN_MODE,
+      );
+      logger.info(
+        `[PlanningMode] Sending ${planModeTools.length} tools to provider: ${planModeTools.map((tool: ToolSchema) => tool.name).join(", ")}`,
+      );
+      return planModeTools;
+    }
+    return this.tools.finalTools.filter((tool: ToolSchema) => {
+      const cleanName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+      return tool.name === "describe_tools" || this.state.loadedTools.has(cleanName);
+    });
+  }
+
+  private injectLiveVisionFrames(
+    currentMessages: ConversationMessage[],
+    resolvedAgentConversationId: string,
+  ): void {
+    const liveFrames = LiveFrameService.getFrames(this.context.conversationId);
+    if (!liveFrames || liveFrames.length === 0) return;
+    const lastUserMessage = [...currentMessages].reverse().find((message) => message.role === "user");
+    if (!lastUserMessage) return;
+    lastUserMessage.images = [...liveFrames];
+    logger.info(
+      `[VisionLanguageHarness] Injected ${liveFrames.length} live frames into last user message for session ${resolvedAgentConversationId}`,
+    );
+  }
+
+  private appendValidationFailureMessages(
+    pass: ReturnType<VisionLanguageHarness["createPassState"]>,
+    results: ToolResult[],
+    validationFeedback: Awaited<ReturnType<typeof validateAfterToolExecution>>,
+    currentMessages: ConversationMessage[],
+  ): void {
+    const errorBlock = validationFeedback
+      .map((feedback) => `### ${feedback.filePath} (${feedback.validatorType})\n${feedback.rawOutput}`)
+      .join("\n\n");
+    const locale =
+      (this.context.options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale();
+
+    currentMessages.push({
+      role: "assistant",
+      content: pass.streamedText || "",
+      ...(pass.streamedThinking.trim() && { thinking: pass.streamedThinking.trim() }),
+      ...(pass.thinkingSignature && { thinkingSignature: pass.thinkingSignature }),
+      toolCalls: pass.pendingToolCalls.map((toolCall: ToolCall) => {
+        const matchingResult = results.find((result) => result.id === toolCall.id);
+        return {
+          id: toolCall.id || null,
+          name: toolCall.name,
+          args: toolCall.args,
+          result: matchingResult ? matchingResult.result : null,
+          durationMs: matchingResult?.durationMs,
+        };
+      }),
+    });
+
+    currentMessages.push({
+      role: "system",
+      content:
+        PromptLocaleService.get(locale, "harness.validationError.header", {
+          errorCount: String(validationFeedback.length),
+        }) +
+        `\n\n${errorBlock}\n\n` +
+        PromptLocaleService.get(locale, "harness.validationError.analyzePrompt"),
+    });
+
+    this.context.emit({
+      type: SERVER_SENT_EVENT_TYPES.STATUS,
+      message: STATUS_MESSAGES.VALIDATION_ERRORS_DETECTED,
+      count: validationFeedback.length,
+    });
+  }
+
+  private appendCompletedToolTurnMessages(
+    pass: ReturnType<VisionLanguageHarness["createPassState"]>,
+    results: ToolResult[],
+    currentMessages: ConversationMessage[],
+  ): ConversationMessage[] {
+    const assistantMessage: ConversationMessage = {
+      role: "assistant",
+      content: pass.streamedText || "",
+      ...(pass.streamedThinking.trim() && { thinking: pass.streamedThinking.trim() }),
+      ...(pass.thinkingSignature && { thinkingSignature: pass.thinkingSignature }),
+      toolCalls: pass.pendingToolCalls.map((toolCall: ToolCall) => {
+        const matchingResult = results.find((result) => result.id === toolCall.id);
+        return {
+          id: toolCall.id || null,
+          responsesItemId: toolCall.responsesItemId || undefined,
+          name: toolCall.name,
+          args: toolCall.args,
+          thoughtSignature: toolCall.thoughtSignature || undefined,
+          reasoningItem: toolCall.reasoningItem || undefined,
+          result: matchingResult ? matchingResult.result : null,
+          durationMs: matchingResult?.durationMs,
+        };
+      }),
+    };
+    currentMessages.push(assistantMessage);
+
+    const retryGuidanceMessage = buildToolRetryGuidance(
+      pass.pendingToolCalls,
+      results,
+      this.state,
+      MAX_CONSECUTIVE_TOOL_ERRORS,
+      this.context.options?.locale as string | undefined,
+    );
+    if (retryGuidanceMessage) {
+      currentMessages.push(retryGuidanceMessage);
+    }
+
+    const filteredMessages = currentMessages.filter(
+      (message) =>
+        !(
+          message.role === "assistant" &&
+          !message.content?.trim() &&
+          (!message.toolCalls || message.toolCalls.length === 0)
+        ),
+    );
+
+    injectToolDiscoveryNudge(pass.pendingToolCalls, results, filteredMessages, this.context);
+    this.checkAndApplyToolSetChanges(filteredMessages);
+    return filteredMessages;
+  }
+
+  private async handleIterationToolCalls(
+    pass: ReturnType<VisionLanguageHarness["createPassState"]>,
+    currentMessages: ConversationMessage[],
+    hooks: ReturnType<typeof createStandardHooks>["hooks"],
+  ): Promise<{ messages: ConversationMessage[]; earlyReturn: boolean }> {
+    const { context, state } = this;
+    const { emit } = context;
+
+    if (state.planModeActive) {
+      const { allBlocked } = blockUnauthorizedToolCalls(
+        pass.pendingToolCalls,
+        currentMessages,
+        pass,
+        state,
+        context.options?.locale as string | undefined,
+      );
+      if (allBlocked) {
+        this.logIteration(pass, currentMessages);
+        return { messages: currentMessages, earlyReturn: false };
+      }
+    }
+
+    context._currentMessages = currentMessages;
+    const results: ToolResult[] = await executeToolBatch(
+      pass.pendingToolCalls,
+      context,
+      this.tools,
+      hooks,
+      state,
+    );
+
+    await processToolResultMedia(pass.pendingToolCalls, results, state, pass, emit, context);
+    trackToolErrors(pass.pendingToolCalls, results, state, MAX_CONSECUTIVE_TOOL_ERRORS, emit);
+    emitPostExecutionStatus(pass.pendingToolCalls, emit);
+
+    const validationFeedback = await validateAfterToolExecution(
+      pass.pendingToolCalls,
+      results,
+      context,
+      this.tools,
+    );
+
+    if (validationFeedback.length > 0) {
+      this.appendValidationFailureMessages(pass, results, validationFeedback, currentMessages);
+      this.logIteration(pass, currentMessages);
+      return { messages: currentMessages, earlyReturn: false };
+    }
+
+    await checkForPlanModeEntry(
+      pass.pendingToolCalls,
+      currentMessages,
+      state,
+      emit,
+      context.options?.locale as string | undefined,
+    );
+
+    const exitPlanToolCall = pass.pendingToolCalls.find(
+      (toolCall) => toolCall.name === TOOL_NAMES.EXIT_PLAN_MODE,
+    );
+    if (exitPlanToolCall) {
+      const { shouldContinueLoop } = await handleExitPlanMode(
+        exitPlanToolCall,
+        pass,
+        results,
+        currentMessages,
+        context,
+        state,
+      );
+      if (!shouldContinueLoop) {
+        return { messages: currentMessages, earlyReturn: true };
+      }
+    }
+
+    const updatedMessages = this.appendCompletedToolTurnMessages(pass, results, currentMessages);
+    this.logIteration(pass, updatedMessages);
+    return { messages: updatedMessages, earlyReturn: false };
+  }
+
+  private handleTruncatedPass(
+    pass: ReturnType<VisionLanguageHarness["createPassState"]>,
+    currentMessages: ConversationMessage[],
+    truncationRecoveryCount: number,
+  ): { shouldContinue: boolean; truncationRecoveryCount: number } {
+    const nextRecoveryCount = truncationRecoveryCount + 1;
+    const configuredMaxTokens = this.context.options.maxTokens || "default";
+    const modelOutputCeiling = this.context.modelDefinition?.maxOutputTokens as number | undefined;
+    logger.warn(
+      `[VisionLanguageHarness] Max tokens truncation detected on iteration ${this.state.iterations} — ` +
+        `Recovery attempt ${nextRecoveryCount}/${MAX_OUTPUT_TRUNCATION_RECOVERIES}.`,
+    );
+
+    const alreadyAtCeiling =
+      typeof configuredMaxTokens === "number" &&
+      isAtOutputCeiling(configuredMaxTokens, modelOutputCeiling);
+
+    if (!alreadyAtCeiling && nextRecoveryCount <= MAX_OUTPUT_TRUNCATION_RECOVERIES) {
+      const escalatedMaxTokens = injectContinuationContext(
+        currentMessages,
+        pass,
+        this.context,
+        nextRecoveryCount,
+      );
+      this.context.options.maxTokens = escalatedMaxTokens;
+      this.logIteration(pass, currentMessages);
+      return { shouldContinue: true, truncationRecoveryCount: nextRecoveryCount };
+    }
+
+    if (alreadyAtCeiling) {
+      logger.warn(
+        `[VisionLanguageHarness] Skipping truncation recovery — maxTokens (${configuredMaxTokens}) ` +
+          `is already at or above model ceiling (${modelOutputCeiling}). Escalation would be pointless.`,
+      );
+    }
+    const exhaustionMessage = buildExhaustedRecoveryMessage(
+      alreadyAtCeiling ? 0 : MAX_OUTPUT_TRUNCATION_RECOVERIES,
+      configuredMaxTokens,
+      this.context.options?.locale as string | undefined,
+    );
+    injectErrorAsConversationMessage(currentMessages, exhaustionMessage, this.context);
+    this.logIteration(pass, currentMessages);
+    return { shouldContinue: false, truncationRecoveryCount: nextRecoveryCount };
+  }
+
+  private handleNoToolPass(
+    pass: ReturnType<VisionLanguageHarness["createPassState"]>,
+    currentMessages: ConversationMessage[],
+    truncationRecoveryCount: number,
+  ): { shouldBreak: boolean; hasCleanTextBreak: boolean; truncationRecoveryCount: number } {
+    const { context, state } = this;
+
+    if (pass.streamedText) {
+      if (state.planModeActive) {
+        currentMessages.push({
+          role: "assistant",
+          content: pass.streamedText,
+          ...(pass.streamedThinking.trim() && { thinking: pass.streamedThinking.trim() }),
+          ...(pass.thinkingSignature && { thinkingSignature: pass.thinkingSignature }),
+        });
+        this.logIteration(pass, currentMessages);
+        return { shouldBreak: false, hasCleanTextBreak: false, truncationRecoveryCount };
+      }
+
+      const codexResult = handleCodexPlanningResponse(
+        pass,
+        currentMessages,
+        context,
+        state,
+        this.tools.finalTools,
+        "VisionLanguageHarness",
+      );
+      this.logIteration(pass, currentMessages);
+      if (codexResult.shouldContinueLoop) {
+        return { shouldBreak: false, hasCleanTextBreak: false, truncationRecoveryCount };
+      }
+      return { shouldBreak: true, hasCleanTextBreak: true, truncationRecoveryCount };
+    }
+
+    if (pass.streamedThinking.trim()) {
+      logger.warn(
+        `[VisionLanguageHarness] Thinking-only response on iteration ${state.iterations} — ` +
+          `thinking=${pass.streamedThinking.length}chars, text=0. ` +
+          `Injecting continuation prompt to elicit text response.`,
+      );
+      currentMessages.push({
+        role: "assistant",
+        content: "",
+        thinking: pass.streamedThinking.trim(),
+        ...(pass.thinkingSignature && { thinkingSignature: pass.thinkingSignature }),
+      });
+      currentMessages.push({
+        role: "user",
+        content:
+          "[System: Your previous response contained only internal reasoning " +
+          "without producing any visible output. Your thinking has been preserved. " +
+          "Now respond concisely with your actual answer, analysis, or tool calls. " +
+          "Do not repeat your reasoning — act on it.]",
+        _isSystemWarning: true,
+      });
+      this.logIteration(pass, currentMessages);
+      return { shouldBreak: false, hasCleanTextBreak: false, truncationRecoveryCount };
+    }
+
+    if (isOutputTruncated(pass)) {
+      const recovery = this.handleTruncatedPass(pass, currentMessages, truncationRecoveryCount);
+      return {
+        shouldBreak: !recovery.shouldContinue,
+        hasCleanTextBreak: false,
+        truncationRecoveryCount: recovery.truncationRecoveryCount,
+      };
+    }
+
+    logger.warn(
+      `[VisionLanguageHarness] Empty model output on iteration ${state.iterations} — ` +
+        `text=${pass.streamedText.length}, thinking=${pass.streamedThinking.length}, ` +
+        `toolCalls=${pass.pendingToolCalls.length}. Breaking.`,
+    );
+    this.logIteration(pass, currentMessages);
+    return { shouldBreak: true, hasCleanTextBreak: false, truncationRecoveryCount };
+  }
+
+  async run(): Promise<{ messages: ConversationMessage[] }> {
+    const context = this.context;
+    const state = this.state;
+    const { options, agentConversationId, project, username, agent, workspaceRoot, emit, signal } =
+      context;
 
     const resolvedAgentConversationId = agentConversationId || "";
-
-    // ── Resolve max iterations ────────────────────────────────
-    const clientMaxIterations = options.maxIterations;
-    const resolvedMaxIterations =
-      clientMaxIterations === 0
-        ? Infinity
-        : clientMaxIterations
-          ? Math.min(100, Math.max(1, clientMaxIterations))
-          : MAX_TOOL_ITERATIONS;
+    const resolvedMaxIterations = this.resolveMaxIterations(options.maxIterations);
 
     let currentMessages: ConversationMessage[] = [...context.messages];
     let truncationRecoveryCount = 0;
     let hasCleanTextBreak = false;
 
-    // ── Initialize lifecycle hooks ──────────────────────────
     const { hooks } = createStandardHooks({
       workspaceRoot: workspaceRoot || undefined,
       enableCriticGate: options.enableCriticGate === true,
@@ -121,28 +510,8 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
       });
     }
 
-    // ── Inject live vision system instruction ─────────────────
-    const systemMessage = currentMessages.find(
-      (message) => message.role === "system",
-    );
-    const visionInstruction = PromptLocaleService.get(
-      (this.context.options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
-      "harness.visionFeed.instruction",
-    );
-    if (systemMessage) {
-      if (!systemMessage.content?.includes("LIVE VISION FEED ACTIVE")) {
-        systemMessage.content =
-          (systemMessage.content || "") + visionInstruction;
-      }
-    } else {
-      currentMessages.unshift({
-        role: "system",
-        content: visionInstruction.trim(),
-      });
-    }
+    this.injectVisionFeedInstruction(currentMessages);
 
-    // ── Main loop ────────────────────────────────────────────
-    // Wrapped in try/catch for error-path message persistence.
     try {
       while (state.iterations < resolvedMaxIterations) {
         state.iterations++;
@@ -154,87 +523,20 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
           maxIterations: resolvedMaxIterations,
         });
 
-        // ── beforePrompt hook (iteration 1 only) ──────────────
         if (state.iterations === 1) {
-          const hookContext: BeforePromptHookContext = {
-            messages: currentMessages,
-            project,
-            username,
-            agent,
-            traceId,
-            conversationId,
-            agentConversationId: agentConversationId || "",
-            parentAgentConversationId: context.parentAgentConversationId,
-            agentContext: options.agentContext,
-            enabledTools: this.tools.resolvedEnabledTools,
-            resolvedToolNames: this.tools.finalTools.map(
-              (tool: ToolSchema) => tool.name,
-            ),
-            workspaceRoot: workspaceRoot || undefined,
-            workspaceEnabled: options.workspaceEnabled as boolean | undefined,
-            locale: options.locale as string | undefined,
-            loadedTools: state.loadedTools,
-          };
-          await hooks.run("beforePrompt", hookContext);
-
-          // ── Persist assembled system prompt to conversationMeta ──
-          if (hookContext._assembledSystemPrompt) {
-            const assembledPrompt = hookContext._assembledSystemPrompt as string;
-            context.conversationMeta = {
-              ...(context.conversationMeta || {}),
-              systemPrompt: assembledPrompt,
-            };
-            // A caller's own systemPrompt wins (see IdentityPrompt.ts).
-            applyAssembledSystemPrompt(options, assembledPrompt);
-          }
-
-          if (
-            Array.isArray(hookContext._injectedSkills) &&
-            hookContext._injectedSkills.length > 0
-          ) {
-            emit({
-              type: SERVER_SENT_EVENT_TYPES.STATUS,
-              message: STATUS_MESSAGES.SKILLS_INJECTED,
-              skills: hookContext._injectedSkills,
-            });
-          }
-
-          if (state.planModeActive) {
-            await PlanningModeService.injectPlanningInstruction(currentMessages);
-          }
+          await this.runFirstIterationSetup(currentMessages, hooks);
         }
 
-        // ── Build pass options ─────────────────────────────────
         const passOptions: IterationPassOptions = {
           ...options,
           project,
           agent,
           username,
+          tools: this.buildPassTools(),
         };
-        if (state.planModeActive) {
-          const planModeTools = this.tools.finalTools.filter(
-            (tool: ToolSchema) => tool.name === TOOL_NAMES.EXIT_PLAN_MODE,
-          );
-          passOptions.tools = planModeTools;
-          logger.info(
-            `[PlanningMode] Sending ${planModeTools.length} tools to provider: ${planModeTools.map((tool: ToolSchema) => tool.name).join(", ")}`,
-          );
-        } else {
-          passOptions.tools = this.tools.finalTools.filter(
-            (tool: ToolSchema) => {
-              const cleanName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
-              return tool.name === "describe_tools" || state.loadedTools.has(cleanName);
-            },
-          );
-        }
-
         const resolvedPassTools = passOptions.tools || [];
-        const allowedToolNames = new Set(
-          resolvedPassTools.map((tool: ToolSchema) => tool.name),
-        );
+        const allowedToolNames = new Set(resolvedPassTools.map((tool: ToolSchema) => tool.name));
 
-        // ── Context pressure management ──────────────────────────
-        // Micro-compaction (pressure-gated) → auto-compaction → summary persistence
         const pressureResult = await manageContextPressure(
           currentMessages,
           context,
@@ -243,30 +545,10 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
         );
         currentMessages = pressureResult.messages;
 
-        // ── Live Vision Frame Injection ────────────────────────
-        const liveFrames = LiveFrameService.getFrames(context.conversationId);
-        if (liveFrames && liveFrames.length > 0) {
-          const lastUserMessage = [...currentMessages]
-            .reverse()
-            .find((message) => message.role === "user");
-          if (lastUserMessage) {
-            if (!lastUserMessage.images) {
-              lastUserMessage.images = [];
-            }
-            lastUserMessage.images = [...liveFrames];
-            logger.info(
-              `[VisionLanguageHarness] Injected ${liveFrames.length} live frames into last user message for session ${resolvedAgentConversationId}`,
-            );
-          }
-        }
+        this.injectLiveVisionFrames(currentMessages, resolvedAgentConversationId);
 
-        // ── Context window enforcement ─────────────────────────
-        currentMessages = this.enforceContextWindow(
-          currentMessages,
-          this.tools.finalTools.length,
-        );
+        currentMessages = this.enforceContextWindow(currentMessages, this.tools.finalTools.length);
 
-        // ── Create per-iteration pass state ────────────────────
         const pass = this.createPassState(passOptions);
         const requestIdBase =
           context.requestId || resolvedAgentConversationId || crypto.randomUUID();
@@ -275,11 +557,9 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
 
         this.registerTrackerRequest(passRequestId);
 
-        // ── Stream LLM response ────────────────────────────────
         const stream = await this.createProviderStream(currentMessages, passOptions);
         await this.consumeStream(stream, pass, allowedToolNames);
 
-        // ── Finalize tracker for this pass ─────────────────────
         finalizePassTracker(pass, passRequestId);
         logKVCacheHitRate(pass.usage, state.iterations, "VisionLanguageHarness");
         this.emitGenerationProgress();
@@ -288,344 +568,28 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
 
         this.emitUsageUpdate();
 
-        // ── Tool execution ─────────────────────────────────────
         if (pass.pendingToolCalls.length > 0) {
-          // Plan mode enforcement
-          if (state.planModeActive) {
-            const { allBlocked } = blockUnauthorizedToolCalls(
-              pass.pendingToolCalls,
-              currentMessages,
-              pass,
-              state,
-              this.context.options?.locale as string | undefined,
-            );
-            if (allBlocked) {
-              this.logIteration(pass, currentMessages);
-              continue;
-            }
-          }
-
-          // ── Execute (executeToolBatch authorizes every call first) ──
-          context._currentMessages = currentMessages;
-
-          const results: ToolResult[] = await executeToolBatch(
-            pass.pendingToolCalls,
-            context,
-            this.tools,
-            hooks,
-            state,
-          );
-
-          // ── Post-execution: media, errors, status ─────────────
-          await processToolResultMedia(
-            pass.pendingToolCalls,
-            results,
-            state,
-            pass,
-            emit,
-            context,
-          );
-
-          trackToolErrors(
-            pass.pendingToolCalls,
-            results,
-            state,
-            MAX_CONSECUTIVE_TOOL_ERRORS,
-            emit,
-          );
-
-          emitPostExecutionStatus(pass.pendingToolCalls, emit);
-
-          // ── Validation intercept (linter auto-remediation) ──────
-          // Must run BEFORE plan mode toggling — no point entering plan
-          // mode if validation will inject error feedback and continue.
-          const validationFeedback = await validateAfterToolExecution(
-            pass.pendingToolCalls,
-            results,
-            context,
-            this.tools,
-          );
-
-          if (validationFeedback.length > 0) {
-            const errorBlock = validationFeedback
-              .map(
-                (feedback) =>
-                  `### ${feedback.filePath} (${feedback.validatorType})\n${feedback.rawOutput}`,
-              )
-              .join("\n\n");
-
-            currentMessages.push({
-              role: "assistant",
-              content: pass.streamedText || "",
-              ...(pass.streamedThinking.trim() && {
-                thinking: pass.streamedThinking.trim(),
-              }),
-              ...(pass.thinkingSignature && {
-                thinkingSignature: pass.thinkingSignature,
-              }),
-              toolCalls: pass.pendingToolCalls.map((toolCall: ToolCall) => {
-                const matchingResult = results.find(
-                  (result) => result.id === toolCall.id,
-                );
-                return {
-                  id: toolCall.id || null,
-                  name: toolCall.name,
-                  args: toolCall.args,
-                  result: matchingResult ? matchingResult.result : null,
-                  durationMs: matchingResult?.durationMs,
-                };
-              }),
-            });
-
-            currentMessages.push({
-              role: "system",
-              content:
-                PromptLocaleService.get(
-                  (this.context.options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
-                  "harness.validationError.header",
-                  { errorCount: String(validationFeedback.length) },
-                ) +
-                `\n\n${errorBlock}\n\n` +
-                PromptLocaleService.get(
-                  (this.context.options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
-                  "harness.validationError.analyzePrompt",
-                ),
-            });
-
-            emit({
-              type: SERVER_SENT_EVENT_TYPES.STATUS,
-              message: STATUS_MESSAGES.VALIDATION_ERRORS_DETECTED,
-              count: validationFeedback.length,
-            });
-            this.logIteration(pass, currentMessages);
-            continue;
-          }
-
-          // ── Plan mode toggling ────────────────────────────────
-          await checkForPlanModeEntry(
-            pass.pendingToolCalls,
-            currentMessages,
-            state,
-            emit,
-            this.context.options?.locale as string | undefined,
-          );
-
-          const exitPlanToolCall = pass.pendingToolCalls.find(
-            (toolCall) => toolCall.name === TOOL_NAMES.EXIT_PLAN_MODE,
-          );
-          if (exitPlanToolCall) {
-            const { shouldContinueLoop } = await handleExitPlanMode(
-              exitPlanToolCall,
-              pass,
-              results,
-              currentMessages,
-              context,
-              state,
-            );
-            if (!shouldContinueLoop) return { messages: currentMessages };
-          }
-
-          // ── Append to context for next pass ───────────────────
-          const assistantMessage: ConversationMessage = {
-            role: "assistant",
-            content: pass.streamedText || "",
-            ...(pass.streamedThinking.trim() && {
-              thinking: pass.streamedThinking.trim(),
-            }),
-            ...(pass.thinkingSignature && {
-              thinkingSignature: pass.thinkingSignature,
-            }),
-            toolCalls: pass.pendingToolCalls.map((toolCall: ToolCall) => {
-              const matchingResult = results.find(
-                (result) => result.id === toolCall.id,
-              );
-              return {
-                id: toolCall.id || null,
-                responsesItemId: toolCall.responsesItemId || undefined,
-                name: toolCall.name,
-                args: toolCall.args,
-                thoughtSignature: toolCall.thoughtSignature || undefined,
-                reasoningItem: toolCall.reasoningItem || undefined,
-                result: matchingResult ? matchingResult.result : null,
-                durationMs: matchingResult?.durationMs,
-              };
-            }),
-          };
-          currentMessages.push(assistantMessage);
-
-          // ── Structured retry guidance on tool failure ──────────
-          const retryGuidanceMessage = buildToolRetryGuidance(
-            pass.pendingToolCalls,
-            results,
-            state,
-            MAX_CONSECUTIVE_TOOL_ERRORS,
-            this.context.options?.locale as string | undefined,
-          );
-          if (retryGuidanceMessage) {
-            currentMessages.push(retryGuidanceMessage);
-          }
-
-          currentMessages = currentMessages.filter(
-            (message) =>
-              !(
-                message.role === "assistant" &&
-                !message.content?.trim() &&
-                (!message.toolCalls || message.toolCalls.length === 0)
-              ),
-          );
-
-          // ── Post-search nudge for tool discovery chain ─────────
-          injectToolDiscoveryNudge(
-            pass.pendingToolCalls,
-            results,
-            currentMessages,
-            context,
-          );
-
-          this.checkAndApplyToolSetChanges(currentMessages);
-
-          this.logIteration(pass, currentMessages);
+          const toolTurn = await this.handleIterationToolCalls(pass, currentMessages, hooks);
+          currentMessages = toolTurn.messages;
+          if (toolTurn.earlyReturn) return { messages: currentMessages };
           continue;
         }
 
-        // ── No tools — check if we should break ─────────────────
-        // Text present (with or without thinking) → clean text break.
-        // Thinking-only (no text, no tools) → the model exhausted its
-        // output budget on thinking tokens before producing a response.
-        // Inject a continuation prompt asking it to respond concisely.
-        if (pass.streamedText) {
-          if (state.planModeActive) {
-            currentMessages.push({
-              role: "assistant",
-              content: pass.streamedText,
-              ...(pass.streamedThinking.trim() && {
-                thinking: pass.streamedThinking.trim(),
-              }),
-              ...(pass.thinkingSignature && {
-                thinkingSignature: pass.thinkingSignature,
-              }),
-            });
-            this.logIteration(pass, currentMessages);
-            continue;
-          }
-
-          // Handle Codex/planning models
-          const codexResult = handleCodexPlanningResponse(
-            pass,
-            currentMessages,
-            context,
-            state,
-            this.tools.finalTools,
-            "VisionLanguageHarness",
-          );
-          if (codexResult.shouldContinueLoop) {
-            this.logIteration(pass, currentMessages);
-            continue;
-          }
-
-          this.logIteration(pass, currentMessages);
-          hasCleanTextBreak = true;
-          break;
-        }
-
-        if (!pass.streamedText && (!pass.pendingToolCalls || !pass.pendingToolCalls.length) && pass.streamedThinking.trim()) {
-          logger.warn(
-            `[VisionLanguageHarness] Thinking-only response on iteration ${state.iterations} — ` +
-              `thinking=${pass.streamedThinking.length}chars, text=0. ` +
-              `Injecting continuation prompt to elicit text response.`,
-          );
-
-          currentMessages.push({
-            role: "assistant",
-            content: "",
-            thinking: pass.streamedThinking.trim(),
-            ...(pass.thinkingSignature && {
-              thinkingSignature: pass.thinkingSignature,
-            }),
-          });
-
-          currentMessages.push({
-            role: "user",
-            content:
-              "[System: Your previous response contained only internal reasoning " +
-              "without producing any visible output. Your thinking has been preserved. " +
-              "Now respond concisely with your actual answer, analysis, or tool calls. " +
-              "Do not repeat your reasoning — act on it.]",
-            _isSystemWarning: true,
-          });
-
-          this.logIteration(pass, currentMessages);
-          continue;
-        }
-
-        // ── Empty output — check for truncation recovery ─────────
-        if (isOutputTruncated(pass)) {
-          truncationRecoveryCount++;
-          const configuredMaxTokens = context.options.maxTokens || "default";
-          const modelOutputCeiling = context.modelDefinition?.maxOutputTokens as number | undefined;
-          logger.warn(
-            `[VisionLanguageHarness] Max tokens truncation detected on iteration ${state.iterations} — ` +
-              `Recovery attempt ${truncationRecoveryCount}/${MAX_OUTPUT_TRUNCATION_RECOVERIES}.`,
-          );
-
-          const alreadyAtCeiling = typeof configuredMaxTokens === "number" &&
-            isAtOutputCeiling(configuredMaxTokens, modelOutputCeiling);
-
-          if (!alreadyAtCeiling && truncationRecoveryCount <= MAX_OUTPUT_TRUNCATION_RECOVERIES) {
-            const escalatedMaxTokens = injectContinuationContext(
-              currentMessages,
-              pass,
-              context,
-              truncationRecoveryCount,
-            );
-            context.options.maxTokens = escalatedMaxTokens;
-            this.logIteration(pass, currentMessages);
-            continue;
-          }
-
-          if (alreadyAtCeiling) {
-            logger.warn(
-              `[VisionLanguageHarness] Skipping truncation recovery — maxTokens (${configuredMaxTokens}) ` +
-                `is already at or above model ceiling (${modelOutputCeiling}). Escalation would be pointless.`,
-            );
-          }
-          const exhaustionMessage = buildExhaustedRecoveryMessage(
-            alreadyAtCeiling ? 0 : MAX_OUTPUT_TRUNCATION_RECOVERIES,
-            configuredMaxTokens,
-            this.context.options?.locale as string | undefined,
-          );
-          injectErrorAsConversationMessage(
-            currentMessages,
-            exhaustionMessage,
-            context,
-          );
-          this.logIteration(pass, currentMessages);
-          break;
-        }
-
-        logger.warn(
-          `[VisionLanguageHarness] Empty model output on iteration ${state.iterations} — ` +
-            `text=${pass.streamedText.length}, thinking=${pass.streamedThinking.length}, ` +
-            `toolCalls=${pass.pendingToolCalls.length}. Breaking.`,
+        const noToolOutcome = this.handleNoToolPass(
+          pass,
+          currentMessages,
+          truncationRecoveryCount,
         );
-        this.logIteration(pass, currentMessages);
-        break;
+        truncationRecoveryCount = noToolOutcome.truncationRecoveryCount;
+        if (noToolOutcome.hasCleanTextBreak) hasCleanTextBreak = true;
+        if (noToolOutcome.shouldBreak) break;
       }
 
-      // ── Exhaustion Recovery Pass ─────────────────────────────
-      // Triggers when the agent used tools but never produced a clean text-only
-      // break — regardless of how the loop exited (max iterations, empty output,
-      // truncation exhaustion). Skipped when signal is aborted.
-      if (
-        !hasCleanTextBreak &&
-        state.streamedToolCalls.length > 0 &&
-        !signal?.aborted
-      ) {
+      if (!hasCleanTextBreak && state.streamedToolCalls.length > 0 && !signal?.aborted) {
         state.conversationOutcome = "exhausted";
         await runExhaustionRecoveryPass(this, context, state, currentMessages);
       }
 
-      // ── Finalization (happy path) ──────────────────────────────
       await this.finalize(currentMessages, hooks);
       return { messages: currentMessages };
     } catch (loopError: unknown) {
@@ -635,7 +599,11 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
 
       injectErrorAsConversationMessage(
         currentMessages,
-        buildProviderErrorMessage(loopError, state.iterations, this.context.options?.locale as string | undefined),
+        buildProviderErrorMessage(
+          loopError,
+          state.iterations,
+          this.context.options?.locale as string | undefined,
+        ),
         context,
       );
 

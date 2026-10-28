@@ -37,6 +37,7 @@ import {
 } from "../utils/VoiceCatalog.ts";
 import type { OrchestratorContext, TeamMember } from "../types/orchestrator.ts";
 import type { PolicyRule } from "./PolicyEngine.ts";
+import type { ConversationMessage } from "./harnesses/types.ts";
 
 // ────────────────────────────────────────────────────────────
 // Strict JSON Schema validation
@@ -1423,12 +1424,189 @@ export default class ToolOrchestratorService {
     return initialized;
   }
 
+  private static findLastUserMessageWithImages(messages?: ConversationMessage[]) {
+    if (!messages) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message.role === "user" && Array.isArray(message.images) && message.images.length > 0) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  private static injectGenerateImageReferenceImages(
+    args: Record<string, unknown>,
+    messages?: ConversationMessage[],
+  ): Record<string, unknown> {
+    const message = ToolOrchestratorService.findLastUserMessageWithImages(messages);
+    if (!message || !message.images) return args;
+
+    const referenceImages: string[] = [];
+    logger.info(
+      `[ToolOrchestrator] generate_image: found ${message.images.length} image(s) on last user message`,
+    );
+    for (const image of message.images) {
+      if (typeof image === "string" && (image.startsWith("http://") || image.startsWith("https://"))) {
+        referenceImages.push(image);
+        logger.info(`[ToolOrchestrator] generate_image: accepted HTTP image ref (${image.substring(0, 80)}...)`);
+      } else if (typeof image === "string" && image.startsWith("data:")) {
+        referenceImages.push(image);
+        logger.info(`[ToolOrchestrator] generate_image: accepted base64 data URL (${(image.length / 1024).toFixed(0)} KB)`);
+      } else {
+        logger.warn(`[ToolOrchestrator] generate_image: REJECTED image ref (type=${typeof image}, prefix=${String(image).substring(0, 30)})`);
+      }
+    }
+    if (referenceImages.length > 0) {
+      logger.info(`[ToolOrchestrator] generate_image: injecting ${referenceImages.length} reference image(s) into tool args`);
+      return { ...args, referenceImages };
+    }
+    logger.info(`[ToolOrchestrator] generate_image: no reference images found in conversation`);
+    return args;
+  }
+
+  private static injectImageInputFromMessages(
+    name: string,
+    args: Record<string, unknown>,
+    messages?: ConversationMessage[],
+  ): Record<string, unknown> {
+    const message = ToolOrchestratorService.findLastUserMessageWithImages(messages);
+    if (!message || !message.images) return args;
+    const firstImage = message.images[0];
+    if (typeof firstImage === "string" && (firstImage.startsWith("http") || firstImage.startsWith("data:"))) {
+      logger.info(
+        `[ToolOrchestrator] ${name}: injecting conversation image as 'input' (${firstImage.startsWith("data:") ? `${(firstImage.length / 1024).toFixed(0)} KB base64` : firstImage.substring(0, 80)})`,
+      );
+      return { ...args, input: firstImage };
+    }
+    return args;
+  }
+
+  private static async resolveMinioImageToDataUrl(
+    name: string,
+    imageReference: string,
+  ): Promise<string | null> {
+    try {
+      const FileService = (await import("./FileService.js")).default;
+      const key = FileService.extractKey(imageReference);
+      const file = await FileService.getFile(key);
+      if (!file) return null;
+      const chunks: Buffer[] = [];
+      for await (const chunk of file.stream) {
+        chunks.push(chunk);
+      }
+      const buffer = Buffer.concat(chunks);
+      const base64 = buffer.toString("base64");
+      const resolvedImageUrl = `data:${file.contentType};base64,${base64}`;
+      logger.info(
+        `[ToolOrchestrator] ${name}: resolved minio ref to data URL image (${(resolvedImageUrl.length / 1024).toFixed(0)} KB)`,
+      );
+      return resolvedImageUrl;
+    } catch (error: unknown) {
+      logger.warn(
+        `[ToolOrchestrator] ${name}: failed to resolve minio image: ${getErrorMessage(error)}`,
+      );
+      return null;
+    }
+  }
+
+  private static async resolveImageReferenceUrl(
+    name: string,
+    imageReference: string,
+  ): Promise<string | null> {
+    if (imageReference.startsWith("data:")) {
+      logger.info(
+        `[ToolOrchestrator] ${name}: using data URL as image (${(imageReference.length / 1024).toFixed(0)} KB)`,
+      );
+      return imageReference;
+    }
+    if (imageReference.startsWith("minio://")) {
+      return ToolOrchestratorService.resolveMinioImageToDataUrl(name, imageReference);
+    }
+    if (imageReference.startsWith("http://") || imageReference.startsWith("https://")) {
+      logger.info(
+        `[ToolOrchestrator] ${name}: using HTTP URL as image (${imageReference.substring(0, 80)})`,
+      );
+      return imageReference;
+    }
+    return null;
+  }
+
+  private static async injectTextureOrVectorReferenceImage(
+    name: string,
+    args: Record<string, unknown>,
+    messages?: ConversationMessage[],
+  ): Promise<Record<string, unknown>> {
+    const isThreeDimensionalTextureTool = name === "create_3d_model" || name === "create_3d_scene";
+    const isVectorAnimationTool = name === "create_vector_animation";
+    if (!isThreeDimensionalTextureTool && !isVectorAnimationTool) return args;
+
+    const message = ToolOrchestratorService.findLastUserMessageWithImages(messages);
+    const imageReference = message?.images?.[0];
+    if (typeof imageReference !== "string") return args;
+
+    const resolvedImageUrl = await ToolOrchestratorService.resolveImageReferenceUrl(name, imageReference);
+    if (!resolvedImageUrl) return args;
+
+    if (isThreeDimensionalTextureTool) {
+      logger.info(`[ToolOrchestrator] ${name}: injected referenceTextureUrl into tool args`);
+      return { ...args, referenceTextureUrl: resolvedImageUrl };
+    }
+    logger.info(`[ToolOrchestrator] ${name}: injected referenceImageUrl into tool args`);
+    return { ...args, referenceImageUrl: resolvedImageUrl };
+  }
+
+  private static async uploadGeneratedImageToMinio(
+    name: string,
+    result: unknown,
+    context: ToolExecutionContext,
+  ): Promise<void> {
+    const imageResult = result as GenerateImageToolResult;
+    if (name !== TOOL_NAMES.GENERATE_IMAGE || !imageResult.image || imageResult.error) return;
+    try {
+      const FileService = (await import("./FileService.js")).default;
+      const image = imageResult.image;
+      const dataUrl = `data:${image.mimeType || "image/png"};base64,${image.data}`;
+      const { ref } = await FileService.uploadFile(
+        dataUrl,
+        FILE_CATEGORIES.GENERATIONS,
+        context.project || null,
+        context.username || null,
+      );
+      image.minioRef = ref;
+    } catch (error: unknown) {
+      logger.warn(`[ToolOrchestrator] Image MinIO upload failed: ${getErrorMessage(error)}`);
+    }
+  }
+
+  private static async uploadBrowserScreenshotToMinio(
+    name: string,
+    result: unknown,
+    context: ToolExecutionContext,
+  ): Promise<void> {
+    const browserResult = result as BrowserActionToolResult;
+    if (name !== TOOL_NAMES.BROWSER_ACTION || !browserResult.screenshot || browserResult.error) return;
+    try {
+      const FileService = (await import("./FileService.js")).default;
+      const dataUrl = `data:${browserResult.mimeType || "image/png"};base64,${browserResult.screenshot}`;
+      const { ref } = await FileService.uploadFile(
+        dataUrl,
+        FILE_CATEGORIES.SCREENSHOTS,
+        context.project || null,
+        context.username || null,
+      );
+      browserResult.screenshotRef = ref;
+      delete browserResult.screenshot;
+    } catch (error: unknown) {
+      logger.warn(`[ToolOrchestrator] Screenshot MinIO upload failed: ${getErrorMessage(error)}`);
+    }
+  }
+
   static async executeTool(
     name: string,
     args: Record<string, unknown> = {},
     context: ToolExecutionContext = {},
   ) {
-    // Validate if the tool is allowed for this conversation session
     const { PrismProxyService } = await import("./prism/PrismProxyService.js");
     if (context.conversationId && !PrismProxyService.isToolAllowed(context.conversationId, name)) {
       logger.warn(
@@ -1437,305 +1615,48 @@ export default class ToolOrchestratorService {
       return { error: `Execution of tool "${name}" is not allowed in this agent session.` };
     }
 
-    // A trading agent's tool runs through ToolDispatch, which checks the call
-    // against the signed tool context the vLLM shim attached (role catalog,
-    // cycle, ticker) — the same check prism's MCP calls get. The plain
-    // executeMCPTool path below would run it with a conversation UUID as the
-    // cycle and no authorization.
     if (ToolOrchestratorService.isTradingToolCall(name, context)) {
       return ToolOrchestratorService.executeTradingTool(name, args, context);
     }
 
-    // Route orchestrator tools to OrchestratorService (Prism-local)
     if (ORCHESTRATOR_ONLY_TOOLS.includes(name)) {
-      return ToolOrchestratorService.executeOrchestratorTool(
-        name,
-        args,
-        context,
-      );
+      return ToolOrchestratorService.executeOrchestratorTool(name, args, context);
     }
 
-    // Route this service's own MCP-namespaced local catalog (widget /
-    // html_notes / canvas tools) through the LocalToolRouter.
     if (name.startsWith("mcp__")) {
       return ToolOrchestratorService.executeMCPTool(name, args, context);
     }
 
-    // read_url failures are classified (see telemetry 2026-10-16: 9/38 failed
-    // in 7 d, almost all HTTP 403 bot-blocks and 404s) and get one structured
-    // untruncated log line; bot-blocked hosts fall back to our own
-    // WebExtractService (scraper-service) before giving the model an error
-    // that says what happened and what to do instead.
     if (name === "read_url") {
       return ToolOrchestratorService.executeReadUrl(args, context);
     }
 
-    // get_music failures are made actionable (telemetry ch.08: 1/24 failed in
-    // the 2026-10-16 window with the error text lost to log rotation): the
-    // MusicBrainz fetcher's `MusicBrainz API error <status>` failures get
-    // guidance that says the failure is upstream and transient instead of a
-    // bare status the model would retry blindly.
     if (name === "get_music") {
       return ToolOrchestratorService.executeGetMusic(args, context);
     }
 
-    // scrape_url is never sent to tools-service. It now reads through the
-    // shared WebExtractService (scraper-service, engine auto) with the
-    // truncate-and-store budget, so the model gets clean text under a fixed
-    // char limit instead of an unbounded page dump.
     if (name === "scrape_url") {
       return ToolOrchestratorService.executeWebExtract(args);
     }
 
-    // search_web is never sent to tools-service. Its search there is
-    // DuckDuckGo alone (Brave is unfunded and trading-client clears its key at
-    // startup), and DuckDuckGo bot-blocks this network's one public IP, so
-    // every call both fails and deepens the block. The shared keyless search
-    // answers it instead, under the same name and arguments.
-    if (name === TOOL_NAMES.SEARCH_WEB) {
+    if (name === TOOL_NAMES.SEARCH_WEB || name === "web_search") {
       return ToolOrchestratorService.executeSharedWebSearch(args, context.signal ?? undefined);
     }
 
-    // `web_search` — same shared search under an in-repo schema that advertises
-    // allowed_domains/blocked_domains (search_web's schema is owned by the
-    // remote catalog and cannot carry them).
-    if (name === "web_search") {
-      return ToolOrchestratorService.executeSharedWebSearch(args, context.signal ?? undefined);
-    }
-
-
-
-
-
-    // Inject reference images from conversation context into generate_image args.
-    // The tools-api endpoint needs these as explicit args since it doesn't have
-    // access to Prism's conversation messages.
-    // IMPORTANT: Only extract from the LAST user message to avoid collecting
-    // stale images from conversation history.
     if (name === TOOL_NAMES.GENERATE_IMAGE && context.messages) {
-      const referenceImages: string[] = [];
-      // Find the last user message with images
-      for (let i = context.messages.length - 1; i >= 0; i--) {
-        const message = context.messages[i];
-        if (
-          message.role === "user" &&
-          message.images &&
-          Array.isArray(message.images) &&
-          message.images.length > 0
-        ) {
-          logger.info(
-            `[ToolOrchestrator] generate_image: found ${message.images.length} image(s) on last user message`,
-          );
-          for (const image of message.images) {
-            if (
-              typeof image === "string" &&
-              (image.startsWith("http://") || image.startsWith("https://"))
-            ) {
-              referenceImages.push(image);
-              logger.info(
-                `[ToolOrchestrator] generate_image: accepted HTTP image ref (${image.substring(0, 80)}...)`,
-              );
-            } else if (typeof image === "string" && image.startsWith("data:")) {
-              // Accept base64 data URLs — the /creative route supports up to 50MB bodies.
-              // Discord avatars and user-attached images are typically well under 5MB.
-              referenceImages.push(image);
-              logger.info(
-                `[ToolOrchestrator] generate_image: accepted base64 data URL (${(image.length / 1024).toFixed(0)} KB)`,
-              );
-            } else {
-              logger.warn(
-                `[ToolOrchestrator] generate_image: REJECTED image ref (type=${typeof image}, prefix=${String(image).substring(0, 30)})`,
-              );
-            }
-          }
-          break; // Only check the last user message
-        }
-      }
-      if (referenceImages.length > 0) {
-        args = { ...args, referenceImages };
-        logger.info(
-          `[ToolOrchestrator] generate_image: injecting ${referenceImages.length} reference image(s) into tool args`,
-        );
-      } else {
-        logger.info(
-          `[ToolOrchestrator] generate_image: no reference images found in conversation`,
-        );
-      }
+      args = ToolOrchestratorService.injectGenerateImageReferenceImages(args, context.messages);
     }
 
-    // Inject the actual image from conversation context into image-consuming tools.
-    // Models cannot reliably reproduce base64 data in tool arguments — they truncate it,
-    // producing corrupt image buffers. Extract the real image from the last user message
-    // and set it as the `input` arg so the tools-service receives valid data.
-    const IMAGE_INPUT_TOOLS: string[] = [
-      TOOL_NAMES.CONVERT_IMAGE_TO_ASCII,
-      TOOL_NAMES.MANIPULATE_IMAGE,
-    ];
-    if (IMAGE_INPUT_TOOLS.includes(name) && context.messages) {
-      for (let i = context.messages.length - 1; i >= 0; i--) {
-        const message = context.messages[i];
-        if (
-          message.role === "user" &&
-          message.images &&
-          Array.isArray(message.images) &&
-          message.images.length > 0
-        ) {
-          const firstImage = message.images[0];
-          if (
-            typeof firstImage === "string" &&
-            (firstImage.startsWith("http") || firstImage.startsWith("data:"))
-          ) {
-            logger.info(
-              `[ToolOrchestrator] ${name}: injecting conversation image as 'input' (${firstImage.startsWith("data:") ? `${(firstImage.length / 1024).toFixed(0)} KB base64` : firstImage.substring(0, 80)})`,
-            );
-            args = { ...args, input: firstImage };
-          }
-          break;
-        }
-      }
+    if ((name === TOOL_NAMES.CONVERT_IMAGE_TO_ASCII || name === TOOL_NAMES.MANIPULATE_IMAGE) && context.messages) {
+      args = ToolOrchestratorService.injectImageInputFromMessages(name, args, context.messages);
     }
 
-    // Inject the user's attached image as a texture URL or default image URL.
-    // Models cannot reproduce base64 data in tool arguments — they see the image in
-    // conversation context but have no mechanism to pass it into the deeply-nested
-    // properties. Resolve the image to a browser-loadable data URL
-    // and inject it as a top-level reference argument.
-    const THREE_DIMENSIONAL_TEXTURE_TOOLS = [
-      "create_3d_model",
-      "create_3d_scene",
-    ];
-    const VECTOR_ANIMATION_TOOLS = ["create_vector_animation"];
-    const isThreeDimensionalTextureTool =
-      THREE_DIMENSIONAL_TEXTURE_TOOLS.includes(name);
-    const isVectorAnimationTool = VECTOR_ANIMATION_TOOLS.includes(name);
-
-    if (
-      (isThreeDimensionalTextureTool || isVectorAnimationTool) &&
-      context.messages
-    ) {
-      for (
-        let messageIndex = context.messages.length - 1;
-        messageIndex >= 0;
-        messageIndex--
-      ) {
-        const message = context.messages[messageIndex];
-        if (
-          message.role === "user" &&
-          message.images &&
-          Array.isArray(message.images) &&
-          message.images.length > 0
-        ) {
-          const imageReference = message.images[0];
-          if (typeof imageReference === "string") {
-            let resolvedImageUrl: string | null = null;
-
-            if (imageReference.startsWith("data:")) {
-              resolvedImageUrl = imageReference;
-              logger.info(
-                `[ToolOrchestrator] ${name}: using data URL as image (${(imageReference.length / 1024).toFixed(0)} KB)`,
-              );
-            } else if (imageReference.startsWith("minio://")) {
-              try {
-                const FileService = (await import("./FileService.js")).default;
-                const key = FileService.extractKey(imageReference);
-                const file = await FileService.getFile(key);
-                if (file) {
-                  const chunks: Buffer[] = [];
-                  for await (const chunk of file.stream) {
-                    chunks.push(chunk);
-                  }
-                  const buffer = Buffer.concat(chunks);
-                  const base64 = buffer.toString("base64");
-                  resolvedImageUrl = `data:${file.contentType};base64,${base64}`;
-                  logger.info(
-                    `[ToolOrchestrator] ${name}: resolved minio ref to data URL image (${(resolvedImageUrl.length / 1024).toFixed(0)} KB)`,
-                  );
-                }
-              } catch (error: unknown) {
-                logger.warn(
-                  `[ToolOrchestrator] ${name}: failed to resolve minio image: ${getErrorMessage(error)}`,
-                );
-              }
-            } else if (
-              imageReference.startsWith("http://") ||
-              imageReference.startsWith("https://")
-            ) {
-              resolvedImageUrl = imageReference;
-              logger.info(
-                `[ToolOrchestrator] ${name}: using HTTP URL as image (${imageReference.substring(0, 80)})`,
-              );
-            }
-
-            if (resolvedImageUrl) {
-              if (isThreeDimensionalTextureTool) {
-                args = { ...args, referenceTextureUrl: resolvedImageUrl };
-                logger.info(
-                  `[ToolOrchestrator] ${name}: injected referenceTextureUrl into tool args`,
-                );
-              } else if (isVectorAnimationTool) {
-                args = { ...args, referenceImageUrl: resolvedImageUrl };
-                logger.info(
-                  `[ToolOrchestrator] ${name}: injected referenceImageUrl into tool args`,
-                );
-              }
-            }
-          }
-          break;
-        }
-      }
-    }
+    args = await ToolOrchestratorService.injectTextureOrVectorReferenceImage(name, args, context.messages);
 
     const result = await executeToolGeneric(name, args, context);
 
-    // Post-process: upload generated images to MinIO
-    const imageResult = result as GenerateImageToolResult;
-    if (
-      name === TOOL_NAMES.GENERATE_IMAGE &&
-      imageResult.image &&
-      !imageResult.error
-    ) {
-      try {
-        const FileService = (await import("./FileService.js")).default;
-        const image = imageResult.image;
-        const dataUrl = `data:${image.mimeType || "image/png"};base64,${image.data}`;
-        const { ref } = await FileService.uploadFile(
-          dataUrl,
-          FILE_CATEGORIES.GENERATIONS,
-          context.project || null,
-          context.username || null,
-        );
-        image.minioRef = ref;
-      } catch (error: unknown) {
-        logger.warn(
-          `[ToolOrchestrator] Image MinIO upload failed: ${getErrorMessage(error)}`,
-        );
-      }
-    }
-
-    // Post-process: upload browser screenshots to MinIO
-    const browserResult = result as BrowserActionToolResult;
-    if (
-      name === TOOL_NAMES.BROWSER_ACTION &&
-      browserResult.screenshot &&
-      !browserResult.error
-    ) {
-      try {
-        const FileService = (await import("./FileService.js")).default;
-        const dataUrl = `data:${browserResult.mimeType || "image/png"};base64,${browserResult.screenshot}`;
-        const { ref } = await FileService.uploadFile(
-          dataUrl,
-          FILE_CATEGORIES.SCREENSHOTS,
-          context.project || null,
-          context.username || null,
-        );
-        browserResult.screenshotRef = ref;
-        delete browserResult.screenshot;
-      } catch (error: unknown) {
-        logger.warn(
-          `[ToolOrchestrator] Screenshot MinIO upload failed: ${getErrorMessage(error)}`,
-        );
-      }
-    }
+    await ToolOrchestratorService.uploadGeneratedImageToMinio(name, result, context);
+    await ToolOrchestratorService.uploadBrowserScreenshotToMinio(name, result, context);
 
     return result;
   }

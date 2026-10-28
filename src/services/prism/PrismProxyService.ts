@@ -162,15 +162,12 @@ export class PrismProxyService {
     return registration.allowedTools.includes(cleanToolName);
   }
 
-  public static async handle(req: Request, res: Response) {
-    const originalPath = req.originalUrl.replace(/^\/prism-proxy/, "");
-    // Extract base path without query params for routing logic
-    const basePath = originalPath.split("?")[0];
-    const targetUrl = `${REAL_PRISM_URL}${originalPath}`;
-    
+  private static prepareProxiedRequestBody(
+    req: Request,
+    basePath: string,
+  ): { ok: true; body: any } | { ok: false; error: string } {
     let body = req.body;
-    
-    // If it's the agent endpoint, apply our guardrail bypass
+
     if (basePath === "/agent" && req.method === "POST" && body) {
       body = { ...req.body };
       const conversationId = body.conversationId;
@@ -180,25 +177,26 @@ export class PrismProxyService {
         this.registerSession(conversationId, originalEnabledTools);
       }
 
-      // Respect the client's explicit tool whitelist. Do not inject all tools, 
-      // as this overwhelms the LLM context window (~130k tokens).
       body.enabledTools = originalEnabledTools;
       try {
         body = prepareTradingAgentRequest(body);
       } catch (error) {
-        res.status(422).json({ error: String(error) });
-        return;
+        return { ok: false, error: String(error) };
       }
     }
 
-    // Apply Qwen non-leading system message rewrite patch (workaround for Qwen
-    // chat template constraint in vLLM). Shared with the vLLM provider so the
-    // proxied path and the direct :7778 path apply identical transformations.
-    if ((basePath === "/agent" || basePath === "/chat") && req.method === "POST" && body && Array.isArray(body.messages) && typeof body.model === "string") {
+    const isChatOrAgentPost =
+      (basePath === "/agent" || basePath === "/chat") &&
+      req.method === "POST" &&
+      body &&
+      Array.isArray(body.messages) &&
+      typeof body.model === "string";
+
+    if (isChatOrAgentPost) {
       const rewrittenMessages = rewriteNonLeadingSystemMessages(
         body.messages as Array<{ role?: string }>,
         body.model,
-        "PrismProxy"
+        "PrismProxy",
       );
       if (rewrittenMessages !== body.messages) {
         if (body === req.body) {
@@ -208,51 +206,113 @@ export class PrismProxyService {
       }
     }
 
+    return { ok: true, body };
+  }
+
+  private static buildUpstreamHeaders(
+    req: Request,
+    body: any,
+  ): Record<string, string> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    const forwardHeaders = [
+      "x-project",
+      "x-username",
+      "authorization",
+      "x-workspace-root",
+    ];
+    for (const h of forwardHeaders) {
+      if (req.headers[h]) {
+        headers[h] = req.headers[h] as string;
+      }
+    }
+
+    const bodyProject =
+      body && typeof body === "object" ? (body as any).project : undefined;
+    const bodyUsername =
+      body && typeof body === "object" ? (body as any).username : undefined;
+
+    const attribution = prismAttributionHeaders(
+      headers["x-project"] || (req.query?.project as string) || bodyProject,
+      headers["x-username"] || (req.query?.username as string) || bodyUsername,
+    );
+    headers["x-project"] = attribution["x-project"];
+    headers["x-username"] = attribution["x-username"];
+    return headers;
+  }
+
+  private static async pumpUpstreamStreamToClient(
+    response: globalThis.Response,
+    res: Response,
+    originalPath: string,
+  ): Promise<void> {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    if (response.body) {
+      const reader = (response.body as any).getReader();
+      let clientDisconnected = false;
+      const handleClientDisconnect = () => {
+        clientDisconnected = true;
+        reader.cancel?.().catch(() => {});
+      };
+      res.on("close", handleClientDisconnect);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done || clientDisconnected) break;
+          res.write(value);
+        }
+      } finally {
+        res.off("close", handleClientDisconnect);
+        reader.cancel?.().catch(() => {});
+      }
+      if (clientDisconnected) {
+        logger.info(
+          `[PrismProxy] Client disconnected mid-stream for ${originalPath} — upstream reader cancelled`,
+        );
+      }
+    }
+    res.end();
+  }
+
+  public static async handle(req: Request, res: Response) {
+    const originalPath = req.originalUrl.replace(/^\/prism-proxy/, "");
+    const basePath = originalPath.split("?")[0];
+    const targetUrl = `${REAL_PRISM_URL}${originalPath}`;
+
+    const prepared = this.prepareProxiedRequestBody(req, basePath);
+    if (!prepared.ok) {
+      res.status(422).json({ error: (prepared as { ok: false; error: string }).error });
+      return;
+    }
+    const body = prepared.body;
+
     const streamQuery = req.query.stream;
     const acceptsSse = req.headers.accept?.includes("text/event-stream");
-    const isStream = streamQuery === "true" || (acceptsSse && streamQuery !== "false" && req.body.stream !== false);
+    const isStream =
+      streamQuery === "true" ||
+      (acceptsSse && streamQuery !== "false" && req.body?.stream !== false);
 
-    logger.info(`[PrismProxy] Forwarding ${req.method} ${originalPath} to ${REAL_PRISM_URL} (stream=${isStream})`);
+    logger.info(
+      `[PrismProxy] Forwarding ${req.method} ${originalPath} to ${REAL_PRISM_URL} (stream=${isStream})`,
+    );
 
     try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json"
-      };
-      
-      // Forward relevant request headers
-      const forwardHeaders = ["x-project", "x-username", "authorization", "x-workspace-root"];
-      for (const h of forwardHeaders) {
-        if (req.headers[h]) {
-          headers[h] = req.headers[h] as string;
-        }
-      }
-
-      // Prism attributes traffic by the x-project / x-username HEADERS only —
-      // it never reads project/username out of the JSON body. A caller that
-      // POSTs {project: "vllm-trading-bot"} without the headers lands in
-      // prism's catch-all "default"/"anonymous" bucket. Backfill the headers
-      // from the same sources authMiddleware uses (query → body), so header and
-      // body agree, and fall back to this service's own identity.
-      const attribution = prismAttributionHeaders(
-        headers["x-project"] ||
-          (req.query?.project as string) ||
-          (body && typeof body === "object" ? (body as any).project : undefined),
-        headers["x-username"] ||
-          (req.query?.username as string) ||
-          (body && typeof body === "object" ? (body as any).username : undefined),
-      );
-      headers["x-project"] = attribution["x-project"];
-      headers["x-username"] = attribution["x-username"];
-
-      // Connect/headers timeout — abort if the upstream never responds.
-      // Cleared as soon as headers arrive so long-running SSE streams are
-      // never cut off once streaming has begun.
+      const headers = this.buildUpstreamHeaders(req, body);
       const upstreamAbortController = new AbortController();
       const headersTimeoutMs = originalPath.startsWith("/agent")
         ? AGENT_HEADERS_TIMEOUT_MS
         : UPSTREAM_HEADERS_TIMEOUT_MS;
       const headersTimeout = setTimeout(() => {
-        logger.error(`[PrismProxy] Upstream headers timeout after ${headersTimeoutMs}ms for ${originalPath}`);
+        logger.error(
+          `[PrismProxy] Upstream headers timeout after ${headersTimeoutMs}ms for ${originalPath}`,
+        );
         upstreamAbortController.abort();
       }, headersTimeoutMs);
 
@@ -261,8 +321,11 @@ export class PrismProxyService {
         response = await fetch(targetUrl, {
           method: req.method,
           headers,
-          body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(body) : undefined,
-          signal: upstreamAbortController.signal
+          body:
+            req.method !== "GET" && req.method !== "HEAD"
+              ? JSON.stringify(body)
+              : undefined,
+          signal: upstreamAbortController.signal,
         });
       } finally {
         clearTimeout(headersTimeout);
@@ -270,59 +333,27 @@ export class PrismProxyService {
 
       if (!response.ok) {
         const errText = await response.text();
-        logger.error(`[PrismProxy] Target returned error status=${response.status}: ${errText}`);
+        logger.error(
+          `[PrismProxy] Target returned error status=${response.status}: ${errText}`,
+        );
         return res.status(response.status).json({ error: errText });
       }
 
-      // Stream whenever the upstream response is SSE — not just for /agent.
-      // GET /webhooks/requests/stream is an infinite event-stream; awaiting
-      // response.json() on it hangs forever and the client sees a silent
-      // connection (this is what starved the office's prism event feed).
       const upstreamContentType = response.headers.get("content-type") || "";
       const respondAsStream =
         upstreamContentType.includes("text/event-stream") ||
         (isStream && basePath === "/agent");
 
       if (respondAsStream) {
-        res.setHeader("Content-Type", "text/event-stream");
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
-        res.setHeader("X-Accel-Buffering", "no");
-        res.flushHeaders?.();
-
-        if (response.body) {
-          const reader = (response.body as any).getReader();
-          // Client-disconnect teardown: if the downstream client goes away
-          // mid-stream (e.g. an infinite /webhooks/requests/stream), cancel
-          // the upstream reader so the pump loop doesn't consume forever.
-          let clientDisconnected = false;
-          const handleClientDisconnect = () => {
-            clientDisconnected = true;
-            reader.cancel?.().catch(() => {});
-          };
-          res.on("close", handleClientDisconnect);
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done || clientDisconnected) break;
-              res.write(value);
-            }
-          } finally {
-            res.off("close", handleClientDisconnect);
-            // Client disconnects mid-stream shouldn't leak the upstream reader
-            reader.cancel?.().catch(() => {});
-          }
-          if (clientDisconnected) {
-            logger.info(`[PrismProxy] Client disconnected mid-stream for ${originalPath} — upstream reader cancelled`);
-          }
-        }
-        res.end();
+        await this.pumpUpstreamStreamToClient(response, res, originalPath);
       } else {
         const data = await response.json();
         res.json(data);
       }
     } catch (error: any) {
-      logger.error(`[PrismProxy] Failed to proxy ${originalPath}: ${error.message}`);
+      logger.error(
+        `[PrismProxy] Failed to proxy ${originalPath}: ${error.message}`,
+      );
       if (!res.headersSent) {
         res.status(500).json({ error: error.message });
       }

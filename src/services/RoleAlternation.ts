@@ -49,29 +49,29 @@ function hasToolCalls(message: ConversationMessage): boolean {
   return Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
 }
 
-/**
- * Normalize role alternation on an internal ConversationMessage array.
- * Returns a new array; the input is never mutated.
- */
-export function normalizeRoleAlternation(
-  messages: ConversationMessage[],
-): RoleAlternationResult {
-  // ── (c) Drop orphan tool-result messages ──────────────────
+function findPrecedingAssistantOwner(
+  withoutOrphans: ConversationMessage[],
+): ConversationMessage | undefined {
+  for (let i = withoutOrphans.length - 1; i >= 0; i--) {
+    const prior = withoutOrphans[i];
+    if (prior.role === "tool") continue;
+    if (prior.role === "assistant" && hasToolCalls(prior)) return prior;
+    break;
+  }
+  return undefined;
+}
+
+function dropOrphanToolResults(messages: ConversationMessage[]): {
+  withoutOrphans: ConversationMessage[];
+  droppedOrphanToolResults: number;
+} {
   let droppedOrphanToolResults = 0;
   const withoutOrphans: ConversationMessage[] = [];
   for (const message of messages) {
     if (message.role === "tool") {
-      // The owner is the nearest preceding assistant toolCalls turn (only
-      // tool results may sit between them); when the result names its call,
-      // that turn must actually contain that call id.
-      let owner: ConversationMessage | undefined;
-      for (let i = withoutOrphans.length - 1; i >= 0; i--) {
-        const prior = withoutOrphans[i];
-        if (prior.role === "tool") continue;
-        if (prior.role === "assistant" && hasToolCalls(prior)) owner = prior;
-        break;
-      }
-      const callId = typeof message.tool_call_id === "string" ? message.tool_call_id : "";
+      const owner = findPrecedingAssistantOwner(withoutOrphans);
+      const callId =
+        typeof message.tool_call_id === "string" ? message.tool_call_id : "";
       const hasOwner =
         owner !== undefined &&
         (!callId || (owner.toolCalls ?? []).some((call) => call.id === callId));
@@ -87,62 +87,79 @@ export function normalizeRoleAlternation(
       `[RoleAlternation] Dropped ${droppedOrphanToolResults} tool-result message(s) with no matching preceding assistant toolCalls turn.`,
     );
   }
+  return { withoutOrphans, droppedOrphanToolResults };
+}
 
-  // ── (d) System messages only at position 0 ────────────────
+function consolidateSystemMessagesAtPositionZero(
+  withoutOrphans: ConversationMessage[],
+): ConversationMessage[] {
   const firstSystemIndex = withoutOrphans.findIndex(
     (message) => message.role === "system",
   );
-  let withSystem: ConversationMessage[];
   if (firstSystemIndex === -1) {
-    withSystem = withoutOrphans;
-  } else {
-    // Merge every later system message into the first one.
-    let mergedSystem: ConversationMessage = {
-      ...withoutOrphans[firstSystemIndex],
-    };
-    const rest: ConversationMessage[] = [];
-    let systemSlot = -1;
-    withoutOrphans.forEach((message, index) => {
-      if (index === firstSystemIndex) {
-        systemSlot = rest.length;
-        rest.push(mergedSystem);
-        return;
-      }
-      if (message.role === "system") {
-        mergedSystem = {
-          ...mergedSystem,
-          content: [messageContent(mergedSystem), messageContent(message)]
-            .filter((part) => part.trim().length > 0)
-            .join("\n\n"),
-        };
-        rest[systemSlot] = mergedSystem;
-        return;
-      }
-      rest.push(message);
-    });
-    // Move the (merged) system message to position 0 if it isn't there.
-    withSystem =
-      firstSystemIndex === 0
-        ? rest
-        : [rest[firstSystemIndex], ...rest.filter((_, index) => index !== firstSystemIndex)];
+    return withoutOrphans;
   }
+  let mergedSystem: ConversationMessage = {
+    ...withoutOrphans[firstSystemIndex],
+  };
+  const rest: ConversationMessage[] = [];
+  let systemSlot = -1;
+  withoutOrphans.forEach((message, index) => {
+    if (index === firstSystemIndex) {
+      systemSlot = rest.length;
+      rest.push(mergedSystem);
+      return;
+    }
+    if (message.role === "system") {
+      mergedSystem = {
+        ...mergedSystem,
+        content: [messageContent(mergedSystem), messageContent(message)]
+          .filter((part) => part.trim().length > 0)
+          .join("\n\n"),
+      };
+      rest[systemSlot] = mergedSystem;
+      return;
+    }
+    rest.push(message);
+  });
+  return firstSystemIndex === 0
+    ? rest
+    : [
+        rest[firstSystemIndex],
+        ...rest.filter((_, index) => index !== firstSystemIndex),
+      ];
+}
 
-  // ── (a) Merge consecutive same-role non-tool messages ─────
+function canMergeConsecutiveMessages(
+  previous: ConversationMessage | undefined,
+  message: ConversationMessage,
+): previous is ConversationMessage {
+  if (!previous || previous.role !== message.role) return false;
+  if (message.role === "tool" || message.role === "system") return false;
+  if (hasToolCalls(previous) || hasToolCalls(message)) return false;
+  const prevIsStringOrEmpty =
+    previous.content === undefined || typeof previous.content === "string";
+  const currIsStringOrEmpty =
+    message.content === undefined || typeof message.content === "string";
+  return prevIsStringOrEmpty && currIsStringOrEmpty;
+}
+
+/**
+ * Normalize role alternation on an internal ConversationMessage array.
+ * Returns a new array; the input is never mutated.
+ */
+export function normalizeRoleAlternation(
+  messages: ConversationMessage[],
+): RoleAlternationResult {
+  const { withoutOrphans, droppedOrphanToolResults } =
+    dropOrphanToolResults(messages);
+  const withSystem = consolidateSystemMessagesAtPositionZero(withoutOrphans);
+
   const merged: ConversationMessage[] = [];
   let mergedMessageCount = 0;
   for (const message of withSystem) {
     const previous = merged[merged.length - 1];
-    const mergeable =
-      previous !== undefined &&
-      previous.role === message.role &&
-      message.role !== "tool" &&
-      message.role !== "system" &&
-      !hasToolCalls(previous) &&
-      !hasToolCalls(message) &&
-      // Structured (array) content cannot be string-joined without loss.
-      (previous.content === undefined || typeof previous.content === "string") &&
-      (message.content === undefined || typeof message.content === "string");
-    if (mergeable) {
+    if (canMergeConsecutiveMessages(previous, message)) {
       const images = [...(previous.images ?? []), ...(message.images ?? [])];
       merged[merged.length - 1] = {
         ...previous,

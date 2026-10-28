@@ -789,6 +789,243 @@ export class VllmShimService {
     return body;
   }
 
+  private static async prepareChatCompletionsBody(
+    req: Request,
+    res: Response,
+    body: Record<string, unknown>,
+  ): Promise<{ handled: boolean; body: Record<string, unknown>; toolContextToken?: string }> {
+    this.recordThinkingFlag(body);
+    let boundary;
+    let toolContextToken: string | undefined;
+    try {
+      const execution = extractToolContext(req.body);
+      toolContextToken = execution.token;
+      const signed = execution.token ? verifyToolContext(execution.token) : null;
+      const protocol = signed
+        ? applyTradingToolProtocol(execution.body, signed.allowedTools, openingStack(signed.agentName, signed.allowedTools))
+        : null;
+      boundary = filterTradingPayload(protocol?.body || execution.body);
+      if (boundary.receipt && protocol) {
+        boundary.receipt.tool_protocol_version = 1;
+        boundary.receipt.reasoning_tools_removed = protocol.removedTools - protocol.deniedTools.length;
+        boundary.receipt.reasoning_acknowledgements_corrected = protocol.correctedAcknowledgements;
+        boundary.receipt.unpermitted_tools_removed = protocol.deniedTools;
+        boundary.receipt.final_turn_directed = protocol.finalTurnDirected;
+      }
+    } catch (error) {
+      res.status(422).json({ error: String(error) });
+      return { handled: true, body };
+    }
+    await recordPayload(boundary.receipt);
+    let nextBody = this.translateChatTemplateKwargs({ ...boundary.body }) as Record<string, unknown>;
+    nextBody = this.rewriteMessages(nextBody);
+    nextBody = this.sanitizeGenerationParams(nextBody);
+    await recordProviderSnapshot(boundary.receipt, nextBody);
+
+    const probeCycle = toolContextToken ? verifyToolContext(toolContextToken).cycleId : undefined;
+    if (probeFault(probeCycle) === "cut") {
+      logger.warn(`[VllmShim] probe fault injected: cut stream (cycle ${probeCycle})`);
+      res.status(200);
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.flushHeaders?.();
+      res.write(cutStreamBody(nextBody.model));
+      res.end();
+      return { handled: true, body: nextBody, toolContextToken };
+    }
+    return { handled: false, body: nextBody, toolContextToken };
+  }
+
+  private static async acquireUpstreamGate(
+    isGated: boolean,
+    upstreamName: string,
+    originalPath: string,
+    res: Response,
+  ): Promise<{ shed: boolean; release: (() => void) | null }> {
+    if (!isGated) return { shed: false, release: null };
+    const sem = this.semaphoreFor(upstreamName);
+    if (!sem) return { shed: false, release: null };
+
+    const waitStart = Date.now();
+    try {
+      const release = await sem.acquire(QUEUE_TIMEOUT_MS);
+      const waited = Date.now() - waitStart;
+      this.queueStats.admitted += 1;
+      this.queueStats.waitedMs += waited;
+      this.queueStats.worstWaitMs = Math.max(this.queueStats.worstWaitMs, waited);
+      this.queueStats.worstDepth = Math.max(this.queueStats.worstDepth, sem.queued);
+      this.reportQueue();
+      return { shed: false, release };
+    } catch (e: any) {
+      this.queueStats.shed += 1;
+      logger.warn(
+        `[VllmShim] SHED ${originalPath} on ${upstreamName}: ${e.message}. ` +
+          `The cap is holding but the queue is longer than it can drain — ` +
+          `either the box is degraded or the caller's own limiter is too loose.`,
+      );
+      res
+        .status(503)
+        .setHeader("Retry-After", "5")
+        .json({
+          error:
+            `vllm-shim: no capacity on ${upstreamName} after ${QUEUE_TIMEOUT_MS}ms ` +
+            `(limit ${sem.limit}). Retry.`,
+        });
+      return { shed: true, release: null };
+    }
+  }
+
+  private static async maybeAutoHealModel404(
+    response: globalThis.Response,
+    basePath: string,
+    upstreamUrl: string,
+    upstreamName: string,
+    body: unknown,
+    fetchOnce: () => Promise<globalThis.Response>,
+  ): Promise<globalThis.Response> {
+    if (response.status !== 404 || basePath !== "/v1/chat/completions") return response;
+    try {
+      const cloned = response.clone();
+      const errJson = (await cloned.json()) as Record<string, any>;
+      const errMsg = errJson?.error?.message || errJson?.message || "";
+      if (typeof errMsg === "string" && /model.*not exist|does not exist/i.test(errMsg)) {
+        const liveModel = await VllmShimService.resolveUpstreamActiveModel(upstreamUrl);
+        if (liveModel && body && typeof body === "object" && (body as Record<string, any>).model !== liveModel) {
+          const staleModel = (body as Record<string, any>).model;
+          logger.warn(
+            `[VllmShim] Upstream "${upstreamName}" rejected model "${staleModel}" (404: model does not exist). Auto-healing to live model "${liveModel}" and retrying.`,
+          );
+          (body as Record<string, any>).model = liveModel;
+          VllmShimService.setActiveModel(upstreamName, liveModel);
+          return await fetchOnce();
+        }
+      }
+    } catch (healErr: any) {
+      logger.warn(`[VllmShim] Failed to auto-heal 404 model on ${upstreamName}: ${healErr?.message || healErr}`);
+    }
+    return response;
+  }
+
+  private static async maybeRescaleEmbedOverflow(
+    isEmbedPost: boolean,
+    response: globalThis.Response,
+    body: unknown,
+    fetchOnce: () => Promise<globalThis.Response>,
+  ): Promise<globalThis.Response> {
+    if (!isEmbedPost || response.status !== 400) return response;
+    let current = response;
+    for (let attempt = 1; attempt <= this.EMBED_RESCALE_ATTEMPTS && current.status === 400; attempt++) {
+      const errText = await current.clone().text();
+      const m = errText.match(this.CTX_LEN_RE);
+      if (!m) break;
+      const windowTokens = Number(m[1]);
+      const measuredTokens = Number(m[2]);
+      if (!(windowTokens > 0) || !(measuredTokens > windowTokens)) break;
+      const factor = this.rescaleFactor(windowTokens, measuredTokens);
+      if (!this.shrinkEmbeddingInput(body as Record<string, unknown>, factor, windowTokens)) break;
+      this.embedClamped.rescued += 1;
+      logger.warn(
+        `[VllmShim] embed input still ${measuredTokens} tokens against a ${windowTokens}-token window ` +
+          `after the char clamp — rescaled by ${factor.toFixed(2)} and retried (attempt ${attempt}).`,
+      );
+      current = await fetchOnce();
+    }
+    return current;
+  }
+
+  private static async streamUpstreamSseResponse(
+    response: globalThis.Response,
+    res: Response,
+    toolContextToken?: string,
+  ): Promise<void> {
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    if (response.body) {
+      const reader = (response.body as any).getReader();
+      const toolStream = toolContextToken ? new TradingToolStream(toolContextToken) : null;
+      let clientDisconnected = false;
+      const handleClientDisconnect = () => {
+        clientDisconnected = true;
+        reader.cancel?.().catch(() => {});
+      };
+      res.on("close", handleClientDisconnect);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done || clientDisconnected) break;
+          res.write(toolStream ? toolStream.push(value) : value);
+        }
+        if (toolStream && !clientDisconnected) res.write(toolStream.finish());
+      } finally {
+        res.off("close", handleClientDisconnect);
+        reader.cancel?.().catch(() => {});
+      }
+    }
+    res.end();
+  }
+
+  private static async handleModelsJsonResponse(
+    buf: Buffer,
+    upstreamUrl: string,
+    upstreamName: string,
+    res: Response,
+  ): Promise<boolean> {
+    try {
+      const text = buf.toString("utf8");
+      const parsed = JSON.parse(text);
+      const filtered = VllmShimService.filterModels(parsed);
+      const enriched = await VllmShimService.enrichModels(filtered, upstreamUrl);
+
+      const list = (((enriched as Record<string, any>).data || (enriched as Record<string, any>).models || []) as Array<Record<string, any>>);
+      const gen = list.find((m: Record<string, any>) => {
+        const id = m?.id || m?.name;
+        return id && !VllmShimService.NON_LLM_MODELS.has(String(id).toLowerCase()) && !/embed/i.test(String(id));
+      });
+      if (gen) {
+        VllmShimService.setActiveModel(upstreamName, String(gen.id || gen.name));
+      }
+
+      res.end(JSON.stringify(enriched));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private static async handleNonStreamJsonResponse(
+    buf: Buffer,
+    upstreamContentType: string,
+    basePath: string,
+    originalPath: string,
+    upstreamUrl: string,
+    upstreamName: string,
+    toolContextToken: string | undefined,
+    res: Response,
+  ): Promise<void> {
+    if (upstreamContentType.includes("application/json") && basePath === "/v1/models") {
+      if (await this.handleModelsJsonResponse(buf, upstreamUrl, upstreamName, res)) {
+        return;
+      }
+    }
+    if (upstreamContentType.includes("application/json") && originalPath.includes("/chat/completions")) {
+      try {
+        const text = buf.toString("utf8");
+        if (text.includes("tool_call") || text.includes("tool calls")) {
+          const parsed = JSON.parse(text);
+          const normalized = VllmShimService.normalizeToolCalls(parsed);
+          res.end(JSON.stringify(toolContextToken ? bindToolResponse(normalized, toolContextToken) : normalized));
+          return;
+        }
+      } catch (error) {
+        if (toolContextToken) throw error;
+      }
+    }
+    res.end(buf);
+  }
+
   public static async handle(req: Request, res: Response) {
     const resolved = this.resolveUpstream(req.originalUrl);
     if (!resolved) {
@@ -803,56 +1040,10 @@ export class VllmShimService {
     let body = req.body;
     let toolContextToken: string | undefined;
     if (basePath === "/v1/chat/completions" && req.method === "POST" && body && typeof body === "object") {
-      // The mirror can only translate a flag that ARRIVES. When a caller asks
-      // for thinking-off and the request reaches us with no
-      // chat_template_kwargs at all, there is nothing to mirror and DeepSeek's
-      // template defaults to thinking ON — which is indistinguishable, from
-      // here, from a caller that genuinely wanted thinking. Downstream that
-      // shows up as reasoning eating the whole output allowance and no JSON
-      // artifact (trading-service, 2026-08-05, 22-36% analyst artifact loss).
-      //
-      // So record what actually arrives. Sampled, because this path carries
-      // every V3 agent call and a per-request line would bury the log.
-      this.recordThinkingFlag(body as Record<string, unknown>);
-      let boundary;
-      try {
-        const execution = extractToolContext(req.body);
-        toolContextToken = execution.token;
-        const signed = execution.token ? verifyToolContext(execution.token) : null;
-        const protocol = signed
-          ? applyTradingToolProtocol(execution.body, signed.allowedTools, openingStack(signed.agentName, signed.allowedTools))
-          : null;
-        boundary = filterTradingPayload(protocol?.body || execution.body);
-        if (boundary.receipt && protocol) {
-          boundary.receipt.tool_protocol_version = 1;
-          boundary.receipt.reasoning_tools_removed = protocol.removedTools - protocol.deniedTools.length;
-          boundary.receipt.reasoning_acknowledgements_corrected = protocol.correctedAcknowledgements;
-          boundary.receipt.unpermitted_tools_removed = protocol.deniedTools;
-          boundary.receipt.final_turn_directed = protocol.finalTurnDirected;
-        }
-      } catch (error) {
-        res.status(422).json({ error: String(error) });
-        return;
-      }
-      await recordPayload(boundary.receipt);
-      body = this.translateChatTemplateKwargs({ ...boundary.body });
-      // Repair degenerate recovery tails + non-leading system turns before
-      // the chat template sees them (copy-on-write; identity when clean).
-      body = this.rewriteMessages(body as Record<string, unknown>);
-      body = this.sanitizeGenerationParams(body as Record<string, unknown>);
-      await recordProviderSnapshot(boundary.receipt, body);
-      // The boundary probe's cut stream (see ProbeFault.ts): one delta, then the
-      // connection ends with no finish_reason — what prism must report as it does.
-      const probeCycle = toolContextToken ? verifyToolContext(toolContextToken).cycleId : undefined;
-      if (probeFault(probeCycle) === "cut") {
-        logger.warn(`[VllmShim] probe fault injected: cut stream (cycle ${probeCycle})`);
-        res.status(200);
-        res.setHeader("Content-Type", "text/event-stream");
-        res.setHeader("Cache-Control", "no-cache");
-        res.flushHeaders?.();
-        res.write(cutStreamBody((body as Record<string, unknown>).model));
-        return res.end();
-      }
+      const prepared = await this.prepareChatCompletionsBody(req, res, body as Record<string, unknown>);
+      if (prepared.handled) return;
+      body = prepared.body;
+      toolContextToken = prepared.toolContextToken;
     }
 
     const isEmbedPost = basePath === "/v1/embeddings" && req.method === "POST" && !!body && typeof body === "object";
@@ -878,179 +1069,39 @@ export class VllmShimService {
       }
     };
 
-    // ── Concurrency gate ────────────────────────────────────────────
-    //
-    // Only GENERATION is gated. /v1/models, /health and /metrics stay ungated
-    // deliberately: trading-service polls /metrics every 5s to drive its own
-    // limiter, and queueing that poll behind four generations would feed it
-    // stale queue depths — which is precisely how the blind-limiter bug behaved
-    // (it read waiting=0 while the box sat at 17).
     const isGated =
       req.method === "POST" &&
       (basePath === "/v1/chat/completions" || basePath === "/v1/embeddings");
-    let release: (() => void) | null = null;
-    if (isGated) {
-      const sem = this.semaphoreFor(upstreamName);
-      if (sem) {
-        const waitStart = Date.now();
-        try {
-          release = await sem.acquire(QUEUE_TIMEOUT_MS);
-        } catch (e: any) {
-          this.queueStats.shed += 1;
-          logger.warn(
-            `[VllmShim] SHED ${originalPath} on ${upstreamName}: ${e.message}. ` +
-              `The cap is holding but the queue is longer than it can drain — ` +
-              `either the box is degraded or the caller's own limiter is too loose.`,
-          );
-          return res
-            .status(503)
-            .setHeader("Retry-After", "5")
-            .json({
-              error:
-                `vllm-shim: no capacity on ${upstreamName} after ${QUEUE_TIMEOUT_MS}ms ` +
-                `(limit ${sem.limit}). Retry.`,
-            });
-        }
-        const waited = Date.now() - waitStart;
-        this.queueStats.admitted += 1;
-        this.queueStats.waitedMs += waited;
-        this.queueStats.worstWaitMs = Math.max(this.queueStats.worstWaitMs, waited);
-        this.queueStats.worstDepth = Math.max(this.queueStats.worstDepth, sem.queued);
-        this.reportQueue();
-      }
-    }
+    const gate = await this.acquireUpstreamGate(isGated, upstreamName, originalPath, res);
+    if (gate.shed) return;
+    const release = gate.release;
 
     try {
       let response = await fetchOnce();
-      if (response.status === 404 && basePath === "/v1/chat/completions") {
-        try {
-          const cloned = response.clone();
-          const errJson = (await cloned.json()) as Record<string, any>;
-          const errMsg = errJson?.error?.message || errJson?.message || "";
-          if (typeof errMsg === "string" && /model.*not exist|does not exist/i.test(errMsg)) {
-            const liveModel = await VllmShimService.resolveUpstreamActiveModel(upstreamUrl);
-            if (liveModel && body && typeof body === "object" && (body as Record<string, any>).model !== liveModel) {
-              const staleModel = (body as Record<string, any>).model;
-              logger.warn(
-                `[VllmShim] Upstream "${upstreamName}" rejected model "${staleModel}" (404: model does not exist). Auto-healing to live model "${liveModel}" and retrying.`,
-              );
-              (body as Record<string, any>).model = liveModel;
-              VllmShimService.setActiveModel(upstreamName, liveModel);
-              response = await fetchOnce();
-            }
-          }
-        } catch (healErr: any) {
-          logger.warn(`[VllmShim] Failed to auto-heal 404 model on ${upstreamName}: ${healErr?.message || healErr}`);
-        }
-      }
-
-      // Token-feedback rescale: the char clamp undershoots on token-dense
-      // text (the desk's JSON/ticker prose runs ~2.4 chars per token). When
-      // the embedder measures the overflow for us, resize to fit and retry
-      // instead of forwarding the rejection. Only strings that could
-      // plausibly overflow (longer than the window in chars) are touched.
-      if (isEmbedPost && response.status === 400) {
-        for (let attempt = 1; attempt <= this.EMBED_RESCALE_ATTEMPTS && response.status === 400; attempt++) {
-          const errText = await response.clone().text();
-          const m = errText.match(this.CTX_LEN_RE);
-          if (!m) break;
-          const windowTokens = Number(m[1]);
-          const measuredTokens = Number(m[2]);
-          if (!(windowTokens > 0) || !(measuredTokens > windowTokens)) break;
-          const factor = this.rescaleFactor(windowTokens, measuredTokens);
-          if (!this.shrinkEmbeddingInput(body as Record<string, unknown>, factor, windowTokens)) break;
-          this.embedClamped.rescued += 1;
-          logger.warn(
-            `[VllmShim] embed input still ${measuredTokens} tokens against a ${windowTokens}-token window ` +
-              `after the char clamp — rescaled by ${factor.toFixed(2)} and retried (attempt ${attempt}).`,
-          );
-          response = await fetchOnce();
-        }
-      }
+      response = await this.maybeAutoHealModel404(response, basePath, upstreamUrl, upstreamName, body, fetchOnce);
+      response = await this.maybeRescaleEmbedOverflow(isEmbedPost, response, body, fetchOnce);
 
       res.status(response.status);
       const upstreamContentType = response.headers.get("content-type") || "";
       res.setHeader("Content-Type", upstreamContentType || "application/json");
 
-      // SSE (stream:true chat completions) — pump raw bytes through, with
-      // client-disconnect teardown so an abandoned stream doesn't pin the GPU.
       if (upstreamContentType.includes("text/event-stream")) {
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
-        res.setHeader("X-Accel-Buffering", "no");
-        res.flushHeaders?.();
-
-        if (response.body) {
-          const reader = (response.body as any).getReader();
-          const toolStream = toolContextToken ? new TradingToolStream(toolContextToken) : null;
-          let clientDisconnected = false;
-          const handleClientDisconnect = () => {
-            clientDisconnected = true;
-            reader.cancel?.().catch(() => {});
-          };
-          res.on("close", handleClientDisconnect);
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done || clientDisconnected) break;
-              res.write(toolStream ? toolStream.push(value) : value);
-            }
-            if (toolStream && !clientDisconnected) res.write(toolStream.finish());
-          } finally {
-            res.off("close", handleClientDisconnect);
-            reader.cancel?.().catch(() => {});
-          }
-        }
-        return res.end();
+        await this.streamUpstreamSseResponse(response, res, toolContextToken);
+        return;
       }
 
-      // Non-stream: if application/json and /v1/chat/completions, normalize any
-      // DeepSeek DSML tool calls back into standard OpenAI tool_calls schema.
       const buf = Buffer.from(await response.arrayBuffer());
-      if (
-        upstreamContentType.includes("application/json") &&
-        basePath === "/v1/models"
-      ) {
-        try {
-          const text = buf.toString("utf8");
-          const parsed = JSON.parse(text);
-          const filtered = VllmShimService.filterModels(parsed);
-          const enriched = await VllmShimService.enrichModels(
-            filtered, resolved.upstreamUrl,
-          );
-
-          const list = (((enriched as Record<string, any>).data || (enriched as Record<string, any>).models || []) as Array<Record<string, any>>);
-          const gen = list.find((m: Record<string, any>) => {
-            const id = m?.id || m?.name;
-            return id && !VllmShimService.NON_LLM_MODELS.has(String(id).toLowerCase()) && !/embed/i.test(String(id));
-          });
-          if (gen) {
-            VllmShimService.setActiveModel(upstreamName, String(gen.id || gen.name));
-          }
-
-          return res.end(JSON.stringify(enriched));
-        } catch {
-          // Fall through to returning raw buffer
-        }
-      }
-      if (
-        upstreamContentType.includes("application/json") &&
-        originalPath.includes("/chat/completions")
-      ) {
-        try {
-          const text = buf.toString("utf8");
-          if (text.includes("tool_call") || text.includes("tool calls")) {
-            const parsed = JSON.parse(text);
-            const normalized = VllmShimService.normalizeToolCalls(parsed);
-            return res.end(JSON.stringify(toolContextToken ? bindToolResponse(normalized, toolContextToken) : normalized));
-          }
-        } catch (error) {
-          // Never pass through an unbound trading tool call on a binding error.
-          if (toolContextToken) throw error;
-          // Non-trading compatibility: malformed JSON still passes through.
-        }
-      }
-      return res.end(buf);
+      await this.handleNonStreamJsonResponse(
+        buf,
+        upstreamContentType,
+        basePath,
+        originalPath,
+        resolved.upstreamUrl,
+        upstreamName,
+        toolContextToken,
+        res,
+      );
+      return;
     } catch (error: any) {
       logger.error(`[VllmShim] Failed to proxy ${originalPath}: ${error.message}`);
       if (!res.headersSent) {
@@ -1058,16 +1109,6 @@ export class VllmShimService {
       }
       return res.end();
     } finally {
-      // AFTER THE BODY DRAINS, never at `await fetchOnce()`.
-      //
-      // Measured 2026-08-09 through this shim: vLLM answers headers in ~20ms
-      // and then holds the GPU for 5-10 SECONDS — 99.7% of a streaming request
-      // happens after the fetch promise resolves. Releasing there would cap
-      // header-fetch concurrency and leave GPU concurrency completely
-      // ungoverned: a limiter that passes every test written against a
-      // non-streaming call and does nothing under the load that caused the
-      // incident. This `finally` covers both exits — the SSE pump's own
-      // `finally` above, and the non-stream `res.end(buf)`.
       release?.();
     }
   }

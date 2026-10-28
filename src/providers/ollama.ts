@@ -71,414 +71,410 @@ function buildOllamaOptions(options: ProviderOptions) {
   return ollamaOptions;
 }
 
+async function ollamaGenerateText(
+  baseUrl: string,
+  messages: ChatMessage[],
+  model: string,
+  options: ProviderOptions,
+): Promise<GenerateTextResult> {
+  logger.provider("Ollama", `generateText model=${model} baseUrl=${baseUrl}`);
+  try {
+    const preparedMessages = prepareOllamaMessages(
+      prependIdentitySystemMessage(messages, options.systemPrompt),
+    );
+
+    const requestBody = {
+      model,
+      messages: preparedMessages,
+      stream: false,
+      ...(options.thinkingEnabled ? { think: true } : {}),
+      options: buildOllamaOptions(options),
+    };
+
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API error: ${response.status} ${errorText}`);
+    }
+
+    const responseData = (await response.json()) as Record<string, unknown>;
+    const msgObj = (responseData.message || {}) as Record<string, string>;
+    const thinking = msgObj.thinking || undefined;
+    const result: GenerateTextResult = {
+      text: msgObj.content || "",
+      usage: {
+        inputTokens: (responseData.prompt_eval_count as number) ?? 0,
+        outputTokens: (responseData.eval_count as number) ?? 0,
+      },
+    };
+    if (thinking) {
+      result.thinking = thinking;
+    }
+    return result;
+  } catch (error: unknown) {
+    if (error instanceof ProviderError) throw error;
+    throw new ProviderError("ollama", getErrorMessage(error), 500, error);
+  }
+}
+
+async function* unloadOtherOllamaModels(
+  baseUrl: string,
+  targetModel: string,
+): AsyncGenerator<StreamChunk, void, unknown> {
+  try {
+    const processStatusResponse = await fetch(`${baseUrl}/api/ps`);
+    if (!processStatusResponse.ok) return;
+    const processStatusData = (await processStatusResponse.json()) as Record<
+      string,
+      unknown[]
+    >;
+    const runningModels = (processStatusData.models || []) as Record<
+      string,
+      string
+    >[];
+    for (const runningModelInstance of runningModels) {
+      const runningName =
+        runningModelInstance.model || runningModelInstance.name;
+      if (runningName && runningName !== targetModel) {
+        yield { type: "status", message: `Unloading ${runningName}…` };
+        logger.info(
+          `Ollama: unloading ${runningName} before loading ${targetModel}`,
+        );
+        await fetch(`${baseUrl}/api/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: runningName, keep_alive: 0 }),
+        });
+      }
+    }
+  } catch (unloadError: unknown) {
+    logger.warn(
+      `Ollama: could not check/unload models: ${getErrorMessage(unloadError)}`,
+    );
+  }
+}
+
+function buildOllamaFinalUsage(parsedJson: Record<string, unknown>): {
+  inputTokens: number;
+  outputTokens: number;
+  tokensPerSec?: number;
+} {
+  const evalDuration = parsedJson.eval_duration as number | undefined;
+  const evalDurationSec = evalDuration ? evalDuration / 1_000_000_000 : null;
+  const outputTokens = (parsedJson.eval_count as number) ?? 0;
+  const usage: {
+    inputTokens: number;
+    outputTokens: number;
+    tokensPerSec?: number;
+  } = {
+    inputTokens: (parsedJson.prompt_eval_count as number) ?? 0,
+    outputTokens,
+  };
+  if (evalDurationSec && evalDurationSec > 0 && outputTokens > 0) {
+    usage.tokensPerSec = parseFloat(
+      (outputTokens / evalDurationSec).toFixed(1),
+    );
+  }
+  return usage;
+}
+
+async function* consumeOllamaNdjsonReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+  counters: { outputChars: number; thinkingChars: number },
+): AsyncGenerator<StreamChunk, void, unknown> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let usage: {
+    inputTokens: number;
+    outputTokens: number;
+    tokensPerSec?: number;
+  } | null = null;
+
+  while (true) {
+    if (signal?.aborted) {
+      reader.cancel().catch(() => {});
+      break;
+    }
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop()!;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsedJson = JSON.parse(trimmed);
+        if (parsedJson.message?.thinking) {
+          counters.thinkingChars += (
+            parsedJson.message.thinking as string
+          ).length;
+          yield {
+            type: "thinking",
+            content: parsedJson.message.thinking,
+          };
+        }
+        if (parsedJson.message?.content) {
+          counters.outputChars += (parsedJson.message.content as string).length;
+          yield parsedJson.message.content;
+        }
+        if (parsedJson.done) {
+          usage = buildOllamaFinalUsage(parsedJson);
+        }
+      } catch {
+        // skip malformed JSON lines
+      }
+    }
+  }
+
+  yield {
+    type: "usage",
+    usage: {
+      inputTokens: usage?.inputTokens || 0,
+      outputTokens: usage?.outputTokens || 0,
+    },
+  };
+}
+
+async function* ollamaGenerateTextStream(
+  baseUrl: string,
+  messages: ChatMessage[],
+  model: string,
+  options: ProviderOptions,
+): AsyncGenerator<StreamChunk, void, unknown> {
+  logger.provider(
+    "Ollama",
+    `generateTextStream model=${model} baseUrl=${baseUrl}`,
+  );
+  const counters = { outputChars: 0, thinkingChars: 0 };
+  try {
+    yield* unloadOtherOllamaModels(baseUrl, model);
+
+    const preparedMessages = prepareOllamaMessages(
+      prependIdentitySystemMessage(messages, options.systemPrompt),
+    );
+
+    const requestBody = {
+      model,
+      messages: preparedMessages,
+      stream: true,
+      ...(options.thinkingEnabled ? { think: true } : {}),
+      options: buildOllamaOptions(options),
+    };
+
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+      dispatcher: STREAMING_DISPATCHER,
+      ...(options.signal && { signal: options.signal }),
+    } as RequestInit & { dispatcher: typeof STREAMING_DISPATCHER });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API error: ${response.status} ${errorText}`);
+    }
+
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    yield* consumeOllamaNdjsonReader(reader, options.signal, counters);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === "AbortError") return;
+    if (counters.outputChars > 0 || counters.thinkingChars > 0) {
+      const estimatedOutputTokens = Math.ceil(counters.outputChars / 4);
+      const estimatedThinkingTokens = Math.ceil(counters.thinkingChars / 4);
+      yield {
+        type: "usage",
+        usage: {
+          inputTokens: 0,
+          outputTokens: estimatedOutputTokens + estimatedThinkingTokens,
+        },
+      };
+    }
+    if (error instanceof ProviderError) throw error;
+    throw new ProviderError("ollama", getErrorMessage(error), 500, error);
+  }
+}
+
+async function ollamaCaptionImage(
+  baseUrl: string,
+  images: string[],
+  prompt: string,
+  model: string,
+  systemPrompt?: string,
+): Promise<{
+  text: string;
+  usage: { inputTokens: number; outputTokens: number };
+}> {
+  logger.provider("Ollama", `captionImage model=${model} baseUrl=${baseUrl}`);
+  try {
+    const imageBase64List = images.map((image: string) =>
+      image.startsWith("data:") ? image.split(",")[1] : image,
+    );
+
+    const messages: ChatMessage[] = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+    messages.push({
+      role: "user",
+      content: prompt,
+      images: imageBase64List,
+    });
+
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: false,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API error: ${response.status} ${errorText}`);
+    }
+
+    const responseData = (await response.json()) as Record<string, unknown>;
+    const msgObj = (responseData.message || {}) as Record<string, string>;
+    const text = msgObj.content || "";
+    const usage = {
+      inputTokens: (responseData.prompt_eval_count as number) || 0,
+      outputTokens: (responseData.eval_count as number) || 0,
+    };
+    return { text, usage };
+  } catch (error: unknown) {
+    if (error instanceof ProviderError) throw error;
+    throw new ProviderError("ollama", getErrorMessage(error), 500, error);
+  }
+}
+
+function stripLatestSuffix(name: string): string {
+  return name.endsWith(":latest") ? name.slice(0, -7) : name;
+}
+
+function mapOllamaModelEntry(
+  value: unknown,
+  running: Record<string, unknown>[],
+) {
+  const modelItem = value as Record<string, unknown>;
+  const tagName = (modelItem.model || modelItem.name || "") as string;
+  const matchedRunningModel = running.find((runningModel) => {
+    const runningName = (runningModel.model ||
+      runningModel.name ||
+      "") as string;
+    return (
+      runningName === tagName ||
+      stripLatestSuffix(tagName) === stripLatestSuffix(runningName)
+    );
+  });
+
+  const loadedInstances = matchedRunningModel
+    ? [
+        {
+          id: String(matchedRunningModel.model || matchedRunningModel.name),
+          config: {
+            context_length: null,
+            size_vram: matchedRunningModel.size_vram ?? null,
+            expires_at: matchedRunningModel.expires_at ?? null,
+          },
+        },
+      ]
+    : undefined;
+
+  return {
+    key: tagName,
+    display_name: tagName,
+    type: "llm",
+    loaded_instances: loadedInstances,
+  };
+}
+
+async function fetchRunningOllamaModels(
+  baseUrl: string,
+): Promise<Record<string, unknown>[]> {
+  try {
+    const processStatusResponse = await fetch(`${baseUrl}/api/ps`);
+    if (processStatusResponse.ok) {
+      const processStatusData = (await processStatusResponse.json()) as Record<
+        string,
+        Record<string, unknown>[]
+      >;
+      return processStatusData.models || [];
+    }
+  } catch (error: unknown) {
+    logger.warn(
+      `Ollama listModels: could not query active models: ${getErrorMessage(error)}`,
+    );
+  }
+  return [];
+}
+
+async function ollamaListModels(baseUrl: string) {
+  logger.provider("Ollama", "listModels");
+  try {
+    const response = await fetch(`${baseUrl}/api/tags`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API error: ${response.status} ${errorText}`);
+    }
+
+    const responseData = (await response.json()) as Record<string, unknown[]>;
+    const models = responseData.models || [];
+    const running = await fetchRunningOllamaModels(baseUrl);
+    const mappedModelsList = models.map((value: unknown) =>
+      mapOllamaModelEntry(value, running),
+    );
+    return { models: mappedModelsList };
+  } catch (error: unknown) {
+    if (error instanceof ProviderError) throw error;
+    throw new ProviderError("ollama", getErrorMessage(error), 500, error);
+  }
+}
+
 export function createOllamaProvider(
   baseUrl: string,
   instanceId: string = "ollama",
 ): Provider {
-  const getBaseUrl = () => baseUrl;
-
   return {
     name: instanceId,
-
-    // ── Non-Streaming Text Generation ──────────────────────
-
-    async generateText(
+    generateText(
       messages: ChatMessage[],
       model: string = getDefaultModels(TYPES.TEXT, TYPES.TEXT)["ollama"],
       options: ProviderOptions = {},
     ): Promise<GenerateTextResult> {
-      const baseUrl = getBaseUrl();
-      logger.provider(
-        "Ollama",
-        `generateText model=${model} baseUrl=${baseUrl}`,
-      );
-      try {
-        const preparedMessages = prepareOllamaMessages(
-          prependIdentitySystemMessage(messages, options.systemPrompt),
-        );
-
-        const requestBody = {
-          model,
-          messages: preparedMessages,
-          stream: false,
-          ...(options.thinkingEnabled ? { think: true } : {}),
-          options: buildOllamaOptions(options),
-        };
-
-        const response = await fetch(`${baseUrl}/api/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestBody),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`API error: ${response.status} ${errorText}`);
-        }
-
-        const responseData = await response.json();
-        const thinking =
-          (responseData as Record<string, Record<string, string>>).message
-            ?.thinking || undefined;
-        const result: GenerateTextResult = {
-          text:
-            (responseData as Record<string, Record<string, string>>).message
-              ?.content || "",
-          usage: {
-            inputTokens:
-              (responseData as Record<string, number>).prompt_eval_count ?? 0,
-            outputTokens:
-              (responseData as Record<string, number>).eval_count ?? 0,
-          },
-        };
-        if (thinking) {
-          result.thinking = thinking;
-        }
-        return result;
-      } catch (error: unknown) {
-        if (error instanceof ProviderError) throw error;
-        throw new ProviderError("ollama", getErrorMessage(error), 500, error);
-      }
+      return ollamaGenerateText(baseUrl, messages, model, options);
     },
-
-    // ── Streaming Text Generation ──────────────────────
-
-    async *generateTextStream(
+    generateTextStream(
       messages: ChatMessage[],
       model: string = getDefaultModels(TYPES.TEXT, TYPES.TEXT)["ollama"],
       options: ProviderOptions = {},
     ): AsyncGenerator<StreamChunk, void, unknown> {
-      const baseUrl = getBaseUrl();
-      logger.provider(
-        "Ollama",
-        `generateTextStream model=${model} baseUrl=${baseUrl}`,
-      );
-      let partialOutputCharacters = 0;
-      let partialThinkingCharacters = 0;
-      try {
-        // Single-model enforcement: unload any other loaded models
-        try {
-          const processStatusResponse = await fetch(`${baseUrl}/api/ps`);
-          if (processStatusResponse.ok) {
-            const processStatusData = await processStatusResponse.json();
-            const runningModels =
-              (processStatusData as Record<string, unknown[]>).models || [];
-            for (const runningModelInstance of runningModels as Record<
-              string,
-              string
-            >[]) {
-              const runningName =
-                runningModelInstance.model || runningModelInstance.name;
-              if (runningName && runningName !== model) {
-                yield { type: "status", message: `Unloading ${runningName}…` };
-                logger.info(
-                  `Ollama: unloading ${runningName} before loading ${model}`,
-                );
-                await fetch(`${baseUrl}/api/generate`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ model: runningName, keep_alive: 0 }),
-                });
-              }
-            }
-          }
-        } catch (unloadError: unknown) {
-          logger.warn(
-            `Ollama: could not check/unload models: ${getErrorMessage(unloadError)}`,
-          );
-        }
-
-        const preparedMessages = prepareOllamaMessages(
-          prependIdentitySystemMessage(messages, options.systemPrompt),
-        );
-
-        const requestBody = {
-          model,
-          messages: preparedMessages,
-          stream: true,
-          ...(options.thinkingEnabled ? { think: true } : {}),
-          options: buildOllamaOptions(options),
-        };
-
-        const response = await fetch(`${baseUrl}/api/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestBody),
-          dispatcher: STREAMING_DISPATCHER,
-          ...(options.signal && { signal: options.signal }),
-        } as RequestInit & { dispatcher: typeof STREAMING_DISPATCHER });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`API error: ${response.status} ${errorText}`);
-        }
-
-        // Ollama streams NDJSON (one JSON object per line)
-        const reader = (
-          response.body as ReadableStream<Uint8Array>
-        ).getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let usage: {
-          inputTokens: number;
-          outputTokens: number;
-          tokensPerSec?: number;
-        } | null = null;
-
-        while (true) {
-          if (options.signal?.aborted) {
-            reader.cancel().catch(() => {});
-            break;
-          }
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop()!; // keep incomplete line in buffer
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-
-            try {
-              const parsedJson = JSON.parse(trimmed);
-
-              // Thinking content comes in message.thinking
-              if (parsedJson.message?.thinking) {
-                partialThinkingCharacters += (
-                  parsedJson.message.thinking as string
-                ).length;
-                yield {
-                  type: "thinking",
-                  content: parsedJson.message.thinking,
-                };
-              }
-
-              // Text content comes in message.content
-              if (parsedJson.message?.content) {
-                partialOutputCharacters += (
-                  parsedJson.message.content as string
-                ).length;
-                yield parsedJson.message.content;
-              }
-
-              // Final chunk has done: true with usage stats
-              if (parsedJson.done) {
-                const evalDurationSec = parsedJson.eval_duration
-                  ? parsedJson.eval_duration / 1_000_000_000
-                  : null;
-                usage = {
-                  inputTokens: parsedJson.prompt_eval_count ?? 0,
-                  outputTokens: parsedJson.eval_count ?? 0,
-                };
-                // Ollama reports precise eval_duration — use it for tok/s
-                if (
-                  evalDurationSec &&
-                  evalDurationSec > 0 &&
-                  usage.outputTokens > 0
-                ) {
-                  usage.tokensPerSec = parseFloat(
-                    (usage.outputTokens / evalDurationSec).toFixed(1),
-                  );
-                }
-              }
-            } catch {
-              // skip malformed JSON lines
-            }
-          }
-        }
-
-        if (usage) {
-          yield {
-            type: "usage",
-            usage: {
-              inputTokens: usage.inputTokens || 0,
-              outputTokens: usage.outputTokens || 0,
-            },
-          };
-        } else {
-          yield { type: "usage", usage: { inputTokens: 0, outputTokens: 0 } };
-        }
-      } catch (error: unknown) {
-        if (error instanceof Error && error.name === "AbortError") return; // Client disconnected
-        // Yield partial usage before re-throwing so the consumer captures
-        // whatever tokens were generated before the stream terminated.
-        if (partialOutputCharacters > 0 || partialThinkingCharacters > 0) {
-          const estimatedOutputTokens = Math.ceil(partialOutputCharacters / 4);
-          const estimatedThinkingTokens = Math.ceil(
-            partialThinkingCharacters / 4,
-          );
-          yield {
-            type: "usage",
-            usage: {
-              inputTokens: 0,
-              outputTokens: estimatedOutputTokens + estimatedThinkingTokens,
-            },
-          };
-        }
-        if (error instanceof ProviderError) throw error;
-        throw new ProviderError("ollama", getErrorMessage(error), 500, error);
-      }
+      return ollamaGenerateTextStream(baseUrl, messages, model, options);
     },
-
-    // ── Image Captioning ──────────────────────
-
-    async captionImage(
+    captionImage(
       images: string[],
       prompt: string = "Describe this image.",
       model: string = getDefaultModels(TYPES.IMAGE, TYPES.TEXT)["ollama"],
       systemPrompt?: string,
-    ): Promise<{
-      text: string;
-      usage: { inputTokens: number; outputTokens: number };
-    }> {
-      const baseUrl = getBaseUrl();
-      logger.provider(
-        "Ollama",
-        `captionImage model=${model} baseUrl=${baseUrl}`,
-      );
-      try {
-        // Extract raw base64 from data URLs
-        const imageBase64List = images.map((image: string) => {
-          if (image.startsWith("data:")) {
-            return image.split(",")[1];
-          }
-          return image;
-        });
-
-        const messages: ChatMessage[] = [];
-        if (systemPrompt) {
-          messages.push({ role: "system", content: systemPrompt });
-        }
-        messages.push({
-          role: "user",
-          content: prompt,
-          images: imageBase64List,
-        });
-
-        const response = await fetch(`${baseUrl}/api/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model,
-            messages,
-            stream: false,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`API error: ${response.status} ${errorText}`);
-        }
-
-        const responseData = await response.json();
-        const text =
-          (responseData as Record<string, Record<string, string>>).message
-            ?.content || "";
-        const usage = {
-          inputTokens:
-            (responseData as Record<string, number>).prompt_eval_count || 0,
-          outputTokens:
-            (responseData as Record<string, number>).eval_count || 0,
-        };
-        return { text, usage };
-      } catch (error: unknown) {
-        if (error instanceof ProviderError) throw error;
-        throw new ProviderError("ollama", getErrorMessage(error), 500, error);
-      }
+    ) {
+      return ollamaCaptionImage(baseUrl, images, prompt, model, systemPrompt);
     },
-
-    // ── Ollama Model Listing ─────────────────────
-
-    /**
-     * List all models available in Ollama.
-     * GET /api/tags
-     */
-    async listModels(): Promise<{
-      models: Array<{
-        key: string;
-        display_name: string;
-        type: string;
-        loaded_instances?: Array<{ id: string }>;
-      }>;
-    }> {
-      const baseUrl = getBaseUrl();
-      logger.provider("Ollama", "listModels");
-      try {
-        const response = await fetch(`${baseUrl}/api/tags`, {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`API error: ${response.status} ${errorText}`);
-        }
-
-        const responseData = await response.json();
-        const models = (responseData as Record<string, unknown[]>).models || [];
-
-        let running: Record<string, unknown>[] = [];
-        try {
-          const processStatusResponse = await fetch(`${baseUrl}/api/ps`);
-          if (processStatusResponse.ok) {
-            const processStatusData = await processStatusResponse.json();
-            running =
-              (processStatusData as Record<string, Record<string, unknown>[]>)
-                .models || [];
-          }
-        } catch (error: unknown) {
-          logger.warn(
-            `Ollama listModels: could not query active models: ${getErrorMessage(error)}`,
-          );
-        }
-
-        const mappedModelsList = models.map((value: unknown) => {
-          const modelItem = value as Record<string, unknown>;
-          const tagName = (modelItem.model || modelItem.name || "") as string;
-          const matchedRunningModel = running.find((runningModel) => {
-            const runningName = (runningModel.model ||
-              runningModel.name ||
-              "") as string;
-            if (runningName === tagName) return true;
-            const cleanTagName = tagName.endsWith(":latest")
-              ? tagName.slice(0, -7)
-              : tagName;
-            const cleanRunningName = runningName.endsWith(":latest")
-              ? runningName.slice(0, -7)
-              : runningName;
-            return cleanTagName === cleanRunningName;
-          });
-
-          const loadedInstances = matchedRunningModel
-            ? [
-                {
-                  id: String(
-                    matchedRunningModel.model || matchedRunningModel.name,
-                  ),
-                  config: {
-                    context_length: null,
-                    size_vram: matchedRunningModel.size_vram ?? null,
-                    expires_at: matchedRunningModel.expires_at ?? null,
-                  },
-                },
-              ]
-            : undefined;
-
-          return {
-            key: tagName,
-            display_name: tagName,
-            type: "llm",
-            loaded_instances: loadedInstances,
-          };
-        });
-
-        return { models: mappedModelsList };
-      } catch (error: unknown) {
-        if (error instanceof ProviderError) throw error;
-        throw new ProviderError("ollama", getErrorMessage(error), 500, error);
-      }
+    listModels() {
+      return ollamaListModels(baseUrl);
     },
   };
 }

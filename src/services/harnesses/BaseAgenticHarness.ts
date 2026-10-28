@@ -592,16 +592,72 @@ export default class BaseAgenticHarness {
    * request would only produce a mid-tool-call truncation. A
    * `context_exhausted` status event is emitted before returning null.
    */
+  private _emitContextExhaustedAndSpan(clampedMaxTokens: number): null {
+    const { providerName, resolvedModel, modelDefinition } = this.context;
+    const contextWindow = modelDefinition?.maxInputTokens || 0;
+    logger.warn(
+      `[ContextExhaustionGuard] Output budget ${clampedMaxTokens} < ${MINIMUM_VIABLE_OUTPUT_TOKENS} threshold — context window (${contextWindow}) exhausted. Skipping provider call instead of sending a doomed request.`,
+    );
+    this.context.emit({
+      type: SERVER_SENT_EVENT_TYPES.STATUS,
+      message: "context_exhausted",
+      availableOutputTokens: clampedMaxTokens,
+      contextWindow,
+    });
+    const activeCtx = TraceContext.get();
+    const exhaustedSpan = new Span({
+      trace_id:
+        activeCtx?.trace_id ||
+        (this.context as any).rootSpan?.trace_id ||
+        this.context.traceId ||
+        crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+      parent_span_id: activeCtx?.current_span_id || (this.context as any).rootSpan?.span_id || null,
+      run_id: activeCtx?.run_id || (this.context as any).runId || this.context.agentConversationId || "run_gen",
+      name: `llm.generate:${resolvedModel}`,
+      kind: "model_call",
+      attributes: {
+        model: resolvedModel,
+        provider: providerName,
+        error: "context_exhausted",
+      },
+    });
+    exhaustedSpan.end("ERROR", "context_exhausted");
+    TraceExporter.getGlobalInstance().enqueueSpan(exhaustedSpan.toJSON());
+    return null;
+  }
+
+  private _startModelCallSpan(passOptions: AgenticOptions, sessionState: unknown): void {
+    const { providerName, resolvedModel } = this.context;
+    const activeCtx = TraceContext.get();
+    const parentSpan = (this.context as any).rootSpan;
+    const modelSpan = new Span({
+      trace_id:
+        activeCtx?.trace_id ||
+        parentSpan?.trace_id ||
+        this.context.traceId ||
+        crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+      parent_span_id: activeCtx?.current_span_id || parentSpan?.span_id || null,
+      run_id: activeCtx?.run_id || (this.context as any).runId || this.context.agentConversationId || "run_gen",
+      name: `llm.generate:${resolvedModel}`,
+      kind: "model_call",
+      attributes: {
+        model: resolvedModel,
+        provider: providerName,
+        ...(sessionState ? { session_state_hash: sessionStateHash(sessionState as any) } : {}),
+        ...(typeof passOptions.reasoningEffort === "string" && {
+          reasoning_effort: passOptions.reasoningEffort,
+        }),
+      },
+    });
+    this._activeModelSpan = modelSpan;
+  }
+
   async createProviderStream(
     messages: ConversationMessage[],
     passOptions: AgenticOptions,
   ): Promise<AsyncIterable<unknown> | null> {
     const { provider, providerName, resolvedModel, modelDefinition, signal } = this.context;
 
-    // Pre-discover the context window for self-hosted providers so
-    // clampOutputTokens has the budget available on the very first
-    // iteration (ported from prism-service: fixes the cold-start race
-    // where discovery ran inside the async generator, after clamping).
     if (provider.discoverContextWindow) {
       await provider.discoverContextWindow(resolvedModel, this.context.options);
     }
@@ -610,73 +666,30 @@ export default class BaseAgenticHarness {
       const limit = this.context.options.maxTokens ?? 0;
       const consumed = this.state.overallUsage.inputTokens + this.state.overallUsage.outputTokens;
       const remaining = limit - consumed;
-      if (remaining <= 0) throw Object.assign(new Error("Canonical token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+      if (remaining <= 0) {
+        throw Object.assign(new Error("Canonical token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
+      }
       passOptions = { ...passOptions, maxTokens: Math.min(passOptions.maxTokens ?? remaining, remaining) };
     }
 
     const clampedMaxTokens = this.clampOutputTokens(messages, passOptions.maxTokens);
-
-    // ── Pre-flight context exhaustion guard ──────────────────
-    // Fires only when clamping actually reduced the requested budget below
-    // the viable floor (an intentionally small requested maxTokens is fine).
     if (
       passOptions.maxTokens &&
       clampedMaxTokens !== undefined &&
       clampedMaxTokens !== passOptions.maxTokens &&
       clampedMaxTokens < MINIMUM_VIABLE_OUTPUT_TOKENS
     ) {
-      const contextWindow = modelDefinition?.maxInputTokens || 0;
-      logger.warn(
-        `[ContextExhaustionGuard] Output budget ${clampedMaxTokens} < ` +
-          `${MINIMUM_VIABLE_OUTPUT_TOKENS} threshold — context window (${contextWindow}) exhausted. ` +
-          `Skipping provider call instead of sending a doomed request.`,
-      );
-      this.context.emit({
-        type: SERVER_SENT_EVENT_TYPES.STATUS,
-        message: "context_exhausted",
-        availableOutputTokens: clampedMaxTokens,
-        contextWindow,
-      });
-      const activeCtx = TraceContext.get();
-      const exhaustedSpan = new Span({
-        trace_id: activeCtx?.trace_id || (this.context as any).rootSpan?.trace_id || this.context.traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
-        parent_span_id: activeCtx?.current_span_id || (this.context as any).rootSpan?.span_id || null,
-        run_id: activeCtx?.run_id || (this.context as any).runId || this.context.agentConversationId || "run_gen",
-        name: `llm.generate:${resolvedModel}`,
-        kind: "model_call",
-        attributes: {
-          model: resolvedModel,
-          provider: providerName,
-          error: "context_exhausted",
-        },
-      });
-      exhaustedSpan.end("ERROR", "context_exhausted");
-      TraceExporter.getGlobalInstance().enqueueSpan(exhaustedSpan.toJSON());
-      return null;
+      return this._emitContextExhaustedAndSpan(clampedMaxTokens);
     }
 
-    const clampedPassOptions = clampedMaxTokens !== passOptions.maxTokens
-      ? { ...passOptions, maxTokens: clampedMaxTokens }
-      : passOptions;
+    const clampedPassOptions =
+      clampedMaxTokens !== passOptions.maxTokens ? { ...passOptions, maxTokens: clampedMaxTokens } : passOptions;
 
-    // ── Role-alternation pre-flight (W3) ─────────────────────
-    // Normalize the internal message array so providers with strict
-    // alternation rules never see malformed history (orphan tool
-    // results, non-leading system messages, duplicate consecutive
-    // roles). Operates on the internal format, before expansion.
     const normalizedMessages = normalizeRoleAlternation(messages);
+    const expandedMessages = expandMessagesForFunctionCall(normalizedMessages.messages as ChatMessage[], {
+      filterDeleted: false,
+    });
 
-    const expandedMessages = expandMessagesForFunctionCall(
-      normalizedMessages.messages as ChatMessage[],
-      {
-        filterDeleted: false,
-      },
-    );
-
-    // ── Ambient session state (SWE-agent state_command) ──────
-    // Inject the per-run SessionState as an ephemeral trailing context message
-    // for this call only. Ephemeral: never persisted, so the persisted message
-    // prefix stays append-only (KV-cache safe); only the newest suffix grows.
     const sessionState = this.context.sessionState;
     if (sessionState) {
       expandedMessages.push({
@@ -685,58 +698,19 @@ export default class BaseAgenticHarness {
       });
     }
 
-    // Start model span before provider invocation to capture setup errors and initial latency
-    const activeCtx = TraceContext.get();
-    const parentSpan = (this.context as any).rootSpan;
-    const modelSpan = new Span({
-      trace_id: activeCtx?.trace_id || parentSpan?.trace_id || this.context.traceId || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
-      parent_span_id: activeCtx?.current_span_id || parentSpan?.span_id || null,
-      run_id: activeCtx?.run_id || (this.context as any).runId || this.context.agentConversationId || "run_gen",
-      name: `llm.generate:${resolvedModel}`,
-      kind: "model_call",
-      attributes: {
-        model: resolvedModel,
-        provider: providerName,
-        ...(sessionState && { session_state_hash: sessionStateHash(sessionState) }),
-        ...(typeof passOptions.reasoningEffort === "string" && {
-          reasoning_effort: passOptions.reasoningEffort,
-        }),
-      },
-    });
-    this._activeModelSpan = modelSpan;
+    this._startModelCallSpan(passOptions, sessionState);
 
-    // The turn's signal (a stop) or this pass's own (a stall) ends the request.
     const passAbort = new AbortController();
     const providerOptions = {
       ...clampedPassOptions,
       signal: signal ? AbortSignal.any([signal, passAbort.signal]) : passAbort.signal,
     };
 
-    // Shared transient-error retry for ALL providers (ported from
-    // prism-service's ProviderStreamResilience). Retries fire only when zero
-    // chunks were yielded — once output reached the consumer, a retry would
-    // duplicate streamed text and re-execute tool calls.
     const createStream = () =>
       modelDefinition?.liveAPI && provider.generateTextStreamLive
-        ? provider.generateTextStreamLive(
-            expandedMessages,
-            resolvedModel,
-            providerOptions,
-          )
-        : provider.generateTextStream(
-            expandedMessages,
-            resolvedModel,
-            providerOptions,
-          );
+        ? provider.generateTextStreamLive(expandedMessages, resolvedModel, providerOptions)
+        : provider.generateTextStream(expandedMessages, resolvedModel, providerOptions);
 
-    // Context-overflow recovery: the pre-flight clamp works from a chars/4
-    // heuristic that dense content (JSON, hex, code) can undershoot far
-    // beyond any fixed margin, and vLLM's rejection only reports a LOWER
-    // BOUND on the real prompt size (window - max_tokens + 1). So on an
-    // overflow rejection, shrink maxTokens — halving guarantees geometric
-    // convergence even when the reported numbers understate the overshoot —
-    // and retry. The factory re-reads providerOptions on every call, so the
-    // mutation reaches the next attempt.
     const recoverFromContextOverflow = (error: unknown): boolean => {
       const overflow = parseContextOverflowError(error);
       if (!overflow) return false;
@@ -748,9 +722,7 @@ export default class BaseAgenticHarness {
       );
       if (reducedMaxTokens === null) return false;
       logger.warn(
-        `[ContextOverflowRecovery] ${providerName} rejected the request ` +
-          `(window=${overflow.contextWindow}, reported input≥${overflow.inputTokens ?? "?"}). ` +
-          `Retrying with maxTokens ${providerOptions.maxTokens} → ${reducedMaxTokens}.`,
+        `[ContextOverflowRecovery] ${providerName} rejected the request (window=${overflow.contextWindow}, reported input≥${overflow.inputTokens ?? "?"}). Retrying with maxTokens ${providerOptions.maxTokens} → ${reducedMaxTokens}.`,
       );
       providerOptions.maxTokens = reducedMaxTokens;
       return true;
@@ -868,327 +840,254 @@ export default class BaseAgenticHarness {
    *   `skip`     — chunk was filtered/dropped
    *   `break`    — abort signal received
    */
-  processStreamChunk(
-    chunk: unknown,
+  private _handleUsageStreamChunk(streamChunk: StreamChunk, pass: PassState): ChunkAction {
+    const state = this.state;
+    const usageChunk = streamChunk.usage as TokenUsage | undefined;
+    pass.usageReported = usageChunk !== undefined && Object.values(usageChunk).some((value) => typeof value === "number");
+    mergeUsage(state.overallUsage, usageChunk);
+    mergeUsage(pass.usage, usageChunk);
+    if (usageChunk) {
+      const realInput = getTotalInputTokens(usageChunk);
+      if (realInput > 0) {
+        this.providerInputBaseline = {
+          inputTokens: realInput,
+          messageTokens: this.lastEstimatedMessageTokens,
+        };
+        this.budgetTracker?.recordRealUsage(usageChunk, this.lastEstimatedMessageTokens);
+      }
+    }
+    const rawUsage = streamChunk.usage as Record<string, number> | undefined;
+    if (pass.requestId) {
+      const reportedInput = usageChunk?.inputTokens || rawUsage?.promptTokens || 0;
+      const reportedOutput = usageChunk?.outputTokens || 0;
+      const trackerUpdate: Record<string, number> = {};
+      if (reportedInput > 0) trackerUpdate.inputTokens = reportedInput;
+      if (reportedOutput > 0) trackerUpdate.outputTokens = reportedOutput;
+      if (usageChunk?.tokensPerSec != null && usageChunk.tokensPerSec > 0) {
+        trackerUpdate.providerTokPerSec = usageChunk.tokensPerSec;
+      }
+      if (Object.keys(trackerUpdate).length > 0) {
+        ConversationGenerationTracker.update(pass.requestId, trackerUpdate);
+      }
+    }
+    return { action: "continue" };
+  }
+
+  private _handleThinkingStreamChunk(streamChunk: StreamChunk, pass: PassState): ChunkAction {
+    const state = this.state;
+    const { emit } = this.context;
+    const content = streamChunk.content || "";
+    this._recordFirstToken(pass);
+    this._recordTiming(pass);
+    state.streamedThinking += content;
+    pass.streamedThinking += content;
+    if (state.displayThinkingFragments.length === 0 || state.lastDisplaySegType !== "thinking") {
+      logger.debug(
+        `[Harness:Thinking] NEW thinking segment on iteration ${state.iterations}, fragments=${state.displayThinkingFragments.length}, lastSegType=${state.lastDisplaySegType}, contentLen=${content.length}ch`,
+      );
+    }
+    if (state.lastDisplaySegType !== "thinking") {
+      state.displaySegments.push({
+        type: SERVER_SENT_EVENT_TYPES.THINKING,
+        fragmentIndex: state.displayThinkingFragments.length,
+      });
+      state.displayThinkingFragments.push("");
+      state.lastDisplaySegType = "thinking";
+    }
+    state.displayThinkingFragments[state.displayThinkingFragments.length - 1] += content;
+    state.overallOutputCharacters += content.length;
+    if (pass.requestId) {
+      ConversationGenerationTracker.recordChunkTiming(pass.requestId, content.length);
+    }
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.THINKING,
+      content,
+      outputCharacters: state.overallOutputCharacters,
+    });
+    this.maybeEmitProgress();
+    return { action: "continue" };
+  }
+
+  private _emitWebhookToolCallStarted(
+    toolName: string,
+    toolCallId: string,
+    toolArgs: Record<string, unknown>,
+  ): void {
+    WebhookEventBus.emit("request.tool_call.started", {
+      requestId: this.context.requestId || null,
+      toolName,
+      toolEmoji: ToolOrchestratorService.getToolEmoji(toolName),
+      toolCallId,
+      toolArgs,
+      agent: this.context.agent || null,
+      conversationId: this.context.conversationId || null,
+      agentConversationId: this.context.agentConversationId || null,
+      project: this.context.project,
+      username: this.context.username,
+      provider: this.context.providerName,
+      model: this.context.resolvedModel,
+      iteration: this.state.iterations,
+    });
+  }
+
+  private _updateCompletedNativeToolCall(
+    streamChunk: StreamChunk,
+    toolName: string,
+    toolCallId: string,
+  ): void {
+    const existing = this.state.streamedToolCalls.find((toolCall) =>
+      streamChunk.id ? toolCall.id === streamChunk.id : toolCall.name === streamChunk.name,
+    );
+    if (existing) {
+      existing.result = streamChunk.result;
+      existing.status = streamChunk.status;
+      if (streamChunk.args && Object.keys(streamChunk.args).length > 0) {
+        existing.args = streamChunk.args;
+      }
+    }
+    WebhookEventBus.emit("request.tool_call.completed", {
+      requestId: this.context.requestId || null,
+      toolName,
+      toolEmoji: ToolOrchestratorService.getToolEmoji(toolName),
+      toolCallId,
+      toolResult: streamChunk.result || null,
+      durationMs: null,
+      status: streamChunk.status,
+      agent: this.context.agent || null,
+      conversationId: this.context.conversationId || null,
+      agentConversationId: this.context.agentConversationId || null,
+      project: this.context.project,
+      username: this.context.username,
+      provider: this.context.providerName,
+      model: this.context.resolvedModel,
+    });
+  }
+
+  private _handleNativeToolCallChunk(streamChunk: StreamChunk): ChunkAction {
+    const state = this.state;
+    const { emit } = this.context;
+    const toolName = streamChunk.name || "";
+    const toolCallId = streamChunk.id || `ntc-${state.streamedToolCalls.length}`;
+    const toolArgs = streamChunk.args || {};
+
+    if (streamChunk.status === "calling") {
+      state.streamedToolCalls.push({
+        id: toolCallId,
+        name: toolName,
+        args: toolArgs,
+      });
+      this._trackToolDisplaySegment(toolCallId);
+      this._emitWebhookToolCallStarted(toolName, toolCallId, toolArgs);
+    } else if (streamChunk.status === "done" || streamChunk.status === "error") {
+      this._updateCompletedNativeToolCall(streamChunk, toolName, toolCallId);
+    }
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
+      id: streamChunk.id || null,
+      name: streamChunk.name,
+      args: toolArgs,
+      result: streamChunk.result || undefined,
+      status: streamChunk.status || "calling",
+    });
+    return { action: "continue" };
+  }
+
+  private _checkAndAutoloadToolPermission(
+    toolName: string,
+    allowedToolNames: Set<string>,
+  ): boolean {
+    if (allowedToolNames.has(toolName)) return false;
+    if (this.tools.finalTools.some((t) => t.name === toolName)) {
+      logger.info(`[AgenticLoop] Auto-loading registered tool "${toolName}" called directly by LLM`);
+      this.state.loadedTools.add(toolName);
+      allowedToolNames.add(toolName);
+      return false;
+    }
+    logger.warn(
+      `[AgenticLoop] Unauthorized tool call "${toolName}" — not in schema: [${[...allowedToolNames].join(", ")}]`,
+    );
+    return true;
+  }
+
+  private _buildToolCallObjectFromChunk(
+    streamChunk: StreamChunk,
+    standardToolCallId: string,
+    toolName: string,
+    isUnauthorized: boolean,
+  ): ToolCall {
+    const rawArgs = typeof streamChunk.rawArgs === "string" ? streamChunk.rawArgs : undefined;
+    return {
+      id: standardToolCallId,
+      responsesItemId: streamChunk.responsesItemId || undefined,
+      name: toolName,
+      args: streamChunk.args || {},
+      thoughtSignature: streamChunk.thoughtSignature || undefined,
+      reasoningItem: streamChunk.reasoningItem || undefined,
+      ...(streamChunk.argsParseError === true && {
+        _argsParseError: true,
+        _rawArgs: rawArgs,
+      }),
+      isUnauthorized,
+    };
+  }
+
+  private _handleToolCallStreamChunk(
+    streamChunk: StreamChunk,
     pass: PassState,
     allowedToolNames: Set<string>,
-  ): ChunkAction | Promise<ChunkAction> {
-    const { emit, signal } = this.context;
+  ): ChunkAction {
+    if (streamChunk.name) {
+      const resolvedName = this._resolveToolName(streamChunk.name);
+      if (resolvedName && resolvedName !== streamChunk.name) {
+        logger.info(`[AgenticLoop] Resolved raw tool call "${streamChunk.name}" to canonical "${resolvedName}"`);
+        streamChunk.name = resolvedName;
+      }
+    }
+    this._recordFirstToken(pass);
+    this._recordTiming(pass);
+    const toolArgs = streamChunk.args || {};
+    if (pass.requestId) {
+      ConversationGenerationTracker.recordChunkTiming(
+        pass.requestId,
+        JSON.stringify(toolArgs).length,
+      );
+    }
+    this.maybeEmitProgress();
+
+    if (streamChunk.native) {
+      return this._handleNativeToolCallChunk(streamChunk);
+    }
+
+    const toolName = streamChunk.name || "";
+    const isUnauthorized = this._checkAndAutoloadToolPermission(toolName, allowedToolNames);
+    const standardToolCallId = streamChunk.id || `toolCall-${this.state.streamedToolCalls.length}`;
+    const toolCall = this._buildToolCallObjectFromChunk(
+      streamChunk,
+      standardToolCallId,
+      toolName,
+      isUnauthorized,
+    );
+    pass.pendingToolCalls.push(toolCall);
+    this.state.streamedToolCalls.push({ ...toolCall });
+    this._trackToolDisplaySegment(standardToolCallId);
+    this.context.emit({
+      type: SERVER_SENT_EVENT_TYPES.TOOL_EXECUTION,
+      tool: { name: toolName, args: toolArgs, id: standardToolCallId },
+      status: "calling",
+    });
+    this._emitWebhookToolCallStarted(toolName, standardToolCallId, toolArgs);
+    return { action: "toolCall", toolCall };
+  }
+
+  private _handlePassthroughStreamChunk(streamChunk: StreamChunk): ChunkAction | null {
+    const { emit } = this.context;
     const state = this.state;
-    // Cast to a loose typed object — we branch on `type` below
-    const streamChunk = chunk as StreamChunk;
-
-    // Abort check
-    if (signal?.aborted) return { action: "break" };
-
-    // ── Usage event ──────────────────────────────────────
-    if (streamChunk?.type === "usage") {
-      const usageChunk = streamChunk.usage as TokenUsage | undefined;
-      pass.usageReported = usageChunk !== undefined && Object.values(usageChunk).some(value => typeof value === "number");
-      mergeUsage(state.overallUsage, usageChunk);
-      mergeUsage(pass.usage, usageChunk);
-      // Calibrate the budget tracker with the real reported input
-      // (ported from prism-service): the next clamp scales its chars/4
-      // estimate by real ÷ estimated instead of trusting the heuristic.
-      if (usageChunk) {
-        const realInput = getTotalInputTokens(usageChunk);
-        if (realInput > 0) {
-          this.providerInputBaseline = {
-            inputTokens: realInput,
-            messageTokens: this.lastEstimatedMessageTokens,
-          };
-          this.budgetTracker?.recordRealUsage(
-            usageChunk,
-            this.lastEstimatedMessageTokens,
-          );
-        }
-      }
-      const rawUsage = streamChunk.usage as Record<string, number> | undefined;
-      if (pass.requestId) {
-        const reportedInput =
-          usageChunk?.inputTokens || rawUsage?.promptTokens || 0;
-        const reportedOutput = usageChunk?.outputTokens || 0;
-        const trackerUpdate: Record<string, number> = {};
-        if (reportedInput > 0) trackerUpdate.inputTokens = reportedInput;
-        if (reportedOutput > 0) trackerUpdate.outputTokens = reportedOutput;
-        if (usageChunk?.tokensPerSec != null && usageChunk.tokensPerSec > 0) {
-          trackerUpdate.providerTokPerSec = usageChunk.tokensPerSec;
-        }
-        if (Object.keys(trackerUpdate).length > 0) {
-          ConversationGenerationTracker.update(pass.requestId, trackerUpdate);
-        }
-      }
-      return { action: "continue" };
-    }
-
-    // ── Rate limits ──────────────────────────────────────
-    if (streamChunk?.type === "rateLimits") {
-      state.lastRateLimits = streamChunk.rateLimits || null;
-      return { action: "continue" };
-    }
-
-    // ── Stop reason (truncation detection) ───────────────
-    if (streamChunk?.type === "stopReason") {
-      pass.stopReason = (streamChunk.stopReason as string) || undefined;
-      return { action: "continue" };
-    }
-
-    // ── Thinking ─────────────────────────────────────────
-    if (streamChunk?.type === "thinking") {
-      this._recordFirstToken(pass);
-      this._recordTiming(pass);
-      state.streamedThinking += streamChunk.content || "";
-      pass.streamedThinking += streamChunk.content || "";
-      if (state.displayThinkingFragments.length === 0 || state.lastDisplaySegType !== "thinking") {
-        logger.debug(
-          `[Harness:Thinking] NEW thinking segment on iteration ${state.iterations}, ` +
-          `fragments=${state.displayThinkingFragments.length}, lastSegType=${state.lastDisplaySegType}, ` +
-          `contentLen=${(streamChunk.content || "").length}ch`,
-        );
-      }
-      // Display segment tracking
-      if (state.lastDisplaySegType !== "thinking") {
-        state.displaySegments.push({
-          type: SERVER_SENT_EVENT_TYPES.THINKING,
-          fragmentIndex: state.displayThinkingFragments.length,
-        });
-        state.displayThinkingFragments.push("");
-        state.lastDisplaySegType = "thinking";
-      }
-      state.displayThinkingFragments[
-        state.displayThinkingFragments.length - 1
-      ] += streamChunk.content || "";
-      state.overallOutputCharacters += (streamChunk.content || "").length;
-      if (pass.requestId) {
-        ConversationGenerationTracker.recordChunkTiming(
-          pass.requestId,
-          (streamChunk.content || "").length,
-        );
-      }
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.THINKING,
-        content: streamChunk.content || "",
-        outputCharacters: state.overallOutputCharacters,
-      });
-      this.maybeEmitProgress();
-      return { action: "continue" };
-    }
-
-    // ── Thinking signature (Anthropic) ───────────────────
-    if (streamChunk?.type === "thinking_signature") {
-      pass.thinkingSignature = streamChunk.signature || "";
-      return { action: "continue" };
-    }
-
-    // ── Tool call start (early disclosure) ─────────────────
-    if (streamChunk?.type === "toolCallStart") {
-      this._recordFirstToken(pass);
-      this._recordTiming(pass);
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.TOOL_EXECUTION,
-        tool: {
-          name: streamChunk.name || "",
-          args: {},
-          id: streamChunk.id || "",
-        },
-        status: "streaming",
-      });
-      this.maybeEmitProgress();
-      return { action: "continue" };
-    }
-
-    // ── Tool call argument delta ─────────────────────────
-    if (streamChunk?.type === "toolCallDelta") {
-      this._recordFirstToken(pass);
-      this._recordTiming(pass);
-      state.overallOutputCharacters += streamChunk.characters as number;
-      if (pass.requestId) {
-        ConversationGenerationTracker.recordChunkTiming(
-          pass.requestId,
-          streamChunk.characters as number,
-        );
-      }
-      this.maybeEmitProgress();
-      return { action: "continue" };
-    }
-
-    // ── Tool call ────────────────────────────────────────
-    if (streamChunk?.type === "toolCall") {
-      if (streamChunk.name) {
-        const resolvedName = this._resolveToolName(streamChunk.name);
-        if (resolvedName && resolvedName !== streamChunk.name) {
-          logger.info(
-            `[AgenticLoop] Resolved raw tool call "${streamChunk.name}" to canonical "${resolvedName}"`,
-          );
-          streamChunk.name = resolvedName;
-        }
-      }
-      this._recordFirstToken(pass);
-      this._recordTiming(pass);
-      if (pass.requestId) {
-        ConversationGenerationTracker.recordChunkTiming(
-          pass.requestId,
-          JSON.stringify(streamChunk.args || {}).length,
-        );
-      }
-      this.maybeEmitProgress();
-
-      // Native MCP tool calls: pass through directly
-      if (streamChunk.native) {
-        const toolName = streamChunk.name || "";
-        const toolCallId =
-          streamChunk.id || `ntc-${state.streamedToolCalls.length}`;
-
-        if (streamChunk.status === "calling") {
-          state.streamedToolCalls.push({
-            id: toolCallId,
-            name: toolName,
-            args: streamChunk.args || {},
-          });
-          this._trackToolDisplaySegment(toolCallId);
-
-          WebhookEventBus.emit("request.tool_call.started", {
-            requestId: this.context.requestId || null,
-            toolName,
-            toolEmoji: ToolOrchestratorService.getToolEmoji(toolName),
-            toolCallId,
-            toolArgs: streamChunk.args || {},
-            agent: this.context.agent || null,
-            conversationId: this.context.conversationId || null,
-            agentConversationId: this.context.agentConversationId || null,
-            project: this.context.project,
-            username: this.context.username,
-            provider: this.context.providerName,
-            model: this.context.resolvedModel,
-            iteration: this.state.iterations,
-          });
-        } else if (
-          streamChunk.status === "done" ||
-          streamChunk.status === "error"
-        ) {
-          const existing = state.streamedToolCalls.find(
-            (toolCall) =>
-              (streamChunk.id && toolCall.id === streamChunk.id) ||
-              (!streamChunk.id && toolCall.name === streamChunk.name),
-          );
-          if (existing) {
-            existing.result = streamChunk.result;
-            existing.status = streamChunk.status;
-            if (streamChunk.args && Object.keys(streamChunk.args).length > 0)
-              existing.args = streamChunk.args;
-          }
-
-          WebhookEventBus.emit("request.tool_call.completed", {
-            requestId: this.context.requestId || null,
-            toolName,
-            toolEmoji: ToolOrchestratorService.getToolEmoji(toolName),
-            toolCallId,
-            toolResult: streamChunk.result || null,
-            durationMs: null,
-            status: streamChunk.status,
-            agent: this.context.agent || null,
-            conversationId: this.context.conversationId || null,
-            agentConversationId: this.context.agentConversationId || null,
-            project: this.context.project,
-            username: this.context.username,
-            provider: this.context.providerName,
-            model: this.context.resolvedModel,
-          });
-        }
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.TOOL_CALL,
-          id: streamChunk.id || null,
-          name: streamChunk.name,
-          args: streamChunk.args || {},
-          result: streamChunk.result || undefined,
-          status: streamChunk.status || "calling",
-        });
-        return { action: "continue" };
-      }
-
-      // Schema enforcement
-      const toolName = streamChunk.name || "";
-      let isUnauthorized = false;
-      if (!allowedToolNames.has(toolName)) {
-        if (this.tools.finalTools.some((t) => t.name === toolName)) {
-          logger.info(
-            `[AgenticLoop] Auto-loading registered tool "${toolName}" called directly by LLM`,
-          );
-          this.state.loadedTools.add(toolName);
-          allowedToolNames.add(toolName);
-        } else {
-          logger.warn(
-            `[AgenticLoop] Unauthorized tool call "${toolName}" — not in schema: [${[...allowedToolNames].join(", ")}]`,
-          );
-          isUnauthorized = true;
-        }
-      }
-
-      const standardToolCallId =
-        streamChunk.id || `toolCall-${state.streamedToolCalls.length}`;
-      const toolCall: ToolCall = {
-        id: standardToolCallId,
-        responsesItemId: streamChunk.responsesItemId || undefined,
-        name: toolName,
-        args: streamChunk.args || {},
-        thoughtSignature: streamChunk.thoughtSignature || undefined,
-        reasoningItem: streamChunk.reasoningItem || undefined,
-        ...(streamChunk.argsParseError === true && {
-          _argsParseError: true,
-          _rawArgs: typeof streamChunk.rawArgs === "string" ? streamChunk.rawArgs : undefined,
-        }),
-        isUnauthorized,
-      };
-      pass.pendingToolCalls.push(toolCall);
-      state.streamedToolCalls.push({ ...toolCall });
-      this._trackToolDisplaySegment(standardToolCallId);
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.TOOL_EXECUTION,
-        tool: {
-          name: toolName,
-          args: streamChunk.args || {},
-          id: standardToolCallId,
-        },
-        status: "calling",
-      });
-      WebhookEventBus.emit("request.tool_call.started", {
-        requestId: this.context.requestId || null,
-        toolName,
-        toolEmoji: ToolOrchestratorService.getToolEmoji(toolName),
-        toolCallId: standardToolCallId,
-        toolArgs: streamChunk.args || {},
-        agent: this.context.agent || null,
-        conversationId: this.context.conversationId || null,
-        agentConversationId: this.context.agentConversationId || null,
-        project: this.context.project,
-        username: this.context.username,
-        provider: this.context.providerName,
-        model: this.context.resolvedModel,
-        iteration: this.state.iterations,
-      });
-      return { action: "toolCall", toolCall: toolCall };
-    }
-
-    // ── Image ────────────────────────────────────────────
-    if (streamChunk?.type === "image") {
-      return this._handleImageChunk(streamChunk, pass);
-    }
-
-    // ── Pass-through events ──────────────────────────────
     if (streamChunk?.type === "executableCode") {
-      emit({
-        type: "executableCode",
-        code: streamChunk.code,
-        language: streamChunk.language,
-      });
+      emit({ type: "executableCode", code: streamChunk.code, language: streamChunk.language });
       return { action: "continue" };
     }
     if (streamChunk?.type === "codeExecutionResult") {
-      emit({
-        type: "codeExecutionResult",
-        output: streamChunk.output,
-        outcome: streamChunk.outcome,
-      });
+      emit({ type: "codeExecutionResult", output: streamChunk.output, outcome: streamChunk.outcome });
       return { action: "continue" };
     }
     if (streamChunk?.type === "webSearchResult") {
@@ -1196,11 +1095,7 @@ export default class BaseAgenticHarness {
       return { action: "continue" };
     }
     if (streamChunk?.type === "audio") {
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.AUDIO,
-        data: streamChunk.data,
-        mimeType: streamChunk.mimeType,
-      });
+      emit({ type: SERVER_SENT_EVENT_TYPES.AUDIO, data: streamChunk.data, mimeType: streamChunk.mimeType });
       if (streamChunk.data) state.streamedAudioChunks.push(streamChunk.data);
       if (streamChunk.mimeType) {
         const rateMatch = streamChunk.mimeType.match(/rate=(\d+)/);
@@ -1213,23 +1108,23 @@ export default class BaseAgenticHarness {
       emit({ type: SERVER_SENT_EVENT_TYPES.STATUS, ...statusRest });
       return { action: "continue" };
     }
+    return null;
+  }
 
-    // ── Text chunk (default) ─────────────────────────────
+  private _handleTextStreamChunk(chunk: unknown, pass: PassState): ChunkAction {
+    const state = this.state;
+    const { emit } = this.context;
     this._recordFirstToken(pass);
     this._recordTiming(pass);
     const rawChunkString = typeof chunk === "string" ? chunk : "";
     state.overallOutputCharacters += rawChunkString.length;
     pass.outputCharacters += rawChunkString.length;
     pass.streamedText += rawChunkString;
-    // Strip tool call XML markup leaked by some local models
     const cleanedPassText = stripToolCallMarkup(pass.streamedText);
-    const chunkString = cleanedPassText.slice(
-      (pass.finalStreamedText || "").length,
-    );
+    const chunkString = cleanedPassText.slice((pass.finalStreamedText || "").length);
     pass.finalStreamedText = cleanedPassText;
     state.finalStreamedText = cleanedPassText;
     if (state.planModeActive) state.planModeText += chunkString;
-    // Display segment tracking
     if (state.lastDisplaySegType !== "text") {
       state.displaySegments.push({
         type: SERVER_SENT_EVENT_TYPES.TEXT,
@@ -1238,25 +1133,185 @@ export default class BaseAgenticHarness {
       state.displayTextFragments.push("");
       state.lastDisplaySegType = "text";
     }
-    state.displayTextFragments[state.displayTextFragments.length - 1] +=
-      chunkString;
+    state.displayTextFragments[state.displayTextFragments.length - 1] += chunkString;
     if (pass.requestId) {
-      ConversationGenerationTracker.recordChunkTiming(
-        pass.requestId,
-        rawChunkString.length,
-      );
+      ConversationGenerationTracker.recordChunkTiming(pass.requestId, rawChunkString.length);
     }
-    if (chunkString)
+    if (chunkString) {
       emit({
         type: SERVER_SENT_EVENT_TYPES.CHUNK,
         content: chunkString,
         outputCharacters: state.overallOutputCharacters,
       });
+    }
     this.maybeEmitProgress();
     return { action: "continue" };
   }
 
-  // ── Iteration logging ─────────────────────────────────────
+  processStreamChunk(
+    chunk: unknown,
+    pass: PassState,
+    allowedToolNames: Set<string>,
+  ): ChunkAction | Promise<ChunkAction> {
+    const { emit, signal } = this.context;
+    const state = this.state;
+    const streamChunk = chunk as StreamChunk;
+
+    if (signal?.aborted) return { action: "break" };
+    if (streamChunk?.type === "usage") return this._handleUsageStreamChunk(streamChunk, pass);
+    if (streamChunk?.type === "rateLimits") {
+      state.lastRateLimits = streamChunk.rateLimits || null;
+      return { action: "continue" };
+    }
+    if (streamChunk?.type === "stopReason") {
+      pass.stopReason = (streamChunk.stopReason as string) || undefined;
+      return { action: "continue" };
+    }
+    if (streamChunk?.type === "thinking") return this._handleThinkingStreamChunk(streamChunk, pass);
+    if (streamChunk?.type === "thinking_signature") {
+      pass.thinkingSignature = streamChunk.signature || "";
+      return { action: "continue" };
+    }
+    if (streamChunk?.type === "toolCallStart") {
+      this._recordFirstToken(pass);
+      this._recordTiming(pass);
+      emit({
+        type: SERVER_SENT_EVENT_TYPES.TOOL_EXECUTION,
+        tool: { name: streamChunk.name || "", args: {}, id: streamChunk.id || "" },
+        status: "streaming",
+      });
+      this.maybeEmitProgress();
+      return { action: "continue" };
+    }
+    if (streamChunk?.type === "toolCallDelta") {
+      this._recordFirstToken(pass);
+      this._recordTiming(pass);
+      state.overallOutputCharacters += streamChunk.characters as number;
+      if (pass.requestId) {
+        ConversationGenerationTracker.recordChunkTiming(pass.requestId, streamChunk.characters as number);
+      }
+      this.maybeEmitProgress();
+      return { action: "continue" };
+    }
+    if (streamChunk?.type === "toolCall") {
+      return this._handleToolCallStreamChunk(streamChunk, pass, allowedToolNames);
+    }
+    if (streamChunk?.type === "image") return this._handleImageChunk(streamChunk, pass);
+
+    const passthrough = this._handlePassthroughStreamChunk(streamChunk);
+    if (passthrough) return passthrough;
+
+    return this._handleTextStreamChunk(chunk, pass);
+  }
+
+  private _extractPassSamplingParams(opts: Record<string, unknown> | undefined) {
+    return {
+      temperature: (opts?.temperature as number) ?? null,
+      maxTokens: (opts?.maxTokens as number) ?? null,
+      topP: (opts?.topP as number) ?? null,
+      topK: (opts?.topK as number) ?? null,
+      frequencyPenalty: (opts?.frequencyPenalty as number) ?? null,
+      presencePenalty: (opts?.presencePenalty as number) ?? null,
+      stopSequences: (opts?.stopSequences as string[]) ?? null,
+    };
+  }
+
+  private _extractPassTokenUsageMetrics(usage: PassState["usage"]) {
+    return {
+      inputTokens: Number(usage.inputTokens) || 0,
+      outputTokens: Number(usage.outputTokens) || 0,
+      cacheReadInputTokens: Number(usage.cacheReadInputTokens) || 0,
+      cacheCreationInputTokens: Number(usage.cacheCreationInputTokens) || 0,
+      reasoningOutputTokens: Number(usage.reasoningOutputTokens) || 0,
+    };
+  }
+
+  private _buildIterationFullLogPayload(
+    pass: PassState,
+    currentMessages: ConversationMessage[],
+    passEstimatedCost: number | null,
+    passTokensPerSec: number | null,
+    passGenerationSec: number | null,
+    passTotalSec: number,
+  ): import("../RequestLogger.ts").LogParams {
+    const {
+      resolvedModel,
+      providerName,
+      project,
+      username,
+      agent,
+      conversationId,
+      agentConversationId,
+      parentAgentConversationId,
+      traceId,
+    } = this.context;
+    const state = this.state;
+    const uniqueToolNames = [...new Set(pass.pendingToolCalls.map((toolCall) => toolCall.name))];
+    const opts = pass.options as Record<string, unknown> | undefined;
+
+    return {
+      requestId: `${this.context.requestId}-${state.iterations}`,
+      endpoint: "/agent",
+      operation: "agent:iteration",
+      project,
+      username,
+      clientIp: this.context.clientIp,
+      agent: agent || null,
+      provider: providerName,
+      model: resolvedModel,
+      conversationId,
+      agentConversationId,
+      parentAgentConversationId: parentAgentConversationId || null,
+      traceId: traceId || null,
+      toolsUsed: pass.pendingToolCalls.length > 0,
+      toolDisplayNames: uniqueToolNames,
+      toolApiNames: uniqueToolNames,
+      success: true,
+      ...this._extractPassTokenUsageMetrics(pass.usage),
+      estimatedCost: passEstimatedCost,
+      tokensPerSec: passTokensPerSec,
+      ...this._extractPassSamplingParams(opts),
+      messageCount: currentMessages?.length ?? 0,
+      inputCharacters: this._sumInputCharacters(currentMessages),
+      outputCharacters: pass.outputCharacters,
+      timeToGeneration: pass.firstTokenTime ? roundMilliseconds((pass.firstTokenTime - pass.start) / 1000) : null,
+      generationTime: passGenerationSec !== null ? roundMilliseconds(passGenerationSec) : null,
+      totalTime: roundMilliseconds(passTotalSec),
+      requestPayload: {
+        messages: (currentMessages || []).map((message) => ({
+          role: (message as Record<string, unknown>).role,
+          content: (message as Record<string, unknown>).content,
+        })),
+        agenticIteration: state.iterations,
+      },
+      responsePayload: this._buildIterationResponsePayload(pass),
+    };
+  }
+
+  private _sumInputCharacters(currentMessages: ConversationMessage[] | undefined): number {
+    if (!currentMessages) return 0;
+    return currentMessages.reduce(
+      (sum, message) => sum + (typeof message.content === "string" ? message.content.length : 0),
+      0,
+    );
+  }
+
+  private _buildIterationResponsePayload(pass: PassState) {
+    return {
+      text: pass.streamedText || null,
+      thinking: pass.streamedThinking || null,
+      ...(pass.streamedImages.length > 0 ? { images: pass.streamedImages } : {}),
+      toolCalls:
+        pass.pendingToolCalls.length > 0
+          ? pass.pendingToolCalls.map((toolCall) => ({
+              name: toolCall.name,
+              id: toolCall.id,
+              args: toolCall.args,
+            }))
+          : null,
+      usage: pass.usage,
+    };
+  }
 
   /** Log a single iteration to the request log. */
   logIteration(pass: PassState, currentMessages: ConversationMessage[]): void {
@@ -1276,17 +1331,10 @@ export default class BaseAgenticHarness {
 
     const passTotalSec = (performance.now() - pass.start) / 1000;
     const passGenerationSec =
-      pass.firstTokenTime && pass.generationEnd
-        ? (pass.generationEnd - pass.firstTokenTime) / 1000
-        : null;
-    const passTokensPerSec = calculateTokensPerSec(
-      pass.usage.outputTokens,
-      passGenerationSec,
-    );
+      pass.firstTokenTime && pass.generationEnd ? (pass.generationEnd - pass.firstTokenTime) / 1000 : null;
+    const passTokensPerSec = calculateTokensPerSec(pass.usage.outputTokens, passGenerationSec);
     const passEstimatedCost = calculateTextCost(pass.usage, pricing);
 
-    // Two-phase completion: if we pre-inserted a pending skeleton on
-    // iteration start, update it in-place instead of inserting a new doc.
     const legacyPayload = {
       requestId: `${this.context.requestId}-${state.iterations}`,
       endpoint: "/agent",
@@ -1305,9 +1353,7 @@ export default class BaseAgenticHarness {
       usage: pass.usage,
       estimatedCost: passEstimatedCost,
       tokensPerSec: passTokensPerSec,
-      timeToGenerationSec: pass.firstTokenTime
-        ? (pass.firstTokenTime - pass.start) / 1000
-        : null,
+      timeToGenerationSec: pass.firstTokenTime ? (pass.firstTokenTime - pass.start) / 1000 : null,
       generationSec: passGenerationSec,
       totalSec: passTotalSec,
       options: pass.options,
@@ -1320,101 +1366,35 @@ export default class BaseAgenticHarness {
       agenticIteration: state.iterations,
     };
 
-    const fullPayload: import("../RequestLogger.ts").LogParams = {
-      requestId: `${this.context.requestId}-${state.iterations}`,
-      endpoint: "/agent",
-      operation: "agent:iteration",
-      project,
-      username,
-      clientIp: this.context.clientIp,
-      agent: agent || null,
-      provider: providerName,
-      model: resolvedModel,
-      conversationId,
-      agentConversationId,
-      parentAgentConversationId: parentAgentConversationId || null,
-      traceId: traceId || null,
-      toolsUsed: pass.pendingToolCalls.length > 0,
-      toolDisplayNames: pass.pendingToolCalls.length > 0
-        ? [...new Set(pass.pendingToolCalls.map((toolCall) => toolCall.name))]
-        : [],
-      toolApiNames: pass.pendingToolCalls.length > 0
-        ? [...new Set(pass.pendingToolCalls.map((toolCall) => toolCall.name))]
-        : [],
-      success: true,
-      inputTokens: Number(pass.usage.inputTokens) || 0,
-      outputTokens: Number(pass.usage.outputTokens) || 0,
-      cacheReadInputTokens: Number(pass.usage.cacheReadInputTokens) || 0,
-      cacheCreationInputTokens: Number(pass.usage.cacheCreationInputTokens) || 0,
-      reasoningOutputTokens: Number(pass.usage.reasoningOutputTokens) || 0,
-      estimatedCost: passEstimatedCost,
-      tokensPerSec: passTokensPerSec,
-      temperature: (pass.options?.temperature as number) ?? null,
-      maxTokens: (pass.options?.maxTokens as number) ?? null,
-      topP: (pass.options?.topP as number) ?? null,
-      topK: (pass.options?.topK as number) ?? null,
-      frequencyPenalty: (pass.options?.frequencyPenalty as number) ?? null,
-      presencePenalty: (pass.options?.presencePenalty as number) ?? null,
-      stopSequences: (pass.options?.stopSequences as string[]) ?? null,
-      messageCount: currentMessages?.length ?? 0,
-      inputCharacters: currentMessages?.reduce(
-        (sum, message) =>
-          sum + (typeof message.content === "string" ? message.content.length : 0),
-        0,
-      ) ?? 0,
-      outputCharacters: pass.outputCharacters,
-      timeToGeneration: pass.firstTokenTime
-        ? roundMilliseconds((pass.firstTokenTime - pass.start) / 1000)
-        : null,
-      generationTime: passGenerationSec !== null ? roundMilliseconds(passGenerationSec) : null,
-      totalTime: roundMilliseconds(passTotalSec),
-      requestPayload: {
-        messages: currentMessages?.map((message) => ({
-          role: (message as Record<string, unknown>).role,
-          content: (message as Record<string, unknown>).content,
-        })) ?? [],
-        agenticIteration: state.iterations,
-      },
-      responsePayload: {
-        text: pass.streamedText || null,
-        thinking: pass.streamedThinking || null,
-        ...(pass.streamedImages.length > 0 ? { images: pass.streamedImages } : {}),
-        toolCalls: pass.pendingToolCalls.length > 0
-          ? pass.pendingToolCalls.map((toolCall) => ({
-              name: toolCall.name,
-              id: toolCall.id,
-              args: toolCall.args,
-            }))
-          : null,
-        usage: pass.usage,
-      },
-    };
+    const fullPayload = this._buildIterationFullLogPayload(
+      pass,
+      currentMessages,
+      passEstimatedCost,
+      passTokensPerSec,
+      passGenerationSec,
+      passTotalSec,
+    );
 
-    pass.pendingRequestDocumentIdPromise.then((pendingRequestDocumentId) => {
-      if (pendingRequestDocumentId) {
-        RequestLogger.completePending(
-          pendingRequestDocumentId,
-          fullPayload,
-        ).catch((error: unknown) =>
+    pass.pendingRequestDocumentIdPromise
+      .then((pendingRequestDocumentId) => {
+        if (pendingRequestDocumentId) {
+          RequestLogger.completePending(pendingRequestDocumentId, fullPayload).catch((error: unknown) =>
+            logger.error(`[AgenticLoopService] Failed to complete pending request: ${errorMessage(error)}`),
+          );
+        } else {
+          RequestLogger.logChatGeneration(legacyPayload).catch((error: unknown) =>
+            logger.error(`[AgenticLoopService] Failed to log intermediate request: ${errorMessage(error)}`),
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        logger.error(`[BaseAgenticHarness] Error resolving pendingRequestDocumentIdPromise: ${errorMessage(error)}`);
+        RequestLogger.logChatGeneration(legacyPayload).catch((loggingError: unknown) =>
           logger.error(
-            `[AgenticLoopService] Failed to complete pending request: ${errorMessage(error)}`,
+            `[AgenticLoopService] Failed to log intermediate request on fallback: ${errorMessage(loggingError)}`,
           ),
         );
-      } else {
-        RequestLogger.logChatGeneration(legacyPayload).catch((error: unknown) =>
-          logger.error(
-            `[AgenticLoopService] Failed to log intermediate request: ${errorMessage(error)}`,
-          ),
-        );
-      }
-    }).catch((error: unknown) => {
-      logger.error(`[BaseAgenticHarness] Error resolving pendingRequestDocumentIdPromise: ${errorMessage(error)}`);
-      RequestLogger.logChatGeneration(legacyPayload).catch((loggingError: unknown) =>
-        logger.error(
-          `[AgenticLoopService] Failed to log intermediate request on fallback: ${errorMessage(loggingError)}`,
-        ),
-      );
-    });
+      });
   }
 
   // ── Per-iteration pass state factory ──────────────────────

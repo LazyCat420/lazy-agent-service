@@ -190,7 +190,7 @@ export default class OrchestratorService {
     }
     return this.agenticLoopServicePromise;
   }
-  private static getRootConversationId(conversationId: string): string {
+  static getRootConversationId(conversationId: string): string {
     let currentId = conversationId;
     while (currentId) {
       const parentAgent = Array.from(activeSubAgents.values()).find(
@@ -240,7 +240,6 @@ export default class OrchestratorService {
       traceId,
       agentConversationId: parentAgentConversationId,
       conversationId: parentConversationId,
-      maxSubAgentIterations: clientMaxSubAgentIterations,
       minContextLength,
       workspaceRoot: orchestratorWorkspaceRoot,
       enabledTools,
@@ -250,203 +249,41 @@ export default class OrchestratorService {
       policies,
     } = orchestratorContext;
 
-    // ── Recursion depth tracking ──────────────────────────────
-    const currentRecursionDepth = orchestratorContext.recursionDepth ?? 0;
-    const maxRecursionDepth = Math.min(
-      MAXIMUM_RECURSIVE_SPAWNING_DEPTH,
-      orchestratorContext.maxRecursionDepth ?? DEFAULT_RECURSIVE_SPAWNING_DEPTH,
+    const limits = validateSubAgentSpawnLimits(orchestratorContext);
+    if (limits.error) {
+      return { error: limits.error };
+    }
+    const { currentRecursionDepth, resolvedMaxSubAgentIterations } = limits;
+
+    const { subAgentProvider, subAgentModel } = await resolveSubAgentInstanceAssignment(
+      assignedProvider,
+      assignedModel,
+      providerName,
+      resolvedModel,
+      model,
     );
-
-    // Depth 0 = sub-agent spawning disabled entirely
-    if (maxRecursionDepth === 0) {
-      return {
-        error: "Sub-agent spawning is disabled (recursion depth is set to 0).",
-      };
-    }
-
-    if (currentRecursionDepth >= maxRecursionDepth) {
-      return {
-        error: `Sub-agent spawning limit reached. Current depth ${currentRecursionDepth} exceeds or matches max depth ${maxRecursionDepth}.`,
-      };
-    }
-
-    // Resolve max sub-agent iterations: 0 = unlimited (Infinity), positive = clamped 1-100, default = constant
-    // Scope attenuation: reduce iterations at each recursion depth hop
-    const baseMaxIterations =
-      clientMaxSubAgentIterations === 0
-        ? Infinity
-        : clientMaxSubAgentIterations
-          ? Math.min(100, Math.max(1, clientMaxSubAgentIterations))
-          : MAX_SUB_AGENT_ITERATIONS;
-
-    const resolvedMaxSubAgentIterations =
-      currentRecursionDepth > 0 && baseMaxIterations !== Infinity
-        ? Math.max(5, Math.round(baseMaxIterations * (1 - RECURSION_SCOPE_ATTENUATION_FACTOR * currentRecursionDepth)))
-        : baseMaxIterations;
-
-    // Check concurrency limit (global)
-    const runningCount = Array.from(activeSubAgents.values()).filter(
-      (subAgent) => subAgent.status === "running",
-    ).length;
-    if (runningCount >= MAX_SUB_AGENTS) {
-      return {
-        error: `Maximum concurrent sub-agents (${MAX_SUB_AGENTS}) reached. Wait for a sub-agent to complete or stop one.`,
-      };
-    }
-
-    // Circuit breaker: cap total agents per conversation across all recursion depths
-    if (parentConversationId) {
-      const rootConversationId = OrchestratorService.getRootConversationId(parentConversationId);
-      const conversationAgentCount = Array.from(activeSubAgents.values()).filter(
-        (subAgent) => OrchestratorService.getRootConversationId(subAgent.parentConversationId || "") === rootConversationId,
-      ).length;
-      if (conversationAgentCount >= MAXIMUM_CONCURRENT_AGENTS_PER_CONVERSATION) {
-        logger.warn(
-          `[Orchestrator] Circuit breaker: conversation ${rootConversationId} has reached total agent ceiling of ${conversationAgentCount} (max ${MAXIMUM_CONCURRENT_AGENTS_PER_CONVERSATION}). Recursive spawning blocked.`,
-        );
-        return {
-          error: `Circuit breaker: maximum concurrent agents per conversation (${MAXIMUM_CONCURRENT_AGENTS_PER_CONVERSATION}) reached. This limit prevents exponential agent fan-out from recursive spawning.`,
-        };
-      }
-    }
-
-    // ── Pre-assigned instance (from createTeam batch assignment) ──
-    // When createTeam calls us, it has already resolved model availability
-    // and assigned instances serially with proper reservation counting.
-    // Skip the entire instance selection path to avoid double-counting.
-    let subAgentProvider = assignedProvider || providerName;
-    // For local providers, the LLM can't know valid GGUF identifiers —
-    // skip the LLM-provided `model` param to prevent hallucinated names.
-    const isLocal = localModelQueue.isLocal(providerName);
-    let subAgentModel =
-      assignedModel || (isLocal ? resolvedModel : model || resolvedModel);
-    const isPreAssigned = !!assignedProvider;
-
-    if (isPreAssigned) {
-      logger.info(
-        `[Orchestrator] spawnFromTool: pre-assigned to ${subAgentProvider} — model "${subAgentModel}" (skipping instance selection)`,
-      );
-    }
-    if (!isPreAssigned && localModelQueue.isLocal(providerName)) {
-      const providerType = getInstanceType(providerName) || providerName;
-      let siblingInstances = getInstancesByType(providerType);
-
-      // ── Model availability filter ─────────────────────────────
-      // Shared logic with /chat route: verify model availability per
-      // instance with quant-level fallback for heterogeneous GPU setups.
-      let instanceModelOverrides = new Map();
-
-      if (siblingInstances.length > 1) {
-        const { usable, modelOverrides } = await resolveModelForInstances(
-          subAgentModel,
-          siblingInstances,
-        );
-        instanceModelOverrides = modelOverrides;
-
-        if (usable.length > 0) {
-          siblingInstances = usable;
-        } else {
-          logger.warn(
-            `[Orchestrator] Model "${subAgentModel}" not available on any ${getInstanceType(providerName) || providerName} instance`,
-          );
-          siblingInstances = [];
-        }
-      }
-
-      // ── Instance selection: respect concurrency per instance ──
-      // concurrency is the max parallel inference requests an instance handles.
-      // The orchestrator's inference is IDLE while sub-agents run (it finished
-      // generating team_create tool calls), but we reserve 1 slot on its
-      // instance for the continuation turn after sub-agents complete.
-      //
-      // instanceReservations prevents race conditions when multiple team_create
-      // calls fire concurrently — the counter is incremented synchronously.
-      const assignedInstance = InstanceLoadBalancer.selectAndReserveInstance(
-        siblingInstances,
-        providerName,
-        instanceModelOverrides,
-        subAgentModel,
-        activeSubAgents,
-      );
-
-      if (assignedInstance) {
-        subAgentProvider = assignedInstance.provider;
-        subAgentModel = assignedInstance.model;
-        logger.info(
-          `[Orchestrator] Assigned sub-agent to ${assignedInstance.provider} (${assignedInstance.slotsAvailable} slots free, ${siblingInstances.length} instance${siblingInstances.length > 1 ? "s" : ""} pooled) — model "${assignedInstance.model}"`,
-        );
-      } else {
-        // Resolve the user-configured (or hardcoded) sub-agent fallback
-        const subAgentFallback = await getSubAgentFallback();
-        if (subAgentFallback) {
-          subAgentProvider = subAgentFallback.provider;
-          subAgentModel = subAgentFallback.model;
-          logger.info(
-            `[Orchestrator] All instances at capacity — sub-agent will use ${subAgentFallback.model}`,
-          );
-        } else {
-          logger.info(
-            `[Orchestrator] All instances at capacity and no sub-agent model configured — sub-agent will queue on local provider`,
-          );
-        }
-      }
-    }
 
     const conversationCounterKey = parentConversationId || parentAgentConversationId || "global";
     const currentConversationCount = (agentCountersByConversation.get(conversationCounterKey) || 0) + 1;
     agentCountersByConversation.set(conversationCounterKey, currentConversationCount);
     const agentId = `agent-${currentConversationCount.toString(36)}-${crypto.randomUUID().slice(0, 4)}`;
     const branchName = `orchestrator/${agentId}`;
-    const workspaceRoot = GitWorktreeHelper.getDefaultWorkspaceRoot(
-      orchestratorWorkspaceRoot ?? undefined,
-    );
+    const workspaceRoot = GitWorktreeHelper.getDefaultWorkspaceRoot(orchestratorWorkspaceRoot ?? undefined);
+    const repositoryPath = GitWorktreeHelper.resolveRepositoryPath(workspaceRoot, files || []);
 
-    // Derive the git repository path from sub-agent files.
-    // If files live under a git subdirectory (e.g. /workspace/projectA/),
-    // use that as the worktree source. Otherwise fall back to workspace root.
-    const repositoryPath = GitWorktreeHelper.resolveRepositoryPath(
-      workspaceRoot,
-      files || [],
-    );
-
-    // Attempt git worktree creation — best-effort
-    // Non-git workspaces gracefully degrade to shared directory mode
-    let worktreePath: string | null = null;
-    const worktreeResult = await GitWorktreeHelper.createWorktree(
-      repositoryPath,
-      branchName,
-    );
+    const worktreeResult = await GitWorktreeHelper.createWorktree(repositoryPath, branchName);
     if (worktreeResult.error) {
       logger.warn(
         `[Orchestrator] Worktree creation skipped for ${agentId}: ${worktreeResult.error}. Running in workspace root.`,
       );
-      worktreePath = workspaceRoot;
-    } else {
-      worktreePath = worktreeResult.worktreePath || workspaceRoot;
     }
-
+    const worktreePath = worktreeResult.error ? workspaceRoot : worktreeResult.worktreePath || workspaceRoot;
     const subAgentConversationId = crypto.randomUUID();
-
-    // Resolve sub-agent type and its tools
-    let subAgentAgentType = agent;
-    let subAgentEnabledTools = enabledTools || null;
-
-    if (memberAgentName) {
-      const persona = AgentPersonaRegistry.get(memberAgentName);
-      if (persona) {
-        subAgentAgentType = persona.id;
-        subAgentEnabledTools = persona.availableTools.includes("*")
-          ? null
-          : persona.availableTools;
-        logger.info(
-          `[Orchestrator] Spawning specified sub-agent type "${persona.id}" with availableTools: [${(subAgentEnabledTools || ["*"]).join(", ")}]`,
-        );
-      } else {
-        logger.warn(
-          `[Orchestrator] Requested agent type "${memberAgentName}" not found in registry. Spawning default "${agent}".`,
-        );
-      }
-    }
+    const { subAgentAgentType, subAgentEnabledTools } = resolveSubAgentPersonaTools(
+      memberAgentName,
+      agent,
+      enabledTools,
+    );
 
     const subAgentState: SubAgentState = {
       agentId,
@@ -456,7 +293,7 @@ export default class OrchestratorService {
       branchName: worktreeResult.error ? null : branchName,
       worktreePath,
       repositoryPath,
-      isolated: !worktreeResult.error, // true if running in a worktree
+      isolated: !worktreeResult.error,
       status: "running",
       output: "",
       toolCalls: [],
@@ -469,7 +306,6 @@ export default class OrchestratorService {
       abortController: createAbortController(),
       messages: [],
       files: files || [],
-      // Carry orchestrator context for continuation
       project,
       username,
       agent: subAgentAgentType,
@@ -492,45 +328,12 @@ export default class OrchestratorService {
     };
 
     activeSubAgents.set(agentId, subAgentState);
-
     logger.info(
       `[Orchestrator] Spawned sub-agent ${agentId}: "${description}" → ${subAgentProvider} (model="${subAgentModel}") in ${worktreePath}${subAgentState.isolated ? " (isolated worktree)" : " (shared workspace)"}`,
     );
 
-    // Mark the parent conversation as having sub-agents (persistent flag for the UI).
-    // Documents are keyed by conversationId — never use agentConversationId for document lookups.
-    if (parentConversationId) {
-      try {
-        const { MONGO_DB_NAME: databaseName } = await import("../../config.ts");
-        const { COLLECTIONS: collectionNames } =
-          await import("../constants.ts");
-        const MongoWrapper = (await import("../wrappers/MongoWrapper.ts"))
-          .default;
-        const parentCollection = MongoWrapper.getCollection(
-          databaseName,
-          collectionNames.AGENT_CONVERSATIONS,
-        );
+    await markParentConversationHasSubAgents(parentConversationId, project, username);
 
-        if (parentCollection) {
-          const hasSubAgentsResult = await parentCollection.updateOne(
-            { id: parentConversationId, project, username },
-            { $set: { hasSubAgents: true } },
-          );
-          if (hasSubAgentsResult.matchedCount === 0) {
-            logger.warn(
-              `[Orchestrator] hasSubAgents write matched 0 documents for conversation ${parentConversationId} (project=${project}, username=${username})`,
-            );
-          }
-        }
-      } catch (databaseError: unknown) {
-        logger.warn(
-          `[Orchestrator] Failed to set hasSubAgents on parent conversation ${parentConversationId}: ${getErrorMessage(databaseError)}`,
-        );
-      }
-    }
-
-    // Emit early so the frontend can show live status immediately
-    // (before the blocking loop starts and before a result is available)
     if (orchestratorContext.emit) {
       orchestratorContext.emit({
         type: "sub_agent_status",
@@ -543,48 +346,13 @@ export default class OrchestratorService {
         provider: subAgentProvider,
       });
     }
-    // Run the sub-agent loop — blocks until the sub-agent completes.
-    // When multiple team_create calls appear in the same model response,
-    // the agentic loop's Promise.all executes them concurrently.
+
     try {
-      await OrchestratorService._runSubAgentLoop(
-        subAgentState,
-        prompt,
-        orchestratorContext,
-        preserveWorktree,
-      );
+      await OrchestratorService._runSubAgentLoop(subAgentState, prompt, orchestratorContext, preserveWorktree);
     } catch (error: unknown) {
-      logger.error(
-        `[Orchestrator] Sub-agent ${agentId} loop error: ${getErrorMessage(error)}`,
-      );
-      subAgentState.status = "failed";
-      subAgentState.error = getErrorMessage(error);
-      subAgentState.durationMs = Date.now() - subAgentState.startedAt;
-
-      // Clean up worktree on failure to prevent orphaned branches
-      if (subAgentState.isolated && subAgentState.worktreePath) {
-        await GitWorktreeHelper.removeWorktree(
-          subAgentState.repositoryPath,
-          subAgentState.worktreePath,
-        ).catch((cleanupError: unknown) =>
-          logger.warn(
-            `[Orchestrator] Worktree cleanup failed for ${agentId}: ${getErrorMessage(cleanupError)}`,
-          ),
-        );
-      }
-
-      // Notify frontend immediately so the StatusBar stops showing "Generating..."
-      if (orchestratorContext.emit) {
-        orchestratorContext.emit({
-          type: SERVER_SENT_EVENT_TYPES.SUB_AGENT_STATUS,
-          subAgentId: agentId,
-          message: "failed",
-          error: getErrorMessage(error),
-        });
-      }
+      await handleSubAgentLoopFailure(subAgentState, error, orchestratorContext);
     }
 
-    // Notify UI that sub-agent state changed
     if (orchestratorContext.emit) {
       orchestratorContext.emit({
         type: SERVER_SENT_EVENT_TYPES.STATUS,
@@ -593,7 +361,7 @@ export default class OrchestratorService {
     }
 
     const subAgentResult = buildSubAgentResult(subAgentState);
-    subAgentState.messages = null; // Release heavy message data from RAM after copying to result
+    subAgentState.messages = null;
     logger.info(
       `[Orchestrator] Sub-agent ${agentId} result: status=${subAgentResult.status} toolUses=${subAgentResult.toolUses} durationMs=${subAgentResult.durationMs}`,
     );
@@ -1323,23 +1091,12 @@ export default class OrchestratorService {
     orchestratorContext: OrchestratorContext,
     preserveWorktree = false,
   ) {
-    const { default: AgenticLoopService } =
-      await OrchestratorService.getAgenticLoopService();
-
-    // Build the sub-agent's initial messages
-    const commitInstructions = subAgent.isolated
-      ? `- Commit your changes when done and report what you accomplished`
-      : `- Report what you accomplished when done`;
-
+    const { default: AgenticLoopService } = await OrchestratorService.getAgenticLoopService();
     const workspaceRoots = ToolOrchestratorService.getWorkspaceRoots();
-    const hasWorkspaceSetup =
-      Array.isArray(workspaceRoots) && workspaceRoots.length > 0;
-
+    const hasWorkspaceSetup = Array.isArray(workspaceRoots) && workspaceRoots.length > 0;
     const parentWorkspaceRoot =
-      orchestratorContext.workspaceRoot ||
-      (hasWorkspaceSetup ? workspaceRoots[0] : subAgent.repositoryPath);
+      orchestratorContext.workspaceRoot || (hasWorkspaceSetup ? workspaceRoots[0] : subAgent.repositoryPath);
 
-    // Register spawned sub-agent worktree in activeWorktrees automatically
     if (subAgent.isolated && subAgent.worktreePath) {
       ToolOrchestratorService._setWorktree(subAgent.subAgentConversationId, {
         originalRoot: parentWorkspaceRoot,
@@ -1349,33 +1106,7 @@ export default class OrchestratorService {
       });
     }
 
-    let isWorkspaceAvailable = false;
-    if (hasWorkspaceSetup) {
-      isWorkspaceAvailable = workspaceRoots.some((rootPath) => {
-        try {
-          return rootPath && existsSync(rootPath);
-        } catch {
-          return false;
-        }
-      });
-    }
-
-    const shouldShowWorkspaceConstraint = hasWorkspaceSetup && isWorkspaceAvailable;
-    const workspaceConstraintInstruction = shouldShowWorkspaceConstraint
-      ? `- Only modify files within your workspace\n`
-      : "";
-
-    const workspaceIntroLine = shouldShowWorkspaceConstraint
-      ? `Your workspace is: ${subAgent.worktreePath}\n`
-      : "";
-
-    // ── Recursive spawning: depth tracking ──────────────────────────
-    // Paper alignment: THREAD (arXiv:2405.17402), RAH (2026), Anthropic production architecture.
-    // Computed early because both the system prompt and the tool-stripping logic need these values.
-    // `orchestratorContext.recursionDepth` is the PARENT's depth. The child
-    // being prepared here runs at `childRecursionDepth = parentDepth + 1`.
-    // The gating check must use the child's depth to prevent an off-by-one
-    // that would allow one extra level of delegation beyond maxRecursionDepth.
+    const shouldShowWorkspaceConstraint = hasWorkspaceSetup && checkWorkspaceAvailability(workspaceRoots);
     const parentRecursionDepth = orchestratorContext.recursionDepth ?? 0;
     const childRecursionDepth = parentRecursionDepth + 1;
     const maxRecursionDepth = Math.min(
@@ -1383,173 +1114,25 @@ export default class OrchestratorService {
       orchestratorContext.maxRecursionDepth ?? DEFAULT_RECURSIVE_SPAWNING_DEPTH,
     );
     const canSpawnRecursively = childRecursionDepth < maxRecursionDepth;
-
     const activeTopology = orchestratorContext.topology || DEFAULT_TOPOLOGY;
 
-    const topologyMetadata: Record<string, { name: string; description: string }> = {
-      [TOPOLOGIES.HIERARCHICAL]: {
-        name: "Hierarchical (Parallel)",
-        description: "All sub-agents run in parallel, each independently working on their own task. No shared state between agents.",
-      },
-      [TOPOLOGIES.HIERARCHICAL_AGGREGATION]: {
-        name: "Hierarchical Aggregation (Parallel + Synthesis)",
-        description: "All sub-agents run in parallel, then a final synthesis pass merges their outputs into a unified result.",
-      },
-      [TOPOLOGIES.SEQUENTIAL]: {
-        name: "Sequential (Pipeline)",
-        description: "Sub-agents run one at a time in order, each receiving the previous agent's output as context before starting.",
-      },
-      [TOPOLOGIES.PEER_TO_PEER]: {
-        name: "Peer-to-Peer (Mesh / MAD)",
-        description: "Turn-based discussion where agents take turns on a shared thread. Each agent reads all prior contributions before responding.",
-      },
-      [TOPOLOGIES.TOURNAMENT]: {
-        name: "Tournament (Best-of-N)",
-        description: "All sub-agents run in parallel, then a judge evaluates and selects the single best result. Compete to produce the highest quality output.",
-      },
-      [TOPOLOGIES.CRITIC_LOOP]: {
-        name: "Critic Loop (Actor-Critic)",
-        description: "Actor produces output, critic evaluates and provides pass/fail feedback. If failed, actor revises. Iterates until critic approves or max rounds reached.",
-      },
-      [TOPOLOGIES.DIVIDE_AND_CONQUER]: {
-        name: "Divide & Conquer (GoT)",
-        description: "A planner decomposes the task into independent subtasks, each dispatched to a sub-agent in parallel, then synthesized into a unified result.",
-      },
-      [TOPOLOGIES.MCTS]: {
-        name: "MCTS-Guided Search (LATS)",
-        description: "Monte Carlo Tree Search — expands N branches in parallel, evaluates and scores each, selects the best, and refines iteratively until complete.",
-      },
-    };
-
-    const resolvedTopologyMetadata = topologyMetadata[activeTopology] ?? {
-      name: activeTopology,
-      description: "Custom or unknown topology.",
-    };
-
-    const agentPositionLine =
-      subAgent.agentIndex != null && subAgent.teamSize != null
-        ? `Agent: ${subAgent.agentIndex + 1} of ${subAgent.teamSize}\n`
-        : "";
-
-    const roundLine =
-      subAgent.round != null && (subAgent.totalRounds == null || subAgent.totalRounds > 1)
-        ? `Round: ${subAgent.round}\n`
-        : "";
-
-    // Recursion awareness: tell the sub-agent its spawning capabilities and depth context
-    // Paper alignment: RAH (2026) Coordinator vs Worker role assignment,
-    // THREAD (arXiv:2405.17402) hierarchical depth communication
-    const remainingDepth = maxRecursionDepth - childRecursionDepth;
-    let recursionBlock: string;
-
-    if (canSpawnRecursively) {
-      const delegationHeader = PromptLocaleService.get("en", "orchestrator.delegation.recursionHeader");
-      const depthStatus = PromptLocaleService.get("en", "orchestrator.delegation.depthStatus", {
-        childRecursionDepth: String(childRecursionDepth),
-        maxRecursionDepth: String(maxRecursionDepth),
-        remainingDepth: String(remainingDepth),
-        plural: remainingDepth !== 1 ? "s" : "",
-      });
-      const hasCreateTeam = PromptLocaleService.get("en", "orchestrator.delegation.hasCreateTeam");
-      const subAgentLine = remainingDepth > 1
-        ? PromptLocaleService.get("en", "orchestrator.delegation.subAgentsCanDelegate")
-        : PromptLocaleService.get("en", "orchestrator.delegation.subAgentsAreFinal");
-      const whenToDelegate = PromptLocaleService.get("en", "orchestrator.delegation.whenToDelegate");
-      const whenNotToDelegate = PromptLocaleService.get("en", "orchestrator.delegation.whenNotToDelegate");
-      const resultReporting = PromptLocaleService.get("en", "orchestrator.delegation.resultReporting");
-
-      recursionBlock =
-        `\n${delegationHeader}\n` +
-        PromptLocaleService.get("en", "orchestrator.coordinatorRole") + `\n` +
-        `${depthStatus}\n` +
-        `${hasCreateTeam}\n` +
-        `${subAgentLine}\n` +
-        `\n` +
-        `${whenToDelegate}\n` +
-        `${whenNotToDelegate}\n` +
-        `${resultReporting}\n\n`;
-    } else if (maxRecursionDepth > 0) {
-      const workerHeader = PromptLocaleService.get("en", "orchestrator.delegation.workerHeader");
-      const noCreateTeam = PromptLocaleService.get("en", "orchestrator.delegation.noCreateTeam");
-      const completeDirectly = PromptLocaleService.get("en", "orchestrator.delegation.completeDirectly");
-      const writeSummary = PromptLocaleService.get("en", "orchestrator.delegation.writeSummary");
-
-      recursionBlock =
-        `\n${workerHeader}\n` +
-        PromptLocaleService.get("en", "orchestrator.workerRole", { childRecursionDepth: String(childRecursionDepth), maxRecursionDepth: String(maxRecursionDepth) }) + `\n` +
-        `${noCreateTeam}\n` +
-        `${completeDirectly}\n` +
-        `${writeSummary}\n\n`;
-    } else {
-      recursionBlock = "";
-    }
-
-    // Sub-agent operational context — identity, topology, delegation rules,
-    // and workspace constraints — belongs in a system message so the LLM
-    // treats it as authoritative behavioral directives rather than
-    // conversational user input. The SystemPromptAssembler will prepend the
-    // persona identity system message at [0], pushing this to [1].
-    const operationalContextParts = [
-      PromptLocaleService.get("en", "orchestrator.subAgentIdentity"),
-      `Sub-agent topology type: ${activeTopology}`,
-      `Sub-agent topology name: ${resolvedTopologyMetadata.name}`,
-      `Sub-agent topology description: ${resolvedTopologyMetadata.description}`,
-    ];
-
-    if (agentPositionLine) operationalContextParts.push(agentPositionLine.trimEnd());
-    if (roundLine) operationalContextParts.push(roundLine.trimEnd());
-    if (recursionBlock) operationalContextParts.push(recursionBlock.trimEnd());
-
-    if (workspaceIntroLine) operationalContextParts.push(workspaceIntroLine.trimEnd());
-    if (subAgent.files?.length) {
-      operationalContextParts.push(`Focus on files: ${subAgent.files.join(", ")}`);
-    }
-
-    const constraintLines: string[] = [];
-    if (workspaceConstraintInstruction) constraintLines.push(workspaceConstraintInstruction.replace(/^- /, "").trimEnd());
-    constraintLines.push(commitInstructions.replace(/^- /, "").trimEnd());
-    constraintLines.push(`Focus on the specific task described above`);
-
-    operationalContextParts.push(
-      `\nOperational constraints:\n` +
-      constraintLines.map((line) => `- ${line}`).join("\n"),
+    const recursionBlock = buildSubAgentRecursionBlock(canSpawnRecursively, childRecursionDepth, maxRecursionDepth);
+    const subAgentMessages = buildSubAgentInitialMessages(
+      subAgent,
+      prompt,
+      activeTopology,
+      recursionBlock,
+      shouldShowWorkspaceConstraint,
     );
 
-    const subAgentMessages: ConversationMessage[] = [
-      ...(subAgent.messages || []).map((message) => ({
-        ...message,
-        _alreadyPersisted: true,
-      })),
-      {
-        role: "system",
-        content: operationalContextParts.join("\n"),
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ];
-
-    // Capture sub-agent output AND forward tool events to the parent orchestrator's
-    // SSE stream. This lets the frontend display live sub-agent tool activity
-    // without polling — events arrive as `sub_agent_tool_execution`, `sub_agent_tool_output`,
-    // and `sub_agent_status` with the sub-agent's agentId for disambiguation.
-    const parentEmit = orchestratorContext.emit;
-    // ── Sub-Agent Telemetry ────────────────────────────────
     const telemetry = new SubAgentTelemetryEmitter({
       subAgentId: subAgent.agentId,
       subAgentDescription: subAgent.description,
-      parentEmit,
+      parentEmit: orchestratorContext.emit,
       parentConversationId: orchestratorContext.agentConversationId,
       recursionDepth: childRecursionDepth,
     });
     const subAgentEmit = telemetry.createEmitFunction();
-
-    // ── Recursive spawning: conditional orchestrator tool access ──────
-    // When recursion depth < max, sub-agents KEEP orchestrator tools (create_team, etc.)
-    // and can spawn their own sub-teams. When depth = max, they become Worker agents
-    // with orchestrator tools stripped — the existing default behavior.
-    // (childRecursionDepth, maxRecursionDepth, canSpawnRecursively computed earlier)
 
     if (canSpawnRecursively) {
       logger.info(
@@ -1557,36 +1140,7 @@ export default class OrchestratorService {
       );
     }
 
-    // Build enabled tools list for the sub-agent.
-    let subAgentEnabledTools: string[] | undefined;
-    if (subAgent.enabledTools) {
-      if (canSpawnRecursively) {
-        subAgentEnabledTools = [...subAgent.enabledTools];
-      } else {
-        const orchestratorToolNames = new Set(ORCHESTRATOR_ONLY_TOOLS);
-        subAgentEnabledTools = subAgent.enabledTools.filter(
-          (name) => !orchestratorToolNames.has(name),
-        );
-      }
-    }
-
-    if (!subAgentEnabledTools) {
-      const settings = await SettingsService.getSection("agents");
-      const defaultTopology =
-        orchestratorContext.topology || settings?.topology || DEFAULT_TOPOLOGY;
-      const allToolSchemas =
-        ToolOrchestratorService.getToolSchemas(defaultTopology);
-
-      if (canSpawnRecursively) {
-        subAgentEnabledTools = allToolSchemas.map((toolSchema) => toolSchema.name);
-      } else {
-        const orchestratorToolNames = new Set(ORCHESTRATOR_ONLY_TOOLS);
-        subAgentEnabledTools = allToolSchemas
-          .map((toolSchema) => toolSchema.name)
-          .filter((name: string) => !orchestratorToolNames.has(name));
-      }
-    }
-
+    const subAgentEnabledTools = await resolveSubAgentLoopTools(subAgent, orchestratorContext, canSpawnRecursively);
     const subAgentProviderInstance = getProvider(subAgent.providerName);
     if (!subAgentProviderInstance) {
       throw new Error(`Provider not found: ${subAgent.providerName}`);
@@ -1594,9 +1148,9 @@ export default class OrchestratorService {
     const { getModelByName } = await import("../config.js");
     const subAgentModelDefinition = getModelByName(subAgent.resolvedModel);
 
-    let loopResult: { messages?: ConversationMessage[] } | undefined;
     const activeCtx = TraceContext.get();
-    const effectiveTraceId = subAgent.traceId || activeCtx?.trace_id || crypto.randomUUID().replaceAll("-", "").slice(0, 32);
+    const effectiveTraceId =
+      subAgent.traceId || activeCtx?.trace_id || crypto.randomUUID().replaceAll("-", "").slice(0, 32);
     subAgent.traceId = effectiveTraceId;
 
     const delegation = HarnessInstrumenter.traceDelegation(
@@ -1604,251 +1158,593 @@ export default class OrchestratorService {
       subAgent.resolvedModel,
       subAgent.subAgentConversationId,
     );
-    const delegateSpan = delegation.delegateSpan;
     const subAgentStartTime = performance.now();
 
-    // Canonical admission: sub-agents get profile-driven tool resolution and
-    // receipt-bound execution; falls back to legacy resolution when no
-    // profile is configured (INTERNAL_AGENT_PROFILE).
-    const admission = await InternalLoopRunner.admit({
-      profileId: process.env.INTERNAL_AGENT_PROFILE || "internal-agent-v1",
-      appId: "orchestrator",
-      sessionId: subAgent.subAgentConversationId,
-      enabledTools: subAgentEnabledTools,
-      signal: subAgent.abortController?.signal,
-    }).catch(() => undefined);
+    const admission = await admitSubAgentLoop(
+      subAgent,
+      subAgentEnabledTools,
+      childRecursionDepth,
+      parentWorkspaceRoot,
+      effectiveTraceId,
+      subAgentEmit,
+    );
 
-    // Delegation wiring: expose `delegate` to this sub-agent's loop when the
-    // repo defines subagents and the caller is top-level (a subagent's own
-    // delegate call is refused inside DelegateTool). The profile executor
-    // handles every other admitted tool unchanged.
-    if (admission && childRecursionDepth === 0 && SubagentRegistry.isEnabled()) {
-      SubagentRegistry.warnIfDescriptionsTooLarge();
-      const profileExecutor = admission.runtimeToolExecutor;
-      admission.runtimeTools = {
-        finalTools: [...admission.runtimeTools.finalTools, DelegateTool.schema],
-        resolvedEnabledTools: [...admission.runtimeTools.resolvedEnabledTools, DelegateTool.name],
-      };
-      admission.runtimeToolExecutor = async (call) => {
-        if (call.name === DelegateTool.name) {
-          return DelegateTool.execute((call.args || {}) as Partial<DelegateArgs>, {
-            recursionDepth: childRecursionDepth,
-            providerName: subAgent.providerName,
-            resolvedModel: subAgent.resolvedModel,
-            project: subAgent.project,
-            username: subAgent.username,
-            workspaceRoot: subAgent.worktreePath || parentWorkspaceRoot,
-            traceId: effectiveTraceId,
-            agentConversationId: subAgent.parentAgentConversationId,
-            conversationId: subAgent.parentConversationId,
-            // DelegateContext types emit loosely; DelegateTool hands it to the
-            // agentic loop, which only emits EmitFunction events.
-            emit: (event: unknown) =>
-              subAgentEmit(event as Parameters<EmitFunction>[0]),
-            policies: subAgent.policies,
-          });
-        }
-        return profileExecutor(call);
-      };
-    }
+    const loopResult = await executeSubAgentCoreRun(
+      AgenticLoopService,
+      subAgent,
+      subAgentProviderInstance as LLMProvider,
+      subAgentModelDefinition,
+      subAgentMessages,
+      admission,
+      delegation,
+      subAgentStartTime,
+      subAgentEnabledTools,
+      effectiveTraceId,
+      subAgentEmit,
+      parentWorkspaceRoot,
+      childRecursionDepth,
+      maxRecursionDepth,
+      preserveWorktree,
+    );
 
-    try {
-      loopResult = await AgenticLoopService.runAgenticLoop({
-        provider: subAgentProviderInstance as LLMProvider,
-        providerName: subAgent.providerName,
-        resolvedModel: subAgent.resolvedModel,
-        modelDefinition: subAgentModelDefinition,
-        messages: subAgentMessages,
-        ...(admission ? {
-          // InternalAdmission types tool parameters as unknown; they are the
-          // capability JSON schemas the loop expects as ToolSchema.
-          runtimeTools: admission.runtimeTools as ResolvedTools,
-          runtimeToolExecutor: admission.runtimeToolExecutor,
-          runId: admission.runId,
-        } : {}),
-        options: {
-          // autoApprove only answers asks; the inherited policies' DENYs
-          // still bind this sub-agent.
-          autoApprove: true,
-          ...(subAgent.policies ? { policies: subAgent.policies } : {}),
-          agenticLoopEnabled: true,
-          isSubAgent: true,
-          parentSpanId: delegateSpan.span_id,
-          enabledTools: subAgentEnabledTools,
-          maxIterations: subAgent.maxIterations,
-          maxTokens: 8192,
-          ...(subAgent.minContextLength && {
-            minContextLength: subAgent.minContextLength,
-          }),
-          ...(subAgent.thinkingEnabled !== undefined && {
-            thinkingEnabled: subAgent.thinkingEnabled,
-          }),
-          ...(subAgent.reasoningEffort !== undefined && {
-            reasoningEffort: subAgent.reasoningEffort,
-          }),
-          ...(subAgent.thinkingBudget !== undefined && {
-            thinkingBudget: subAgent.thinkingBudget,
-          }),
-        },
-        agentConversationId: subAgent.subAgentConversationId,
-        parentAgentConversationId: subAgent.parentAgentConversationId,
-        conversationId: subAgent.subAgentConversationId,
-        parentConversationId: subAgent.parentConversationId,
-        traceId: effectiveTraceId,
-        project: subAgent.project,
-        username: subAgent.username,
-        agent: subAgent.agent,
-        requestId: crypto.randomUUID(),
-        requestStart: performance.now(),
-        emit: subAgentEmit,
-        signal: subAgent.abortController?.signal,
-        workspaceRoot: subAgent.worktreePath || parentWorkspaceRoot,
-        // Recursive spawning: propagate incremented depth so child create_team
-        // calls know they're one level deeper. The ToolExecutor forwards these
-        // to ToolOrchestratorService.executeOrchestratorTool → OrchestratorContext.
-        _recursionDepth: childRecursionDepth,
-        _maxRecursionDepth: maxRecursionDepth,
-      });
-      const durationMs = performance.now() - subAgentStartTime;
-      delegation.complete("OK");
-      delegation.emitJoinSpan("OK", durationMs);
-    } catch (error: unknown) {
-      delegation.complete("ERROR", error instanceof Error ? error.message : String(error));
-      delegation.emitJoinSpan("ERROR");
-      if (
-        (error instanceof Error && error.name === "AbortError") ||
-        subAgent.abortController?.signal.aborted
-      ) {
-        subAgent.status = "stopped";
-      } else {
-        if (!preserveWorktree && subAgent.isolated) {
-          ToolOrchestratorService._clearWorktree(subAgent.subAgentConversationId);
-        }
-        throw error;
-      }
-    }
-
-    // Capture the full conversation from the loop (includes all assistant
-    // responses, tool calls, and results). Falls back to the initial
-    // subAgentMessages on error/abort paths where the loop didn't return.
     const finalMessages = loopResult?.messages || subAgentMessages;
-
-    // Capture output using a robust fallback chain:
-    // 1. Last assistant message from the harness's returned conversation
-    // 2. Telemetry-captured streamed chunks (accumulated from chunk events)
-    // 3. Empty string as last resort
     const messagesOutput = getLastAssistantText(finalMessages);
     const telemetryOutput = (telemetry.output || "").trim();
     subAgent.output = messagesOutput || telemetryOutput;
     if (!subAgent.output && subAgent.status !== "stopped") {
       logger.warn(
-        `[Orchestrator] Sub-agent ${subAgent.agentId} completed with empty output. ` +
-          `messages=${finalMessages.length}, telemetryOutput=${telemetryOutput.length}chars`,
+        `[Orchestrator] Sub-agent ${subAgent.agentId} completed with empty output. messages=${finalMessages.length}, telemetryOutput=${telemetryOutput.length}chars`,
       );
     }
     subAgent.toolCalls = telemetry.toolCalls;
     subAgent.messages = finalMessages;
     subAgent.durationMs = Date.now() - subAgent.startedAt;
 
-    if (subAgent.status !== "stopped") {
-      // Stage and commit changes in the worktree
-      await GitWorktreeHelper.toolsApiPost("/agentic/command/run", {
-        command: "git add -A",
-        cwd: subAgent.worktreePath,
-      });
-      await GitWorktreeHelper.toolsApiPost("/agentic/command/run", {
-        command: `git commit -m "orchestrator: ${subAgent.agentId} — ${subAgent.description}" --allow-empty`,
-        cwd: subAgent.worktreePath,
-      });
+    await commitAndCollectSubAgentDiff(subAgent);
+    await finalizeSubAgentLoopCleanup(subAgent, telemetry, preserveWorktree, orchestratorContext.providerName);
+  }
+}
 
-      // Collect diff (only if the worktree created a branch)
-      if (subAgent.branchName) {
-        const diffResult = await GitWorktreeHelper.getWorktreeDiff(
-          subAgent.repositoryPath,
-          subAgent.branchName,
-        );
-        if (
-          !("error" in diffResult) &&
-          typeof diffResult.hasChanges === "boolean" &&
-          typeof diffResult.additions === "number" &&
-          typeof diffResult.deletions === "number" &&
-          Array.isArray(diffResult.files)
-        ) {
-          subAgent.diff = {
-            hasChanges: diffResult.hasChanges,
-            additions: diffResult.additions,
-            deletions: diffResult.deletions,
-            files: diffResult.files,
-          };
-        } else {
-          subAgent.diff = null;
-        }
-      } else {
-        subAgent.diff = null;
-      }
-      subAgent.status = "complete";
+function validateSubAgentSpawnLimits(orchestratorContext: OrchestratorContext): {
+  error?: string;
+  currentRecursionDepth: number;
+  resolvedMaxSubAgentIterations: number;
+} {
+  const currentRecursionDepth = orchestratorContext.recursionDepth ?? 0;
+  const maxRecursionDepth = Math.min(
+    MAXIMUM_RECURSIVE_SPAWNING_DEPTH,
+    orchestratorContext.maxRecursionDepth ?? DEFAULT_RECURSIVE_SPAWNING_DEPTH,
+  );
+  if (maxRecursionDepth === 0) {
+    return { error: "Sub-agent spawning is disabled (recursion depth is set to 0).", currentRecursionDepth, resolvedMaxSubAgentIterations: 0 };
+  }
+  if (currentRecursionDepth >= maxRecursionDepth) {
+    return {
+      error: `Sub-agent spawning limit reached. Current depth ${currentRecursionDepth} exceeds or matches max depth ${maxRecursionDepth}.`,
+      currentRecursionDepth,
+      resolvedMaxSubAgentIterations: 0,
+    };
+  }
+  const clientMax = orchestratorContext.maxSubAgentIterations;
+  const baseMaxIterations =
+    clientMax === 0 ? Infinity : clientMax ? Math.min(100, Math.max(1, clientMax)) : MAX_SUB_AGENT_ITERATIONS;
+  const resolvedMaxSubAgentIterations =
+    currentRecursionDepth > 0 && baseMaxIterations !== Infinity
+      ? Math.max(5, Math.round(baseMaxIterations * (1 - RECURSION_SCOPE_ATTENUATION_FACTOR * currentRecursionDepth)))
+      : baseMaxIterations;
+
+  const runningCount = Array.from(activeSubAgents.values()).filter((subAgent) => subAgent.status === "running").length;
+  if (runningCount >= MAX_SUB_AGENTS) {
+    return {
+      error: `Maximum concurrent sub-agents (${MAX_SUB_AGENTS}) reached. Wait for a sub-agent to complete or stop one.`,
+      currentRecursionDepth,
+      resolvedMaxSubAgentIterations,
+    };
+  }
+  if (orchestratorContext.conversationId) {
+    const rootConversationId = OrchestratorService.getRootConversationId(orchestratorContext.conversationId);
+    const conversationAgentCount = Array.from(activeSubAgents.values()).filter(
+      (subAgent) => OrchestratorService.getRootConversationId(subAgent.parentConversationId || "") === rootConversationId,
+    ).length;
+    if (conversationAgentCount >= MAXIMUM_CONCURRENT_AGENTS_PER_CONVERSATION) {
+      logger.warn(
+        `[Orchestrator] Circuit breaker: conversation ${rootConversationId} has reached total agent ceiling of ${conversationAgentCount} (max ${MAXIMUM_CONCURRENT_AGENTS_PER_CONVERSATION}). Recursive spawning blocked.`,
+      );
+      return {
+        error: `Circuit breaker: maximum concurrent agents per conversation (${MAXIMUM_CONCURRENT_AGENTS_PER_CONVERSATION}) reached. This limit prevents exponential agent fan-out from recursive spawning.`,
+        currentRecursionDepth,
+        resolvedMaxSubAgentIterations,
+      };
     }
+  }
+  return { currentRecursionDepth, resolvedMaxSubAgentIterations };
+}
 
-    // ── Release heavy data from completed sub-agents ──────────
-    // The messages array can be tens of MBs (includes tool results,
-    // code snippets, base64 images). We release this memory from RAM
-    // in spawnFromTool and getTaskOutput once the orchestrator builds
-    // the result payload.
-    subAgent.abortController = null;
-    // Remove worktree now that the diff has been collected — prevents orphaned
-    // worktrees from accumulating on disk across conversations.
-    // When preserveWorktree is true (P2P mesh turns), the worktree stays alive
-    // so the agent can be continued with its local file state intact.
-    if (
-      !preserveWorktree &&
-      subAgent.status !== "stopped" &&
-      subAgent.isolated &&
-      subAgent.worktreePath
-    ) {
-      await GitWorktreeHelper.removeWorktree(
-        subAgent.repositoryPath,
-        subAgent.worktreePath,
-      ).catch((error: unknown) =>
-        logger.warn(
-          `[Orchestrator] Post-completion worktree cleanup failed for ${subAgent.agentId}: ${getErrorMessage(error)}`,
-        ),
+async function resolveSubAgentInstanceAssignment(
+  assignedProvider: string | undefined,
+  assignedModel: string | undefined,
+  providerName: string,
+  resolvedModel: string,
+  model: string | undefined,
+): Promise<{ subAgentProvider: string; subAgentModel: string }> {
+  const subAgentProvider = assignedProvider || providerName;
+  const isLocal = localModelQueue.isLocal(providerName);
+  const subAgentModel = assignedModel || (isLocal ? resolvedModel : model || resolvedModel);
+  if (assignedProvider) {
+    logger.info(
+      `[Orchestrator] spawnFromTool: pre-assigned to ${subAgentProvider} — model "${subAgentModel}" (skipping instance selection)`,
+    );
+    return { subAgentProvider, subAgentModel };
+  }
+  if (!isLocal) {
+    return { subAgentProvider, subAgentModel };
+  }
+  const providerType = getInstanceType(providerName) || providerName;
+  let siblingInstances = getInstancesByType(providerType);
+  let instanceModelOverrides = new Map();
+  if (siblingInstances.length > 1) {
+    const { usable, modelOverrides } = await resolveModelForInstances(subAgentModel, siblingInstances);
+    instanceModelOverrides = modelOverrides;
+    if (usable.length > 0) {
+      siblingInstances = usable;
+    } else {
+      logger.warn(`[Orchestrator] Model "${subAgentModel}" not available on any ${providerType} instance`);
+      siblingInstances = [];
+    }
+  }
+  const assignedInstance = InstanceLoadBalancer.selectAndReserveInstance(
+    siblingInstances,
+    providerName,
+    instanceModelOverrides,
+    subAgentModel,
+    activeSubAgents,
+  );
+  if (assignedInstance) {
+    logger.info(
+      `[Orchestrator] Assigned sub-agent to ${assignedInstance.provider} (${assignedInstance.slotsAvailable} slots free, ${siblingInstances.length} instance${siblingInstances.length > 1 ? "s" : ""} pooled) — model "${assignedInstance.model}"`,
+    );
+    return { subAgentProvider: assignedInstance.provider, subAgentModel: assignedInstance.model };
+  }
+  const subAgentFallback = await getSubAgentFallback();
+  if (subAgentFallback) {
+    logger.info(`[Orchestrator] All instances at capacity — sub-agent will use ${subAgentFallback.model}`);
+    return { subAgentProvider: subAgentFallback.provider, subAgentModel: subAgentFallback.model };
+  }
+  logger.info(
+    `[Orchestrator] All instances at capacity and no sub-agent model configured — sub-agent will queue on local provider`,
+  );
+  return { subAgentProvider, subAgentModel };
+}
+
+function resolveSubAgentPersonaTools(
+  memberAgentName: string | undefined,
+  defaultAgent: string | undefined,
+  enabledTools: string[] | null | undefined,
+): { subAgentAgentType: string | undefined; subAgentEnabledTools: string[] | null } {
+  let subAgentAgentType = defaultAgent;
+  let subAgentEnabledTools = enabledTools || null;
+  if (memberAgentName) {
+    const persona = AgentPersonaRegistry.get(memberAgentName);
+    if (persona) {
+      subAgentAgentType = persona.id;
+      subAgentEnabledTools = persona.availableTools.includes("*") ? null : persona.availableTools;
+      logger.info(
+        `[Orchestrator] Spawning specified sub-agent type "${persona.id}" with availableTools: [${(subAgentEnabledTools || ["*"]).join(", ")}]`,
+      );
+    } else {
+      logger.warn(
+        `[Orchestrator] Requested agent type "${memberAgentName}" not found in registry. Spawning default "${defaultAgent}".`,
       );
     }
+  }
+  return { subAgentAgentType, subAgentEnabledTools };
+}
 
-    // Transfer cost/usage/iterations captured by telemetry from streamed events
-    subAgent.totalCost = telemetry.totalCost;
-    subAgent.usage = telemetry.usage;
-    if (telemetry.iterations != null)
-      subAgent.iterations = telemetry.iterations;
-
-    // Notify frontend immediately so the per-sub-agent StatusBar updates
-    // from "Generating..." to a completed state.
-    telemetry.emitCompletion(
-      subAgent.durationMs,
-      subAgent.usage || null,
-      subAgent.totalCost || null,
-    );
-
-    // Release the per-instance reservation (synchronous counter)
-    if (!subAgent.reservationReleased) {
-      InstanceLoadBalancer.releaseReservation(subAgent.providerName);
-      subAgent.reservationReleased = true;
+async function markParentConversationHasSubAgents(
+  parentConversationId: string | undefined,
+  project: string | undefined,
+  username: string | undefined,
+): Promise<void> {
+  if (!parentConversationId) return;
+  try {
+    const { MONGO_DB_NAME: databaseName } = await import("../../config.ts");
+    const { COLLECTIONS: collectionNames } = await import("../constants.ts");
+    const MongoWrapper = (await import("../wrappers/MongoWrapper.ts")).default;
+    const parentCollection = MongoWrapper.getCollection(databaseName, collectionNames.AGENT_CONVERSATIONS);
+    if (parentCollection) {
+      const hasSubAgentsResult = await parentCollection.updateOne(
+        { id: parentConversationId, project, username },
+        { $set: { hasSubAgents: true } },
+      );
+      if (hasSubAgentsResult.matchedCount === 0) {
+        logger.warn(
+          `[Orchestrator] hasSubAgents write matched 0 documents for conversation ${parentConversationId} (project=${project}, username=${username})`,
+        );
+      }
     }
-
-    logger.info(
-      `[Orchestrator] Sub-agent ${subAgent.agentId} completed in ${subAgent.durationMs}ms (${telemetry.toolCalls.length} tool calls)`,
+  } catch (databaseError: unknown) {
+    logger.warn(
+      `[Orchestrator] Failed to set hasSubAgents on parent conversation ${parentConversationId}: ${getErrorMessage(databaseError)}`,
     );
+  }
+}
 
-    // Release the active worktree registration if we don't want to preserve it
+async function handleSubAgentLoopFailure(
+  subAgentState: SubAgentState,
+  error: unknown,
+  orchestratorContext: OrchestratorContext,
+): Promise<void> {
+  const { agentId } = subAgentState;
+  logger.error(`[Orchestrator] Sub-agent ${agentId} loop error: ${getErrorMessage(error)}`);
+  subAgentState.status = "failed";
+  subAgentState.error = getErrorMessage(error);
+  subAgentState.durationMs = Date.now() - subAgentState.startedAt;
+  if (subAgentState.isolated && subAgentState.worktreePath) {
+    await GitWorktreeHelper.removeWorktree(subAgentState.repositoryPath, subAgentState.worktreePath).catch(
+      (cleanupError: unknown) =>
+        logger.warn(`[Orchestrator] Worktree cleanup failed for ${agentId}: ${getErrorMessage(cleanupError)}`),
+    );
+  }
+  if (orchestratorContext.emit) {
+    orchestratorContext.emit({
+      type: SERVER_SENT_EVENT_TYPES.SUB_AGENT_STATUS,
+      subAgentId: agentId,
+      message: "failed",
+      error: getErrorMessage(error),
+    });
+  }
+}
+
+const TOPOLOGY_METADATA: Record<string, { name: string; description: string }> = {
+  [TOPOLOGIES.HIERARCHICAL]: {
+    name: "Hierarchical (Parallel)",
+    description: "All sub-agents run in parallel, each independently working on their own task. No shared state between agents.",
+  },
+  [TOPOLOGIES.HIERARCHICAL_AGGREGATION]: {
+    name: "Hierarchical Aggregation (Parallel + Synthesis)",
+    description: "All sub-agents run in parallel, then a final synthesis pass merges their outputs into a unified result.",
+  },
+  [TOPOLOGIES.SEQUENTIAL]: {
+    name: "Sequential (Pipeline)",
+    description: "Sub-agents run one at a time in order, each receiving the previous agent's output as context before starting.",
+  },
+  [TOPOLOGIES.PEER_TO_PEER]: {
+    name: "Peer-to-Peer (Mesh / MAD)",
+    description: "Turn-based discussion where agents take turns on a shared thread. Each agent reads all prior contributions before responding.",
+  },
+  [TOPOLOGIES.TOURNAMENT]: {
+    name: "Tournament (Best-of-N)",
+    description: "All sub-agents run in parallel, then a judge evaluates and selects the single best result. Compete to produce the highest quality output.",
+  },
+  [TOPOLOGIES.CRITIC_LOOP]: {
+    name: "Critic Loop (Actor-Critic)",
+    description: "Actor produces output, critic evaluates and provides pass/fail feedback. If failed, actor revises. Iterates until critic approves or max rounds reached.",
+  },
+  [TOPOLOGIES.DIVIDE_AND_CONQUER]: {
+    name: "Divide & Conquer (GoT)",
+    description: "A planner decomposes the task into independent subtasks, each dispatched to a sub-agent in parallel, then synthesized into a unified result.",
+  },
+  [TOPOLOGIES.MCTS]: {
+    name: "MCTS-Guided Search (LATS)",
+    description: "Monte Carlo Tree Search — expands N branches in parallel, evaluates and scores each, selects the best, and refines iteratively until complete.",
+  },
+};
+
+function checkWorkspaceAvailability(workspaceRoots: unknown): boolean {
+  if (!Array.isArray(workspaceRoots) || workspaceRoots.length === 0) return false;
+  return workspaceRoots.some((rootPath) => {
+    try {
+      return Boolean(rootPath && existsSync(rootPath));
+    } catch {
+      return false;
+    }
+  });
+}
+
+function buildSubAgentRecursionBlock(
+  canSpawnRecursively: boolean,
+  childRecursionDepth: number,
+  maxRecursionDepth: number,
+): string {
+  const remainingDepth = maxRecursionDepth - childRecursionDepth;
+  if (canSpawnRecursively) {
+    const delegationHeader = PromptLocaleService.get("en", "orchestrator.delegation.recursionHeader");
+    const depthStatus = PromptLocaleService.get("en", "orchestrator.delegation.depthStatus", {
+      childRecursionDepth: String(childRecursionDepth),
+      maxRecursionDepth: String(maxRecursionDepth),
+      remainingDepth: String(remainingDepth),
+      plural: remainingDepth !== 1 ? "s" : "",
+    });
+    const hasCreateTeam = PromptLocaleService.get("en", "orchestrator.delegation.hasCreateTeam");
+    const subAgentLine =
+      remainingDepth > 1
+        ? PromptLocaleService.get("en", "orchestrator.delegation.subAgentsCanDelegate")
+        : PromptLocaleService.get("en", "orchestrator.delegation.subAgentsAreFinal");
+    const whenToDelegate = PromptLocaleService.get("en", "orchestrator.delegation.whenToDelegate");
+    const whenNotToDelegate = PromptLocaleService.get("en", "orchestrator.delegation.whenNotToDelegate");
+    const resultReporting = PromptLocaleService.get("en", "orchestrator.delegation.resultReporting");
+    return (
+      `\n${delegationHeader}\n` +
+      PromptLocaleService.get("en", "orchestrator.coordinatorRole") +
+      `\n${depthStatus}\n${hasCreateTeam}\n${subAgentLine}\n\n${whenToDelegate}\n${whenNotToDelegate}\n${resultReporting}\n\n`
+    );
+  }
+  if (maxRecursionDepth > 0) {
+    const workerHeader = PromptLocaleService.get("en", "orchestrator.delegation.workerHeader");
+    const noCreateTeam = PromptLocaleService.get("en", "orchestrator.delegation.noCreateTeam");
+    const completeDirectly = PromptLocaleService.get("en", "orchestrator.delegation.completeDirectly");
+    const writeSummary = PromptLocaleService.get("en", "orchestrator.delegation.writeSummary");
+    return (
+      `\n${workerHeader}\n` +
+      PromptLocaleService.get("en", "orchestrator.workerRole", {
+        childRecursionDepth: String(childRecursionDepth),
+        maxRecursionDepth: String(maxRecursionDepth),
+      }) +
+      `\n${noCreateTeam}\n${completeDirectly}\n${writeSummary}\n\n`
+    );
+  }
+  return "";
+}
+
+function buildSubAgentInitialMessages(
+  subAgent: SubAgentState,
+  prompt: string,
+  activeTopology: string,
+  recursionBlock: string,
+  shouldShowWorkspaceConstraint: boolean,
+): ConversationMessage[] {
+  const commitInstructions = subAgent.isolated
+    ? `Commit your changes when done and report what you accomplished`
+    : `Report what you accomplished when done`;
+  const resolvedTopologyMetadata = TOPOLOGY_METADATA[activeTopology] ?? {
+    name: activeTopology,
+    description: "Custom or unknown topology.",
+  };
+  const operationalContextParts = [
+    PromptLocaleService.get("en", "orchestrator.subAgentIdentity"),
+    `Sub-agent topology type: ${activeTopology}`,
+    `Sub-agent topology name: ${resolvedTopologyMetadata.name}`,
+    `Sub-agent topology description: ${resolvedTopologyMetadata.description}`,
+  ];
+  if (subAgent.agentIndex != null && subAgent.teamSize != null) {
+    operationalContextParts.push(`Agent: ${subAgent.agentIndex + 1} of ${subAgent.teamSize}`);
+  }
+  if (subAgent.round != null && (subAgent.totalRounds == null || subAgent.totalRounds > 1)) {
+    operationalContextParts.push(`Round: ${subAgent.round}`);
+  }
+  if (recursionBlock) operationalContextParts.push(recursionBlock.trimEnd());
+  if (shouldShowWorkspaceConstraint) {
+    operationalContextParts.push(`Your workspace is: ${subAgent.worktreePath}`);
+  }
+  if (subAgent.files?.length) {
+    operationalContextParts.push(`Focus on files: ${subAgent.files.join(", ")}`);
+  }
+  const constraintLines: string[] = [];
+  if (shouldShowWorkspaceConstraint) constraintLines.push("Only modify files within your workspace");
+  constraintLines.push(commitInstructions);
+  constraintLines.push("Focus on the specific task described above");
+  operationalContextParts.push(`\nOperational constraints:\n` + constraintLines.map((line) => `- ${line}`).join("\n"));
+
+  return [
+    ...(subAgent.messages || []).map((message) => ({
+      ...message,
+      _alreadyPersisted: true,
+    })),
+    { role: "system", content: operationalContextParts.join("\n") },
+    { role: "user", content: prompt },
+  ];
+}
+
+async function resolveSubAgentLoopTools(
+  subAgent: SubAgentState,
+  orchestratorContext: OrchestratorContext,
+  canSpawnRecursively: boolean,
+): Promise<string[]> {
+  const orchestratorToolNames = new Set(ORCHESTRATOR_ONLY_TOOLS);
+  if (subAgent.enabledTools) {
+    return canSpawnRecursively
+      ? [...subAgent.enabledTools]
+      : subAgent.enabledTools.filter((name) => !orchestratorToolNames.has(name));
+  }
+  const settings = await SettingsService.getSection("agents");
+  const defaultTopology = orchestratorContext.topology || settings?.topology || DEFAULT_TOPOLOGY;
+  const allToolNames = ToolOrchestratorService.getToolSchemas(defaultTopology).map((toolSchema) => toolSchema.name);
+  return canSpawnRecursively ? allToolNames : allToolNames.filter((name: string) => !orchestratorToolNames.has(name));
+}
+
+async function admitSubAgentLoop(
+  subAgent: SubAgentState,
+  subAgentEnabledTools: string[],
+  childRecursionDepth: number,
+  parentWorkspaceRoot: string,
+  effectiveTraceId: string,
+  subAgentEmit: EmitFunction,
+) {
+  const admission = await InternalLoopRunner.admit({
+    profileId: process.env.INTERNAL_AGENT_PROFILE || "internal-agent-v1",
+    appId: "orchestrator",
+    sessionId: subAgent.subAgentConversationId,
+    enabledTools: subAgentEnabledTools,
+    signal: subAgent.abortController?.signal,
+  }).catch(() => undefined);
+
+  if (admission && childRecursionDepth === 0 && SubagentRegistry.isEnabled()) {
+    SubagentRegistry.warnIfDescriptionsTooLarge();
+    const profileExecutor = admission.runtimeToolExecutor;
+    admission.runtimeTools = {
+      finalTools: [...admission.runtimeTools.finalTools, DelegateTool.schema],
+      resolvedEnabledTools: [...admission.runtimeTools.resolvedEnabledTools, DelegateTool.name],
+    };
+    admission.runtimeToolExecutor = async (call) => {
+      if (call.name === DelegateTool.name) {
+        return DelegateTool.execute((call.args || {}) as Partial<DelegateArgs>, {
+          recursionDepth: childRecursionDepth,
+          providerName: subAgent.providerName,
+          resolvedModel: subAgent.resolvedModel,
+          project: subAgent.project,
+          username: subAgent.username,
+          workspaceRoot: subAgent.worktreePath || parentWorkspaceRoot,
+          traceId: effectiveTraceId,
+          agentConversationId: subAgent.parentAgentConversationId,
+          conversationId: subAgent.parentConversationId,
+          emit: (event: unknown) => subAgentEmit(event as Parameters<EmitFunction>[0]),
+          policies: subAgent.policies,
+        });
+      }
+      return profileExecutor(call);
+    };
+  }
+  return admission;
+}
+
+function buildSubAgentLoopOptions(
+  subAgent: SubAgentState,
+  delegateSpanId: string,
+  subAgentEnabledTools: string[],
+) {
+  return {
+    autoApprove: true,
+    ...(subAgent.policies ? { policies: subAgent.policies } : {}),
+    agenticLoopEnabled: true,
+    isSubAgent: true,
+    parentSpanId: delegateSpanId,
+    enabledTools: subAgentEnabledTools,
+    maxIterations: subAgent.maxIterations,
+    maxTokens: 8192,
+    ...(subAgent.minContextLength && { minContextLength: subAgent.minContextLength }),
+    ...(subAgent.thinkingEnabled !== undefined && { thinkingEnabled: subAgent.thinkingEnabled }),
+    ...(subAgent.reasoningEffort !== undefined && { reasoningEffort: subAgent.reasoningEffort }),
+    ...(subAgent.thinkingBudget !== undefined && { thinkingBudget: subAgent.thinkingBudget }),
+  };
+}
+
+async function executeSubAgentCoreRun(
+  AgenticLoopService: { runAgenticLoop: (ctx: unknown) => Promise<{ messages?: ConversationMessage[] }> },
+  subAgent: SubAgentState,
+  subAgentProviderInstance: LLMProvider,
+  subAgentModelDefinition: unknown,
+  subAgentMessages: ConversationMessage[],
+  admission: Awaited<ReturnType<typeof admitSubAgentLoop>>,
+  delegation: ReturnType<typeof HarnessInstrumenter.traceDelegation>,
+  subAgentStartTime: number,
+  subAgentEnabledTools: string[],
+  effectiveTraceId: string,
+  subAgentEmit: EmitFunction,
+  parentWorkspaceRoot: string,
+  childRecursionDepth: number,
+  maxRecursionDepth: number,
+  preserveWorktree: boolean,
+): Promise<{ messages?: ConversationMessage[] } | undefined> {
+  try {
+    const loopResult = await AgenticLoopService.runAgenticLoop({
+      provider: subAgentProviderInstance,
+      providerName: subAgent.providerName,
+      resolvedModel: subAgent.resolvedModel,
+      modelDefinition: subAgentModelDefinition,
+      messages: subAgentMessages,
+      ...(admission
+        ? {
+            runtimeTools: admission.runtimeTools as ResolvedTools,
+            runtimeToolExecutor: admission.runtimeToolExecutor,
+            runId: admission.runId,
+          }
+        : {}),
+      options: buildSubAgentLoopOptions(subAgent, delegation.delegateSpan.span_id, subAgentEnabledTools),
+      agentConversationId: subAgent.subAgentConversationId,
+      parentAgentConversationId: subAgent.parentAgentConversationId,
+      conversationId: subAgent.subAgentConversationId,
+      parentConversationId: subAgent.parentConversationId,
+      traceId: effectiveTraceId,
+      project: subAgent.project,
+      username: subAgent.username,
+      agent: subAgent.agent,
+      requestId: crypto.randomUUID(),
+      requestStart: performance.now(),
+      emit: subAgentEmit,
+      signal: subAgent.abortController?.signal,
+      workspaceRoot: subAgent.worktreePath || parentWorkspaceRoot,
+      _recursionDepth: childRecursionDepth,
+      _maxRecursionDepth: maxRecursionDepth,
+    });
+    const durationMs = performance.now() - subAgentStartTime;
+    delegation.complete("OK");
+    delegation.emitJoinSpan("OK", durationMs);
+    return loopResult;
+  } catch (error: unknown) {
+    delegation.complete("ERROR", error instanceof Error ? error.message : String(error));
+    delegation.emitJoinSpan("ERROR");
+    if ((error instanceof Error && error.name === "AbortError") || subAgent.abortController?.signal.aborted) {
+      subAgent.status = "stopped";
+      return undefined;
+    }
     if (!preserveWorktree && subAgent.isolated) {
       ToolOrchestratorService._clearWorktree(subAgent.subAgentConversationId);
     }
+    throw error;
+  }
+}
 
-    // ── VRAM eviction for secondary instances ──────────────────
-    await evictIdleSecondaryModel(
-      subAgent,
-      orchestratorContext.providerName,
-      activeSubAgents,
+async function commitAndCollectSubAgentDiff(subAgent: SubAgentState): Promise<void> {
+  if (subAgent.status === "stopped") return;
+  await GitWorktreeHelper.toolsApiPost("/agentic/command/run", {
+    command: "git add -A",
+    cwd: subAgent.worktreePath,
+  });
+  await GitWorktreeHelper.toolsApiPost("/agentic/command/run", {
+    command: `git commit -m "orchestrator: ${subAgent.agentId} — ${subAgent.description}" --allow-empty`,
+    cwd: subAgent.worktreePath,
+  });
+
+  if (subAgent.branchName) {
+    const diffResult = await GitWorktreeHelper.getWorktreeDiff(subAgent.repositoryPath, subAgent.branchName);
+    if (
+      !("error" in diffResult) &&
+      typeof diffResult.hasChanges === "boolean" &&
+      typeof diffResult.additions === "number" &&
+      typeof diffResult.deletions === "number" &&
+      Array.isArray(diffResult.files)
+    ) {
+      subAgent.diff = {
+        hasChanges: diffResult.hasChanges,
+        additions: diffResult.additions,
+        deletions: diffResult.deletions,
+        files: diffResult.files,
+      };
+    } else {
+      subAgent.diff = null;
+    }
+  } else {
+    subAgent.diff = null;
+  }
+  subAgent.status = "complete";
+}
+
+async function finalizeSubAgentLoopCleanup(
+  subAgent: SubAgentState,
+  telemetry: SubAgentTelemetryEmitter,
+  preserveWorktree: boolean,
+  parentProviderName: string,
+): Promise<void> {
+  subAgent.abortController = null;
+  if (!preserveWorktree && subAgent.status !== "stopped" && subAgent.isolated && subAgent.worktreePath) {
+    await GitWorktreeHelper.removeWorktree(subAgent.repositoryPath, subAgent.worktreePath).catch((error: unknown) =>
+      logger.warn(`[Orchestrator] Post-completion worktree cleanup failed for ${subAgent.agentId}: ${getErrorMessage(error)}`),
     );
   }
+  subAgent.totalCost = telemetry.totalCost;
+  subAgent.usage = telemetry.usage;
+  if (telemetry.iterations != null) subAgent.iterations = telemetry.iterations;
+
+  telemetry.emitCompletion(subAgent.durationMs, subAgent.usage || null, subAgent.totalCost || null);
+  if (!subAgent.reservationReleased) {
+    InstanceLoadBalancer.releaseReservation(subAgent.providerName);
+    subAgent.reservationReleased = true;
+  }
+  logger.info(
+    `[Orchestrator] Sub-agent ${subAgent.agentId} completed in ${subAgent.durationMs}ms (${telemetry.toolCalls.length} tool calls)`,
+  );
+  if (!preserveWorktree && subAgent.isolated) {
+    ToolOrchestratorService._clearWorktree(subAgent.subAgentConversationId);
+  }
+  await evictIdleSecondaryModel(subAgent, parentProviderName, activeSubAgents);
 }

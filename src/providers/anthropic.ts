@@ -127,267 +127,219 @@ async function enforceImageSizeLimits(messages: ChatMessage[]) {
   }
 }
 
-/**
- * Anthropic requires alternating user/assistant roles and handles system messages separately.
- * This helper extracts the system message and merges consecutive same-role messages.
- */
-async function prepareMessages(messages: ChatMessage[]) {
-  let systemMessage: string | undefined;
+function detectImageMediaType(mimeType: string, data: string): string {
+  if (data.startsWith("/9j/")) return "image/jpeg";
+  if (data.startsWith("iVBOR")) return "image/png";
+  if (data.startsWith("R0lG")) return "image/gif";
+  if (data.startsWith("UklG")) return "image/webp";
+  return mimeType;
+}
 
-  // Extract system message
-  const conversation = messages.map((chatMessage: ChatMessage) => ({
-    ...chatMessage,
-  }));
-  if (conversation.length > 0 && conversation[0].role === "system") {
-    systemMessage = conversation.shift()?.content as string | undefined;
+async function convertDataUrlToAnthropicBlock(
+  dataUrl: string,
+): Promise<AnthropicBlock | null> {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return null;
+  const mimeType = match[1];
+  const rawData = match[2];
+
+  if (mimeType.startsWith("image/")) {
+    const initialMediaType = detectImageMediaType(mimeType, rawData);
+    logger.info(
+      `[anthropic] Image block: ${initialMediaType}, b64_len=${rawData.length} (${(rawData.length / 1024 / 1024).toFixed(2)} MB), decoded=${(Buffer.byteLength(rawData, "base64") / 1024 / 1024).toFixed(2)} MB`,
+    );
+    const compressed = await compressImageForSizeLimit(
+      rawData,
+      initialMediaType,
+    );
+    return {
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: compressed.mediaType,
+        data: compressed.data,
+      },
+    };
   }
 
-  // Build clean messages with ONLY the fields Anthropic's API accepts.
-  // Whitelist approach: explicitly construct each output object instead of
-  // destructuring + ...rest, which leaks any new internal fields (e.g.
-  // _ttftSamples, _liveGenProgress, _workerTokens) into the API payload.
-  //
-  // Mid-conversation system messages (e.g. dynamic tool updates) are
-  // converted to user role with XML scaffolding. Anthropic Opus 4.8+
-  // natively supports role: "system" mid-conversation, but converting
-  // to user ensures compatibility across all Claude model versions.
-  const cleaned = await Promise.all(
-    conversation
-      .filter(
-        (chatMessage: ChatMessage) =>
-          chatMessage.role === "user" ||
-          chatMessage.role === "assistant" ||
-          chatMessage.role === "tool" ||
-          chatMessage.role === "system",
-      )
-      .map(async (message: ChatMessage) => {
-        // Convert tool role messages to tool_result user messages for Anthropic
-        if (message.role === "tool") {
-          return {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id:
-                  message.tool_call_id ||
-                  message.id ||
-                  message.name ||
-                  "unknown",
-                content:
-                  typeof message.content === "string"
-                    ? message.content
-                    : JSON.stringify(message.content),
-              },
-            ],
-          };
-        }
+  if (mimeType === "application/pdf") {
+    return {
+      type: "document",
+      source: {
+        type: "base64",
+        media_type: "application/pdf",
+        data: rawData,
+      },
+    };
+  }
 
-        // Mid-conversation system messages (e.g. dynamic tool updates from
-        // the harness) — convert to user role for Anthropic API compatibility.
-        // The harness wraps these in <tool-update> XML tags, so the model
-        // can distinguish them from actual user messages.
-        if (message.role === "system") {
-          return {
-            role: "user",
-            content:
-              typeof message.content === "string"
-                ? message.content
-                : JSON.stringify(message.content),
-          };
-        }
+  if (mimeType.startsWith("text/") || mimeType === "application/json") {
+    try {
+      const decoded = Buffer.from(rawData, "base64").toString("utf-8");
+      return {
+        type: "text",
+        text: `[Attached file (${mimeType})]:\n${decoded}`,
+      };
+    } catch {
+      return null;
+    }
+  }
 
-        // Convert assistant messages with toolCalls to multi-part content
-        if (
-          message.role === "assistant" &&
-          message.toolCalls &&
-          message.toolCalls.length > 0
-        ) {
-          const contentBlocks: AnthropicBlock[] = [];
-          // Preserve thinking blocks for multi-step reasoning continuity.
-          // The signature field is REQUIRED by Anthropic's API for multi-turn
-          // conversations — without it the API returns a 400.
-          // Only include thinking when we have the signature; conversations
-          // missing it must omit the block to avoid API 400 errors.
-          if (message.thinking && message.thinkingSignature) {
-            contentBlocks.push({
-              type: "thinking",
-              thinking: message.thinking,
-              signature: message.thinkingSignature,
-            });
-          }
-          if (typeof message.content === "string" && message.content.trim()) {
-            contentBlocks.push({ type: "text", text: message.content });
-          }
-          for (const toolCall of message.toolCalls) {
-            contentBlocks.push({
-              type: "tool_use",
-              id: toolCall.id || toolCall.name || `toolCall-${Date.now()}`,
-              name: toolCall.name,
-              input: (toolCall.args as Record<string, unknown>) || {},
-            });
-          }
-          return {
-            role: "assistant",
-            content: contentBlocks,
-          };
-        }
+  return null;
+}
 
-        // Convert messages with media to Anthropic content block format
-        const images = message.images;
-        if (images && images.length > 0) {
-          const contentBlocks: AnthropicBlock[] = [];
-          for (const dataUrl of images) {
-            const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-            if (!match) continue;
-            const mimeType = match[1];
-            let data = match[2];
+async function buildAnthropicMediaMessage(message: ChatMessage) {
+  const contentBlocks: AnthropicBlock[] = [];
+  for (const dataUrl of message.images || []) {
+    const block = await convertDataUrlToAnthropicBlock(dataUrl);
+    if (block) contentBlocks.push(block);
+  }
+  const textContent =
+    typeof message.content === "string" ? message.content : "";
+  if (textContent) {
+    contentBlocks.push({ type: "text", text: textContent });
+  }
+  return {
+    role: message.role,
+    content: contentBlocks.length > 0 ? contentBlocks : message.content,
+  };
+}
 
-            if (mimeType.startsWith("image/")) {
-              // Image content block
-              let mediaType = mimeType;
-              if (data.startsWith("/9j/")) mediaType = "image/jpeg";
-              else if (data.startsWith("iVBOR")) mediaType = "image/png";
-              else if (data.startsWith("R0lG")) mediaType = "image/gif";
-              else if (data.startsWith("UklG")) mediaType = "image/webp";
+function buildAssistantToolCallsMessage(message: ChatMessage) {
+  const contentBlocks: AnthropicBlock[] = [];
+  if (message.thinking && message.thinkingSignature) {
+    contentBlocks.push({
+      type: "thinking",
+      thinking: message.thinking,
+      signature: message.thinkingSignature,
+    });
+  }
+  if (typeof message.content === "string" && message.content.trim()) {
+    contentBlocks.push({ type: "text", text: message.content });
+  }
+  for (const toolCall of message.toolCalls || []) {
+    contentBlocks.push({
+      type: "tool_use",
+      id: toolCall.id || toolCall.name || `toolCall-${Date.now()}`,
+      name: toolCall.name,
+      input: (toolCall.args as Record<string, unknown>) || {},
+    });
+  }
+  return {
+    role: "assistant",
+    content: contentBlocks,
+  };
+}
 
-              // Enforce Anthropic's 5 MB per-image limit
-              logger.info(
-                `[anthropic] Image block: ${mediaType}, b64_len=${data.length} (${(data.length / 1024 / 1024).toFixed(2)} MB), decoded=${(Buffer.byteLength(data, "base64") / 1024 / 1024).toFixed(2)} MB`,
-              );
-              const compressed = await compressImageForSizeLimit(
-                data,
-                mediaType,
-              );
-              data = compressed.data;
-              mediaType = compressed.mediaType;
+function buildAssistantThinkingOnlyMessage(message: ChatMessage) {
+  const contentBlocks: AnthropicBlock[] = [];
+  if (message.thinkingSignature && message.thinking) {
+    contentBlocks.push({
+      type: "thinking",
+      thinking: message.thinking,
+      signature: message.thinkingSignature,
+    });
+  }
+  const trimmedText =
+    typeof message.content === "string" ? message.content.trim() : "";
+  contentBlocks.push({ type: "text", text: trimmedText || " " });
+  return {
+    role: "assistant",
+    content: contentBlocks.length > 1 ? contentBlocks : trimmedText || " ",
+  };
+}
 
-              contentBlocks.push({
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mediaType,
-                  data,
-                },
-              });
-            } else if (mimeType === "application/pdf") {
-              // PDF document content block
-              contentBlocks.push({
-                type: "document",
-                source: {
-                  type: "base64",
-                  media_type: "application/pdf",
-                  data,
-                },
-              });
-            } else if (
-              mimeType.startsWith("text/") ||
-              mimeType === "application/json"
-            ) {
-              // Text-based files — decode and inline as text
-              try {
-                const decoded = Buffer.from(data, "base64").toString("utf-8");
-                contentBlocks.push({
-                  type: "text",
-                  text: `[Attached file (${mimeType})]:\n${decoded}`,
-                });
-              } catch {
-                // Skip if decoding fails
-              }
-            }
-            // Other MIME types (audio, video) are not supported by Anthropic — skip
-          }
-          const textContent =
-            typeof message.content === "string" ? message.content : "";
-          if (textContent) {
-            contentBlocks.push({ type: "text", text: textContent });
-          }
-          return {
-            role: message.role,
-            content: contentBlocks.length > 0 ? contentBlocks : message.content,
-          };
-        }
+function cleanAssistantAnthropicMessage(
+  message: ChatMessage,
+): ChatMessage {
+  if (message.toolCalls?.length) {
+    return buildAssistantToolCallsMessage(message);
+  }
+  if (message.thinking) {
+    return buildAssistantThinkingOnlyMessage(message);
+  }
+  const hasNonEmptyText =
+    typeof message.content === "string"
+      ? Boolean(message.content.trim())
+      : Boolean(message.content);
+  return { role: "assistant", content: hasNonEmptyText ? message.content : " " };
+}
 
-        // Handle assistant messages that have thinking but no toolCalls.
-        // Anthropic requires thinking blocks as structured content blocks,
-        // not top-level fields — convert them into the proper format.
-        // Only include thinking when we have the signature; conversations
-        // without it must omit the block to avoid API 400 errors.
-        if (
-          message.role === "assistant" &&
-          message.thinking &&
-          !message.toolCalls?.length
-        ) {
-          const contentBlocks: AnthropicBlock[] = [];
-          if (message.thinkingSignature) {
-            contentBlocks.push({
-              type: "thinking",
-              thinking: message.thinking,
-              signature: message.thinkingSignature,
-            });
-          }
-          if (typeof message.content === "string" && message.content.trim()) {
-            contentBlocks.push({ type: "text", text: message.content });
-          } else {
-            contentBlocks.push({ type: "text", text: " " });
-          }
-          return {
-            role: "assistant",
-            content:
-              contentBlocks.length > 1
-                ? contentBlocks
-                : (typeof message.content === "string"
-                    ? message.content.trim()
-                    : "") || " ",
-          };
-        }
+function serializeAnthropicRoleContent(content: unknown): string {
+  return typeof content === "string" ? content : JSON.stringify(content);
+}
 
-        // Ensure assistant messages never have empty content
-        if (
-          message.role === "assistant" &&
-          (!message.content ||
-            (typeof message.content === "string" && !message.content.trim()))
-        ) {
-          return { role: "assistant", content: " " };
-        }
+async function cleanSingleAnthropicMessage(
+  message: ChatMessage,
+): Promise<ChatMessage> {
+  if (message.role === "tool") {
+    const toolUseId =
+      message.tool_call_id || message.id || message.name || "unknown";
+    return {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          content: serializeAnthropicRoleContent(message.content),
+        },
+      ] as unknown as ChatMessage["content"],
+    };
+  }
 
-        // Default: user or assistant with plain text — whitelist only role + content
-        return { role: message.role, content: message.content || " " };
-      }),
-  );
+  if (message.role === "system") {
+    return {
+      role: "user",
+      content: serializeAnthropicRoleContent(message.content),
+    };
+  }
 
-  // Merge consecutive same-role messages
-  const merged = cleaned.reduce((acc: ChatMessage[], current: ChatMessage) => {
+  if (message.images && message.images.length > 0) {
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      return buildAssistantToolCallsMessage(message);
+    }
+    return buildAnthropicMediaMessage(message);
+  }
+
+  if (message.role === "assistant") {
+    return cleanAssistantAnthropicMessage(message);
+  }
+
+  return { role: message.role, content: message.content || " " };
+}
+
+function toAnthropicBlockList(content: unknown): AnthropicBlock[] {
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+  return (content as AnthropicBlock[]) || [];
+}
+
+function mergeConsecutiveSameRoleMessages(
+  cleaned: ChatMessage[],
+): ChatMessage[] {
+  return cleaned.reduce((acc: ChatMessage[], current: ChatMessage) => {
     if (acc.length && acc[acc.length - 1].role === current.role) {
       const previous = acc[acc.length - 1];
-      // Handle merging when content might be string or array
       if (
         typeof previous.content === "string" &&
         typeof current.content === "string"
       ) {
         previous.content += `\n\n${current.content}`;
       } else {
-        // Convert both to arrays and concat
-        const previousBlocks =
-          typeof previous.content === "string"
-            ? [{ type: "text", text: previous.content }]
-            : previous.content || [];
-        const currentBlocks =
-          typeof current.content === "string"
-            ? [{ type: "text", text: current.content }]
-            : current.content || [];
-        previous.content = [...previousBlocks, ...currentBlocks];
+        previous.content = [
+          ...toAnthropicBlockList(previous.content),
+          ...toAnthropicBlockList(current.content),
+        ];
       }
     } else {
       acc.push({ ...current });
     }
     return acc;
   }, []);
+}
 
-  // Deduplicate tool_result blocks within merged user messages.
-  // Anthropic requires exactly one tool_result per tool_use_id.
-  // The frontend may send both inline results (from assistant.toolCalls
-  // expansion) and standalone tool-role messages with the same ID,
-  // which after merging creates duplicate tool_result blocks.
+function deduplicateUserToolResults(merged: ChatMessage[]): void {
   for (const message of merged) {
     if (message.role !== "user" || !Array.isArray(message.content)) continue;
     const seenToolResultIds = new Set();
@@ -400,57 +352,88 @@ async function prepareMessages(messages: ChatMessage[]) {
       },
     );
   }
+}
 
-  // Ensure conversation starts with a user message
-  if (merged.length > 0 && merged[0].role === "assistant") {
-    merged.shift();
-  }
+function messageHasToolResult(msg: ChatMessage | undefined): boolean {
+  return Boolean(
+    msg?.role === "user" &&
+      Array.isArray(msg.content) &&
+      (msg.content as AnthropicBlock[]).some(
+        (b: AnthropicBlock) => b.type === "tool_result",
+      ),
+  );
+}
 
-  // Strip orphaned tool_use blocks: if an assistant message has tool_use
-  // content blocks but the next message is NOT a tool_result, remove them.
-  // This handles stale conversation history loaded from the database.
+function stripOrphanedToolUseBlocks(merged: ChatMessage[]): void {
   for (let i = 0; i < merged.length; i++) {
     const message = merged[i];
-    if (message.role !== "assistant" || !Array.isArray(message.content))
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
       continue;
-
-    const hasToolUse = (message.content as AnthropicBlock[]).some(
-      (b: AnthropicBlock) => b.type === "tool_use",
-    );
-    if (!hasToolUse) continue;
-
-    const next = merged[i + 1];
-    const nextHasToolResult =
-      next?.role === "user" &&
-      Array.isArray(next.content) &&
-      next.content.some((b: AnthropicBlock) => b.type === "tool_result");
-
-    if (!nextHasToolResult) {
-      // Strip tool_use blocks, keep only text
-      message.content = (message.content as AnthropicBlock[]).filter(
-        (b: AnthropicBlock) => b.type !== "tool_use",
-      );
-      if (message.content.length === 0) {
-        message.content = " ";
-      }
     }
-  }
+    const blocks = message.content as AnthropicBlock[];
+    const hasToolUse = blocks.some((b: AnthropicBlock) => b.type === "tool_use");
+    if (!hasToolUse || messageHasToolResult(merged[i + 1])) continue;
 
-  // Anthropic rejects requests where the final assistant message content ends
-  // with trailing whitespace (400: "final assistant content cannot end with
-  // trailing whitespace"). Sanitize all assistant text blocks to be safe.
+    const filtered = blocks.filter((b: AnthropicBlock) => b.type !== "tool_use");
+    message.content = filtered.length > 0 ? filtered : " ";
+  }
+}
+
+function trimAssistantTrailingWhitespace(merged: ChatMessage[]): void {
   for (const message of merged) {
     if (message.role !== "assistant") continue;
     if (typeof message.content === "string") {
       message.content = message.content.trimEnd() || " ";
     } else if (Array.isArray(message.content)) {
-      for (const block of message.content) {
+      for (const block of message.content as AnthropicBlock[]) {
         if (block.type === "text" && typeof block.text === "string") {
           block.text = block.text.trimEnd() || " ";
         }
       }
     }
   }
+}
+
+function isSupportedAnthropicRole(role: string): boolean {
+  return (
+    role === "user" ||
+    role === "assistant" ||
+    role === "tool" ||
+    role === "system"
+  );
+}
+
+/**
+ * Anthropic requires alternating user/assistant roles and handles system messages separately.
+ * This helper extracts the system message and merges consecutive same-role messages.
+ */
+async function prepareMessages(messages: ChatMessage[]) {
+  let systemMessage: string | undefined;
+
+  const conversation = messages.map((chatMessage: ChatMessage) => ({
+    ...chatMessage,
+  }));
+  if (conversation.length > 0 && conversation[0].role === "system") {
+    systemMessage = conversation.shift()?.content as string | undefined;
+  }
+
+  const cleaned = await Promise.all(
+    conversation
+      .filter((chatMessage: ChatMessage) =>
+        isSupportedAnthropicRole(chatMessage.role),
+      )
+      .map(cleanSingleAnthropicMessage),
+  );
+
+  const merged = mergeConsecutiveSameRoleMessages(cleaned);
+  deduplicateUserToolResults(merged);
+
+  if (merged.length > 0 && merged[0].role === "assistant") {
+    merged.shift();
+  }
+
+  stripOrphanedToolUseBlocks(merged);
+  trimAssistantTrailingWhitespace(merged);
 
   return { systemMessage, messages: merged };
 }

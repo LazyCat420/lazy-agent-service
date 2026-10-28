@@ -109,6 +109,185 @@ function resolveModelModalities(step: WorkflowStep): ResolvedModalities {
  * Utility steps (🧠 prefix) are shown in the graph but without viewers
  * or chain edges, keeping the visualization focused on output.
  */
+function appendStepInputAndConversationNodes(
+  step: WorkflowStep,
+  stepPrefix: string,
+  baseX: number,
+  baseY: number,
+  modalities: ReturnType<typeof resolveModelModalities>,
+  allNodes: GraphNode[],
+  allEdges: GraphEdge[],
+): string {
+  let inputY = baseY;
+  const sysId = `${stepPrefix}_sys`;
+  if (step.systemPrompt) {
+    allNodes.push({
+      id: sysId,
+      nodeType: "input",
+      modality: "text",
+      content: step.systemPrompt,
+      inputTypes: [],
+      outputTypes: ["text"],
+      position: { x: baseX + INPUT_X_OFFSET, y: inputY },
+    } as InputNode);
+    inputY += 200;
+  }
+
+  const userMessageId = `${stepPrefix}_user`;
+  if (step.input) {
+    allNodes.push({
+      id: userMessageId,
+      nodeType: "input",
+      modality: "text",
+      content: step.input,
+      inputTypes: [],
+      outputTypes: ["text"],
+      position: { x: baseX + INPUT_X_OFFSET, y: inputY },
+    } as InputNode);
+  }
+
+  const convId = `${stepPrefix}_conv`;
+  const messages: WorkflowMessage[] = [];
+  if (step.systemPrompt) {
+    messages.push({ role: "system", content: step.systemPrompt });
+  }
+  messages.push({ role: "user", content: step.input || "" });
+  if (step.output) {
+    const assistantMessage: WorkflowMessage & { images?: string[] } = {
+      role: "assistant",
+      content: step.output,
+    };
+    if (step.outputImageRef) assistantMessage.images = [step.outputImageRef];
+    messages.push(assistantMessage);
+  }
+
+  const supportedModalities = (modalities.rawInputTypes || ["text"]).filter(
+    (tool: string) => tool !== "conversation",
+  );
+  const convInputTypes = buildConversationPorts(messages, supportedModalities);
+
+  allNodes.push({
+    id: convId,
+    nodeType: "input",
+    modality: "conversation",
+    messages,
+    supportedModalities,
+    customName: step.label || undefined,
+    inputTypes: convInputTypes,
+    outputTypes: ["conversation"],
+    position: { x: baseX + CONV_X_OFFSET, y: baseY + 100 },
+  } as InputNode);
+
+  if (step.systemPrompt) {
+    allEdges.push({
+      id: `${stepPrefix}_sys_to_conv`,
+      sourceNodeId: sysId,
+      targetNodeId: convId,
+      sourceModality: "text",
+      targetModality: "0.text",
+    });
+  }
+  if (step.input) {
+    const userIndex = step.systemPrompt ? 1 : 0;
+    allEdges.push({
+      id: `${stepPrefix}_user_to_conv`,
+      sourceNodeId: userMessageId,
+      targetNodeId: convId,
+      sourceModality: "text",
+      targetModality: `${userIndex}.text`,
+    });
+  }
+  return convId;
+}
+
+function appendStepModelAndViewerNodes(
+  step: WorkflowStep,
+  stepPrefix: string,
+  convId: string,
+  baseX: number,
+  baseY: number,
+  modalities: ReturnType<typeof resolveModelModalities>,
+  allNodes: GraphNode[],
+  allEdges: GraphEdge[],
+  nodeResults: NodeResultMap,
+): string {
+  const modelId = `${stepPrefix}_model`;
+  allNodes.push({
+    id: modelId,
+    modelName: step.model || "any",
+    provider: step.type?.toLowerCase() || "any",
+    displayName: modalities.label || step.model || "Step",
+    modelType: modalities.modelType,
+    inputTypes: ["conversation"],
+    rawInputTypes: modalities.rawInputTypes,
+    outputTypes: modalities.outputTypes,
+    supportsSystemPrompt: modalities.supportsSystemPrompt,
+    position: { x: baseX + MODEL_X_OFFSET, y: baseY + 100 },
+    stepMeta: {
+      duration: step.duration,
+      timestamp: step.timestamp,
+      index: step.index,
+    },
+  } as ModelNode);
+
+  allEdges.push({
+    id: `${stepPrefix}_conv_to_model`,
+    sourceNodeId: convId,
+    targetNodeId: modelId,
+    sourceModality: "conversation",
+    targetModality: "conversation",
+  });
+
+  const result: NodeResult = {};
+  if (step.output) result.text = step.output;
+  if (step.outputImageRef) result.image = step.outputImageRef;
+  nodeResults[modelId] = result;
+
+  const viewerId = `${stepPrefix}_viewer`;
+  const viewerResult: NodeResult = { ...result };
+  const viewerContentType = viewerResult.image
+    ? "image"
+    : viewerResult.text
+      ? "text"
+      : null;
+
+  allNodes.push({
+    id: viewerId,
+    nodeType: "viewer",
+    modality: null,
+    content: viewerResult.text || viewerResult.image || null,
+    contentType: viewerContentType,
+    receivedOutputs: viewerResult,
+    inputTypes: ["text", "image", "audio"],
+    outputTypes: ["text", "image", "audio"],
+    position: {
+      x: baseX + VIEWER_X_OFFSET,
+      y: baseY + 100,
+    },
+  } as ViewerNode);
+
+  if (step.output) {
+    allEdges.push({
+      id: `${stepPrefix}_model_to_viewer_text`,
+      sourceNodeId: modelId,
+      targetNodeId: viewerId,
+      sourceModality: "text",
+      targetModality: "text",
+    });
+  }
+  if (step.outputImageRef) {
+    allEdges.push({
+      id: `${stepPrefix}_model_to_viewer_image`,
+      sourceNodeId: modelId,
+      targetNodeId: viewerId,
+      sourceModality: "image",
+      targetModality: "image",
+    });
+  }
+  nodeResults[viewerId] = viewerResult;
+  return modelId;
+}
+
 function assembleGraph(steps: WorkflowStep[]): AssembledGraph {
   if (!Array.isArray(steps) || steps.length === 0) {
     return { nodes: [], edges: [], nodeResults: {} };
@@ -117,197 +296,37 @@ function assembleGraph(steps: WorkflowStep[]): AssembledGraph {
   const allNodes: GraphNode[] = [];
   const allEdges: GraphEdge[] = [];
   const nodeResults: NodeResultMap = {};
-
-  // Track the last non-utility model ID for chain edges
   let previousOutputModelId: string | null = null;
 
   steps.forEach((step: WorkflowStep, i: number) => {
     const baseX = 80 + i * STEP_WIDTH;
     const baseY = 80;
     const stepPrefix = `s${i}`;
-    let inputY = baseY;
     const utility = isUtilityStep(step);
-
     const modalities = resolveModelModalities(step);
 
-    // ── 1. Text Input: System Prompt ──
-    const sysId = `${stepPrefix}_sys`;
-    if (step.systemPrompt) {
-      allNodes.push({
-        id: sysId,
-        nodeType: "input",
-        modality: "text",
-        content: step.systemPrompt,
-        inputTypes: [],
-        outputTypes: ["text"],
-        position: { x: baseX + INPUT_X_OFFSET, y: inputY },
-      } as InputNode);
-      inputY += 200;
-    }
-
-    // ── 2. Text Input: User Message ──
-    const userMessageId = `${stepPrefix}_user`;
-    if (step.input) {
-      allNodes.push({
-        id: userMessageId,
-        nodeType: "input",
-        modality: "text",
-        content: step.input,
-        inputTypes: [],
-        outputTypes: ["text"],
-        position: { x: baseX + INPUT_X_OFFSET, y: inputY },
-      } as InputNode);
-      inputY += 200;
-    }
-
-    // ── 3. Conversation Node ──
-    const convId = `${stepPrefix}_conv`;
-    const messages: WorkflowMessage[] = [];
-    if (step.systemPrompt)
-      messages.push({ role: "system", content: step.systemPrompt });
-    const userMessage: WorkflowMessage = {
-      role: "user",
-      content: step.input || "",
-    };
-    messages.push(userMessage);
-    if (step.output) {
-      const assistantMessage: WorkflowMessage & { images?: string[] } = {
-        role: "assistant",
-        content: step.output,
-      };
-      if (step.outputImageRef) assistantMessage.images = [step.outputImageRef];
-      messages.push(assistantMessage);
-    }
-
-    // Derive conversation supported modalities from the model's raw input types
-    const supportedModalities = (modalities.rawInputTypes || ["text"]).filter(
-      (tool: string) => tool !== "conversation",
-    );
-    const convInputTypes = buildConversationPorts(
-      messages,
-      supportedModalities,
+    const convId = appendStepInputAndConversationNodes(
+      step,
+      stepPrefix,
+      baseX,
+      baseY,
+      modalities,
+      allNodes,
+      allEdges,
     );
 
-    allNodes.push({
-      id: convId,
-      nodeType: "input",
-      modality: "conversation",
-      messages,
-      supportedModalities,
-      customName: step.label || undefined,
-      inputTypes: convInputTypes,
-      outputTypes: ["conversation"],
-      position: { x: baseX + CONV_X_OFFSET, y: baseY + 100 },
-    } as InputNode);
+    const modelId = appendStepModelAndViewerNodes(
+      step,
+      stepPrefix,
+      convId,
+      baseX,
+      baseY,
+      modalities,
+      allNodes,
+      allEdges,
+      nodeResults,
+    );
 
-    // Wire inputs → conversation node
-    const sysIndex = 0;
-    const userIndex = step.systemPrompt ? 1 : 0;
-
-    if (step.systemPrompt) {
-      allEdges.push({
-        id: `${stepPrefix}_sys_to_conv`,
-        sourceNodeId: sysId,
-        targetNodeId: convId,
-        sourceModality: "text",
-        targetModality: `${sysIndex}.text`,
-      });
-    }
-    if (step.input) {
-      allEdges.push({
-        id: `${stepPrefix}_user_to_conv`,
-        sourceNodeId: userMessageId,
-        targetNodeId: convId,
-        sourceModality: "text",
-        targetModality: `${userIndex}.text`,
-      });
-    }
-
-    // ── 4. Model Node ──
-    const modelId = `${stepPrefix}_model`;
-    allNodes.push({
-      id: modelId,
-      modelName: step.model || "any",
-      provider: step.type?.toLowerCase() || "any",
-      displayName: modalities.label || step.model || "Step",
-      modelType: modalities.modelType,
-      inputTypes: ["conversation"],
-      rawInputTypes: modalities.rawInputTypes,
-      outputTypes: modalities.outputTypes,
-      supportsSystemPrompt: modalities.supportsSystemPrompt,
-      position: { x: baseX + MODEL_X_OFFSET, y: baseY + 100 },
-      stepMeta: {
-        duration: step.duration,
-        timestamp: step.timestamp,
-        index: step.index,
-      },
-    } as ModelNode);
-
-    // Wire conversation → model
-    allEdges.push({
-      id: `${stepPrefix}_conv_to_model`,
-      sourceNodeId: convId,
-      targetNodeId: modelId,
-      sourceModality: "conversation",
-      targetModality: "conversation",
-    });
-
-    // Store model results
-    const result: NodeResult = {};
-    if (step.output) result.text = step.output;
-    if (step.outputImageRef) result.image = step.outputImageRef;
-    nodeResults[modelId] = result;
-
-    // ── 5. Output Viewer ──
-    {
-      const viewerId = `${stepPrefix}_viewer`;
-      const viewerResult: NodeResult = {};
-      if (step.output) viewerResult.text = step.output;
-      if (step.outputImageRef) viewerResult.image = step.outputImageRef;
-
-      allNodes.push({
-        id: viewerId,
-        nodeType: "viewer",
-        modality: null,
-        content: viewerResult.text || viewerResult.image || null,
-        contentType: viewerResult.image
-          ? "image"
-          : viewerResult.text
-            ? "text"
-            : null,
-        receivedOutputs: viewerResult,
-        inputTypes: ["text", "image", "audio"],
-        outputTypes: ["text", "image", "audio"],
-        position: {
-          x: baseX + VIEWER_X_OFFSET,
-          y: baseY + 100,
-        },
-      } as ViewerNode);
-
-      // Connect model outputs to viewer
-      if (step.output) {
-        allEdges.push({
-          id: `${stepPrefix}_model_to_viewer_text`,
-          sourceNodeId: modelId,
-          targetNodeId: viewerId,
-          sourceModality: "text",
-          targetModality: "text",
-        });
-      }
-      if (step.outputImageRef) {
-        allEdges.push({
-          id: `${stepPrefix}_model_to_viewer_image`,
-          sourceNodeId: modelId,
-          targetNodeId: viewerId,
-          sourceModality: "image",
-          targetModality: "image",
-        });
-      }
-
-      nodeResults[viewerId] = viewerResult;
-    }
-
-    // ── 6. Chain edge from previous output model → this model (non-utility only) ──
     if (!utility && previousOutputModelId) {
       allEdges.push({
         id: `chain_${previousOutputModelId}_to_${modelId}`,
@@ -318,7 +337,6 @@ function assembleGraph(steps: WorkflowStep[]): AssembledGraph {
       });
     }
 
-    // Track last non-utility model for chains
     if (!utility) {
       previousOutputModelId = modelId;
     }

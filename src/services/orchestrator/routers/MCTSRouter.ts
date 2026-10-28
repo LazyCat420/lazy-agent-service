@@ -294,6 +294,287 @@ export function extractNodeOutput(result: SubAgentResult): string {
  * for full paper-alignment metadata and config option documentation.
  */
 export class MCTSRouter implements TopologyRouter {
+  private selectExpansionTargetForIteration(
+    iteration: number,
+    searchIterations: number,
+    branchFactor: number,
+    originalTask: string,
+    allTreeNodes: MCTSTreeNode[],
+    rootChildIndices: number[],
+    explorationWeight: number,
+    maximumDepth: number,
+  ): {
+    nodeToExpand: MCTSTreeNode | null;
+    expansionPrompt: string;
+    expansionDepth: number;
+  } | null {
+    if (iteration === 1) {
+      logger.info(
+        `[MCTSRouter] Iteration ${iteration}/${searchIterations}: Root expansion → ${branchFactor} branches at depth 1`,
+      );
+      return {
+        nodeToExpand: null,
+        expansionPrompt: originalTask,
+        expansionDepth: 1,
+      };
+    }
+
+    const selectedIndex = selectNodeToExpand(
+      allTreeNodes,
+      rootChildIndices,
+      explorationWeight,
+      maximumDepth,
+    );
+    if (selectedIndex === null) {
+      logger.info(
+        `[MCTSRouter] Iteration ${iteration}: No expandable nodes remaining — tree fully explored. Terminating.`,
+      );
+      return null;
+    }
+
+    const nodeToExpand = allTreeNodes[selectedIndex];
+    const expansionDepth = nodeToExpand.depth + 1;
+    const nodeOutput = extractNodeOutput(nodeToExpand.result);
+    const expansionPrompt = buildRefinementPrompt(
+      originalTask,
+      nodeOutput,
+      nodeToExpand.evaluationFeedback,
+      nodeToExpand.depth,
+      maximumDepth,
+    );
+
+    logger.info(
+      `[MCTSRouter] Iteration ${iteration}/${searchIterations}: UCB1 selected node ${selectedIndex} ` +
+        `(depth ${nodeToExpand.depth}, score: ${nodeToExpand.score.toFixed(2)}) → expanding to depth ${expansionDepth}`,
+    );
+    return { nodeToExpand, expansionPrompt, expansionDepth };
+  }
+
+  private async spawnMCTSBranches(
+    referenceMember: TeamMember,
+    branchFactor: number,
+    iteration: number,
+    searchIterations: number,
+    expansionDepth: number,
+    expansionPrompt: string,
+    orchestratorContext: OrchestratorContext,
+    spawnSubAgent: (
+      assignment: OrchestratorSpawnParams,
+    ) => Promise<SubAgentResult | { error: string }>,
+  ): Promise<{
+    branchResults: (SubAgentResult | { error: string })[];
+    successfulBranches: { branchIndex: number; result: SubAgentResult }[];
+  }> {
+    const { providerName, resolvedModel } = orchestratorContext;
+    const resolvedSiblings = await resolveSiblingInstances(
+      { providerName, resolvedModel },
+      "MCTSRouter",
+    );
+    const branchAssignments: OrchestratorSpawnParams[] = [];
+
+    for (let branchIndex = 0; branchIndex < branchFactor; branchIndex++) {
+      const { assignedProvider, assignedModel } = selectInstanceForMember(
+        referenceMember,
+        resolvedSiblings,
+        { providerName, resolvedModel },
+      );
+
+      branchAssignments.push({
+        description: `${referenceMember.description} (Iter ${iteration}, Depth ${expansionDepth}, Branch ${branchIndex + 1})`,
+        prompt: expansionPrompt,
+        files: referenceMember.files,
+        model: referenceMember.model,
+        agent: referenceMember.agent,
+        assignedProvider,
+        assignedModel,
+        agentIndex: branchIndex,
+        teamSize: branchFactor,
+        round: iteration,
+        totalRounds: searchIterations,
+        orchestratorContext,
+      });
+    }
+
+    const branchResults = await Promise.all(
+      branchAssignments.map((assignment) => spawnSubAgent(assignment)),
+    );
+    const successfulBranches: { branchIndex: number; result: SubAgentResult }[] =
+      [];
+    for (let branchIndex = 0; branchIndex < branchResults.length; branchIndex++) {
+      const branchResult = branchResults[branchIndex];
+      if (!("error" in branchResult) && branchResult.status === "completed") {
+        successfulBranches.push({ branchIndex, result: branchResult });
+      }
+    }
+    return { branchResults, successfulBranches };
+  }
+
+  private async evaluateMCTSBranches(
+    provider: NonNullable<ReturnType<typeof getProvider>>,
+    teamName: string,
+    iteration: number,
+    expansionDepth: number,
+    maximumDepth: number,
+    originalTask: string,
+    successfulBranches: { branchIndex: number; result: SubAgentResult }[],
+    nodeToExpand: MCTSTreeNode | null,
+    orchestratorContext: OrchestratorContext,
+  ): Promise<EvaluationResult> {
+    const { providerName, resolvedModel } = orchestratorContext;
+    const candidateOutputs = successfulBranches.map((branch) => ({
+      branchIndex: branch.branchIndex,
+      output: extractNodeOutput(branch.result),
+    }));
+
+    const evaluationPrompt = buildEvaluationPrompt(
+      originalTask,
+      candidateOutputs,
+      expansionDepth,
+      maximumDepth,
+    );
+
+    try {
+      const evaluationStartMs = performance.now();
+      const evaluationMessages: Array<{
+        role: "user" | "assistant" | "system";
+        content: string;
+      }> = [{ role: "user", content: evaluationPrompt }];
+      const evaluationResponse = await provider.generateText(
+        evaluationMessages,
+        resolvedModel,
+        { maxTokens: 2048 },
+      );
+
+      RequestLogger.logBackgroundLlmCall({
+        requestId: `${orchestratorContext.conversationId || "unknown"}-mcts-eval-i${iteration}-${teamName}`,
+        endpoint: "/agent",
+        operation: "orchestrator:mcts-evaluate",
+        project: orchestratorContext.project || null,
+        username: orchestratorContext.username || "system",
+        agent: null,
+        provider: providerName,
+        model: resolvedModel,
+        traceId: orchestratorContext.traceId || null,
+        agentConversationId: orchestratorContext.agentConversationId || null,
+        aiMessages: evaluationMessages,
+        resultText: evaluationResponse.text || "",
+        usage: evaluationResponse.usage || null,
+        success: true,
+        errorMessage: null,
+        requestStartMs: evaluationStartMs,
+        extraRequestPayload: {
+          teamName,
+          iteration,
+          depth: expansionDepth,
+          branchCount: successfulBranches.length,
+          expandedNodeIndex: nodeToExpand?.nodeIndex ?? "root",
+        },
+      }).catch((loggingError: unknown) =>
+        logger.error(
+          `[MCTSRouter] Failed to log evaluation request: ${getErrorMessage(loggingError)}`,
+        ),
+      );
+
+      return parseEvaluationResponse(
+        evaluationResponse.text || "",
+        successfulBranches.length,
+      );
+    } catch (evaluationError: unknown) {
+      logger.error(
+        `[MCTSRouter] Evaluation failed at iteration ${iteration}: ${getErrorMessage(evaluationError)}`,
+      );
+      return {
+        scores: new Array(successfulBranches.length).fill(0.5),
+        bestBranchIndex: 0,
+        isComplete: false,
+        feedback: "",
+        branchFeedback: new Array(successfulBranches.length).fill(""),
+      };
+    }
+  }
+
+  private recordAndBackpropagateMCTSNodes(
+    allTreeNodes: MCTSTreeNode[],
+    rootChildIndices: number[],
+    nodeToExpand: MCTSTreeNode | null,
+    expansionDepth: number,
+    successfulBranches: { branchIndex: number; result: SubAgentResult }[],
+    evaluationResult: EvaluationResult,
+  ): void {
+    const parentIndex = nodeToExpand?.nodeIndex ?? null;
+    const newChildIndices: number[] = [];
+
+    for (
+      let branchOffset = 0;
+      branchOffset < successfulBranches.length;
+      branchOffset++
+    ) {
+      const branch = successfulBranches[branchOffset];
+      const nodeIndex = allTreeNodes.length;
+      const perBranchFeedback =
+        evaluationResult.branchFeedback[branchOffset] ||
+        evaluationResult.feedback ||
+        "";
+      const score = evaluationResult.scores[branchOffset] ?? 0.5;
+
+      allTreeNodes.push({
+        nodeIndex,
+        depth: expansionDepth,
+        branchIndex: branch.branchIndex,
+        result: branch.result,
+        score,
+        visitCount: 0,
+        parentNodeIndex: parentIndex,
+        childNodeIndices: [],
+        isExpanded: false,
+        evaluationFeedback: perBranchFeedback,
+      });
+
+      newChildIndices.push(nodeIndex);
+      backpropagateScores(allTreeNodes, nodeIndex, score);
+    }
+
+    if (nodeToExpand) {
+      nodeToExpand.isExpanded = true;
+      nodeToExpand.childNodeIndices = newChildIndices;
+    } else {
+      rootChildIndices.push(...newChildIndices);
+    }
+  }
+
+  private buildMCTSSearchSummaryResult(
+    teamName: string,
+    allTreeNodes: MCTSTreeNode[],
+    allResults: (SubAgentResult | { error: string })[],
+  ): SubAgentResult {
+    const bestOverallNode = allTreeNodes.reduce((bestNode, currentNode) =>
+      currentNode.score > bestNode.score ? currentNode : bestNode,
+    );
+    const treeDepthReached = Math.max(
+      ...allTreeNodes.map((node) => node.depth),
+    );
+    const expandedNodeCount = allTreeNodes.filter(
+      (node) => node.isExpanded,
+    ).length;
+
+    return {
+      agent_id: `mcts-search-${teamName}-${Date.now()}`,
+      description: `MCTS search summary for team "${teamName}"`,
+      status: "completed",
+      summary:
+        `MCTS search explored ${allTreeNodes.length} nodes across ${treeDepthReached} depth levels ` +
+        `(${expandedNodeCount} expanded). Best node: depth ${bestOverallNode.depth}, score ${bestOverallNode.score.toFixed(3)}`,
+      result: bestOverallNode.result.result,
+      toolUses: 0,
+      iterations: allTreeNodes.length,
+      durationMs: allResults
+        .filter((result): result is SubAgentResult => !("error" in result))
+        .reduce((total, result) => total + (result.durationMs || 0), 0),
+      messages: [],
+      diff: bestOverallNode.result.diff,
+    };
+  }
+
   async execute(
     teamName: string,
     members: TeamMember[],
@@ -304,19 +585,31 @@ export class MCTSRouter implements TopologyRouter {
     _continueSubAgent?: ContinueSubAgentCallback,
     topologyConfig?: TopologyConfig,
   ): Promise<(SubAgentResult | { error: string })[]> {
-    const { providerName, resolvedModel } = orchestratorContext;
+    const { providerName } = orchestratorContext;
     const originalTask = members[0]?.prompt || "";
     const branchFactor = Math.min(
-      Math.max(1, Number(topologyConfig?.branchFactor) || DEFAULT_BRANCH_FACTOR),
+      Math.max(
+        1,
+        Number(topologyConfig?.branchFactor) || DEFAULT_BRANCH_FACTOR,
+      ),
       Math.max(members.length, 2),
     );
-    const maximumDepth = Math.max(1, Number(topologyConfig?.maxDepth) || DEFAULT_MAXIMUM_DEPTH);
-    const explorationWeight = Math.max(0, Number(topologyConfig?.explorationWeight) || DEFAULT_EXPLORATION_WEIGHT);
-    const searchIterations = Math.max(1, Number(topologyConfig?.searchIterations) || maximumDepth);
+    const maximumDepth = Math.max(
+      1,
+      Number(topologyConfig?.maxDepth) || DEFAULT_MAXIMUM_DEPTH,
+    );
+    const explorationWeight = Math.max(
+      0,
+      Number(topologyConfig?.explorationWeight) || DEFAULT_EXPLORATION_WEIGHT,
+    );
+    const searchIterations = Math.max(
+      1,
+      Number(topologyConfig?.searchIterations) || maximumDepth,
+    );
 
     logger.info(
       `[MCTSRouter] Starting MCTS search for team "${teamName}" ` +
-      `(branch factor: ${branchFactor}, max depth: ${maximumDepth}, iterations: ${searchIterations})...`,
+        `(branch factor: ${branchFactor}, max depth: ${maximumDepth}, iterations: ${searchIterations})...`,
     );
 
     const provider = getProvider(providerName);
@@ -330,239 +623,76 @@ export class MCTSRouter implements TopologyRouter {
     const allResults: (SubAgentResult | { error: string })[] = [];
     const rootChildIndices: number[] = [];
 
-    // ════════════════════════════════════════════════════════════════════
-    // MCTS ITERATION LOOP
-    // Each iteration: SELECT → EXPAND → EVALUATE → BACKPROPAGATE
-    // ════════════════════════════════════════════════════════════════════
-
     for (let iteration = 1; iteration <= searchIterations; iteration++) {
-      let nodeToExpand: MCTSTreeNode | null = null;
-      let expansionPrompt: string;
-      let expansionDepth: number;
-
-      if (iteration === 1) {
-        // First iteration: expand root with the original task
-        expansionPrompt = originalTask;
-        expansionDepth = 1;
-        logger.info(
-          `[MCTSRouter] Iteration ${iteration}/${searchIterations}: Root expansion → ${branchFactor} branches at depth 1`,
-        );
-      } else {
-        // ── SELECT: UCB1-guided walk to find the most promising leaf ────
-        const selectedIndex = selectNodeToExpand(
-          allTreeNodes,
-          rootChildIndices,
-          explorationWeight,
-          maximumDepth,
-        );
-
-        if (selectedIndex === null) {
-          logger.info(
-            `[MCTSRouter] Iteration ${iteration}: No expandable nodes remaining — tree fully explored. Terminating.`,
-          );
-          break;
-        }
-
-        nodeToExpand = allTreeNodes[selectedIndex];
-        expansionDepth = nodeToExpand.depth + 1;
-
-        const nodeOutput = extractNodeOutput(nodeToExpand.result);
-        expansionPrompt = buildRefinementPrompt(
-          originalTask,
-          nodeOutput,
-          nodeToExpand.evaluationFeedback,
-          nodeToExpand.depth,
-          maximumDepth,
-        );
-
-        logger.info(
-          `[MCTSRouter] Iteration ${iteration}/${searchIterations}: UCB1 selected node ${selectedIndex} ` +
-          `(depth ${nodeToExpand.depth}, score: ${nodeToExpand.score.toFixed(2)}) → expanding to depth ${expansionDepth}`,
-        );
-      }
-
-      // ── EXPAND: Spawn B sub-agents in parallel ──────────────────────
-
-      const resolvedSiblings = await resolveSiblingInstances(
-        { providerName, resolvedModel },
-        "MCTSRouter",
+      const target = this.selectExpansionTargetForIteration(
+        iteration,
+        searchIterations,
+        branchFactor,
+        originalTask,
+        allTreeNodes,
+        rootChildIndices,
+        explorationWeight,
+        maximumDepth,
       );
+      if (!target) break;
+      const { nodeToExpand, expansionPrompt, expansionDepth } = target;
 
-      const referenceMember = members[0];
-      const branchAssignments: OrchestratorSpawnParams[] = [];
-
-      for (let branchIndex = 0; branchIndex < branchFactor; branchIndex++) {
-        const { assignedProvider, assignedModel } = selectInstanceForMember(
-          referenceMember,
-          resolvedSiblings,
-          { providerName, resolvedModel },
-        );
-
-        branchAssignments.push({
-          description: `${referenceMember.description} (Iter ${iteration}, Depth ${expansionDepth}, Branch ${branchIndex + 1})`,
-          prompt: expansionPrompt,
-          files: referenceMember.files,
-          model: referenceMember.model,
-          agent: referenceMember.agent,
-          assignedProvider,
-          assignedModel,
-          agentIndex: branchIndex,
-          teamSize: branchFactor,
-          round: iteration,
-          totalRounds: searchIterations,
+      const { branchResults, successfulBranches } =
+        await this.spawnMCTSBranches(
+          members[0],
+          branchFactor,
+          iteration,
+          searchIterations,
+          expansionDepth,
+          expansionPrompt,
           orchestratorContext,
-        });
-      }
-
-      const branchPromises = branchAssignments.map((assignment) =>
-        spawnSubAgent(assignment),
-      );
-      const branchResults = await Promise.all(branchPromises);
+          spawnSubAgent,
+        );
       allResults.push(...branchResults);
-
-      const successfulBranches: { branchIndex: number; result: SubAgentResult }[] = [];
-      for (let branchIndex = 0; branchIndex < branchResults.length; branchIndex++) {
-        const branchResult = branchResults[branchIndex];
-        if (!("error" in branchResult) && branchResult.status === "completed") {
-          successfulBranches.push({ branchIndex, result: branchResult });
-        }
-      }
 
       if (successfulBranches.length === 0) {
         logger.warn(
           `[MCTSRouter] All ${branchFactor} branches failed at iteration ${iteration} — ` +
-          `${iteration === 1 ? "aborting search" : "marking node as expanded (dead end)"}`,
+            `${iteration === 1 ? "aborting search" : "marking node as expanded (dead end)"}`,
         );
-        if (nodeToExpand) {
-          nodeToExpand.isExpanded = true;
-        }
+        if (nodeToExpand) nodeToExpand.isExpanded = true;
         if (iteration === 1) break;
         continue;
       }
 
-      // ── EVALUATE: Score each successful branch ──────────────────────
-
       logger.info(
         `[MCTSRouter] Iteration ${iteration}: Evaluating ${successfulBranches.length} successful branch(es)...`,
       );
-
-      const candidateOutputs = successfulBranches.map((branch) => ({
-        branchIndex: branch.branchIndex,
-        output: extractNodeOutput(branch.result),
-      }));
-
-      const evaluationPrompt = buildEvaluationPrompt(
-        originalTask,
-        candidateOutputs,
+      const evaluationResult = await this.evaluateMCTSBranches(
+        provider,
+        teamName,
+        iteration,
         expansionDepth,
         maximumDepth,
+        originalTask,
+        successfulBranches,
+        nodeToExpand,
+        orchestratorContext,
       );
 
-      let evaluationResult: EvaluationResult;
+      this.recordAndBackpropagateMCTSNodes(
+        allTreeNodes,
+        rootChildIndices,
+        nodeToExpand,
+        expansionDepth,
+        successfulBranches,
+        evaluationResult,
+      );
 
-      try {
-        const evaluationStartMs = performance.now();
-        const evaluationMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [{ role: "user", content: evaluationPrompt }];
-        const evaluationResponse = await provider.generateText(
-          evaluationMessages,
-          resolvedModel,
-          { maxTokens: 2048 },
-        );
-
-        RequestLogger.logBackgroundLlmCall({
-          requestId: `${orchestratorContext.conversationId || "unknown"}-mcts-eval-i${iteration}-${teamName}`,
-          endpoint: "/agent",
-          operation: "orchestrator:mcts-evaluate",
-          project: orchestratorContext.project || null,
-          username: orchestratorContext.username || "system",
-          agent: null,
-          provider: providerName,
-          model: resolvedModel,
-          traceId: orchestratorContext.traceId || null,
-          agentConversationId: orchestratorContext.agentConversationId || null,
-          aiMessages: evaluationMessages,
-          resultText: evaluationResponse.text || "",
-          usage: evaluationResponse.usage || null,
-          success: true,
-          errorMessage: null,
-          requestStartMs: evaluationStartMs,
-          extraRequestPayload: {
-            teamName,
-            iteration,
-            depth: expansionDepth,
-            branchCount: successfulBranches.length,
-            expandedNodeIndex: nodeToExpand?.nodeIndex ?? "root",
-          },
-        }).catch((loggingError: unknown) =>
-          logger.error(
-            `[MCTSRouter] Failed to log evaluation request: ${getErrorMessage(loggingError)}`,
-          ),
-        );
-
-        evaluationResult = parseEvaluationResponse(
-          evaluationResponse.text || "",
-          successfulBranches.length,
-        );
-      } catch (evaluationError: unknown) {
-        logger.error(
-          `[MCTSRouter] Evaluation failed at iteration ${iteration}: ${getErrorMessage(evaluationError)}`,
-        );
-        evaluationResult = {
-          scores: new Array(successfulBranches.length).fill(0.5),
-          bestBranchIndex: 0,
-          isComplete: false,
-          feedback: "",
-          branchFeedback: new Array(successfulBranches.length).fill(""),
-        };
-      }
-
-      // ── Record tree nodes and BACKPROPAGATE ─────────────────────────
-
-      const parentIndex = nodeToExpand?.nodeIndex ?? null;
-      const newChildIndices: number[] = [];
-
-      for (let branchOffset = 0; branchOffset < successfulBranches.length; branchOffset++) {
-        const branch = successfulBranches[branchOffset];
-        const nodeIndex = allTreeNodes.length;
-
-        const perBranchFeedback = evaluationResult.branchFeedback[branchOffset]
-          || evaluationResult.feedback
-          || "";
-
-        allTreeNodes.push({
-          nodeIndex,
-          depth: expansionDepth,
-          branchIndex: branch.branchIndex,
-          result: branch.result,
-          score: evaluationResult.scores[branchOffset] ?? 0.5,
-          visitCount: 0,
-          parentNodeIndex: parentIndex,
-          childNodeIndices: [],
-          isExpanded: false,
-          evaluationFeedback: perBranchFeedback,
-        });
-
-        newChildIndices.push(nodeIndex);
-        backpropagateScores(allTreeNodes, nodeIndex, evaluationResult.scores[branchOffset] ?? 0.5);
-      }
-
-      // Link children to parent (or register as root children)
-      if (nodeToExpand) {
-        nodeToExpand.isExpanded = true;
-        nodeToExpand.childNodeIndices = newChildIndices;
-      } else {
-        rootChildIndices.push(...newChildIndices);
-      }
-
-      // ── Log selection info ──────────────────────────────────────────
-
-      const bestBranch = successfulBranches[evaluationResult.bestBranchIndex] ?? successfulBranches[0];
-      const bestScore = evaluationResult.scores[evaluationResult.bestBranchIndex] ?? 0.5;
-
+      const bestBranch =
+        successfulBranches[evaluationResult.bestBranchIndex] ??
+        successfulBranches[0];
+      const bestScore =
+        evaluationResult.scores[evaluationResult.bestBranchIndex] ?? 0.5;
       logger.info(
         `[MCTSRouter] Iteration ${iteration}: Best branch ${bestBranch.branchIndex + 1} ` +
-        `(score: ${bestScore.toFixed(2)})` +
-        `${evaluationResult.isComplete ? " — COMPLETE" : ""}`,
+          `(score: ${bestScore.toFixed(2)})` +
+          `${evaluationResult.isComplete ? " — COMPLETE" : ""}`,
       );
 
       if (evaluationResult.isComplete) {
@@ -573,36 +703,10 @@ export class MCTSRouter implements TopologyRouter {
       }
     }
 
-    // ════════════════════════════════════════════════════════════════════
-    // BUILD FINAL RESULT — select highest-scoring node across the tree
-    // ════════════════════════════════════════════════════════════════════
-
     if (allTreeNodes.length > 0) {
-      const bestOverallNode = allTreeNodes.reduce((bestNode, currentNode) =>
-        currentNode.score > bestNode.score ? currentNode : bestNode,
+      allResults.push(
+        this.buildMCTSSearchSummaryResult(teamName, allTreeNodes, allResults),
       );
-
-      const treeDepthReached = Math.max(...allTreeNodes.map((node) => node.depth));
-      const expandedNodeCount = allTreeNodes.filter((node) => node.isExpanded).length;
-
-      const searchSummary: SubAgentResult = {
-        agent_id: `mcts-search-${teamName}-${Date.now()}`,
-        description: `MCTS search summary for team "${teamName}"`,
-        status: "completed",
-        summary:
-          `MCTS search explored ${allTreeNodes.length} nodes across ${treeDepthReached} depth levels ` +
-          `(${expandedNodeCount} expanded). Best node: depth ${bestOverallNode.depth}, score ${bestOverallNode.score.toFixed(3)}`,
-        result: bestOverallNode.result.result,
-        toolUses: 0,
-        iterations: allTreeNodes.length,
-        durationMs: allResults
-          .filter((result): result is SubAgentResult => !("error" in result))
-          .reduce((total, result) => total + (result.durationMs || 0), 0),
-        messages: [],
-        diff: bestOverallNode.result.diff,
-      };
-
-      allResults.push(searchSummary);
     }
 
     return allResults;

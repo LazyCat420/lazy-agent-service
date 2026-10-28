@@ -92,18 +92,159 @@ import type {
  */
 
 /** Execute a batch of tool calls in parallel. */
-export async function executeToolBatch(
-  toolCalls: ToolCall[],
+async function handleMalformedToolCall(
+  toolCall: ToolCall,
   context: AgenticContext,
-  tools: ResolvedTools,
+  hooks: AgentHooks,
+): Promise<ToolResult> {
+  const result = {
+    success: false,
+    error: "MALFORMED_TOOL_CALL_JSON",
+    message:
+      `The JSON arguments for your "${toolCall.name}" call could not be parsed ` +
+      `(likely truncated or invalid). Re-emit the tool call with complete, valid JSON arguments.` +
+      (toolCall._rawArgs ? `\nUnparseable argument text (excerpt): ${toolCall._rawArgs}` : ""),
+  };
+  await hooks.run("afterToolCall", toolCall, result, context);
+  return { name: toolCall.name, id: toolCall.id, result, durationMs: 0 };
+}
+
+async function tryExecuteInternalTool(
+  toolCall: ToolCall,
+  context: AgenticContext,
+  hooks: AgentHooks,
+  resolvedAgentConversationId: string,
+): Promise<ToolResult | null> {
+  if (toolCall.name === "skill_read") {
+    const started = Date.now();
+    const requestedName = typeof toolCall.args?.name === "string" ? toolCall.args.name : "";
+    const body = new SkillRegistry().loadBody(requestedName);
+    const result = {
+      success: body !== null,
+      ...(body !== null
+        ? { name: requestedName, body }
+        : {
+            error: "skill_not_found",
+            message: `No skill named "${requestedName}" is registered. Check the Available Skills section of the system prompt.`,
+          }),
+    };
+    await hooks.run("afterToolCall", toolCall, result, context);
+    return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+  }
+
+  if (toolCall.name === "take_note") {
+    const started = Date.now();
+    const runId =
+      typeof (context as { runId?: unknown }).runId === "string"
+        ? String((context as { runId?: unknown }).runId)
+        : resolvedAgentConversationId;
+    const result = await executeTakeNote(
+      toolCall.args ?? {},
+      runId,
+      new NoteStore({ repoRoot: context.workspaceRoot || undefined }),
+    );
+    await hooks.run("afterToolCall", toolCall, result, context);
+    return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+  }
+
+  if (toolCall.name === "ask_user") {
+    const started = Date.now();
+    let result: Record<string, unknown>;
+    try {
+      result = await executeAskUser(toolCall.args ?? {}, context);
+    } catch (askError: unknown) {
+      result = { error: askError instanceof Error ? askError.message : String(askError) };
+    }
+    await hooks.run("afterToolCall", toolCall, result, context);
+    return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+  }
+
+  if (toolCall.name === "retrieve_offloaded_content") {
+    const started = Date.now();
+    const result = await retrieveOffloadedTool.execute(toolCall.args ?? {});
+    await hooks.run("afterToolCall", toolCall, result, context);
+    return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
+  }
+
+  return null;
+}
+
+async function executeStreamingToolCall(
+  toolCall: ToolCall,
+  context: AgenticContext,
   hooks: AgentHooks,
   state: AgenticLoopState,
-): Promise<ToolResult[]> {
+  resolvedAgentConversationId: string,
+  parentSpan: any,
+  sideEffect: ReturnType<typeof classifySideEffect>,
+): Promise<ToolResult> {
+  const { project, username, agent, conversationId, workspaceRoot, emit } = context;
+  const startTime = Date.now();
+  const result = await HarnessInstrumenter.traceToolExecution(
+    toolCall.name,
+    toolCall.args,
+    parentSpan,
+    sideEffect,
+    async () => {
+      return await ToolOrchestratorService.executeToolStreaming(
+        toolCall.name,
+        toolCall.args as Record<string, unknown>,
+        (event: string, data: string | null, meta?: Record<string, unknown>) => {
+          emit({
+            type: SERVER_SENT_EVENT_TYPES.TOOL_OUTPUT,
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            event,
+            data: data || undefined,
+            meta: meta || undefined,
+            ...(context.traceId ? { trace_id: context.traceId } : {}),
+            ...((context as any).runId ? { run_id: (context as any).runId } : {}),
+          });
+        },
+        {
+          project,
+          username,
+          agent,
+          requestId: context.requestId,
+          agentConversationId: resolvedAgentConversationId,
+          conversationId,
+          iteration: state.iterations,
+          workspaceRoot,
+          _toolState: ToolContext.getStore(resolvedAgentConversationId),
+        },
+      );
+    },
+  );
+  const durationMs = Date.now() - startTime;
+  await hooks.run("afterToolCall", toolCall, result, context);
+  return {
+    name: toolCall.name,
+    id: toolCall.id,
+    result: truncateResultIfNeeded(result, project, toolCall.name),
+    durationMs,
+  };
+}
+
+function resolveMaxRecursionDepth(context: AgenticContext): number | undefined {
+  if (typeof context._maxRecursionDepth === "number") {
+    return context._maxRecursionDepth;
+  }
+  if (typeof context.options?.maxRecursionDepth === "number") {
+    return context.options.maxRecursionDepth;
+  }
+  return undefined;
+}
+
+function buildStandardToolExecContext(
+  context: AgenticContext,
+  tools: ResolvedTools,
+  state: AgenticLoopState,
+  resolvedAgentConversationId: string,
+) {
   const {
     project,
     username,
     agent,
-    agentConversationId,
     conversationId,
     traceId,
     providerName,
@@ -111,227 +252,161 @@ export async function executeToolBatch(
     workspaceRoot,
     emit,
   } = context;
+  return {
+    messages: context._currentMessages || context.messages,
+    project,
+    username,
+    agent: agent || null,
+    traceId: traceId || null,
+    agentConversationId: resolvedAgentConversationId,
+    conversationId,
+    clientIp: context.clientIp || null,
+    requestId: context.requestId,
+    iteration: state.iterations,
+    _providerName: providerName,
+    _resolvedModel: resolvedModel,
+    _emit: emit,
+    _maxSubAgentIterations: context.options?.maxSubAgentIterations,
+    _minContextLength: context.options?.minContextLength,
+    workspaceRoot,
+    _toolState: ToolContext.getStore(resolvedAgentConversationId),
+    enabledTools: tools.finalTools.map((toolSchema) => toolSchema.name),
+    _topology: typeof context.options?.topology === "string" ? context.options.topology : undefined,
+    _recursionDepth: typeof context._recursionDepth === "number" ? context._recursionDepth : undefined,
+    _maxRecursionDepth: resolveMaxRecursionDepth(context),
+    _thinkingEnabled: context.options?.thinkingEnabled,
+    _reasoningEffort: context.options?.reasoningEffort,
+    _thinkingBudget: context.options?.thinkingBudget,
+    _policies: context.options?.policies,
+  };
+}
 
-  const resolvedAgentConversationId = agentConversationId || "";
+function recordDescribedTools(toolCall: ToolCall, state: AgenticLoopState): void {
+  if (toolCall.name === "describe_tools" && toolCall.args && Array.isArray(toolCall.args.tool_names)) {
+    for (const name of toolCall.args.tool_names) {
+      if (typeof name === "string") {
+        const cleanName = name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+        state.loadedTools.add(cleanName);
+      }
+    }
+  }
+}
 
-  // Every call is decided before any runs (asks may pause for a person).
+async function executeSingleAuthorizedTool(
+  toolCall: ToolCall,
+  authorization: Awaited<ReturnType<typeof authorizeToolCalls>>,
+  context: AgenticContext,
+  tools: ResolvedTools,
+  hooks: AgentHooks,
+  state: AgenticLoopState,
+  resolvedAgentConversationId: string,
+): Promise<ToolResult> {
+  if (toolCall._argsParseError) {
+    return handleMalformedToolCall(toolCall, context, hooks);
+  }
+
+  const denial = authorization.denied.get(toolCall);
+  if (denial) {
+    await hooks.run("afterToolCall", toolCall, denial, context);
+    return { name: toolCall.name, id: toolCall.id, result: denial, durationMs: 0 };
+  }
+  if (!authorization.executable.has(toolCall)) {
+    throw new Error(`Tool call "${toolCall.name}" reached execution without an allow verdict`);
+  }
+
+  if (context.runtimeToolExecutor) {
+    const started = Date.now();
+    const result = await context.runtimeToolExecutor(toolCall);
+    await hooks.run("afterToolCall", toolCall, result, context);
+    return {
+      name: toolCall.name,
+      id: toolCall.id,
+      result: normalizeEmptyToolContent(result),
+      durationMs: Date.now() - started,
+    };
+  }
+
+  const internalResult = await tryExecuteInternalTool(
+    toolCall,
+    context,
+    hooks,
+    resolvedAgentConversationId,
+  );
+  if (internalResult) return internalResult;
+
+  const parentSpan = (context as any).rootSpan;
+  const sideEffect = classifySideEffect(toolCall.name);
+
+  if (ToolOrchestratorService.isStreamable(toolCall.name)) {
+    return executeStreamingToolCall(
+      toolCall,
+      context,
+      hooks,
+      state,
+      resolvedAgentConversationId,
+      parentSpan,
+      sideEffect,
+    );
+  }
+
+  const startTime = Date.now();
+  const execContext = buildStandardToolExecContext(
+    context,
+    tools,
+    state,
+    resolvedAgentConversationId,
+  );
+  const result = await HarnessInstrumenter.traceToolExecution(
+    toolCall.name,
+    toolCall.args,
+    parentSpan,
+    sideEffect,
+    async () => {
+      return await ToolOrchestratorService.executeTool(
+        toolCall.name,
+        toolCall.args as Record<string, unknown>,
+        execContext,
+      );
+    },
+  );
+  const durationMs = Date.now() - startTime;
+  await hooks.run("afterToolCall", toolCall, result, context);
+  recordDescribedTools(toolCall, state);
+
+  return {
+    name: toolCall.name,
+    id: toolCall.id,
+    result: truncateResultIfNeeded(
+      normalizeEmptyToolContent(truncateResultIfNeeded(result, context.project, toolCall.name)),
+      context.project,
+      toolCall.name,
+    ),
+    durationMs,
+  };
+}
+
+export async function executeToolBatch(
+  toolCalls: ToolCall[],
+  context: AgenticContext,
+  tools: ResolvedTools,
+  hooks: AgentHooks,
+  state: AgenticLoopState,
+): Promise<ToolResult[]> {
+  const resolvedAgentConversationId = context.agentConversationId || "";
   const authorization = await authorizeToolCalls(toolCalls, context, hooks);
 
   const results = await Promise.all(
-    toolCalls.map(async (toolCall) => {
-      // ported from prism-service lifecycle/ToolExecutor.ts: malformed
-      // tool-call JSON — never execute with silently-empty args. Return a
-      // synthetic error telling the model its own JSON was broken so it can
-      // re-emit the call with complete, valid JSON arguments.
-      if (toolCall._argsParseError) {
-        const result = {
-          success: false,
-          error: "MALFORMED_TOOL_CALL_JSON",
-          message:
-            `The JSON arguments for your "${toolCall.name}" call could not be parsed ` +
-            `(likely truncated or invalid). Re-emit the tool call with complete, valid JSON arguments.` +
-            (toolCall._rawArgs ? `\nUnparseable argument text (excerpt): ${toolCall._rawArgs}` : ""),
-        };
-        await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result, durationMs: 0 };
-      }
-
-      // A denied call ends here with its one denial result; it never runs.
-      const denial = authorization.denied.get(toolCall);
-      if (denial) {
-        await hooks.run("afterToolCall", toolCall, denial, context);
-        return { name: toolCall.name, id: toolCall.id, result: denial, durationMs: 0 };
-      }
-      if (!authorization.executable.has(toolCall)) {
-        throw new Error(`Tool call "${toolCall.name}" reached execution without an allow verdict`);
-      }
-
-      if (context.runtimeToolExecutor) {
-        const started = Date.now();
-        const result = await context.runtimeToolExecutor(toolCall);
-        await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result: normalizeEmptyToolContent(result), durationMs: Date.now() - started };
-      }
-
-      // ── skill_read internal tool ─────────────────────────────
-      // Serves skill bodies from <repoRoot>/skills/<name>/SKILL.md on
-      // demand; never dispatched to tools-api.
-      if (toolCall.name === "skill_read") {
-        const started = Date.now();
-        const requestedName =
-          typeof toolCall.args?.name === "string" ? toolCall.args.name : "";
-        const body = new SkillRegistry().loadBody(requestedName);
-        const result = {
-          success: body !== null,
-          ...(body !== null
-            ? { name: requestedName, body }
-            : {
-                error: "skill_not_found",
-                message: `No skill named "${requestedName}" is registered. Check the Available Skills section of the system prompt.`,
-              }),
-        };
-        await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
-      }
-
-      // ── take_note internal tool ──────────────────────────────
-      // Persists per-run notes to <repoRoot>/data/notes/<runId>.md;
-      // never dispatched to tools-api.
-      if (toolCall.name === "take_note") {
-        const started = Date.now();
-        const runId =
-          typeof (context as { runId?: unknown }).runId === "string"
-            ? String((context as { runId?: unknown }).runId)
-            : resolvedAgentConversationId;
-        const result = await executeTakeNote(
-          toolCall.args ?? {},
-          runId,
-          new NoteStore({ repoRoot: workspaceRoot || undefined }),
-        );
-        await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
-      }
-
-      // ── ask_user internal tool ───────────────────────────────
-      // Parks the turn until the user answers over POST /agent/answer.
-      if (toolCall.name === "ask_user") {
-        const started = Date.now();
-        let result: Record<string, unknown>;
-        try {
-          result = await executeAskUser(toolCall.args ?? {}, context);
-        } catch (askError: unknown) {
-          result = { error: askError instanceof Error ? askError.message : String(askError) };
-        }
-        await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
-      }
-
-      // ── retrieve_offloaded_content internal tool ─────────────
-      // Serves the full payload of an offloaded tool result; never
-      // dispatched to tools-api.
-      if (toolCall.name === "retrieve_offloaded_content") {
-        const started = Date.now();
-        const result = await retrieveOffloadedTool.execute(toolCall.args ?? {});
-        await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result, durationMs: Date.now() - started };
-      }
-
-      const parentSpan = (context as any).rootSpan;
-      const sideEffect = classifySideEffect(toolCall.name);
-
-      if (ToolOrchestratorService.isStreamable(toolCall.name)) {
-        const startTime = Date.now();
-        const result = await HarnessInstrumenter.traceToolExecution(
-          toolCall.name,
-          toolCall.args,
-          parentSpan,
-          sideEffect,
-          async () => {
-            return await ToolOrchestratorService.executeToolStreaming(
-              toolCall.name,
-              toolCall.args as Record<string, unknown>,
-              (
-                event: string,
-                data: string | null,
-                meta?: Record<string, unknown>,
-              ) => {
-                emit({
-                  type: SERVER_SENT_EVENT_TYPES.TOOL_OUTPUT,
-                  toolCallId: toolCall.id,
-                  name: toolCall.name,
-                  event,
-                  data: data || undefined,
-                  meta: meta || undefined,
-                  ...(context.traceId ? { trace_id: context.traceId } : {}),
-                  ...((context as any).runId ? { run_id: (context as any).runId } : {}),
-                });
-              },
-              {
-                project,
-                username,
-                agent,
-                requestId: context.requestId,
-                agentConversationId: resolvedAgentConversationId,
-                conversationId,
-                iteration: state.iterations,
-                workspaceRoot,
-                _toolState: ToolContext.getStore(resolvedAgentConversationId),
-              },
-            );
-          },
-        );
-        const durationMs = Date.now() - startTime;
-        await hooks.run("afterToolCall", toolCall, result, context);
-        return { name: toolCall.name, id: toolCall.id, result: truncateResultIfNeeded(result, project, toolCall.name), durationMs };
-      }
-
-      const startTime = Date.now();
-      const result = await HarnessInstrumenter.traceToolExecution(
-        toolCall.name,
-        toolCall.args,
-        parentSpan,
-        sideEffect,
-        async () => {
-          return await ToolOrchestratorService.executeTool(
-            toolCall.name,
-            toolCall.args as Record<string, unknown>,
-            {
-              messages: context._currentMessages || context.messages,
-              project,
-              username,
-              agent: agent || null,
-              traceId: traceId || null,
-              agentConversationId: resolvedAgentConversationId,
-              conversationId,
-              clientIp: context.clientIp || null,
-              requestId: context.requestId,
-              iteration: state.iterations,
-              _providerName: providerName,
-              _resolvedModel: resolvedModel,
-              _emit: emit,
-              _maxSubAgentIterations: context.options?.maxSubAgentIterations,
-              _minContextLength: context.options?.minContextLength,
-              workspaceRoot,
-              _toolState: ToolContext.getStore(resolvedAgentConversationId),
-              enabledTools: tools.finalTools.map((toolSchema) => toolSchema.name),
-              _topology:
-                typeof context.options?.topology === "string"
-                  ? context.options.topology
-                  : undefined,
-              _recursionDepth:
-                typeof context._recursionDepth === "number"
-                  ? context._recursionDepth
-                  : undefined,
-              _maxRecursionDepth:
-                typeof context._maxRecursionDepth === "number"
-                  ? context._maxRecursionDepth
-                  : typeof context.options?.maxRecursionDepth === "number"
-                    ? context.options.maxRecursionDepth
-                    : undefined,
-              _thinkingEnabled: context.options?.thinkingEnabled,
-              _reasoningEffort: context.options?.reasoningEffort,
-              _thinkingBudget: context.options?.thinkingBudget,
-              // Sub-agents inherit the parent's policies: a parent DENY
-              // binds every agent it spawns.
-              _policies: context.options?.policies,
-            },
-          );
-        },
-      );
-      const durationMs = Date.now() - startTime;
-      await hooks.run("afterToolCall", toolCall, result, context);
-
-      if (toolCall.name === "describe_tools" && toolCall.args && Array.isArray(toolCall.args.tool_names)) {
-        for (const name of toolCall.args.tool_names) {
-          if (typeof name === "string") {
-            const cleanName = name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
-            state.loadedTools.add(cleanName);
-          }
-        }
-      }
-
-      return { name: toolCall.name, id: toolCall.id, result: truncateResultIfNeeded(normalizeEmptyToolContent(truncateResultIfNeeded(result, project, toolCall.name)), project, toolCall.name), durationMs };
-    }),
+    toolCalls.map((toolCall) =>
+      executeSingleAuthorizedTool(
+        toolCall,
+        authorization,
+        context,
+        tools,
+        hooks,
+        state,
+        resolvedAgentConversationId,
+      ),
+    ),
   );
 
   await applyOffloadPolicyToResults(results, context);

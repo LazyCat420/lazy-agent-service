@@ -289,63 +289,36 @@ export function buildDependencyContextPrefix(
  * for full paper-alignment metadata and config option documentation.
  */
 export class DivideAndConquerRouter implements TopologyRouter {
-  async execute(
+  private async runTaskDecompositionPass(
     teamName: string,
-    members: TeamMember[],
+    originalTask: string,
+    memberCount: number,
+    configuredMaxSubtasks: number,
+    firstMemberDescription: string,
+    provider: NonNullable<ReturnType<typeof getProvider>>,
     orchestratorContext: OrchestratorContext,
-    spawnSubAgent: (
-      assignment: OrchestratorSpawnParams,
-    ) => Promise<SubAgentResult | { error: string }>,
-    _continueSubAgent?: ContinueSubAgentCallback,
-    topologyConfig?: TopologyConfig,
-  ): Promise<(SubAgentResult | { error: string })[]> {
+  ): Promise<{ subtasks: DecomposedSubtask[] } | { error: string }> {
     const { providerName, resolvedModel } = orchestratorContext;
-    if (members.length === 0) {
-      const errorMessage = "No members provided for Divide & Conquer execution";
-      logger.error(`[DivideAndConquerRouter] ${errorMessage}`);
-      return [{ error: errorMessage }];
-    }
-    const originalTask = members.map((member) => member.prompt).join("\n\n");
-    const configuredMaxSubtasks = Math.max(1, Number(topologyConfig?.maxSubtasks) || MAXIMUM_SUBTASKS);
-    const maximumRecursionDepth = Math.min(
-      MAXIMUM_ALLOWED_RECURSION_DEPTH,
-      Math.max(1, Number(topologyConfig?.maxRecursionDepth) || DEFAULT_MAXIMUM_RECURSION_DEPTH),
+    const decompositionPrompt = buildDecompositionPrompt(
+      originalTask,
+      memberCount,
+      configuredMaxSubtasks,
     );
-    const recursionComplexityThreshold = Math.max(
-      50,
-      Number(topologyConfig?.recursionComplexityThreshold) || DEFAULT_RECURSION_COMPLEXITY_THRESHOLD,
-    );
-
-    logger.info(
-      `[DivideAndConquerRouter] Starting divide-and-conquer for team "${teamName}" (${members.length} member(s))...`,
-    );
-
-    // ── Phase 1: Task Decomposition ─────────────────────────────────────
-
-    logger.info(
-      `[DivideAndConquerRouter] Phase 1: Decomposing task into subtasks...`,
-    );
-
-    const decompositionPrompt = buildDecompositionPrompt(originalTask, members.length, configuredMaxSubtasks);
-    const provider = getProvider(providerName);
-
-    if (!provider) {
-      const errorMessage = `Provider "${providerName}" not found for decomposition pass`;
-      logger.error(`[DivideAndConquerRouter] ${errorMessage}`);
-      return [{ error: errorMessage }];
-    }
-
-    let subtasks: DecomposedSubtask[];
 
     try {
       const decompositionStartMs = performance.now();
-      const decompositionMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [{ role: "user", content: decompositionPrompt }];
+      const decompositionMessages: Array<{
+        role: "user" | "assistant" | "system";
+        content: string;
+      }> = [{ role: "user", content: decompositionPrompt }];
       const decompositionResult = await provider.generateText(
         decompositionMessages,
         resolvedModel,
         { maxTokens: 4096 },
       );
-      const decompositionDurationMs = Math.round(performance.now() - decompositionStartMs);
+      const decompositionDurationMs = Math.round(
+        performance.now() - decompositionStartMs,
+      );
 
       RequestLogger.logBackgroundLlmCall({
         requestId: `${orchestratorContext.conversationId || "unknown"}-decompose-${teamName}`,
@@ -371,27 +344,40 @@ export class DivideAndConquerRouter implements TopologyRouter {
         ),
       );
 
-      subtasks = parseDecompositionResponse(decompositionResult.text || "", configuredMaxSubtasks);
-
+      let subtasks = parseDecompositionResponse(
+        decompositionResult.text || "",
+        configuredMaxSubtasks,
+      );
       logger.info(
         `[DivideAndConquerRouter] Decomposed into ${subtasks.length} subtask(s) in ${decompositionDurationMs}ms`,
       );
+      if (subtasks.length === 0) {
+        logger.warn(
+          `[DivideAndConquerRouter] Decomposition produced 0 subtasks — falling back to direct execution`,
+        );
+        subtasks = [{ description: firstMemberDescription, prompt: originalTask }];
+      }
+      return { subtasks };
     } catch (decompositionError: unknown) {
       const errorMessage = `Decomposition failed: ${getErrorMessage(decompositionError)}`;
       logger.error(`[DivideAndConquerRouter] ${errorMessage}`);
-      return [{ error: errorMessage }];
+      return { error: errorMessage };
     }
+  }
 
-    if (subtasks.length === 0) {
-      logger.warn(
-        `[DivideAndConquerRouter] Decomposition produced 0 subtasks — falling back to direct execution`,
-      );
-      // Fall back: execute the original task as-is with one sub-agent
-      subtasks = [{ description: members[0].description, prompt: originalTask }];
-    }
-
-    // ── Phase 2: Tier-Based Subtask Execution (Dependency-Aware) ─────────
-
+  private async executeSubtaskTiers(
+    subtasks: DecomposedSubtask[],
+    referenceMember: TeamMember,
+    provider: NonNullable<ReturnType<typeof getProvider>>,
+    orchestratorContext: OrchestratorContext,
+    spawnSubAgent: (
+      assignment: OrchestratorSpawnParams,
+    ) => Promise<SubAgentResult | { error: string }>,
+    configuredMaxSubtasks: number,
+    maximumRecursionDepth: number,
+    recursionComplexityThreshold: number,
+  ): Promise<(SubAgentResult | { error: string })[]> {
+    const { providerName, resolvedModel } = orchestratorContext;
     const executionTiers = buildExecutionTiers(subtasks);
     const tierCount = executionTiers.length;
     const subtaskDescriptions = subtasks.map((subtask) => subtask.description);
@@ -405,12 +391,14 @@ export class DivideAndConquerRouter implements TopologyRouter {
       "DivideAndConquerRouter",
     );
 
-    const referenceMember = members[0];
     const subtaskResults: (SubAgentResult | { error: string })[] = Array.from(
       { length: subtasks.length },
       () => ({ error: "not executed" }),
     );
-    const completedResults = new Map<number, SubAgentResult | { error: string }>();
+    const completedResults = new Map<
+      number,
+      SubAgentResult | { error: string }
+    >();
 
     for (let tierIndex = 0; tierIndex < tierCount; tierIndex++) {
       const tierSubtaskIndices = executionTiers[tierIndex];
@@ -421,9 +409,7 @@ export class DivideAndConquerRouter implements TopologyRouter {
         );
       }
 
-      const tierAssignments: { subtaskIndex: number; assignment: OrchestratorSpawnParams }[] = [];
-
-      for (const subtaskIndex of tierSubtaskIndices) {
+      const tierAssignments = tierSubtaskIndices.map((subtaskIndex) => {
         const subtask = subtasks[subtaskIndex];
         const { assignedProvider, assignedModel } = selectInstanceForMember(
           referenceMember,
@@ -431,11 +417,16 @@ export class DivideAndConquerRouter implements TopologyRouter {
           { providerName, resolvedModel },
         );
 
-        const dependencyContext = subtask.dependsOn && subtask.dependsOn.length > 0
-          ? buildDependencyContextPrefix(completedResults, subtask.dependsOn, subtaskDescriptions)
-          : "";
+        const dependencyContext =
+          subtask.dependsOn && subtask.dependsOn.length > 0
+            ? buildDependencyContextPrefix(
+                completedResults,
+                subtask.dependsOn,
+                subtaskDescriptions,
+              )
+            : "";
 
-        tierAssignments.push({
+        return {
           subtaskIndex,
           assignment: {
             description: subtask.description,
@@ -449,58 +440,58 @@ export class DivideAndConquerRouter implements TopologyRouter {
             teamSize: subtasks.length,
             orchestratorContext,
           },
-        });
-      }
+        };
+      });
 
-      const tierPromises = tierAssignments.map(({ assignment }) =>
-        this.executeSubtaskWithRecursion(
-          assignment,
-          spawnSubAgent,
-          provider,
-          orchestratorContext,
-          referenceMember,
-          resolvedSiblings,
-          configuredMaxSubtasks,
-          maximumRecursionDepth,
-          recursionComplexityThreshold,
-          1,
+      const tierResults = await Promise.all(
+        tierAssignments.map(({ assignment }) =>
+          this.executeSubtaskWithRecursion(
+            assignment,
+            spawnSubAgent,
+            provider,
+            orchestratorContext,
+            referenceMember,
+            resolvedSiblings,
+            configuredMaxSubtasks,
+            maximumRecursionDepth,
+            recursionComplexityThreshold,
+            1,
+          ),
         ),
       );
-      const tierResults = await Promise.all(tierPromises);
 
-      for (let resultOffset = 0; resultOffset < tierAssignments.length; resultOffset++) {
+      for (
+        let resultOffset = 0;
+        resultOffset < tierAssignments.length;
+        resultOffset++
+      ) {
         const originalIndex = tierAssignments[resultOffset].subtaskIndex;
         subtaskResults[originalIndex] = tierResults[resultOffset];
         completedResults.set(originalIndex, tierResults[resultOffset]);
       }
     }
 
-    // ── Phase 3: Synthesis ──────────────────────────────────────────────
+    return subtaskResults;
+  }
 
-    const successfulResults = subtaskResults.filter(
-      (result) => !("error" in result) && result.status === "completed",
-    );
-
-    if (successfulResults.length === 0) {
-      logger.warn(
-        `[DivideAndConquerRouter] All ${subtaskResults.length} subtasks failed — skipping synthesis`,
-      );
-      return subtaskResults;
-    }
-
-    if (successfulResults.length === 1 && subtasks.length === 1) {
-      logger.info(
-        `[DivideAndConquerRouter] Single subtask executed — skipping synthesis`,
-      );
-      return subtaskResults;
-    }
-
+  private async runDivideAndConquerSynthesis(
+    teamName: string,
+    originalTask: string,
+    subtasks: DecomposedSubtask[],
+    subtaskResults: (SubAgentResult | { error: string })[],
+    successfulCount: number,
+    provider: NonNullable<ReturnType<typeof getProvider>>,
+    orchestratorContext: OrchestratorContext,
+  ): Promise<(SubAgentResult | { error: string })[]> {
+    const { providerName, resolvedModel } = orchestratorContext;
     logger.info(
-      `[DivideAndConquerRouter] Phase 3: Synthesizing ${successfulResults.length} subtask result(s)...`,
+      `[DivideAndConquerRouter] Phase 3: Synthesizing ${successfulCount} subtask result(s)...`,
     );
 
     try {
-      const subtaskDescriptions = subtasks.map((subtask) => subtask.description);
+      const subtaskDescriptions = subtasks.map(
+        (subtask) => subtask.description,
+      );
       const synthesisPrompt = buildSynthesisPrompt(
         originalTask,
         subtaskResults,
@@ -508,13 +499,18 @@ export class DivideAndConquerRouter implements TopologyRouter {
       );
 
       const synthesisStartMs = performance.now();
-      const synthesisMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [{ role: "user", content: synthesisPrompt }];
+      const synthesisMessages: Array<{
+        role: "user" | "assistant" | "system";
+        content: string;
+      }> = [{ role: "user", content: synthesisPrompt }];
       const synthesisResult = await provider.generateText(
         synthesisMessages,
         resolvedModel,
         { maxTokens: 8192 },
       );
-      const synthesisDurationMs = Math.round(performance.now() - synthesisStartMs);
+      const synthesisDurationMs = Math.round(
+        performance.now() - synthesisStartMs,
+      );
 
       RequestLogger.logBackgroundLlmCall({
         requestId: `${orchestratorContext.conversationId || "unknown"}-synthesis-${teamName}`,
@@ -537,7 +533,7 @@ export class DivideAndConquerRouter implements TopologyRouter {
           teamName,
           phase: "synthesis",
           subtaskCount: subtasks.length,
-          successfulCount: successfulResults.length,
+          successfulCount,
         },
       }).catch((loggingError: unknown) =>
         logger.error(
@@ -549,7 +545,7 @@ export class DivideAndConquerRouter implements TopologyRouter {
         agent_id: `divide-conquer-synthesis-${teamName}-${Date.now()}`,
         description: `Divide & Conquer synthesis for team "${teamName}"`,
         status: "completed",
-        summary: `Decomposed into ${subtasks.length} subtasks, synthesized ${successfulResults.length} successful results`,
+        summary: `Decomposed into ${subtasks.length} subtasks, synthesized ${successfulCount} successful results`,
         result: synthesisResult.text,
         toolUses: 0,
         iterations: 1,
@@ -569,6 +565,109 @@ export class DivideAndConquerRouter implements TopologyRouter {
       );
       return subtaskResults;
     }
+  }
+
+  async execute(
+    teamName: string,
+    members: TeamMember[],
+    orchestratorContext: OrchestratorContext,
+    spawnSubAgent: (
+      assignment: OrchestratorSpawnParams,
+    ) => Promise<SubAgentResult | { error: string }>,
+    _continueSubAgent?: ContinueSubAgentCallback,
+    topologyConfig?: TopologyConfig,
+  ): Promise<(SubAgentResult | { error: string })[]> {
+    const { providerName } = orchestratorContext;
+    if (members.length === 0) {
+      const errorMessage = "No members provided for Divide & Conquer execution";
+      logger.error(`[DivideAndConquerRouter] ${errorMessage}`);
+      return [{ error: errorMessage }];
+    }
+    const originalTask = members.map((member) => member.prompt).join("\n\n");
+    const configuredMaxSubtasks = Math.max(
+      1,
+      Number(topologyConfig?.maxSubtasks) || MAXIMUM_SUBTASKS,
+    );
+    const maximumRecursionDepth = Math.min(
+      MAXIMUM_ALLOWED_RECURSION_DEPTH,
+      Math.max(
+        1,
+        Number(topologyConfig?.maxRecursionDepth) ||
+          DEFAULT_MAXIMUM_RECURSION_DEPTH,
+      ),
+    );
+    const recursionComplexityThreshold = Math.max(
+      50,
+      Number(topologyConfig?.recursionComplexityThreshold) ||
+        DEFAULT_RECURSION_COMPLEXITY_THRESHOLD,
+    );
+
+    logger.info(
+      `[DivideAndConquerRouter] Starting divide-and-conquer for team "${teamName}" (${members.length} member(s))...`,
+    );
+    logger.info(
+      `[DivideAndConquerRouter] Phase 1: Decomposing task into subtasks...`,
+    );
+
+    const provider = getProvider(providerName);
+    if (!provider) {
+      const errorMessage = `Provider "${providerName}" not found for decomposition pass`;
+      logger.error(`[DivideAndConquerRouter] ${errorMessage}`);
+      return [{ error: errorMessage }];
+    }
+
+    const decomp = await this.runTaskDecompositionPass(
+      teamName,
+      originalTask,
+      members.length,
+      configuredMaxSubtasks,
+      members[0].description,
+      provider,
+      orchestratorContext,
+    );
+    if ("error" in decomp) {
+      return [{ error: decomp.error }];
+    }
+    const subtasks = decomp.subtasks;
+
+    const subtaskResults = await this.executeSubtaskTiers(
+      subtasks,
+      members[0],
+      provider,
+      orchestratorContext,
+      spawnSubAgent,
+      configuredMaxSubtasks,
+      maximumRecursionDepth,
+      recursionComplexityThreshold,
+    );
+
+    const successfulResults = subtaskResults.filter(
+      (result) => !("error" in result) && result.status === "completed",
+    );
+
+    if (successfulResults.length === 0) {
+      logger.warn(
+        `[DivideAndConquerRouter] All ${subtaskResults.length} subtasks failed — skipping synthesis`,
+      );
+      return subtaskResults;
+    }
+
+    if (successfulResults.length === 1 && subtasks.length === 1) {
+      logger.info(
+        `[DivideAndConquerRouter] Single subtask executed — skipping synthesis`,
+      );
+      return subtaskResults;
+    }
+
+    return this.runDivideAndConquerSynthesis(
+      teamName,
+      originalTask,
+      subtasks,
+      subtaskResults,
+      successfulResults.length,
+      provider,
+      orchestratorContext,
+    );
   }
 
   private async executeSubtaskWithRecursion(

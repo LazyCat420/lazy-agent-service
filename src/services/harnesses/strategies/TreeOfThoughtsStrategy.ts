@@ -40,6 +40,7 @@ import type {
   AgenticOptions,
   PassState,
   BeforePromptHookContext,
+  EmitFunction,
 } from "../types.ts";
 import {
   SERVER_SENT_EVENT_TYPES,
@@ -131,36 +132,11 @@ const BRANCH_STRATEGY_DESCRIPTORS = [
 //  Public API — called by ReActHarness when thoughtStructure === "tree_of_thoughts"
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-export async function runTreeOfThoughts(
-  harness: BaseAgenticHarness,
-): Promise<{ messages: ConversationMessage[] }> {
-  const context = harness["context"];
-  const state: AgenticLoopState = harness["state"];
-  const tools = harness["tools"];
-  const {
-    options,
-    conversationId,
-    agentConversationId,
-    traceId,
-    project,
-    username,
-    agent,
-    workspaceRoot,
-    emit,
-    signal,
-  } = context;
-
-  const resolvedAgentConversationId = agentConversationId || "";
-
-  const searchStrategy: SearchStrategy =
-    (options.searchStrategy as SearchStrategy) || "bfs";
-  const initialBranchCount = Math.min(
-    Math.max(1, options.branchCount || DEFAULT_BRANCH_COUNT),
-    5,
-  );
+function resolveToTSearchConfig(options: AgenticOptions) {
+  const searchStrategy: SearchStrategy = (options.searchStrategy as SearchStrategy) || "bfs";
+  const initialBranchCount = Math.min(Math.max(1, options.branchCount || DEFAULT_BRANCH_COUNT), 5);
   const valueThreshold = options.valueThreshold ?? DEFAULT_VALUE_THRESHOLD;
   const bfsBeamWidth = Math.min(DEFAULT_BFS_BEAM_WIDTH, initialBranchCount);
-
   const clientMaxIterations = options.maxIterations;
   const resolvedMaxIterations =
     clientMaxIterations === 0
@@ -168,26 +144,19 @@ export async function runTreeOfThoughts(
       : clientMaxIterations
         ? Math.min(100, Math.max(1, clientMaxIterations))
         : MAX_TOOL_ITERATIONS;
+  return { searchStrategy, initialBranchCount, valueThreshold, bfsBeamWidth, resolvedMaxIterations };
+}
 
-  let currentMessages: ConversationMessage[] = [...context.messages];
-  let truncationRecoveryCount = 0;
-  let hasCleanTextBreak = false;
-  let failedApproachDescriptions: string[] = [];
+async function runToTBeforePromptHook(
+  harness: BaseAgenticHarness,
+  currentMessages: ConversationMessage[],
+  hooks: ReturnType<typeof createStandardHooks>["hooks"],
+  resolvedAgentConversationId: string,
+): Promise<void> {
+  const context = harness["context"];
+  const tools = harness["tools"];
+  const { options, conversationId, traceId, project, username, agent, workspaceRoot, emit } = context;
 
-  const { hooks } = createStandardHooks({
-    workspaceRoot: workspaceRoot || undefined,
-    enableCriticGate: options.enableCriticGate === true,
-    criticModel: options.criticModel || undefined,
-  });
-
-  if (options.planFirst) {
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.STATUS,
-      message: STATUS_MESSAGES.PLAN_MODE_ENTERED,
-    });
-  }
-
-  // ── beforePrompt hook (once) ──────────────────────────
   const hookContext: BeforePromptHookContext = {
     messages: currentMessages,
     project,
@@ -199,9 +168,7 @@ export async function runTreeOfThoughts(
     parentAgentConversationId: context.parentAgentConversationId,
     agentContext: options.agentContext,
     enabledTools: tools.resolvedEnabledTools,
-    resolvedToolNames: tools.finalTools.map(
-      (tool: ToolSchema) => tool.name,
-    ),
+    resolvedToolNames: tools.finalTools.map((tool: ToolSchema) => tool.name),
     workspaceRoot: workspaceRoot || undefined,
     workspaceEnabled: options.workspaceEnabled as boolean | undefined,
     locale: options.locale as string | undefined,
@@ -218,35 +185,743 @@ export async function runTreeOfThoughts(
       options.systemPrompt = assembledPrompt;
     }
   }
-
-  if (
-    Array.isArray(hookContext._injectedSkills) &&
-    hookContext._injectedSkills.length > 0
-  ) {
+  if (Array.isArray(hookContext._injectedSkills) && hookContext._injectedSkills.length > 0) {
     emit({
       type: SERVER_SENT_EVENT_TYPES.STATUS,
       message: STATUS_MESSAGES.SKILLS_INJECTED,
       skills: hookContext._injectedSkills,
     });
   }
+}
 
-  // ── Pre-loop planning phase ─────────────────────────────
+async function exploreDfsBranches(
+  harness: BaseAgenticHarness,
+  adaptiveBranchCount: number,
+  valueThreshold: number,
+  currentMessages: ConversationMessage[],
+  passOptions: IterationPassOptions,
+  allowedToolNames: Set<string>,
+  failedApproachDescriptions: string[],
+): Promise<{ scoredBranches: ScoredBranch[]; selectedBranch: ScoredBranch }> {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const { emit, signal } = context;
+
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.BRANCHING_STARTED,
+    branchCount: adaptiveBranchCount,
+    iteration: state.iterations,
+    searchStrategy: "dfs",
+  });
+
+  let acceptedBranch: ScoredBranch | null = null;
+  const exploredSiblings: ScoredBranch[] = [];
+
+  for (let siblingAttempt = 0; siblingAttempt < adaptiveBranchCount; siblingAttempt++) {
+    if (signal?.aborted) break;
+    const branch = await generateBranch(
+      harness,
+      siblingAttempt,
+      adaptiveBranchCount,
+      currentMessages,
+      passOptions,
+      allowedToolNames,
+      failedApproachDescriptions,
+    );
+    state.branchesExplored++;
+
+    const [scoredSibling] = await scoreBranchesMultiCriteria(harness, [branch], currentMessages);
+    exploredSiblings.push(scoredSibling);
+
+    if (scoredSibling.score >= valueThreshold) {
+      acceptedBranch = scoredSibling;
+      logger.info(
+        `[TreeOfThoughts/DFS] Sibling ${siblingAttempt + 1}/${adaptiveBranchCount} accepted (score: ${scoredSibling.score.toFixed(1)} >= threshold: ${valueThreshold})`,
+      );
+      break;
+    }
+
+    state.branchesBacktracked++;
+    failedApproachDescriptions.push((scoredSibling.text || scoredSibling.thinking || "").slice(0, 300));
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.STATUS,
+      message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
+      branchIndex: scoredSibling.branchIndex,
+      reason: "dfs_sibling_pruned",
+      score: scoredSibling.score,
+      threshold: valueThreshold,
+      siblingAttempt: siblingAttempt + 1,
+      maxSiblings: adaptiveBranchCount,
+    });
+    logger.info(
+      `[TreeOfThoughts/DFS] Sibling ${siblingAttempt + 1}/${adaptiveBranchCount} pruned (score: ${scoredSibling.score.toFixed(1)} < threshold: ${valueThreshold})`,
+    );
+  }
+
+  exploredSiblings.sort((branchA, branchB) => branchB.score - branchA.score);
+  if (!acceptedBranch) {
+    acceptedBranch = exploredSiblings[0];
+    logger.info(
+      `[TreeOfThoughts/DFS] No sibling above threshold — accepting best available (score: ${acceptedBranch.score.toFixed(1)})`,
+    );
+  }
+  return { scoredBranches: exploredSiblings, selectedBranch: acceptedBranch };
+}
+
+async function exploreBfsBranches(
+  harness: BaseAgenticHarness,
+  adaptiveBranchCount: number,
+  bfsBeamWidth: number,
+  currentMessages: ConversationMessage[],
+  passOptions: IterationPassOptions,
+  allowedToolNames: Set<string>,
+  failedApproachDescriptions: string[],
+): Promise<{ scoredBranches: ScoredBranch[]; selectedBranch: ScoredBranch; aborted: boolean }> {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const { emit, signal } = context;
+
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.BRANCHING_STARTED,
+    branchCount: adaptiveBranchCount,
+    iteration: state.iterations,
+    searchStrategy: "bfs",
+  });
+
+  const branchResults = await Promise.all(
+    Array.from({ length: adaptiveBranchCount }, (_, branchIndex) =>
+      generateBranch(
+        harness,
+        branchIndex,
+        adaptiveBranchCount,
+        currentMessages,
+        passOptions,
+        allowedToolNames,
+        failedApproachDescriptions,
+      ),
+    ),
+  );
+
+  if (signal?.aborted) {
+    return { scoredBranches: [], selectedBranch: branchResults[0], aborted: true };
+  }
+
+  state.branchesExplored += adaptiveBranchCount;
+  const scoredBranches = await scoreBranchesMultiCriteria(harness, branchResults, currentMessages);
+  scoredBranches.sort((branchA, branchB) => branchB.score - branchA.score);
+  const selectedBranch = scoredBranches[0];
+
+  state.frontierCandidates = scoredBranches.slice(1, bfsBeamWidth).map((branch) => ({
+    pass: branch.pass,
+    score: branch.score,
+    branchIndex: branch.branchIndex,
+    criteriaScores: branch.criteriaScores,
+  }));
+
+  return { scoredBranches, selectedBranch, aborted: false };
+}
+
+function handleProactiveToTBacktrack(
+  selectedBranch: ScoredBranch,
+  scoredBranches: ScoredBranch[],
+  valueThreshold: number,
+  state: AgenticLoopState,
+  currentMessages: ConversationMessage[],
+  failedApproachDescriptions: string[],
+  options: AgenticOptions,
+  emit: EmitFunction,
+): boolean {
+  if (
+    selectedBranch.score >= valueThreshold ||
+    state.iterations <= 1 ||
+    state.proactiveBacktracks >= MAX_PROACTIVE_BACKTRACKS
+  ) {
+    return false;
+  }
+  state.proactiveBacktracks++;
+  state.branchesBacktracked++;
+
+  const failedSummary = (selectedBranch.text || selectedBranch.thinking || "").slice(0, 300).trim();
+  if (failedSummary) failedApproachDescriptions.push(failedSummary);
+
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
+    branchIndex: selectedBranch.branchIndex,
+    reason: "proactive_value_threshold",
+    bestScore: selectedBranch.score,
+    threshold: valueThreshold,
+    proactiveBacktracks: state.proactiveBacktracks,
+    maxProactiveBacktracks: MAX_PROACTIVE_BACKTRACKS,
+  });
+
+  logger.info(
+    `[TreeOfThoughts] Proactive backtrack — best score ${selectedBranch.score.toFixed(1)} < threshold ${valueThreshold}. Re-branching (${state.proactiveBacktracks}/${MAX_PROACTIVE_BACKTRACKS}).`,
+  );
+
+  currentMessages.push({
+    role: "system",
+    content: PromptLocaleService.get(
+      (options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
+      "harness.treeOfThoughts.proactiveBacktrack",
+      {
+        branchCount: String(scoredBranches.length),
+        bestScore: selectedBranch.score.toFixed(1),
+        threshold: String(valueThreshold),
+      },
+    ),
+  });
+  return true;
+}
+
+function handleToTValidationFailure(
+  harness: BaseAgenticHarness,
+  selectedBranch: ScoredBranch,
+  scoredBranches: ScoredBranch[],
+  validationFeedback: Array<{ filePath: string; validatorType: string; rawOutput: string }>,
+  results: ToolResult[],
+  preExecutionSnapshot: ConversationMessage[],
+  sandboxCheckpointReference: string | null,
+  searchStrategy: SearchStrategy,
+  failedApproachDescriptions: string[],
+): ConversationMessage[] {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const { options, workspaceRoot, emit } = context;
+  const selectedPass = selectedBranch.pass;
+  const locale = (options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale();
+
+  state.branchesBacktracked++;
+  const errorBlock = validationFeedback
+    .map((feedback) => `### ${feedback.filePath} (${feedback.validatorType})\n${feedback.rawOutput}`)
+    .join("\n\n");
+
+  const failedApproachSummary = (selectedPass.streamedText || selectedPass.streamedThinking || "")
+    .slice(0, 300)
+    .trim();
+  if (failedApproachSummary) {
+    failedApproachDescriptions.push(failedApproachSummary);
+  }
+
+  if (searchStrategy === "bfs" && state.frontierCandidates.length > 0 && sandboxCheckpointReference) {
+    return applyBfsFrontierFallback(
+      harness,
+      selectedBranch,
+      selectedPass,
+      validationFeedback.length,
+      errorBlock,
+      preExecutionSnapshot,
+      sandboxCheckpointReference,
+      locale,
+    );
+  }
+
+  const shouldRestoreCheckpoint =
+    state.branchesBacktracked <= MAX_BACKTRACK_ATTEMPTS_PER_ITERATION && scoredBranches.length > 1;
+  const nextMessages = shouldRestoreCheckpoint
+    ? applyToTCheckpointRestore(
+        selectedBranch,
+        validationFeedback.length,
+        errorBlock,
+        preExecutionSnapshot,
+        sandboxCheckpointReference,
+        workspaceRoot,
+        emit,
+        locale,
+      )
+    : applyToTBudgetExhaustedFallback(
+        selectedBranch,
+        selectedPass,
+        validationFeedback.length,
+        errorBlock,
+        results,
+        context._currentMessages || preExecutionSnapshot,
+        emit,
+        locale,
+      );
+
+  harness.logIteration(selectedPass, nextMessages);
+  return nextMessages;
+}
+
+function applyBfsFrontierFallback(
+  harness: BaseAgenticHarness,
+  selectedBranch: ScoredBranch,
+  selectedPass: PassState,
+  errorCount: number,
+  errorBlock: string,
+  preExecutionSnapshot: ConversationMessage[],
+  sandboxCheckpointReference: string,
+  locale: string,
+): ConversationMessage[] {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const { workspaceRoot, emit } = context;
+  const fallbackCandidate = state.frontierCandidates.shift()!;
+  const currentMessages = [...preExecutionSnapshot];
+  restoreSandboxCheckpoint(workspaceRoot, sandboxCheckpointReference, emit);
+
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
+    branchIndex: selectedBranch.branchIndex,
+    validationErrors: errorCount,
+    restoredCheckpoint: true,
+    reason: "frontier_fallback",
+    fallbackBranchIndex: fallbackCandidate.branchIndex,
+    fallbackScore: fallbackCandidate.score,
+  });
+
+  logger.info(
+    `[TreeOfThoughts/BFS] Branch ${selectedBranch.branchIndex + 1} failed validation. Falling back to frontier candidate ${fallbackCandidate.branchIndex + 1} (score: ${fallbackCandidate.score.toFixed(1)}).`,
+  );
+
+  currentMessages.push({
+    role: "system",
+    content: PromptLocaleService.get(locale, "harness.treeOfThoughts.frontierFallback", {
+      branchIndex: String(selectedBranch.branchIndex + 1),
+      errorCount: String(errorCount),
+      errorBlock,
+    }),
+  });
+
+  harness.logIteration(selectedPass, currentMessages);
+  if (fallbackCandidate.pass.streamedText) {
+    currentMessages.push({
+      role: "assistant",
+      content: fallbackCandidate.pass.streamedText,
+      ...(fallbackCandidate.pass.streamedThinking.trim() && {
+        thinking: fallbackCandidate.pass.streamedThinking.trim(),
+      }),
+    });
+  }
+  return currentMessages;
+}
+
+function applyToTCheckpointRestore(
+  selectedBranch: ScoredBranch,
+  errorCount: number,
+  errorBlock: string,
+  preExecutionSnapshot: ConversationMessage[],
+  sandboxCheckpointReference: string | null,
+  workspaceRoot: string | null | undefined,
+  emit: EmitFunction,
+  locale: string,
+): ConversationMessage[] {
+  const currentMessages = [...preExecutionSnapshot];
+  if (sandboxCheckpointReference) {
+    restoreSandboxCheckpoint(workspaceRoot, sandboxCheckpointReference, emit);
+  }
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
+    branchIndex: selectedBranch.branchIndex,
+    validationErrors: errorCount,
+    restoredCheckpoint: true,
+  });
+  logger.info(
+    `[TreeOfThoughts] Branch ${selectedBranch.branchIndex + 1} failed validation. Restored checkpoint. Injecting reflexion prompt for self-correction.`,
+  );
+  currentMessages.push({
+    role: "system",
+    content: PromptLocaleService.get(locale, "harness.treeOfThoughts.reflexion", {
+      branchIndex: String(selectedBranch.branchIndex + 1),
+      errorCount: String(errorCount),
+      errorBlock,
+    }),
+  });
+  return currentMessages;
+}
+
+function applyToTBudgetExhaustedFallback(
+  selectedBranch: ScoredBranch,
+  selectedPass: PassState,
+  errorCount: number,
+  errorBlock: string,
+  results: ToolResult[],
+  currentMessages: ConversationMessage[],
+  emit: EmitFunction,
+  locale: string,
+): ConversationMessage[] {
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
+    branchIndex: selectedBranch.branchIndex,
+    validationErrors: errorCount,
+    restoredCheckpoint: false,
+  });
+  currentMessages.push({
+    role: "assistant",
+    content: selectedPass.streamedText || "",
+    ...(selectedPass.streamedThinking.trim() && {
+      thinking: selectedPass.streamedThinking.trim(),
+    }),
+    toolCalls: selectedPass.pendingToolCalls.map((toolCall: ToolCall) => {
+      const matchingResult = results.find((result) => result.id === toolCall.id);
+      return {
+        id: toolCall.id || null,
+        name: toolCall.name,
+        args: toolCall.args,
+        result: matchingResult ? matchingResult.result : null,
+        durationMs: matchingResult?.durationMs,
+      };
+    }),
+  });
+  currentMessages.push({
+    role: "system",
+    content: PromptLocaleService.get(locale, "harness.treeOfThoughts.budgetExhausted", { errorBlock }),
+  });
+  return currentMessages;
+}
+
+async function commitValidatedToTToolBranch(
+  harness: BaseAgenticHarness,
+  selectedPass: PassState,
+  results: ToolResult[],
+  currentMessages: ConversationMessage[],
+): Promise<{ messages: ConversationMessage[]; planAborted: boolean }> {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const { options, emit } = context;
+
+  harness.logIteration(selectedPass, currentMessages);
+
+  await checkForPlanModeEntry(
+    selectedPass.pendingToolCalls,
+    currentMessages,
+    state,
+    emit,
+    options?.locale as string | undefined,
+  );
+
+  if (state.planModeActive) {
+    const { planApproved } = await runPlanningPhase(harness, currentMessages, "TreeOfThoughts");
+    if (!planApproved) return { messages: currentMessages, planAborted: true };
+  }
+
+  const assistantMessage: ConversationMessage = {
+    role: "assistant",
+    content: selectedPass.streamedText || "",
+    ...(selectedPass.streamedThinking.trim() && {
+      thinking: selectedPass.streamedThinking.trim(),
+    }),
+    ...(selectedPass.thinkingSignature && {
+      thinkingSignature: selectedPass.thinkingSignature,
+    }),
+    toolCalls: selectedPass.pendingToolCalls.map((toolCall: ToolCall) => {
+      const matchingResult = results.find((result) => result.id === toolCall.id);
+      return {
+        id: toolCall.id || null,
+        responsesItemId: toolCall.responsesItemId || undefined,
+        name: toolCall.name,
+        args: toolCall.args,
+        thoughtSignature: toolCall.thoughtSignature || undefined,
+        reasoningItem: toolCall.reasoningItem || undefined,
+        result: matchingResult ? matchingResult.result : null,
+        durationMs: matchingResult?.durationMs,
+      };
+    }),
+  };
+  currentMessages.push(assistantMessage);
+
+  const retryGuidanceMessage = buildToolRetryGuidance(
+    selectedPass.pendingToolCalls,
+    results,
+    state,
+    MAX_CONSECUTIVE_TOOL_ERRORS,
+    options?.locale as string | undefined,
+  );
+  if (retryGuidanceMessage) {
+    currentMessages.push(retryGuidanceMessage);
+  }
+
+  const filteredMessages = currentMessages.filter(
+    (message) =>
+      !(
+        message.role === "assistant" &&
+        !message.content?.trim() &&
+        (!message.toolCalls || message.toolCalls.length === 0)
+      ),
+  );
+
+  injectToolDiscoveryNudge(selectedPass.pendingToolCalls, results, filteredMessages, context);
+  harness.checkAndApplyToolSetChanges(filteredMessages);
+  return { messages: filteredMessages, planAborted: false };
+}
+
+function handleToTNonToolPass(
+  harness: BaseAgenticHarness,
+  selectedPass: PassState,
+  currentMessages: ConversationMessage[],
+  truncationState: { count: number },
+): "continue" | "clean_break" | "break" {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const tools = harness["tools"];
+  const { options } = context;
+
+  if (selectedPass.streamedText) {
+    const codexResult = handleCodexPlanningResponse(
+      selectedPass,
+      currentMessages,
+      context,
+      state,
+      tools.finalTools,
+      "TreeOfThoughts",
+    );
+    harness.logIteration(selectedPass, currentMessages);
+    return codexResult.shouldContinueLoop ? "continue" : "clean_break";
+  }
+
+  if (selectedPass.streamedThinking.trim()) {
+    logger.warn(
+      `[TreeOfThoughts] Thinking-only response on iteration ${state.iterations} — thinking=${selectedPass.streamedThinking.length}chars, text=0. Injecting continuation prompt.`,
+    );
+    currentMessages.push({
+      role: "assistant",
+      content: "",
+      thinking: selectedPass.streamedThinking.trim(),
+      ...(selectedPass.thinkingSignature && { thinkingSignature: selectedPass.thinkingSignature }),
+    });
+    currentMessages.push({
+      role: "user",
+      content:
+        "[System: Your previous response contained only internal reasoning without producing any visible output. Your thinking has been preserved. Now respond concisely with your actual answer, analysis, or tool calls. Do not repeat your reasoning — act on it.]",
+      _isSystemWarning: true,
+    });
+    harness.logIteration(selectedPass, currentMessages);
+    return "continue";
+  }
+
+  if (isOutputTruncated(selectedPass)) {
+    return handleToTTruncationRecovery(harness, selectedPass, currentMessages, truncationState, options);
+  }
+
+  logger.warn(`[TreeOfThoughts] Empty model output on iteration ${state.iterations}. Breaking.`);
+  harness.logIteration(selectedPass, currentMessages);
+  return "break";
+}
+
+function handleToTTruncationRecovery(
+  harness: BaseAgenticHarness,
+  selectedPass: PassState,
+  currentMessages: ConversationMessage[],
+  truncationState: { count: number },
+  options: AgenticOptions,
+): "continue" | "break" {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  truncationState.count++;
+  const configuredMaxTokens = context.options.maxTokens || "default";
+  const modelOutputCeiling = context.modelDefinition?.maxOutputTokens as number | undefined;
+  logger.warn(
+    `[TreeOfThoughts] Max tokens truncation detected on iteration ${state.iterations} — Recovery attempt ${truncationState.count}/${MAX_OUTPUT_TRUNCATION_RECOVERIES}.`,
+  );
+
+  const alreadyAtCeiling =
+    typeof configuredMaxTokens === "number" && isAtOutputCeiling(configuredMaxTokens, modelOutputCeiling);
+  if (!alreadyAtCeiling && truncationState.count <= MAX_OUTPUT_TRUNCATION_RECOVERIES) {
+    context.options.maxTokens = injectContinuationContext(
+      currentMessages,
+      selectedPass,
+      context,
+      truncationState.count,
+    );
+    harness.logIteration(selectedPass, currentMessages);
+    return "continue";
+  }
+
+  if (alreadyAtCeiling) {
+    logger.warn(
+      `[TreeOfThoughts] Skipping truncation recovery — maxTokens (${configuredMaxTokens}) is already at or above model ceiling (${modelOutputCeiling}). Escalation would be pointless.`,
+    );
+  }
+  const exhaustionMessage = buildExhaustedRecoveryMessage(
+    alreadyAtCeiling ? 0 : MAX_OUTPUT_TRUNCATION_RECOVERIES,
+    configuredMaxTokens,
+    options?.locale as string | undefined,
+  );
+  injectErrorAsConversationMessage(currentMessages, exhaustionMessage, context);
+  harness.logIteration(selectedPass, currentMessages);
+  return "break";
+}
+
+function parseToTMultiCriteriaScores(scoreResponseText: string, branches: ScoredBranch[]): void {
+  const linePattern =
+    /(\d+)\s*:\s*correctness\s*=\s*(\d+(?:\.\d+)?)\s*,\s*risk\s*=\s*(\d+(?:\.\d+)?)\s*,\s*efficiency\s*=\s*(\d+(?:\.\d+)?)\s*,\s*completeness\s*=\s*(\d+(?:\.\d+)?)/gi;
+  let lineMatch: RegExpExecArray | null;
+  while ((lineMatch = linePattern.exec(scoreResponseText)) !== null) {
+    const candidateIndex = parseInt(lineMatch[1], 10) - 1;
+    if (candidateIndex >= 0 && candidateIndex < branches.length) {
+      const criteria: CriteriaScores = {
+        correctness: Math.min(10, Math.max(0, parseFloat(lineMatch[2]))),
+        risk: Math.min(10, Math.max(0, parseFloat(lineMatch[3]))),
+        efficiency: Math.min(10, Math.max(0, parseFloat(lineMatch[4]))),
+        completeness: Math.min(10, Math.max(0, parseFloat(lineMatch[5]))),
+      };
+      branches[candidateIndex].criteriaScores = criteria;
+      branches[candidateIndex].score =
+        criteria.correctness * 0.4 +
+        criteria.risk * 0.25 +
+        criteria.efficiency * 0.15 +
+        criteria.completeness * 0.2;
+    }
+  }
+}
+
+function parseToTSimpleFallbackScores(scoreResponseText: string, branches: ScoredBranch[]): void {
+  const hasMultiCriteriaScores = branches.some((branch) => branch.criteriaScores.correctness > 0);
+  if (!hasMultiCriteriaScores) {
+    const simpleScorePattern = /(\d+)\s*:\s*(\d+(?:\.\d+)?)/g;
+    let simpleMatch: RegExpExecArray | null;
+    while ((simpleMatch = simpleScorePattern.exec(scoreResponseText)) !== null) {
+      const candidateIndex = parseInt(simpleMatch[1], 10) - 1;
+      const candidateScore = parseFloat(simpleMatch[2]);
+      if (candidateIndex >= 0 && candidateIndex < branches.length && candidateScore >= 0 && candidateScore <= 10) {
+        branches[candidateIndex].score = candidateScore;
+        branches[candidateIndex].criteriaScores = {
+          correctness: candidateScore,
+          risk: candidateScore,
+          efficiency: candidateScore,
+          completeness: candidateScore,
+        };
+      }
+    }
+  }
+  for (const branch of branches) {
+    if (branch.score === 0) {
+      branch.score = 5;
+      branch.criteriaScores = { correctness: 5, risk: 5, efficiency: 5, completeness: 5 };
+    }
+  }
+}
+
+async function executeToTToolCalls(
+  harness: BaseAgenticHarness,
+  selectedBranch: ScoredBranch,
+  scoredBranches: ScoredBranch[],
+  currentMessages: ConversationMessage[],
+  hooks: ReturnType<typeof createStandardHooks>["hooks"],
+  searchStrategy: SearchStrategy,
+  failedApproachDescriptions: string[],
+): Promise<{ messages: ConversationMessage[]; planAborted: boolean; clearedFailed: boolean }> {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const tools = harness["tools"];
+  const { options, workspaceRoot, emit } = context;
+  const selectedPass = selectedBranch.pass;
+
+  const preExecutionSnapshot = currentMessages.map((message) => ({ ...message }));
+  context._currentMessages = currentMessages;
+  const sandboxCheckpointReference = options.enableSandbox
+    ? createSandboxCheckpoint(workspaceRoot, emit)
+    : null;
+
+  const results: ToolResult[] = await executeToolBatch(
+    selectedPass.pendingToolCalls,
+    context,
+    tools,
+    hooks,
+    state,
+  );
+  await processToolResultMedia(selectedPass.pendingToolCalls, results, state, selectedPass, emit, context);
+  trackToolErrors(selectedPass.pendingToolCalls, results, state, MAX_CONSECUTIVE_TOOL_ERRORS, emit);
+  emitPostExecutionStatus(selectedPass.pendingToolCalls, emit);
+
+  const validationFeedback = await validateAfterToolExecution(
+    selectedPass.pendingToolCalls,
+    results,
+    context,
+    tools,
+  );
+  if (validationFeedback.length > 0) {
+    const updated = handleToTValidationFailure(
+      harness,
+      selectedBranch,
+      scoredBranches,
+      validationFeedback,
+      results,
+      preExecutionSnapshot,
+      sandboxCheckpointReference,
+      searchStrategy,
+      failedApproachDescriptions,
+    );
+    return { messages: updated, planAborted: false, clearedFailed: false };
+  }
+
+  const committed = await commitValidatedToTToolBranch(harness, selectedPass, results, currentMessages);
+  return { messages: committed.messages, planAborted: committed.planAborted, clearedFailed: true };
+}
+
+async function handleToTLoopError(
+  loopError: unknown,
+  harness: BaseAgenticHarness,
+  currentMessages: ConversationMessage[],
+  hooks: ReturnType<typeof createStandardHooks>["hooks"],
+): Promise<never> {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  logger.error(
+    `[TreeOfThoughts] Loop error on iteration ${state.iterations}: ${loopError instanceof Error ? loopError.message : String(loopError)}. Persisting ${currentMessages.length - state.originalMessageCount} accumulated message(s).`,
+  );
+  injectErrorAsConversationMessage(
+    currentMessages,
+    buildProviderErrorMessage(loopError, state.iterations, context.options?.locale as string | undefined),
+    context,
+  );
+  state.conversationOutcome = "error";
+  try {
+    await harness["finalize"](currentMessages, hooks);
+  } catch (persistError: unknown) {
+    logger.error(
+      `[TreeOfThoughts] Failed to persist messages on error path: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
+    );
+  }
+  throw loopError;
+}
+
+export async function runTreeOfThoughts(
+  harness: BaseAgenticHarness,
+): Promise<{ messages: ConversationMessage[] }> {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const tools = harness["tools"];
+  const { options, agentConversationId, project, username, agent, workspaceRoot, emit, signal } = context;
+  const resolvedAgentConversationId = agentConversationId || "";
+  const { searchStrategy, initialBranchCount, valueThreshold, bfsBeamWidth, resolvedMaxIterations } =
+    resolveToTSearchConfig(options);
+
+  let currentMessages: ConversationMessage[] = [...context.messages];
+  const truncationState = { count: 0 };
+  let hasCleanTextBreak = false;
+  let failedApproachDescriptions: string[] = [];
+
+  const { hooks } = createStandardHooks({
+    workspaceRoot: workspaceRoot || undefined,
+    enableCriticGate: options.enableCriticGate === true,
+    criticModel: options.criticModel || undefined,
+  });
+
+  if (options.planFirst) {
+    emit({ type: SERVER_SENT_EVENT_TYPES.STATUS, message: STATUS_MESSAGES.PLAN_MODE_ENTERED });
+  }
+
+  await runToTBeforePromptHook(harness, currentMessages, hooks, resolvedAgentConversationId);
+
   if (state.planModeActive) {
     const { planApproved } = await runPlanningPhase(harness, currentMessages, "TreeOfThoughts");
     if (!planApproved) return { messages: currentMessages };
   }
 
-  // ── Main loop ────────────────────────────────────────────
   try {
     while (state.iterations < resolvedMaxIterations) {
       state.iterations++;
-
       const adaptiveBranchCount =
-        searchStrategy === "dfs"
+        searchStrategy === "dfs" || state.iterations === 1
           ? initialBranchCount
-          : state.iterations === 1
-            ? initialBranchCount
-            : Math.max(1, Math.ceil(initialBranchCount * 0.6));
+          : Math.max(1, Math.ceil(initialBranchCount * 0.6));
 
       emit({
         type: SERVER_SENT_EVENT_TYPES.STATUS,
@@ -258,12 +933,7 @@ export async function runTreeOfThoughts(
         branchCount: adaptiveBranchCount,
       });
 
-      // ── Instruction fade-out countermeasure ─────────────────
-      await maybeInjectSystemReminder(
-        currentMessages,
-        state,
-        context,
-      );
+      await maybeInjectSystemReminder(currentMessages, state, context);
 
       const passOptions: IterationPassOptions = {
         ...options,
@@ -273,160 +943,37 @@ export async function runTreeOfThoughts(
         tools: tools.finalTools,
       };
 
-      // ── Context pressure management ──────────────────────────
-      const pressureResult = await manageContextPressure(
-        currentMessages,
-        context,
-        state,
-        "TreeOfThoughts",
-      );
-      currentMessages = pressureResult.messages;
-
-      // ── Context window enforcement ─────────────────────────
-      currentMessages = harness.enforceContextWindow(
-        currentMessages,
-        tools.finalTools.length,
-      );
-
-      const allowedToolNames = new Set(
-        tools.finalTools.map((tool: ToolSchema) => tool.name),
-      );
-
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      //  PHASE 1+2: Generate, score, and select — strategy-aware
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      const pressureResult = await manageContextPressure(currentMessages, context, state, "TreeOfThoughts");
+      currentMessages = harness.enforceContextWindow(pressureResult.messages, tools.finalTools.length);
+      const allowedToolNames = new Set(tools.finalTools.map((tool: ToolSchema) => tool.name));
 
       let scoredBranches: ScoredBranch[];
       let selectedBranch: ScoredBranch;
-
       if (searchStrategy === "dfs") {
-        // ── True DFS: sequential sibling exploration (Paper Algorithm 2) ──
-        // Generate one branch at a time, score it, accept if above
-        // threshold. Try up to `initialBranchCount` siblings before
-        // accepting the best available.
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.STATUS,
-          message: STATUS_MESSAGES.BRANCHING_STARTED,
-          branchCount: adaptiveBranchCount,
-          iteration: state.iterations,
-          searchStrategy,
-        });
-
-        let acceptedBranch: ScoredBranch | null = null;
-        const exploredSiblings: ScoredBranch[] = [];
-
-        for (let siblingAttempt = 0; siblingAttempt < adaptiveBranchCount; siblingAttempt++) {
-          if (signal?.aborted) break;
-
-          const branch = await generateBranch(
-            harness,
-            siblingAttempt,
-            adaptiveBranchCount,
-            currentMessages,
-            passOptions,
-            allowedToolNames,
-            failedApproachDescriptions,
-          );
-          state.branchesExplored++;
-
-          const [scoredSibling] = await scoreBranchesMultiCriteria(
-            harness,
-            [branch],
-            currentMessages,
-          );
-          exploredSiblings.push(scoredSibling);
-
-          if (scoredSibling.score >= valueThreshold) {
-            acceptedBranch = scoredSibling;
-            logger.info(
-              `[TreeOfThoughts/DFS] Sibling ${siblingAttempt + 1}/${adaptiveBranchCount} accepted ` +
-                `(score: ${scoredSibling.score.toFixed(1)} >= threshold: ${valueThreshold})`,
-            );
-            break;
-          }
-
-          state.branchesBacktracked++;
-          failedApproachDescriptions.push(
-            (scoredSibling.text || scoredSibling.thinking || "").slice(0, 300),
-          );
-
-          emit({
-            type: SERVER_SENT_EVENT_TYPES.STATUS,
-            message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
-            branchIndex: scoredSibling.branchIndex,
-            reason: "dfs_sibling_pruned",
-            score: scoredSibling.score,
-            threshold: valueThreshold,
-            siblingAttempt: siblingAttempt + 1,
-            maxSiblings: adaptiveBranchCount,
-          });
-
-          logger.info(
-            `[TreeOfThoughts/DFS] Sibling ${siblingAttempt + 1}/${adaptiveBranchCount} pruned ` +
-              `(score: ${scoredSibling.score.toFixed(1)} < threshold: ${valueThreshold})`,
-          );
-        }
-
-        if (!acceptedBranch) {
-          exploredSiblings.sort((branchA, branchB) => branchB.score - branchA.score);
-          acceptedBranch = exploredSiblings[0];
-          logger.info(
-            `[TreeOfThoughts/DFS] No sibling above threshold — accepting best available ` +
-              `(score: ${acceptedBranch.score.toFixed(1)})`,
-          );
-        }
-
-        scoredBranches = exploredSiblings.sort((branchA, branchB) => branchB.score - branchA.score);
-        selectedBranch = acceptedBranch;
-      } else {
-        // ── BFS: parallel generation + frontier retention (Paper Algorithm 1) ──
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.STATUS,
-          message: STATUS_MESSAGES.BRANCHING_STARTED,
-          branchCount: adaptiveBranchCount,
-          iteration: state.iterations,
-          searchStrategy,
-        });
-
-        const branchResults = await Promise.all(
-          Array.from({ length: adaptiveBranchCount }, (_, branchIndex) =>
-            generateBranch(
-              harness,
-              branchIndex,
-              adaptiveBranchCount,
-              currentMessages,
-              passOptions,
-              allowedToolNames,
-              failedApproachDescriptions,
-            ),
-          ),
-        );
-
-        if (signal?.aborted) break;
-
-        state.branchesExplored += adaptiveBranchCount;
-
-        scoredBranches = await scoreBranchesMultiCriteria(
+        const dfsOutcome = await exploreDfsBranches(
           harness,
-          branchResults,
+          adaptiveBranchCount,
+          valueThreshold,
           currentMessages,
+          passOptions,
+          allowedToolNames,
+          failedApproachDescriptions,
         );
-
-        scoredBranches.sort(
-          (branchA, branchB) => branchB.score - branchA.score,
+        scoredBranches = dfsOutcome.scoredBranches;
+        selectedBranch = dfsOutcome.selectedBranch;
+      } else {
+        const bfsOutcome = await exploreBfsBranches(
+          harness,
+          adaptiveBranchCount,
+          bfsBeamWidth,
+          currentMessages,
+          passOptions,
+          allowedToolNames,
+          failedApproachDescriptions,
         );
-
-        selectedBranch = scoredBranches[0];
-
-        // ── Retain top-b candidates as frontier (Paper Algorithm 1: "b best states") ──
-        state.frontierCandidates = scoredBranches
-          .slice(1, bfsBeamWidth)
-          .map((branch) => ({
-            pass: branch.pass,
-            score: branch.score,
-            branchIndex: branch.branchIndex,
-            criteriaScores: branch.criteriaScores,
-          }));
+        if (bfsOutcome.aborted) break;
+        scoredBranches = bfsOutcome.scoredBranches;
+        selectedBranch = bfsOutcome.selectedBranch;
       }
 
       state.selectedBranchScores.push(selectedBranch.score);
@@ -449,68 +996,23 @@ export async function runTreeOfThoughts(
         })),
       });
 
-      logger.info(
-        `[TreeOfThoughts] Iteration ${state.iterations}: selected branch ${selectedBranch.branchIndex + 1}/${adaptiveBranchCount} ` +
-          `(score: ${selectedBranch.score.toFixed(1)}, correctness: ${selectedBranch.criteriaScores.correctness}, ` +
-          `risk: ${selectedBranch.criteriaScores.risk}, efficiency: ${selectedBranch.criteriaScores.efficiency}, ` +
-          `completeness: ${selectedBranch.criteriaScores.completeness})`,
-      );
-
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      //  PHASE 2.5: Proactive value-threshold pruning (Paper §2.1)
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
       if (
-        selectedBranch.score < valueThreshold &&
-        state.iterations > 1 &&
-        state.proactiveBacktracks < MAX_PROACTIVE_BACKTRACKS
+        handleProactiveToTBacktrack(
+          selectedBranch,
+          scoredBranches,
+          valueThreshold,
+          state,
+          currentMessages,
+          failedApproachDescriptions,
+          options,
+          emit,
+        )
       ) {
-        state.proactiveBacktracks++;
-        state.branchesBacktracked++;
-
-        const failedSummary = (selectedBranch.text || selectedBranch.thinking || "").slice(0, 300).trim();
-        if (failedSummary) failedApproachDescriptions.push(failedSummary);
-
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.STATUS,
-          message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
-          branchIndex: selectedBranch.branchIndex,
-          reason: "proactive_value_threshold",
-          bestScore: selectedBranch.score,
-          threshold: valueThreshold,
-          proactiveBacktracks: state.proactiveBacktracks,
-          maxProactiveBacktracks: MAX_PROACTIVE_BACKTRACKS,
-        });
-
-        logger.info(
-          `[TreeOfThoughts] Proactive backtrack — best score ${selectedBranch.score.toFixed(1)} ` +
-            `< threshold ${valueThreshold}. Re-branching (${state.proactiveBacktracks}/${MAX_PROACTIVE_BACKTRACKS}).`,
-        );
-
-        currentMessages.push({
-          role: "system",
-          content: PromptLocaleService.get(
-            (options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
-            "harness.treeOfThoughts.proactiveBacktrack",
-            {
-              branchCount: String(scoredBranches.length),
-              bestScore: selectedBranch.score.toFixed(1),
-              threshold: String(valueThreshold),
-            },
-          ),
-        });
-
         continue;
       }
 
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      //  PHASE 3: Execute selected branch with backtracking
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
       const selectedPass = selectedBranch.pass;
-
       finalizePassTracker(selectedPass, selectedPass.requestId || "");
-
       for (const branch of scoredBranches) {
         if (branch !== selectedBranch && branch.pass.requestId) {
           finalizePassTracker(branch.pass, branch.pass.requestId);
@@ -520,10 +1022,8 @@ export async function runTreeOfThoughts(
 
       logKVCacheHitRate(selectedPass.usage, state.iterations, "TreeOfThoughts");
       harness.emitGenerationProgress();
-
       harness.emitUsageUpdate();
 
-      // ── Cost budget enforcement ────────────────────────────
       if (
         await checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId, {
           signal: context.signal,
@@ -533,450 +1033,42 @@ export async function runTreeOfThoughts(
         break;
       }
 
-      // ── Tool execution from selected branch ─────────────────
       if (selectedPass.pendingToolCalls.length > 0) {
-        const preExecutionSnapshot = currentMessages.map((message) => ({
-          ...message,
-        }));
-
-        // executeToolBatch authorizes every call (allow-list, policies, hooks,
-        // approval) before running any; denied calls return their denial result.
-        context._currentMessages = currentMessages;
-
-        // ── Sandbox checkpoint (git-based rollback) ────────────
-        const sandboxCheckpointReference = options.enableSandbox
-          ? createSandboxCheckpoint(workspaceRoot, emit)
-          : null;
-
-        const results: ToolResult[] = await executeToolBatch(
-          selectedPass.pendingToolCalls,
-          context,
-          tools,
+        const toolTurn = await executeToTToolCalls(
+          harness,
+          selectedBranch,
+          scoredBranches,
+          currentMessages,
           hooks,
-          state,
+          searchStrategy,
+          failedApproachDescriptions,
         );
-
-        // ── Post-execution processing ─────────────────────────
-        await processToolResultMedia(
-          selectedPass.pendingToolCalls,
-          results,
-          state,
-          selectedPass,
-          emit,
-          context,
-        );
-
-        trackToolErrors(
-          selectedPass.pendingToolCalls,
-          results,
-          state,
-          MAX_CONSECUTIVE_TOOL_ERRORS,
-          emit,
-        );
-
-        emitPostExecutionStatus(selectedPass.pendingToolCalls, emit);
-
-        // ── Validation + reflexion-based backtracking ──────────
-        const validationFeedback = await validateAfterToolExecution(
-          selectedPass.pendingToolCalls,
-          results,
-          context,
-          tools,
-        );
-
-        if (validationFeedback.length > 0) {
-          state.branchesBacktracked++;
-
-          const errorBlock = validationFeedback
-            .map(
-              (feedback) =>
-                `### ${feedback.filePath} (${feedback.validatorType})\n${feedback.rawOutput}`,
-            )
-            .join("\n\n");
-
-          const failedApproachSummary = (
-            selectedPass.streamedText ||
-            selectedPass.streamedThinking ||
-            ""
-          )
-            .slice(0, 300)
-            .trim();
-          if (failedApproachSummary) {
-            failedApproachDescriptions.push(failedApproachSummary);
-          }
-
-          const backtrackAttemptsThisIteration = state.branchesBacktracked;
-
-          // ── BFS frontier fallback (Paper Algorithm 1: try next-best state) ──
-          // Before re-branching from scratch, try the next frontier candidate
-          // that was already scored but not executed.
-          if (
-            searchStrategy === "bfs" &&
-            state.frontierCandidates.length > 0 &&
-            sandboxCheckpointReference
-          ) {
-            const fallbackCandidate = state.frontierCandidates.shift()!;
-
-            currentMessages = preExecutionSnapshot;
-            restoreSandboxCheckpoint(workspaceRoot, sandboxCheckpointReference, emit);
-
-            emit({
-              type: SERVER_SENT_EVENT_TYPES.STATUS,
-              message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
-              branchIndex: selectedBranch.branchIndex,
-              validationErrors: validationFeedback.length,
-              restoredCheckpoint: true,
-              reason: "frontier_fallback",
-              fallbackBranchIndex: fallbackCandidate.branchIndex,
-              fallbackScore: fallbackCandidate.score,
-            });
-
-            logger.info(
-              `[TreeOfThoughts/BFS] Branch ${selectedBranch.branchIndex + 1} failed validation. ` +
-                `Falling back to frontier candidate ${fallbackCandidate.branchIndex + 1} ` +
-                `(score: ${fallbackCandidate.score.toFixed(1)}).`,
-            );
-
-            currentMessages.push({
-              role: "system",
-              content: PromptLocaleService.get(
-                (options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
-                "harness.treeOfThoughts.frontierFallback",
-                {
-                  branchIndex: String(selectedBranch.branchIndex + 1),
-                  errorCount: String(validationFeedback.length),
-                  errorBlock,
-                },
-              ),
-            });
-
-            // Re-enter the main execution path with the fallback candidate's pass
-            // by replacing the selected branch and re-executing the tool phase
-            // on the next iteration with the fallback's tool calls.
-            harness.logIteration(selectedPass, currentMessages);
-
-            // Inject the fallback branch's reasoning as context for the next iteration
-            if (fallbackCandidate.pass.streamedText) {
-              currentMessages.push({
-                role: "assistant",
-                content: fallbackCandidate.pass.streamedText,
-                ...(fallbackCandidate.pass.streamedThinking.trim() && {
-                  thinking: fallbackCandidate.pass.streamedThinking.trim(),
-                }),
-              });
-            }
-
-            continue;
-          }
-
-          const shouldRestoreCheckpoint =
-            backtrackAttemptsThisIteration <=
-              MAX_BACKTRACK_ATTEMPTS_PER_ITERATION &&
-            scoredBranches.length > 1;
-
-          if (shouldRestoreCheckpoint) {
-            currentMessages = preExecutionSnapshot;
-
-            // Restore filesystem to pre-execution state alongside conversation
-            if (sandboxCheckpointReference) {
-              restoreSandboxCheckpoint(workspaceRoot, sandboxCheckpointReference, emit);
-            }
-
-            emit({
-              type: SERVER_SENT_EVENT_TYPES.STATUS,
-              message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
-              branchIndex: selectedBranch.branchIndex,
-              validationErrors: validationFeedback.length,
-              restoredCheckpoint: true,
-            });
-
-            logger.info(
-              `[TreeOfThoughts] Branch ${selectedBranch.branchIndex + 1} failed validation. ` +
-                `Restored checkpoint. Injecting reflexion prompt for self-correction.`,
-            );
-
-            currentMessages.push({
-              role: "system",
-              content: PromptLocaleService.get(
-                (options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
-                "harness.treeOfThoughts.reflexion",
-                {
-                  branchIndex: String(selectedBranch.branchIndex + 1),
-                  errorCount: String(validationFeedback.length),
-                  errorBlock,
-                },
-              ),
-            });
-          } else {
-            emit({
-              type: SERVER_SENT_EVENT_TYPES.STATUS,
-              message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
-              branchIndex: selectedBranch.branchIndex,
-              validationErrors: validationFeedback.length,
-              restoredCheckpoint: false,
-            });
-
-            currentMessages.push({
-              role: "assistant",
-              content: selectedPass.streamedText || "",
-              ...(selectedPass.streamedThinking.trim() && {
-                thinking: selectedPass.streamedThinking.trim(),
-              }),
-              toolCalls: selectedPass.pendingToolCalls.map(
-                (toolCall: ToolCall) => {
-                  const matchingResult = results.find(
-                    (result) => result.id === toolCall.id,
-                  );
-                  return {
-                    id: toolCall.id || null,
-                    name: toolCall.name,
-                    args: toolCall.args,
-                    result: matchingResult ? matchingResult.result : null,
-                    durationMs: matchingResult?.durationMs,
-                  };
-                },
-              ),
-            });
-
-            currentMessages.push({
-              role: "system",
-              content: PromptLocaleService.get(
-                (options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
-                "harness.treeOfThoughts.budgetExhausted",
-                { errorBlock },
-              ),
-            });
-          }
-
-          harness.logIteration(selectedPass, currentMessages);
-          continue;
-        }
-
-        // ── No validation errors — commit this branch ──────────
-
-        harness.logIteration(selectedPass, currentMessages);
-
-        failedApproachDescriptions = [];
-
-        await checkForPlanModeEntry(
-          selectedPass.pendingToolCalls,
-          currentMessages,
-          state,
-          emit,
-          options?.locale as string | undefined,
-        );
-
-        if (state.planModeActive) {
-          const { planApproved } = await runPlanningPhase(harness, currentMessages, "TreeOfThoughts");
-          if (!planApproved) return { messages: currentMessages };
-        }
-
-        const assistantMessage: ConversationMessage = {
-          role: "assistant",
-          content: selectedPass.streamedText || "",
-          ...(selectedPass.streamedThinking.trim() && {
-            thinking: selectedPass.streamedThinking.trim(),
-          }),
-          ...(selectedPass.thinkingSignature && {
-            thinkingSignature: selectedPass.thinkingSignature,
-          }),
-          toolCalls: selectedPass.pendingToolCalls.map(
-            (toolCall: ToolCall) => {
-              const matchingResult = results.find(
-                (result) => result.id === toolCall.id,
-              );
-              return {
-                id: toolCall.id || null,
-                responsesItemId: toolCall.responsesItemId || undefined,
-                name: toolCall.name,
-                args: toolCall.args,
-                thoughtSignature: toolCall.thoughtSignature || undefined,
-                reasoningItem: toolCall.reasoningItem || undefined,
-                result: matchingResult ? matchingResult.result : null,
-                durationMs: matchingResult?.durationMs,
-              };
-            },
-          ),
-        };
-        currentMessages.push(assistantMessage);
-
-        const retryGuidanceMessage = buildToolRetryGuidance(
-          selectedPass.pendingToolCalls,
-          results,
-          state,
-          MAX_CONSECUTIVE_TOOL_ERRORS,
-          options?.locale as string | undefined,
-        );
-        if (retryGuidanceMessage) {
-          currentMessages.push(retryGuidanceMessage);
-        }
-
-        currentMessages = currentMessages.filter(
-          (message) =>
-            !(
-              message.role === "assistant" &&
-              !message.content?.trim() &&
-              (!message.toolCalls || message.toolCalls.length === 0)
-            ),
-        );
-
-        injectToolDiscoveryNudge(
-          selectedPass.pendingToolCalls,
-          results,
-          currentMessages,
-          context,
-        );
-
-        harness.checkAndApplyToolSetChanges(currentMessages);
-
+        currentMessages = toolTurn.messages;
+        if (toolTurn.clearedFailed) failedApproachDescriptions = [];
+        if (toolTurn.planAborted) return { messages: currentMessages };
         continue;
       }
 
-      // ── No tools — final text response ──────────────────────
-      // Text present → clean text break. Thinking-only → continuation.
-      if (selectedPass.streamedText) {
-        const codexResult = handleCodexPlanningResponse(
-          selectedPass,
-          currentMessages,
-          context,
-          state,
-          tools.finalTools,
-          "TreeOfThoughts",
-        );
-        if (codexResult.shouldContinueLoop) {
-          harness.logIteration(selectedPass, currentMessages);
-          continue;
-        }
-
-        harness.logIteration(selectedPass, currentMessages);
-        hasCleanTextBreak = true;
-        break;
-      }
-
-      if (!selectedPass.streamedText && (!selectedPass.pendingToolCalls || !selectedPass.pendingToolCalls.length) && selectedPass.streamedThinking.trim()) {
-        logger.warn(
-          `[TreeOfThoughts] Thinking-only response on iteration ${state.iterations} — ` +
-            `thinking=${selectedPass.streamedThinking.length}chars, text=0. ` +
-            `Injecting continuation prompt.`,
-        );
-
-        currentMessages.push({
-          role: "assistant",
-          content: "",
-          thinking: selectedPass.streamedThinking.trim(),
-          ...(selectedPass.thinkingSignature && {
-            thinkingSignature: selectedPass.thinkingSignature,
-          }),
-        });
-
-        currentMessages.push({
-          role: "user",
-          content:
-            "[System: Your previous response contained only internal reasoning " +
-            "without producing any visible output. Your thinking has been preserved. " +
-            "Now respond concisely with your actual answer, analysis, or tool calls. " +
-            "Do not repeat your reasoning — act on it.]",
-          _isSystemWarning: true,
-        });
-
-        harness.logIteration(selectedPass, currentMessages);
-        continue;
-      }
-
-      // ── Empty output — check for truncation recovery ─────────
-      if (isOutputTruncated(selectedPass)) {
-        truncationRecoveryCount++;
-        const configuredMaxTokens = context.options.maxTokens || "default";
-        const modelOutputCeiling = context.modelDefinition?.maxOutputTokens as number | undefined;
-        logger.warn(
-          `[TreeOfThoughts] Max tokens truncation detected on iteration ${state.iterations} — ` +
-            `Recovery attempt ${truncationRecoveryCount}/${MAX_OUTPUT_TRUNCATION_RECOVERIES}.`,
-        );
-
-        const alreadyAtCeiling = typeof configuredMaxTokens === "number" &&
-          isAtOutputCeiling(configuredMaxTokens, modelOutputCeiling);
-
-        if (!alreadyAtCeiling && truncationRecoveryCount <= MAX_OUTPUT_TRUNCATION_RECOVERIES) {
-          const escalatedMaxTokens = injectContinuationContext(
-            currentMessages,
-            selectedPass,
-            context,
-            truncationRecoveryCount,
-          );
-          context.options.maxTokens = escalatedMaxTokens;
-          harness.logIteration(selectedPass, currentMessages);
-          continue;
-        }
-
-        if (alreadyAtCeiling) {
-          logger.warn(
-            `[TreeOfThoughts] Skipping truncation recovery — maxTokens (${configuredMaxTokens}) ` +
-              `is already at or above model ceiling (${modelOutputCeiling}). Escalation would be pointless.`,
-          );
-        }
-        const exhaustionMessage = buildExhaustedRecoveryMessage(
-          alreadyAtCeiling ? 0 : MAX_OUTPUT_TRUNCATION_RECOVERIES,
-          configuredMaxTokens,
-          options?.locale as string | undefined,
-        );
-        injectErrorAsConversationMessage(
-          currentMessages,
-          exhaustionMessage,
-          context,
-        );
-        harness.logIteration(selectedPass, currentMessages);
-        break;
-      }
-
-      logger.warn(
-        `[TreeOfThoughts] Empty model output on iteration ${state.iterations}. Breaking.`,
-      );
-      harness.logIteration(selectedPass, currentMessages);
+      const nonToolAction = handleToTNonToolPass(harness, selectedPass, currentMessages, truncationState);
+      if (nonToolAction === "continue") continue;
+      if (nonToolAction === "clean_break") hasCleanTextBreak = true;
       break;
     }
 
-    // ── Exhaustion Recovery Pass ─────────────────────────────
-    if (
-      !hasCleanTextBreak &&
-      state.streamedToolCalls.length > 0 &&
-      !signal?.aborted
-    ) {
+    if (!hasCleanTextBreak && state.streamedToolCalls.length > 0 && !signal?.aborted) {
       state.conversationOutcome = "exhausted";
       await runExhaustionRecoveryPass(harness, context, state, currentMessages);
     }
 
-    // ── Finalization ──────────────────────────────────────────
     logger.info(
-      `[TreeOfThoughts] Session complete: ${state.iterations} iterations, ` +
-        `${state.branchesExplored} branches explored, ` +
-        `${state.branchesBacktracked} backtracked (${state.proactiveBacktracks} proactive), ` +
-        `strategy: ${searchStrategy}`,
+      `[TreeOfThoughts] Session complete: ${state.iterations} iterations, ${state.branchesExplored} branches explored, ${state.branchesBacktracked} backtracked (${state.proactiveBacktracks} proactive), strategy: ${searchStrategy}`,
     );
 
     cleanupReminderCache(resolvedAgentConversationId);
     await harness["finalize"](currentMessages, hooks);
     return { messages: currentMessages };
   } catch (loopError: unknown) {
-    logger.error(
-      `[TreeOfThoughts] Loop error on iteration ${state.iterations}: ${loopError instanceof Error ? loopError.message : String(loopError)}. Persisting ${currentMessages.length - state.originalMessageCount} accumulated message(s).`,
-    );
-
-    injectErrorAsConversationMessage(
-      currentMessages,
-      buildProviderErrorMessage(loopError, state.iterations, options?.locale as string | undefined),
-      context,
-    );
-
-    state.conversationOutcome = "error";
-
-    try {
-      await harness["finalize"](currentMessages, hooks);
-    } catch (persistError: unknown) {
-      logger.error(
-        `[TreeOfThoughts] Failed to persist messages on error path: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
-      );
-    }
-    throw loopError;
+    return await handleToTLoopError(loopError, harness, currentMessages, hooks);
   }
 }
 
@@ -1057,6 +1149,21 @@ async function generateBranch(
 //  Multi-criteria scoring (§2.1.2)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+function formatCandidateSummariesForToT(branches: ScoredBranch[]): string {
+  return branches
+    .map((branch, index) => {
+      const textPreview = (branch.text || branch.thinking || "(no output)").slice(0, 500).trim();
+      const toolCallCount = branch.pass.pendingToolCalls.length;
+      const toolCallNames = branch.pass.pendingToolCalls.map((toolCall) => toolCall.name).join(", ");
+      return (
+        `[Candidate ${index + 1}] ` +
+        `${toolCallCount} tool call(s)${toolCallNames ? ` (${toolCallNames})` : ""}.\n` +
+        `Output: ${textPreview}`
+      );
+    })
+    .join("\n\n");
+}
+
 async function scoreBranchesMultiCriteria(
   harness: BaseAgenticHarness,
   branches: ScoredBranch[],
@@ -1065,12 +1172,7 @@ async function scoreBranchesMultiCriteria(
   if (branches.length <= 1) {
     if (branches[0]) {
       branches[0].score = 10;
-      branches[0].criteriaScores = {
-        correctness: 10,
-        risk: 10,
-        efficiency: 10,
-        completeness: 10,
-      };
+      branches[0].criteriaScores = { correctness: 10, risk: 10, efficiency: 10, completeness: 10 };
     }
     return branches;
   }
@@ -1078,23 +1180,7 @@ async function scoreBranchesMultiCriteria(
   const context = harness["context"];
 
   try {
-    const candidateSummaries = branches
-      .map((branch, index) => {
-        const textPreview = (branch.text || branch.thinking || "(no output)")
-          .slice(0, 500)
-          .trim();
-        const toolCallCount = branch.pass.pendingToolCalls.length;
-        const toolCallNames = branch.pass.pendingToolCalls
-          .map((toolCall) => toolCall.name)
-          .join(", ");
-        return (
-          `[Candidate ${index + 1}] ` +
-          `${toolCallCount} tool call(s)${toolCallNames ? ` (${toolCallNames})` : ""}.\n` +
-          `Output: ${textPreview}`
-        );
-      })
-      .join("\n\n");
-
+    const candidateSummaries = formatCandidateSummariesForToT(branches);
     const scoringPrompt = [
       "Rate each candidate approach on 4 criteria (1-10 each):",
       "- CORRECTNESS: Will this produce the right result?",
@@ -1109,10 +1195,7 @@ async function scoreBranchesMultiCriteria(
       candidateSummaries,
     ].join("\n");
 
-    const scoringMessages = [
-      { role: "user" as const, content: scoringPrompt },
-    ];
-
+    const scoringMessages = [{ role: "user" as const, content: scoringPrompt }];
     const scoringOptions = {
       maxTokens: 200,
       temperature: 0,
@@ -1150,87 +1233,20 @@ async function scoreBranchesMultiCriteria(
       errorMessage: null,
       requestStartMs: scoringRequestStartMs,
     }).catch((scoringLogError: unknown) =>
-      logger.error(
-        `[TreeOfThoughts] Failed to log scoring request: ${getErrorMessage(scoringLogError)}`,
-      ),
+      logger.error(`[TreeOfThoughts] Failed to log scoring request: ${getErrorMessage(scoringLogError)}`),
     );
 
-    const linePattern =
-      /(\d+)\s*:\s*correctness\s*=\s*(\d+(?:\.\d+)?)\s*,\s*risk\s*=\s*(\d+(?:\.\d+)?)\s*,\s*efficiency\s*=\s*(\d+(?:\.\d+)?)\s*,\s*completeness\s*=\s*(\d+(?:\.\d+)?)/gi;
-    let lineMatch: RegExpExecArray | null;
-    while ((lineMatch = linePattern.exec(scoreResponseText)) !== null) {
-      const candidateIndex = parseInt(lineMatch[1], 10) - 1;
-      if (candidateIndex >= 0 && candidateIndex < branches.length) {
-        const criteria: CriteriaScores = {
-          correctness: Math.min(10, Math.max(0, parseFloat(lineMatch[2]))),
-          risk: Math.min(10, Math.max(0, parseFloat(lineMatch[3]))),
-          efficiency: Math.min(10, Math.max(0, parseFloat(lineMatch[4]))),
-          completeness: Math.min(10, Math.max(0, parseFloat(lineMatch[5]))),
-        };
-        branches[candidateIndex].criteriaScores = criteria;
-        branches[candidateIndex].score =
-          criteria.correctness * 0.4 +
-          criteria.risk * 0.25 +
-          criteria.efficiency * 0.15 +
-          criteria.completeness * 0.2;
-      }
-    }
-
-    const hasMultiCriteriaScores = branches.some(
-      (branch) => branch.criteriaScores.correctness > 0,
-    );
-    if (!hasMultiCriteriaScores) {
-      const simpleScorePattern = /(\d+)\s*:\s*(\d+(?:\.\d+)?)/g;
-      let simpleMatch: RegExpExecArray | null;
-      while (
-        (simpleMatch = simpleScorePattern.exec(scoreResponseText)) !== null
-      ) {
-        const candidateIndex = parseInt(simpleMatch[1], 10) - 1;
-        const candidateScore = parseFloat(simpleMatch[2]);
-        if (
-          candidateIndex >= 0 &&
-          candidateIndex < branches.length &&
-          candidateScore >= 0 &&
-          candidateScore <= 10
-        ) {
-          branches[candidateIndex].score = candidateScore;
-          branches[candidateIndex].criteriaScores = {
-            correctness: candidateScore,
-            risk: candidateScore,
-            efficiency: candidateScore,
-            completeness: candidateScore,
-          };
-        }
-      }
-    }
-
-    for (const branch of branches) {
-      if (branch.score === 0) {
-        branch.score = 5;
-        branch.criteriaScores = {
-          correctness: 5,
-          risk: 5,
-          efficiency: 5,
-          completeness: 5,
-        };
-      }
-    }
+    parseToTMultiCriteriaScores(scoreResponseText, branches);
+    parseToTSimpleFallbackScores(scoreResponseText, branches);
 
     logger.info(
       `[TreeOfThoughts] Branch scores: ${branches.map((branch, index) => `${index + 1}:${branch.score.toFixed(1)}`).join(", ")}`,
     );
   } catch (scoringError: unknown) {
-    logger.warn(
-      `[TreeOfThoughts] Scoring failed: ${getErrorMessage(scoringError)}. Using equal scores.`,
-    );
+    logger.warn(`[TreeOfThoughts] Scoring failed: ${getErrorMessage(scoringError)}. Using equal scores.`);
     for (const branch of branches) {
       branch.score = 5;
-      branch.criteriaScores = {
-        correctness: 5,
-        risk: 5,
-        efficiency: 5,
-        completeness: 5,
-      };
+      branch.criteriaScores = { correctness: 5, risk: 5, efficiency: 5, completeness: 5 };
     }
   }
 

@@ -181,6 +181,85 @@ export class GlobalCapabilityExecutor {
     };
   }
 
+  private static pickFieldsFromObject(
+    item: Record<string, unknown>,
+    fields: string[],
+  ): Record<string, unknown> {
+    const picked: Record<string, unknown> = {};
+    for (const f of fields) {
+      if (item && item[f] !== undefined) picked[f] = item[f];
+    }
+    return picked;
+  }
+
+  private static applyPickTransform(current: any, fields: string[]): any {
+    if (Array.isArray(current)) {
+      return current.map((item: any) => this.pickFieldsFromObject(item, fields));
+    }
+    if (typeof current === "object" && current !== null) {
+      return this.pickFieldsFromObject(current, fields);
+    }
+    return current;
+  }
+
+  private static renameFieldsInObject(
+    item: Record<string, unknown>,
+    mapping: Record<string, string>,
+  ): Record<string, unknown> {
+    const renamed = { ...item };
+    for (const [oldKey, newKey] of Object.entries(mapping)) {
+      if (renamed[oldKey] !== undefined) {
+        renamed[newKey] = renamed[oldKey];
+        delete renamed[oldKey];
+      }
+    }
+    return renamed;
+  }
+
+  private static applyRenameTransform(
+    current: any,
+    mapping: Record<string, string>,
+  ): any {
+    if (Array.isArray(current)) {
+      return current.map((item: any) => this.renameFieldsInObject(item, mapping));
+    }
+    if (typeof current === "object" && current !== null) {
+      return this.renameFieldsInObject(current, mapping);
+    }
+    return current;
+  }
+
+  private static computeAggregateValue(
+    aggType: string,
+    numbers: number[],
+    totalCount: number,
+  ): number {
+    if (aggType === "sum") return numbers.reduce((a, b) => a + b, 0);
+    if (aggType === "avg") {
+      return numbers.length > 0
+        ? numbers.reduce((a, b) => a + b, 0) / numbers.length
+        : 0;
+    }
+    if (aggType === "min") return numbers.length > 0 ? Math.min(...numbers) : 0;
+    if (aggType === "max") return numbers.length > 0 ? Math.max(...numbers) : 0;
+    if (aggType === "count") return totalCount;
+    return 0;
+  }
+
+  private static applyAggregateTransform(current: any[], op: any): any {
+    const aggKey = op.aggregate_key as string;
+    const aggType = op.aggregate_type as string;
+    const numbers = current
+      .map((item: any) => Number(item?.[aggKey]))
+      .filter((n: number) => !isNaN(n));
+    const aggVal = this.computeAggregateValue(aggType, numbers, current.length);
+    return {
+      [aggKey || "result"]: aggVal,
+      aggregate_type: aggType,
+      count: current.length,
+    };
+  }
+
   private static executeTransform(args: Record<string, unknown>): ExecutionResult {
     const input = args.input;
     const operations = args.operations;
@@ -203,66 +282,13 @@ export class GlobalCapabilityExecutor {
 
     for (const op of operations) {
       if (op.op === "pick" && Array.isArray(op.fields)) {
-        if (Array.isArray(current)) {
-          current = current.map((item: any) => {
-            const picked: Record<string, unknown> = {};
-            for (const f of op.fields) {
-              if (item && item[f] !== undefined) picked[f] = item[f];
-            }
-            return picked;
-          });
-        } else if (typeof current === "object" && current !== null) {
-          const picked: Record<string, unknown> = {};
-          for (const f of op.fields) {
-            if (current[f] !== undefined) picked[f] = current[f];
-          }
-          current = picked;
-        }
+        current = this.applyPickTransform(current, op.fields);
         applied++;
       } else if (op.op === "rename" && typeof op.mapping === "object" && op.mapping !== null) {
-        const mapping = op.mapping as Record<string, string>;
-        if (Array.isArray(current)) {
-          current = current.map((item: any) => {
-            const renamed = { ...item };
-            for (const [oldKey, newKey] of Object.entries(mapping)) {
-              if (renamed[oldKey] !== undefined) {
-                renamed[newKey] = renamed[oldKey];
-                delete renamed[oldKey];
-              }
-            }
-            return renamed;
-          });
-        } else if (typeof current === "object" && current !== null) {
-          const renamed = { ...current };
-          for (const [oldKey, newKey] of Object.entries(mapping)) {
-            if (renamed[oldKey] !== undefined) {
-              renamed[newKey] = renamed[oldKey];
-              delete renamed[oldKey];
-            }
-          }
-          current = renamed;
-        }
+        current = this.applyRenameTransform(current, op.mapping as Record<string, string>);
         applied++;
       } else if (op.op === "aggregate" && Array.isArray(current)) {
-        const aggKey = op.aggregate_key as string;
-        const aggType = op.aggregate_type as string;
-        const numbers = current
-          .map((item: any) => Number(item?.[aggKey]))
-          .filter((n: number) => !isNaN(n));
-
-        let aggVal: number = 0;
-        if (aggType === "sum") {
-          aggVal = numbers.reduce((a, b) => a + b, 0);
-        } else if (aggType === "avg") {
-          aggVal = numbers.length > 0 ? numbers.reduce((a, b) => a + b, 0) / numbers.length : 0;
-        } else if (aggType === "min") {
-          aggVal = numbers.length > 0 ? Math.min(...numbers) : 0;
-        } else if (aggType === "max") {
-          aggVal = numbers.length > 0 ? Math.max(...numbers) : 0;
-        } else if (aggType === "count") {
-          aggVal = current.length;
-        }
-        current = { [aggKey || "result"]: aggVal, aggregate_type: aggType, count: current.length };
+        current = this.applyAggregateTransform(current, op);
         applied++;
       }
     }
@@ -356,6 +382,105 @@ export class GlobalCapabilityExecutor {
     }
   }
 
+  private static async tryWebExtractPageFallback(
+    url: string,
+    maxChars: number,
+    minTrimmedLength: number,
+  ): Promise<ExecutionResult | null> {
+    try {
+      const fallback = await this.webExtractFallback(url, maxChars);
+      if (
+        fallback.status === "ok" &&
+        fallback.content.trim().length >= minTrimmedLength
+      ) {
+        const fallbackBounded = fallback.content.slice(0, maxChars);
+        return {
+          success: true,
+          result: {
+            url,
+            title: "Extracted Page Content",
+            content: fallbackBounded,
+            character_count: fallbackBounded.length,
+            fallback_used: "web_extract",
+            ...(fallback.engineUsed ? { engine_used: fallback.engineUsed } : {}),
+          },
+        };
+      }
+    } catch {
+      // Ignore fallback error and return null so caller returns standard error
+    }
+    return null;
+  }
+
+  private static async fetchPageHtmlBounded(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<SafeFetchResult> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    const abort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+    try {
+      const headers: Record<string, string> = {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      };
+      return await this.safeFetchImpl(url, {
+        signal: controller.signal,
+        headers,
+        maxBytes: 2_000_000,
+      });
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    }
+  }
+
+  private static mapReadPageError(
+    err: any,
+    signal?: AbortSignal,
+  ): ExecutionResult {
+    if (err instanceof UnsafeUrlError || err?.cause instanceof UnsafeUrlError) {
+      return {
+        success: false,
+        error: {
+          code: "URL_BLOCKED",
+          message: `blocked: ${(err.cause ?? err).message} (SSRF guard)`,
+        },
+      };
+    }
+    if (signal?.aborted) {
+      return {
+        success: false,
+        error: {
+          code: "CAPABILITY_CANCELLED",
+          message: "Page read was cancelled",
+        },
+      };
+    }
+    if (err?.name === "AbortError") {
+      return {
+        success: false,
+        error: {
+          code: "TIMEOUT",
+          message:
+            "Page read timed out after 15 s. Use the search snippet or another source.",
+        },
+      };
+    }
+    return {
+      success: false,
+      error: {
+        code: "FETCH_FAILED",
+        message: `Failed to read page: ${err?.message || "network error"}. Use the search snippet or another source.`,
+      },
+    };
+  }
+
   private static async executeReadPage(args: Record<string, unknown>, signal?: AbortSignal): Promise<ExecutionResult> {
     const url = String(args.url || "");
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -367,57 +492,21 @@ export class GlobalCapabilityExecutor {
     const maxChars = Math.min(50000, Math.max(500, Number(args.max_chars || 8000)));
 
     try {
-      // Bounded HTTP fetch
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
-      const abort = () => controller.abort(signal?.reason);
-      if (signal?.aborted) abort();
-      else signal?.addEventListener("abort", abort, { once: true });
-      let res: SafeFetchResult;
-      try {
-        // Model-supplied headers are NOT forwarded (they could carry
-        // credentials or Host overrides to an internal target).
-        const headers: Record<string, string> = {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
-        };
-        res = await this.safeFetchImpl(url, { signal: controller.signal, headers, maxBytes: 2_000_000 });
-      } finally {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abort);
-      }
-
+      const res = await this.fetchPageHtmlBounded(url, signal);
       const canRunFallback =
         this.webExtractFallback !== webExtract ||
         typeof (this.safeFetchImpl as { mock?: unknown })?.mock === "undefined";
 
       if (!res.ok) {
-        if (
-          canRunFallback &&
-          (res.status === 401 || res.status === 403 || res.status === 429)
-        ) {
-          try {
-            const fallback = await this.webExtractFallback(url, maxChars);
-            if (fallback.status === "ok" && fallback.content.trim().length > 0) {
-              const fallbackBounded = fallback.content.slice(0, maxChars);
-              return {
-                success: true,
-                result: {
-                  url,
-                  title: "Extracted Page Content",
-                  content: fallbackBounded,
-                  character_count: fallbackBounded.length,
-                  fallback_used: "web_extract",
-                  ...(fallback.engineUsed
-                    ? { engine_used: fallback.engineUsed }
-                    : {}),
-                },
-              };
-            }
-          } catch {
-            // Fall through to standard HTTP_ERROR below
-          }
+        const isBlockStatus =
+          res.status === 401 || res.status === 403 || res.status === 429;
+        if (canRunFallback && isBlockStatus) {
+          const fallbackResult = await this.tryWebExtractPageFallback(
+            url,
+            maxChars,
+            1,
+          );
+          if (fallbackResult) return fallbackResult;
         }
         return {
           success: false,
@@ -428,9 +517,7 @@ export class GlobalCapabilityExecutor {
         };
       }
 
-      const html = res.text;
-      // Simple text strip for bounded markdown
-      const stripped = html
+      const stripped = res.text
         .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
         .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
         .replace(/<[^>]+>/g, " ")
@@ -440,27 +527,12 @@ export class GlobalCapabilityExecutor {
       const bounded = stripped.slice(0, maxChars);
       if (bounded.trim().length < 200) {
         if (canRunFallback) {
-          try {
-            const fallback = await this.webExtractFallback(url, maxChars);
-            if (fallback.status === "ok" && fallback.content.trim().length >= 200) {
-              const fallbackBounded = fallback.content.slice(0, maxChars);
-              return {
-                success: true,
-                result: {
-                  url,
-                  title: "Extracted Page Content",
-                  content: fallbackBounded,
-                  character_count: fallbackBounded.length,
-                  fallback_used: "web_extract",
-                  ...(fallback.engineUsed
-                    ? { engine_used: fallback.engineUsed }
-                    : {}),
-                },
-              };
-            }
-          } catch {
-            // Fall through to EMPTY_CONTENT below
-          }
+          const fallbackResult = await this.tryWebExtractPageFallback(
+            url,
+            maxChars,
+            200,
+          );
+          if (fallbackResult) return fallbackResult;
         }
         return {
           success: false,
@@ -480,22 +552,7 @@ export class GlobalCapabilityExecutor {
         },
       };
     } catch (err: any) {
-      if (err instanceof UnsafeUrlError || err?.cause instanceof UnsafeUrlError) {
-        return { success: false, error: { code: "URL_BLOCKED", message: `blocked: ${(err.cause ?? err).message} (SSRF guard)` } };
-      }
-      if (signal?.aborted) {
-        return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Page read was cancelled" } };
-      }
-      if (err?.name === "AbortError") {
-        return { success: false, error: { code: "TIMEOUT", message: "Page read timed out after 15 s. Use the search snippet or another source." } };
-      }
-      return {
-        success: false,
-        error: {
-          code: "FETCH_FAILED",
-          message: `Failed to read page: ${err?.message || "network error"}. Use the search snippet or another source.`,
-        },
-      };
+      return this.mapReadPageError(err, signal);
     }
   }
 

@@ -170,37 +170,10 @@ export default class CompactionService {
    *   3. Extracts <summary> from the response
    *   4. Builds: [CompactBoundary, SummaryUserMessage, ...recentTail]
    */
-  static async compactConversation(
-    messages: AdminChatMessage[],
-    options: CompactionOptions,
-  ): Promise<CompactionResult | null> {
-    // ── Circuit breaker (per conversation) ─────────────────────
-    const breakerKey = this.breakerKey(options);
-    const consecutiveFailures = this.consecutiveFailures.get(breakerKey) ?? 0;
-    if (consecutiveFailures >= MAX_CONSECUTIVE_COMPACT_FAILURES) {
-      logger.warn(
-        `[CompactionService] Circuit breaker open for ${breakerKey}: ${consecutiveFailures} consecutive failures. Skipping compaction.`,
-      );
-      return null;
-    }
-
-    // ── Shrink-check cooldown ─────────────────────────────────
-    const preCompactTokenCount = estimateTotalTokens(messages);
-    const noShrinkAtTokens = this.noShrinkAtTokens.get(breakerKey);
-    if (
-      noShrinkAtTokens != null &&
-      preCompactTokenCount <
-        noShrinkAtTokens * (1 + NO_SHRINK_RETRY_GROWTH_FRACTION)
-    ) {
-      logger.info(
-        `[CompactionService] Skipping compaction for ${breakerKey}: the last summary did not shrink a ` +
-          `${noShrinkAtTokens}-token history and it is only ${preCompactTokenCount} tokens now.`,
-      );
-      return null;
-    }
-
-    // ── Resolve compaction model from settings ─────────────────
-    // Uses the same provider/model config path as MemoryExtractor
+  private static async resolveCompactionProviderAndModel(): Promise<{
+    compactionProvider: string;
+    compactionModel: string;
+  } | null> {
     let compactionProvider: string | undefined;
     let compactionModel: string | undefined;
     try {
@@ -216,10 +189,12 @@ export default class CompactionService {
       return null;
     }
 
-    if (!compactionProvider || !compactionModel || compactionModel === "default-model") {
-      // No Settings model: use the auxiliary "compression" chain
-      // (AUX_COMPRESSION_PROVIDER/MODEL env, then a light local model) so
-      // compaction still runs instead of the context overflowing.
+    const isDefaultOrEmpty =
+      !compactionProvider ||
+      !compactionModel ||
+      compactionModel === "default-model";
+
+    if (isDefaultOrEmpty) {
       try {
         const aux = DynamicModelResolver.resolveAuxModel("compression");
         compactionProvider = aux.provider;
@@ -229,69 +204,70 @@ export default class CompactionService {
         compactionModel = undefined;
       }
     }
-    if (!compactionProvider || !compactionModel || compactionModel === "default-model") {
+    if (
+      !compactionProvider ||
+      !compactionModel ||
+      compactionModel === "default-model"
+    ) {
       logger.info(
         "[CompactionService] No compaction model (Settings → Memory Models or aux compression chain). Skipping.",
       );
       return null;
     }
+    return { compactionProvider, compactionModel };
+  }
 
-    // ── Strip images before summarizing ────────────────────────
-    // Claude Code equivalent: stripImagesFromMessages() in compact.ts
-    const strippedMessages = stripImagesFromMessages(messages);
-
-    // ── Build the conversation text for summarization ──────────
-    // Build a compact text representation of the conversation
-    // (same approach as MemoryExtractor — compact format saves tokens)
-    const conversationText = strippedMessages
+  private static formatConversationForSummarization(
+    strippedMessages: AdminChatMessage[],
+  ): string {
+    return strippedMessages
       .map((message) => {
         const role = message.role;
         const content =
           typeof message.content === "string" ? message.content : "";
-
-        // Include tool call summaries for context
-        const toolSummary = message.toolCalls?.length
-          ? `\n[Tools used: ${message.toolCalls
-              .map((toolCall) => {
-                const resultPreview = toolCall.result
-                  ? typeof toolCall.result === "string"
-                    ? toolCall.result.slice(0, 300)
-                    : JSON.stringify(toolCall.result).slice(0, 300)
-                  : "";
-                return `${toolCall.name}(${resultPreview ? `→ ${resultPreview}...` : ""})`;
-              })
-              .join(", ")}]`
-          : "";
-
-        return `${role}: ${content}${toolSummary}`;
+        if (!message.toolCalls?.length) {
+          return `${role}: ${content}`;
+        }
+        const toolEntries = message.toolCalls.map((toolCall) => {
+          if (!toolCall.result) return `${toolCall.name}()`;
+          const preview =
+            typeof toolCall.result === "string"
+              ? toolCall.result.slice(0, 300)
+              : JSON.stringify(toolCall.result).slice(0, 300);
+          return `${toolCall.name}(→ ${preview}...)`;
+        });
+        return `${role}: ${content}\n[Tools used: ${toolEntries.join(", ")}]`;
       })
       .join("\n\n");
+  }
 
-    // ── Memory flush before compaction (N7) ────────────────────
-    // Summarization drops the pre-boundary history, so any pending
-    // memory extraction must run first or the facts it would capture
-    // are lost. Awaited; failure is logged and compaction continues.
-    // Bounded: a hung extractor must not stall the compaction (and the
-    // turn waiting on it); past the deadline it finishes in the background.
-    const flushTimeoutMs = Number(process.env.COMPACTION_MEMORY_FLUSH_TIMEOUT_MS) || 30_000;
+  private static async flushMemoryBeforeCompaction(
+    messages: AdminChatMessage[],
+    options: CompactionOptions,
+  ): Promise<void> {
+    const flushTimeoutMs =
+      Number(process.env.COMPACTION_MEMORY_FLUSH_TIMEOUT_MS) || 30_000;
     let flushTimer: NodeJS.Timeout | undefined;
     try {
       const flush = options.memoryFlush
         ? options.memoryFlush()
         : MemoryExtractor.extractAndStore({
-          project: options.project,
-          username: options.username,
-          messages: messages as unknown as ConversationMessage[],
-          traceId: options.traceId || null,
-          agentConversationId: options.agentConversationId || null,
-          agent: options.agent || null,
-          emit: options.emit ?? null,
-        });
-      flush.catch(() => {}); // a late rejection after the deadline must not go unhandled
+            project: options.project,
+            username: options.username,
+            messages: messages as unknown as ConversationMessage[],
+            traceId: options.traceId || null,
+            agentConversationId: options.agentConversationId || null,
+            agent: options.agent || null,
+            emit: options.emit ?? null,
+          });
+      flush.catch(() => {});
       await Promise.race([
         flush,
         new Promise((_, reject) => {
-          flushTimer = setTimeout(() => reject(new Error(`timed out after ${flushTimeoutMs} ms`)), flushTimeoutMs);
+          flushTimer = setTimeout(
+            () => reject(new Error(`timed out after ${flushTimeoutMs} ms`)),
+            flushTimeoutMs,
+          );
         }),
       ]);
     } catch (error: unknown) {
@@ -301,17 +277,17 @@ export default class CompactionService {
     } finally {
       clearTimeout(flushTimer);
     }
+  }
 
-    // ── Build summarization messages ───────────────────────────
-    const summarizationMessages: ChatMessage[] = [
-      { role: "system", content: COMPACTION_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `Here is the conversation to summarize:\n\n${conversationText}\n\n${COMPACTION_USER_PROMPT}`,
-      },
-    ];
-
-    // ── Call the LLM ──────────────────────────────────────────
+  private static async executeCompactionLlmCall(
+    summarizationMessages: ChatMessage[],
+    compactionProvider: string,
+    compactionModel: string,
+    breakerKey: string,
+    preCompactTokenCount: number,
+    messageCount: number,
+    options: CompactionOptions,
+  ): Promise<GenerateTextResult | null> {
     options.emit?.({
       type: SERVER_SENT_EVENT_TYPES.STATUS,
       message: STATUS_MESSAGES.COMPACTION_STARTED,
@@ -325,25 +301,18 @@ export default class CompactionService {
 
     try {
       let resolvedModel = compactionModel;
-      let targetProviderId = compactionProvider;
-
       const baseType = getInstanceType(compactionProvider) || compactionProvider;
       const siblings = getInstancesByType(baseType);
       const modelRes = await resolveModelForInstances(resolvedModel, siblings);
-      const usable = modelRes.usable;
-      const modelOverrides = modelRes.modelOverrides;
-
-      if (usable.length === 0) {
+      if (modelRes.usable.length === 0) {
         throw new Error(
-          `[CompactionService] Model resolution failed: "${compactionModel}" is not loaded on any instances of provider type "${baseType}".`
+          `[CompactionService] Model resolution failed: "${compactionModel}" is not loaded on any instances of provider type "${baseType}".`,
         );
       }
 
-      targetProviderId = usable[0].id;
-      const override = modelOverrides.get(targetProviderId);
-      if (override) {
-        resolvedModel = override;
-      }
+      const targetProviderId = modelRes.usable[0].id;
+      const override = modelRes.modelOverrides.get(targetProviderId);
+      if (override) resolvedModel = override;
 
       const provider = getProvider(targetProviderId);
       result = await provider.generateText(
@@ -355,6 +324,7 @@ export default class CompactionService {
           thinkingEnabled: false,
         },
       );
+      return result;
     } catch (error: unknown) {
       success = false;
       compactionError = errorMessage(error);
@@ -369,8 +339,6 @@ export default class CompactionService {
       });
       return null;
     } finally {
-      // Log the compaction LLM call for cost tracking
-      const realUsage = result?.usage || null;
       RequestLogger.logBackgroundLlmCall({
         requestId,
         endpoint: "/agent",
@@ -386,20 +354,139 @@ export default class CompactionService {
           typeof RequestLogger.logBackgroundLlmCall
         >[0]["aiMessages"],
         resultText: result?.text || "",
-        usage: realUsage,
+        usage: result?.usage || null,
         success,
         errorMessage: compactionError,
         requestStartMs: requestStart,
         extraRequestPayload: {
           operation: "compact:summarize",
           preCompactTokenCount,
-          messageCount: messages.length,
+          messageCount,
         },
       });
     }
+  }
 
-    // ── Extract summary from response ─────────────────────────
-    const summaryText = extractSummaryFromResponse(result!.text);
+  private static assembleCompactedMessageArray(
+    messages: AdminChatMessage[],
+    summaryText: string,
+  ): AdminChatMessage[] {
+    const systemMessage = messages.find((message) => message.role === "system");
+    const recentTail = extractRecentTail(messages);
+    const keptFlags = messages.map(
+      (message) => message === systemMessage || recentTail.includes(message),
+    );
+    const pairKeptFlags = enforceToolPairIntegrity(messages, keptFlags);
+    const keptSystem =
+      systemMessage && pairKeptFlags[messages.indexOf(systemMessage)]
+        ? systemMessage
+        : undefined;
+    const keptTail = messages.filter(
+      (message, index) =>
+        pairKeptFlags[index] &&
+        message !== systemMessage &&
+        message.role !== "system",
+    );
+
+    const compactedMessages: AdminChatMessage[] = [];
+    if (keptSystem) {
+      compactedMessages.push(keptSystem);
+    }
+    compactedMessages.push({
+      role: "user",
+      content: `${PROMPT_DELIMITERS.CONVERSATION_SUMMARY_PREFIX} — auto-generated by compaction]\n\n${summaryText}`,
+      isCompactSummary: true,
+    });
+    compactedMessages.push(...keptTail);
+    return compactedMessages;
+  }
+
+  private static emitCompactionUsageIfPresent(
+    options: CompactionOptions,
+    result: GenerateTextResult,
+    compactionModel: string,
+  ): void {
+    if (!options.emit || !result.usage) return;
+    try {
+      const compactPricing = getPricing(TYPES.TEXT, TYPES.TEXT)[
+        compactionModel
+      ];
+      const inputTokens = result.usage.inputTokens || 0;
+      const outputTokens = result.usage.outputTokens || 0;
+      const compactCost = compactPricing
+        ? calculateTextCost({ inputTokens, outputTokens }, compactPricing)
+        : null;
+      options.emit({
+        type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
+        operation: "compact:summarize",
+        usage: {
+          requests: 1,
+          inputTokens,
+          outputTokens,
+          estimatedCost: compactCost,
+        },
+      });
+    } catch {
+      /* SSE channel may be closed */
+    }
+  }
+
+  static async compactConversation(
+    messages: AdminChatMessage[],
+    options: CompactionOptions,
+  ): Promise<CompactionResult | null> {
+    const breakerKey = this.breakerKey(options);
+    const consecutiveFailures = this.consecutiveFailures.get(breakerKey) ?? 0;
+    if (consecutiveFailures >= MAX_CONSECUTIVE_COMPACT_FAILURES) {
+      logger.warn(
+        `[CompactionService] Circuit breaker open for ${breakerKey}: ${consecutiveFailures} consecutive failures. Skipping compaction.`,
+      );
+      return null;
+    }
+
+    const preCompactTokenCount = estimateTotalTokens(messages);
+    const noShrinkAtTokens = this.noShrinkAtTokens.get(breakerKey);
+    if (
+      noShrinkAtTokens != null &&
+      preCompactTokenCount <
+        noShrinkAtTokens * (1 + NO_SHRINK_RETRY_GROWTH_FRACTION)
+    ) {
+      logger.info(
+        `[CompactionService] Skipping compaction for ${breakerKey}: the last summary did not shrink a ` +
+          `${noShrinkAtTokens}-token history and it is only ${preCompactTokenCount} tokens now.`,
+      );
+      return null;
+    }
+
+    const resolved = await this.resolveCompactionProviderAndModel();
+    if (!resolved) return null;
+    const { compactionProvider, compactionModel } = resolved;
+
+    const strippedMessages = stripImagesFromMessages(messages);
+    const conversationText =
+      this.formatConversationForSummarization(strippedMessages);
+    await this.flushMemoryBeforeCompaction(messages, options);
+
+    const summarizationMessages: ChatMessage[] = [
+      { role: "system", content: COMPACTION_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: `Here is the conversation to summarize:\n\n${conversationText}\n\n${COMPACTION_USER_PROMPT}`,
+      },
+    ];
+
+    const result = await this.executeCompactionLlmCall(
+      summarizationMessages,
+      compactionProvider,
+      compactionModel,
+      breakerKey,
+      preCompactTokenCount,
+      messages.length,
+      options,
+    );
+    if (!result) return null;
+
+    const summaryText = extractSummaryFromResponse(result.text);
     if (!summaryText) {
       const failures = (this.consecutiveFailures.get(breakerKey) ?? 0) + 1;
       this.consecutiveFailures.set(breakerKey, failures);
@@ -413,52 +500,12 @@ export default class CompactionService {
       return null;
     }
 
-    // ── Build compacted message array ─────────────────────────
-    // Structure: [system prompt, summary as user message, ...recent tail]
-    const systemMessage = messages.find((message) => message.role === "system");
-    const recentTail = extractRecentTail(messages);
-
-    // ── Pair-aware drop filter (N7) ────────────────────────────
-    // The dropped range is everything not kept (system + recent tail).
-    // An assistant toolCalls message and its tool results must be
-    // dropped together: never orphan a tool result whose owning
-    // assistant is summarized away, and never keep an assistant whose
-    // tool result was dropped.
-    const keptFlags = messages.map(
-      (message) => message === systemMessage || recentTail.includes(message),
+    const compactedMessages = this.assembleCompactedMessageArray(
+      messages,
+      summaryText,
     );
-    const pairKeptFlags = enforceToolPairIntegrity(messages, keptFlags);
-    const keptSystem = systemMessage && pairKeptFlags[messages.indexOf(systemMessage)]
-      ? systemMessage
-      : undefined;
-    const keptTail = messages.filter(
-      (message, index) =>
-        pairKeptFlags[index] && message !== systemMessage && message.role !== "system",
-    );
-
-    const compactedMessages: AdminChatMessage[] = [];
-
-    if (keptSystem) {
-      compactedMessages.push(keptSystem);
-    }
-
-    // Insert the summary as a user message with a marker
-    compactedMessages.push({
-      role: "user",
-      content: `${PROMPT_DELIMITERS.CONVERSATION_SUMMARY_PREFIX} — auto-generated by compaction]\n\n${summaryText}`,
-      isCompactSummary: true,
-    });
-
-    // Append recent tail (last few turns the model is actively reasoning about)
-    compactedMessages.push(...keptTail);
-
     const postCompactTokenCount = estimateTotalTokens(compactedMessages);
 
-    // ── Shrink check (ported from prism-service) ──────────────
-    // If the "compacted" conversation is not actually smaller (a
-    // tail-heavy history can produce summary-of-summary growth), keep the
-    // original messages. Not a breaker failure — the model worked; the
-    // conversation cools down until its history has grown (see above).
     if (!compactionShrank(preCompactTokenCount, postCompactTokenCount)) {
       this.noShrinkAtTokens.set(breakerKey, preCompactTokenCount);
       logger.warn(
@@ -474,8 +521,7 @@ export default class CompactionService {
       return null;
     }
 
-    // ── Reset circuit breaker on success ──────────────────────
-    this.consecutiveFailures.delete(this.breakerKey(options));
+    this.consecutiveFailures.delete(breakerKey);
 
     logger.info(
       `[CompactionService] Compaction complete: ${preCompactTokenCount} → ${postCompactTokenCount} tokens ` +
@@ -490,35 +536,7 @@ export default class CompactionService {
       postCompactTokens: postCompactTokenCount,
     });
 
-    // Emit usage for the compaction call so the UI token badge updates
-    if (options.emit && result?.usage) {
-      try {
-        const compactPricing = getPricing(TYPES.TEXT, TYPES.TEXT)[
-          compactionModel
-        ];
-        const compactCost = compactPricing
-          ? calculateTextCost(
-              {
-                inputTokens: result.usage.inputTokens || 0,
-                outputTokens: result.usage.outputTokens || 0,
-              },
-              compactPricing,
-            )
-          : null;
-        options.emit({
-          type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
-          operation: "compact:summarize",
-          usage: {
-            requests: 1,
-            inputTokens: result.usage.inputTokens || 0,
-            outputTokens: result.usage.outputTokens || 0,
-            estimatedCost: compactCost,
-          },
-        });
-      } catch {
-        /* SSE channel may be closed */
-      }
-    }
+    this.emitCompactionUsageIfPresent(options, result, compactionModel);
 
     return {
       compactedMessages,
