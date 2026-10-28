@@ -106,11 +106,15 @@ const coerceArgs = (
     if (!expected) continue;
     if (expected === "array" || expected === "object") {
       if (typeof value !== "string") continue;
+      const trimmed = value.trim();
       try {
-        const parsed: unknown = JSON.parse(value);
+        const parsed: unknown = JSON.parse(trimmed);
         if (typeChecks[expected](parsed)) coerced[key] = parsed;
       } catch {
-        // Not valid JSON — leave for validateArgs to reject.
+        // If schema expects an array and the string is CSV/single-token (not broken JSON), coerce to string[].
+        if (expected === "array" && trimmed.length > 0 && !trimmed.startsWith("[") && !trimmed.startsWith("{")) {
+          coerced[key] = trimmed.split(",").map((s) => s.trim()).filter(Boolean);
+        }
       }
     } else if (expected === "integer" || expected === "number") {
       if (typeof value !== "string" || value.trim() === "") continue;

@@ -431,5 +431,22 @@ describe("runToolBatch", () => {
     );
     expect(rejected[0]).toMatchObject({ isError: true, errorCode: "TOOL_BAD_ARGS" });
     expect(rejected[0].content).toContain('"limit"');
+
+    const csvResults = await runToolBatch(
+      [
+        makeCall("screener", {
+          filters: "sector:eq:Technology,pe_ratio:lt:30",
+          columns: "ticker,pe_ratio,ev_to_ebitda",
+          limit: "5",
+        }),
+      ],
+      baseOptions({ tools }),
+    );
+    expect(csvResults[0]).toMatchObject({ isError: false, content: "ok" });
+    expect(executed[1]).toEqual({
+      filters: ["sector:eq:Technology", "pe_ratio:lt:30"],
+      columns: ["ticker", "pe_ratio", "ev_to_ebitda"],
+      limit: 5,
+    });
   });
 });
