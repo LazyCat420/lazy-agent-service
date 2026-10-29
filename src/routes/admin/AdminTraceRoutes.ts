@@ -25,17 +25,7 @@ router.get(
   "/",
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const {
-        project,
-        username,
-        from,
-        to,
-        sort = "createdAt",
-        provider,
-        model,
-        agent,
-        workspace,
-      } = req.query;
+      const { from, to, sort = "createdAt", workspace } = req.query;
 
       const { skip, limit, page, sortDirection } = parsePaginationParams(
         req.query,

@@ -3,10 +3,21 @@ import { Readable } from "stream";
 import { ProviderError } from "../utils/errors.ts";
 import logger from "../utils/logger.ts";
 import { INWORLD_BASIC } from "../../config.ts";
-import { DEFAULT_VOICES, getDefaultModels, TYPES } from "../config.ts";
+import { DEFAULT_VOICES, getDefaultModels, getModelByName, TYPES } from "../config.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 
 const INWORLD_TTS_URL = "https://api.inworld.ai/tts/v1/voice:stream";
+
+/**
+ * Which steering field this TTS model takes, from the model catalog.
+ * Unknown models default to the current protocol (delivery_mode).
+ */
+export function usesDeliveryModeSteering(model: string): boolean {
+  const definition = getModelByName(model) as { ttsSteering?: string } | null;
+  if (definition?.ttsSteering === "delivery_mode") return true;
+  if (definition?.ttsSteering === "temperature") return false;
+  return true;
+}
 
 function getApiKey() {
   if (!INWORLD_BASIC) {
@@ -72,7 +83,7 @@ const inworldProvider = {
       const model =
         options.model || getDefaultModels(TYPES.TEXT, TYPES.AUDIO).inworld;
 
-      const isTtsTwo = model.startsWith("inworld-tts-2");
+      const usesDeliveryMode = usesDeliveryModeSteering(model);
 
       const response = await fetch(INWORLD_TTS_URL, {
         method: "POST",
@@ -87,7 +98,7 @@ const inworldProvider = {
             audio_encoding: "MP3",
             sample_rate_hertz: 24000,
           },
-          ...(isTtsTwo
+          ...(usesDeliveryMode
             ? { delivery_mode: options.deliveryMode ?? "CREATIVE" }
             : { temperature: options.temperature ?? 1.1 }),
           model_id: model,
@@ -154,7 +165,7 @@ const inworldProvider = {
     const controller = new AbortController();
 
     try {
-      const isTtsTwo = model.startsWith("inworld-tts-2");
+      const usesDeliveryMode = usesDeliveryModeSteering(model);
 
       const response = await fetch(INWORLD_TTS_URL, {
         method: "POST",
@@ -169,7 +180,7 @@ const inworldProvider = {
             audio_encoding: "LINEAR16",
             sample_rate_hertz: 24000,
           },
-          ...(isTtsTwo
+          ...(usesDeliveryMode
             ? { delivery_mode: options.deliveryMode ?? "CREATIVE" }
             : { temperature: options.temperature ?? 1.1 }),
           model_id: model,

@@ -1,4 +1,5 @@
 import { classifyToolResult } from "./ToolResult.ts";
+import { analyzeCodeHealth, type CodeHealthFile } from "./quality/CodeHealthSensor.ts";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
 import { callKey, guardedRun } from "./ToolCallGuard.ts";
@@ -472,6 +473,60 @@ const WIDGET_TOOL_NAMES = new Set([
   "plan_widget",
 ]);
 
+const MAX_CODE_HEALTH_FILES = 50;
+const MAX_CODE_HEALTH_BYTES = 2_000_000;
+
+/**
+ * Deterministic code health for the files an agent submits. Runs in-process:
+ * no filesystem access, no shell, no network.
+ */
+function routeCodeHealthTool(toolArguments: Record<string, unknown>): unknown {
+  const rawFiles = toolArguments.files;
+  if (!Array.isArray(rawFiles) || rawFiles.length === 0) {
+    return { error: "code_health requires a non-empty files array" };
+  }
+  if (rawFiles.length > MAX_CODE_HEALTH_FILES) {
+    return { error: `code_health accepts at most ${MAX_CODE_HEALTH_FILES} files per call` };
+  }
+
+  const files: CodeHealthFile[] = [];
+  let bytes = 0;
+  for (const entry of rawFiles) {
+    if (!entry || typeof entry !== "object") {
+      return { error: "each files entry must be an object with path and content" };
+    }
+    const { path, content } = entry as { path?: unknown; content?: unknown };
+    if (typeof path !== "string" || typeof content !== "string") {
+      return { error: "each files entry needs a string path and string content" };
+    }
+    bytes += content.length;
+    if (bytes > MAX_CODE_HEALTH_BYTES) {
+      return { error: "submitted content exceeds the 2 MB code_health budget; submit fewer files" };
+    }
+    files.push({ path, content });
+  }
+
+  const numberOption = (name: string): number | undefined => {
+    const value = toolArguments[name];
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  };
+
+  const report = analyzeCodeHealth(files, {
+    maxComplexity: numberOption("max_complexity"),
+    maxLines: numberOption("max_lines"),
+    minDuplicateTokens: numberOption("min_duplicate_tokens"),
+  });
+
+  return {
+    success: true,
+    ...report,
+    guidance:
+      report.verdict === "ok"
+        ? "No findings at the configured thresholds."
+        : "Fix the flagged functions/duplicates, then call code_health again with the updated content.",
+  };
+}
+
 export async function routeLocalTool(
   toolName: string,
   toolArguments: Record<string, unknown>,
@@ -513,6 +568,10 @@ export async function routeLocalTool(
 
   if (tName === "news_search") {
     return routeNewsSearchTool(toolArguments, context);
+  }
+
+  if (tName === "code_health") {
+    return routeCodeHealthTool(toolArguments);
   }
 
   if (tName.startsWith("html_notes_") || tName.startsWith("canvas_")) {

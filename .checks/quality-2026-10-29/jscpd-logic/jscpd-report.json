@@ -2,6 +2,44 @@
   "duplicates": [
     {
       "firstFile": {
+        "end": 754,
+        "endLoc": {
+          "column": 38,
+          "line": 754,
+          "position": 23806
+        },
+        "name": "core/chat/ChatGeneration.ts",
+        "start": 739,
+        "startLoc": {
+          "column": 20,
+          "line": 739,
+          "position": 23325
+        }
+      },
+      "format": "typescript",
+      "fragment": "  emit: EmitFunction,\n  { signal }: { signal?: AbortSignal } = {},\n) {\n  let context: Awaited<ReturnType<typeof prepareGenerationContext>> | null =\n    null;\n  try {\n    context = await prepareGenerationContext(params, emit, { signal });\n  } catch (error: unknown) {\n    emit({\n      type: SERVER_SENT_EVENT_TYPES.ERROR,\n      message: getErrorMessage(error),\n      ...(error instanceof ProviderError && { statusCode: error.statusCode }),\n    });\n    return;\n  }\n  const { providerName, resolvedModel, modelDefinition, localRelease } = context;",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 16,
+      "secondFile": {
+        "end": 820,
+        "endLoc": {
+          "column": 18,
+          "line": 820,
+          "position": 25895
+        },
+        "name": "core/chat/ChatGeneration.ts",
+        "start": 803,
+        "startLoc": {
+          "column": 33,
+          "line": 803,
+          "position": 25406
+        }
+      },
+      "tokens": 100
+    },
+    {
+      "firstFile": {
         "end": 135,
         "endLoc": {
           "column": 30,
@@ -189,120 +227,6 @@
         }
       },
       "tokens": 86
-    },
-    {
-      "firstFile": {
-        "end": 93,
-        "endLoc": {
-          "column": 11,
-          "line": 93,
-          "position": 2979
-        },
-        "name": "platform/rules/RuleLoader.ts",
-        "start": 81,
-        "startLoc": {
-          "column": 32,
-          "line": 81,
-          "position": 2446
-        }
-      },
-      "format": "typescript",
-      "fragment": "export function parseFrontmatter(\n  content: string,\n): { frontmatter: Record<string, string | string[]>; body: string } | null {\n  const match = /^---\\r?\\n([\\s\\S]*?)\\r?\\n---\\r?\\n?([\\s\\S]*)$/.exec(content);\n  if (!match) return null;\n  const frontmatter: Record<string, string | string[]> = {};\n  let currentKey: string | null = null;\n  for (const rawLine of match[1].split(/\\r?\\n/)) {\n    const line = rawLine.trim();\n    if (line === \"\" || line.startsWith(\"#\")) continue;\n    const listItem = /^-\\s+(.+)$/.exec(line);\n    if (listItem && currentKey) {\n      const existing = frontmatter[currentKey];",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 13,
-      "secondFile": {
-        "end": 50,
-        "endLoc": {
-          "column": 11,
-          "line": 50,
-          "position": 1585
-        },
-        "name": "platform/skills/SkillRegistry.ts",
-        "start": 38,
-        "startLoc": {
-          "column": 30,
-          "line": 38,
-          "position": 1052
-        }
-      },
-      "tokens": 130
-    },
-    {
-      "firstFile": {
-        "end": 109,
-        "endLoc": {
-          "column": 13,
-          "line": 109,
-          "position": 3534
-        },
-        "name": "platform/rules/RuleLoader.ts",
-        "start": 96,
-        "startLoc": {
-          "column": 36,
-          "line": 96,
-          "position": 3155
-        }
-      },
-      "format": "typescript",
-      "fragment": "      frontmatter[currentKey] = list;\n      continue;\n    }\n    const kv = /^([A-Za-z_][\\w-]*)\\s*:\\s*(.*)$/.exec(line);\n    if (!kv) continue;\n    currentKey = kv[1];\n    const value = kv[2].trim();\n    if (value === \"\") {\n      frontmatter[currentKey] = [];\n    } else if (value.startsWith(\"[\") && value.endsWith(\"]\")) {\n      frontmatter[currentKey] = value\n        .slice(1, -1)\n        .split(\",\")\n        .map((entry) => stripQuotes(entry.trim()))",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 14,
-      "secondFile": {
-        "end": 65,
-        "endLoc": {
-          "column": 13,
-          "line": 65,
-          "position": 2076
-        },
-        "name": "platform/skills/SkillRegistry.ts",
-        "start": 52,
-        "startLoc": {
-          "column": 37,
-          "line": 52,
-          "position": 1697
-        }
-      },
-      "tokens": 96
-    },
-    {
-      "firstFile": {
-        "end": 128,
-        "endLoc": {
-          "column": 12,
-          "line": 128,
-          "position": 3968
-        },
-        "name": "platform/rules/RuleLoader.ts",
-        "start": 118,
-        "startLoc": {
-          "column": 20,
-          "line": 118,
-          "position": 3758
-        }
-      },
-      "format": "typescript",
-      "fragment": "function stripQuotes(value: string): string {\n  if (\n    (value.startsWith('\"') && value.endsWith('\"')) ||\n    (value.startsWith(\"'\") && value.endsWith(\"'\"))\n  ) {\n    return value.slice(1, -1);\n  }\n  return value;\n}\n\nexport class RuleLoader {",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 11,
-      "secondFile": {
-        "end": 84,
-        "endLoc": {
-          "column": 12,
-          "line": 84,
-          "position": 2473
-        },
-        "name": "platform/skills/SkillRegistry.ts",
-        "start": 74,
-        "startLoc": {
-          "column": 16,
-          "line": 74,
-          "position": 2263
-        }
-      },
-      "tokens": 61
     },
     {
       "firstFile": {
@@ -610,18 +534,18 @@
     },
     {
       "firstFile": {
-        "end": 38,
+        "end": 49,
         "endLoc": {
           "column": 18,
-          "line": 38,
-          "position": 1217
+          "line": 49,
+          "position": 1669
         },
         "name": "providers/inworld.ts",
-        "start": 29,
+        "start": 40,
         "startLoc": {
           "column": 4,
-          "line": 29,
-          "position": 943
+          "line": 40,
+          "position": 1395
         }
       },
       "format": "typescript",
@@ -648,18 +572,18 @@
     },
     {
       "firstFile": {
-        "end": 37,
+        "end": 48,
         "endLoc": {
           "column": 33,
-          "line": 37,
-          "position": 1198
+          "line": 48,
+          "position": 1650
         },
         "name": "providers/inworld.ts",
-        "start": 30,
+        "start": 41,
         "startLoc": {
           "column": 6,
-          "line": 30,
-          "position": 964
+          "line": 41,
+          "position": 1416
         }
       },
       "format": "typescript",
@@ -1488,14 +1412,14 @@
         "endLoc": {
           "column": 6,
           "line": 135,
-          "position": 4784
+          "position": 4799
         },
         "name": "routes/AgentRoutes.ts",
         "start": 122,
         "startLoc": {
           "column": 8,
           "line": 122,
-          "position": 4158
+          "position": 4173
         }
       },
       "format": "typescript",
@@ -1508,14 +1432,14 @@
         "endLoc": {
           "column": 8,
           "line": 33,
-          "position": 1337
+          "position": 1352
         },
         "name": "routes/ConversationExecutionRoute.ts",
         "start": 24,
         "startLoc": {
           "column": 12,
           "line": 24,
-          "position": 1003
+          "position": 1018
         }
       },
       "tokens": 64
@@ -1788,44 +1712,6 @@
     },
     {
       "firstFile": {
-        "end": 759,
-        "endLoc": {
-          "column": 38,
-          "line": 759,
-          "position": 24030
-        },
-        "name": "routes/ChatRoutes.ts",
-        "start": 744,
-        "startLoc": {
-          "column": 20,
-          "line": 744,
-          "position": 23549
-        }
-      },
-      "format": "typescript",
-      "fragment": "  emit: EmitFunction,\n  { signal }: { signal?: AbortSignal } = {},\n) {\n  let context: Awaited<ReturnType<typeof prepareGenerationContext>> | null =\n    null;\n  try {\n    context = await prepareGenerationContext(params, emit, { signal });\n  } catch (error: unknown) {\n    emit({\n      type: SERVER_SENT_EVENT_TYPES.ERROR,\n      message: getErrorMessage(error),\n      ...(error instanceof ProviderError && { statusCode: error.statusCode }),\n    });\n    return;\n  }\n  const { providerName, resolvedModel, modelDefinition, localRelease } = context;",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 16,
-      "secondFile": {
-        "end": 825,
-        "endLoc": {
-          "column": 18,
-          "line": 825,
-          "position": 26119
-        },
-        "name": "routes/ChatRoutes.ts",
-        "start": 808,
-        "startLoc": {
-          "column": 33,
-          "line": 808,
-          "position": 25630
-        }
-      },
-      "tokens": 100
-    },
-    {
-      "firstFile": {
         "end": 403,
         "endLoc": {
           "column": 11,
@@ -2040,14 +1926,14 @@
         "endLoc": {
           "column": 1,
           "line": 642,
-          "position": 20158
+          "position": 20165
         },
         "name": "services/WorkflowExecutionService.ts",
         "start": 633,
         "startLoc": {
           "column": 38,
           "line": 633,
-          "position": 19905
+          "position": 19912
         }
       },
       "tokens": 62
@@ -3670,18 +3556,18 @@
       "kind": "exact",
       "lines": 9,
       "secondFile": {
-        "end": 118,
+        "end": 87,
         "endLoc": {
           "column": 10,
-          "line": 118,
-          "position": 3961
+          "line": 87,
+          "position": 3151
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 110,
+        "start": 79,
         "startLoc": {
           "column": 66,
-          "line": 110,
-          "position": 3714
+          "line": 79,
+          "position": 2904
         }
       },
       "tokens": 60
@@ -3708,18 +3594,18 @@
       "kind": "exact",
       "lines": 13,
       "secondFile": {
-        "end": 1429,
+        "end": 1379,
         "endLoc": {
           "column": 27,
-          "line": 1429,
-          "position": 45634
+          "line": 1379,
+          "position": 44188
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 1417,
+        "start": 1367,
         "startLoc": {
           "column": 23,
-          "line": 1417,
-          "position": 45284
+          "line": 1367,
+          "position": 43838
         }
       },
       "tokens": 82
@@ -4544,74 +4430,74 @@
       "kind": "exact",
       "lines": 17,
       "secondFile": {
-        "end": 80,
+        "end": 49,
         "endLoc": {
           "column": 78,
-          "line": 80,
-          "position": 2566
+          "line": 49,
+          "position": 1782
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 64,
+        "start": 33,
         "startLoc": {
           "column": 59,
-          "line": 64,
-          "position": 2023
+          "line": 33,
+          "position": 1239
         }
       },
       "tokens": 120
     },
     {
       "firstFile": {
-        "end": 86,
+        "end": 55,
         "endLoc": {
           "column": 3,
-          "line": 86,
-          "position": 2769
+          "line": 55,
+          "position": 1985
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 37,
+        "start": 31,
         "startLoc": {
-          "column": 2,
-          "line": 37,
-          "position": 1223
+          "column": 68,
+          "line": 31,
+          "position": 1176
         }
       },
       "format": "typescript",
-      "fragment": "  if (agent) {\n    const agentIds = String(agent).split(\",\").filter(Boolean);\n    if (agentIds.length === 1) {\n      match.agent = agentIds[0];\n    } else if (agentIds.length > 1) {\n      match.agent = { $in: agentIds };\n    }\n  }\n\n  if (provider) {\n    const providerNames = String(provider).split(\",\").filter(Boolean);\n    if (providerNames.length === 1) {\n      match.provider = providerNames[0];\n    } else if (providerNames.length > 1) {\n      match.provider = { $in: providerNames };\n    }\n  }\n\n  if (model) {\n    const modelNames = String(model).split(\",\").filter(Boolean);\n    if (modelNames.length === 1) {\n      match.model = modelNames[0];\n    } else if (modelNames.length > 1) {\n      match.model = { $in: modelNames };\n    }\n  }\n\n  applyDateRangeFilter(match, from as string, to as string);\n\n  if (workspace) {\n    const [convDocs, agentConvDocs] = await Promise.all([\n      req.db\n        .collection(COLLECTIONS.MODEL_CONVERSATIONS)\n        .find({ workspaceRoot: workspace })\n        .project({ id: 1 })\n        .toArray(),\n      req.db\n        .collection(COLLECTIONS.AGENT_CONVERSATIONS)\n        .find({ workspaceRoot: workspace })\n        .project({ id: 1 })\n        .toArray(),\n    ]);\n    const convIds = convDocs.map((document) => document.id);\n    const agentConversationIds = agentConvDocs.map((document) => document.id);\n    match.$or = [\n      { conversationId: { $in: convIds } },\n      { agentConversationId: { $in: agentConversationIds } },\n      { parentAgentConversationId: { $in: agentConversationIds } },\n    ];\n  }",
+      "fragment": "  const match = buildAdminMatch(req.query as Record<string, unknown>);\n\n  applyDateRangeFilter(match, from as string, to as string);\n\n  if (workspace) {\n    const [convDocs, agentConvDocs] = await Promise.all([\n      req.db\n        .collection(COLLECTIONS.MODEL_CONVERSATIONS)\n        .find({ workspaceRoot: workspace })\n        .project({ id: 1 })\n        .toArray(),\n      req.db\n        .collection(COLLECTIONS.AGENT_CONVERSATIONS)\n        .find({ workspaceRoot: workspace })\n        .project({ id: 1 })\n        .toArray(),\n    ]);\n    const convIds = convDocs.map((document) => document.id);\n    const agentConversationIds = agentConvDocs.map((document) => document.id);\n    match.$or = [\n      { conversationId: { $in: convIds } },\n      { agentConversationId: { $in: agentConversationIds } },\n      { parentAgentConversationId: { $in: agentConversationIds } },\n    ];\n  }",
       "isNew": false,
       "kind": "exact",
-      "lines": 50,
+      "lines": 25,
       "secondFile": {
-        "end": 96,
+        "end": 57,
         "endLoc": {
           "column": 7,
-          "line": 96,
-          "position": 3163
+          "line": 57,
+          "position": 2152
         },
         "name": "routes/admin/AdminTraceRoutes.ts",
-        "start": 47,
+        "start": 34,
         "startLoc": {
-          "column": 6,
-          "line": 47,
-          "position": 1437
+          "column": 93,
+          "line": 34,
+          "position": 1256
         }
       },
-      "tokens": 362
+      "tokens": 172
     },
     {
       "firstFile": {
-        "end": 88,
+        "end": 57,
         "endLoc": {
           "column": 8,
-          "line": 88,
-          "position": 2779
+          "line": 57,
+          "position": 1995
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 74,
+        "start": 43,
         "startLoc": {
           "column": 51,
-          "line": 74,
-          "position": 2325
+          "line": 43,
+          "position": 1541
         }
       },
       "format": "typescript",
@@ -4620,112 +4506,36 @@
       "kind": "exact",
       "lines": 15,
       "secondFile": {
-        "end": 98,
+        "end": 59,
         "endLoc": {
           "column": 11,
-          "line": 98,
-          "position": 3176
+          "line": 59,
+          "position": 2165
         },
         "name": "routes/admin/AdminTraceRoutes.ts",
-        "start": 84,
+        "start": 45,
         "startLoc": {
           "column": 55,
-          "line": 84,
-          "position": 2671
+          "line": 45,
+          "position": 1660
         }
       },
       "tokens": 97
     },
     {
       "firstFile": {
-        "end": 103,
-        "endLoc": {
-          "column": 16,
-          "line": 103,
-          "position": 3293
-        },
-        "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 93,
-        "startLoc": {
-          "column": 5,
-          "line": 93,
-          "position": 2915
-        }
-      },
-      "format": "typescript",
-      "fragment": "  \"/\",\n  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {\n    try {\n      const match = await buildMatchFilter(req);\n      const { from, to, project, provider, model, workspace } = req.query;\n\n      const pipeline: Record<string, unknown>[] = [\n        ...(Object.keys(match).length ? [{ $match: match }] : []),\n        {\n          $group: {\n            _id: null,",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 11,
-      "secondFile": {
-        "end": 215,
-        "endLoc": {
-          "column": 16,
-          "line": 215,
-          "position": 7205
-        },
-        "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 205,
-        "startLoc": {
-          "column": 13,
-          "line": 205,
-          "position": 6827
-        }
-      },
-      "tokens": 91
-    },
-    {
-      "firstFile": {
-        "end": 147,
-        "endLoc": {
-          "column": 21,
-          "line": 147,
-          "position": 5066
-        },
-        "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 125,
-        "startLoc": {
-          "column": 26,
-          "line": 125,
-          "position": 4229
-        }
-      },
-      "format": "typescript",
-      "fragment": "        { $count: \"total\" },\n      ];\n\n      const convMatch: Record<string, unknown> = {};\n      if (project) convMatch.project = project;\n      if (workspace) convMatch.workspaceRoot = workspace;\n      if (provider) {\n        const providerNames = String(provider).split(\",\").filter(Boolean);\n        if (providerNames.length === 1) convMatch.providers = providerNames[0];\n        else if (providerNames.length > 1)\n          convMatch.providers = { $in: providerNames };\n      }\n      if (model) {\n        const modelNames = String(model).split(\",\").filter(Boolean);\n        if (modelNames.length === 1)\n          convMatch[\"messages.model\"] = modelNames[0];\n        else if (modelNames.length > 1)\n          convMatch[\"messages.model\"] = { $in: modelNames };\n      }\n      applyDateRangeFilter(\n        convMatch,\n        from as string,\n        to as string,",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 23,
-      "secondFile": {
-        "end": 277,
-        "endLoc": {
-          "column": 21,
-          "line": 277,
-          "position": 9454
-        },
-        "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 255,
-        "startLoc": {
-          "column": 73,
-          "line": 255,
-          "position": 8617
-        }
-      },
-      "tokens": 171
-    },
-    {
-      "firstFile": {
-        "end": 222,
+        "end": 172,
         "endLoc": {
           "column": 53,
-          "line": 222,
-          "position": 7609
+          "line": 172,
+          "position": 6163
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 215,
+        "start": 165,
         "startLoc": {
           "column": 27,
-          "line": 215,
-          "position": 7216
+          "line": 165,
+          "position": 5770
         }
       },
       "format": "typescript",
@@ -4734,36 +4544,36 @@
       "kind": "exact",
       "lines": 8,
       "secondFile": {
-        "end": 413,
+        "end": 363,
         "endLoc": {
           "column": 53,
-          "line": 413,
-          "position": 14238
+          "line": 363,
+          "position": 12792
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 406,
+        "start": 356,
         "startLoc": {
           "column": 59,
-          "line": 406,
-          "position": 13845
+          "line": 356,
+          "position": 12399
         }
       },
       "tokens": 69
     },
     {
       "firstFile": {
-        "end": 222,
+        "end": 172,
         "endLoc": {
           "column": 53,
-          "line": 222,
-          "position": 7609
+          "line": 172,
+          "position": 6163
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 215,
+        "start": 165,
         "startLoc": {
           "column": 27,
-          "line": 215,
-          "position": 7216
+          "line": 165,
+          "position": 5770
         }
       },
       "format": "typescript",
@@ -4772,36 +4582,36 @@
       "kind": "exact",
       "lines": 8,
       "secondFile": {
-        "end": 1412,
+        "end": 1362,
         "endLoc": {
           "column": 53,
-          "line": 1412,
-          "position": 45056
+          "line": 1362,
+          "position": 43610
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 1405,
+        "start": 1355,
         "startLoc": {
           "column": 25,
-          "line": 1405,
-          "position": 44663
+          "line": 1355,
+          "position": 43217
         }
       },
       "tokens": 69
     },
     {
       "firstFile": {
-        "end": 362,
+        "end": 312,
         "endLoc": {
           "column": 16,
-          "line": 362,
-          "position": 12479
+          "line": 312,
+          "position": 11033
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 354,
+        "start": 304,
         "startLoc": {
           "column": 10,
-          "line": 354,
-          "position": 12177
+          "line": 304,
+          "position": 10731
         }
       },
       "format": "typescript",
@@ -4810,36 +4620,36 @@
       "kind": "exact",
       "lines": 9,
       "secondFile": {
-        "end": 406,
+        "end": 356,
         "endLoc": {
           "column": 16,
-          "line": 406,
-          "position": 13802
+          "line": 356,
+          "position": 12356
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 397,
+        "start": 347,
         "startLoc": {
           "column": 11,
-          "line": 397,
-          "position": 13499
+          "line": 347,
+          "position": 12053
         }
       },
       "tokens": 72
     },
     {
       "firstFile": {
-        "end": 362,
+        "end": 312,
         "endLoc": {
           "column": 16,
-          "line": 362,
-          "position": 12479
+          "line": 312,
+          "position": 11033
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 354,
+        "start": 304,
         "startLoc": {
           "column": 10,
-          "line": 354,
-          "position": 12177
+          "line": 304,
+          "position": 10731
         }
       },
       "format": "typescript",
@@ -4848,36 +4658,36 @@
       "kind": "exact",
       "lines": 9,
       "secondFile": {
-        "end": 655,
+        "end": 605,
         "endLoc": {
           "column": 16,
-          "line": 655,
-          "position": 22306
+          "line": 605,
+          "position": 20860
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 646,
+        "start": 596,
         "startLoc": {
           "column": 14,
-          "line": 646,
-          "position": 22003
+          "line": 596,
+          "position": 20557
         }
       },
       "tokens": 72
     },
     {
       "firstFile": {
-        "end": 379,
+        "end": 329,
         "endLoc": {
           "column": 54,
-          "line": 379,
-          "position": 13002
+          "line": 329,
+          "position": 11556
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 367,
+        "start": 317,
         "startLoc": {
           "column": 46,
-          "line": 367,
-          "position": 12727
+          "line": 317,
+          "position": 11281
         }
       },
       "format": "typescript",
@@ -4886,36 +4696,36 @@
       "kind": "exact",
       "lines": 13,
       "secondFile": {
-        "end": 674,
+        "end": 624,
         "endLoc": {
           "column": 54,
-          "line": 674,
-          "position": 22890
+          "line": 624,
+          "position": 21444
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 662,
+        "start": 612,
         "startLoc": {
           "column": 12,
-          "line": 662,
-          "position": 22615
+          "line": 612,
+          "position": 21169
         }
       },
       "tokens": 62
     },
     {
       "firstFile": {
-        "end": 674,
+        "end": 624,
         "endLoc": {
           "column": 51,
-          "line": 674,
-          "position": 22887
+          "line": 624,
+          "position": 21441
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 661,
+        "start": 611,
         "startLoc": {
           "column": 54,
-          "line": 661,
-          "position": 22589
+          "line": 611,
+          "position": 21143
         }
       },
       "format": "typescript",
@@ -4924,18 +4734,18 @@
       "kind": "exact",
       "lines": 14,
       "secondFile": {
-        "end": 1435,
+        "end": 1385,
         "endLoc": {
           "column": 51,
-          "line": 1435,
-          "position": 45800
+          "line": 1385,
+          "position": 44354
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 1422,
+        "start": 1372,
         "startLoc": {
           "column": 55,
-          "line": 1422,
-          "position": 45502
+          "line": 1372,
+          "position": 44056
         }
       },
       "tokens": 69
@@ -5836,18 +5646,18 @@
       "kind": "exact",
       "lines": 8,
       "secondFile": {
-        "end": 149,
+        "end": 130,
         "endLoc": {
           "column": 49,
-          "line": 149,
-          "position": 5874
+          "line": 130,
+          "position": 5284
         },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 142,
+        "name": "services/harnesses/strategies/shared.ts",
+        "start": 123,
         "startLoc": {
           "column": 52,
-          "line": 142,
-          "position": 5475
+          "line": 123,
+          "position": 4885
         }
       },
       "tokens": 64
@@ -6026,18 +5836,18 @@
       "kind": "exact",
       "lines": 11,
       "secondFile": {
-        "end": 571,
+        "end": 339,
         "endLoc": {
           "column": 5,
-          "line": 571,
-          "position": 20393
+          "line": 339,
+          "position": 12244
         },
         "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 561,
+        "start": 329,
         "startLoc": {
           "column": 27,
-          "line": 561,
-          "position": 20024
+          "line": 329,
+          "position": 11875
         }
       },
       "tokens": 78
@@ -6089,72 +5899,34 @@
           "position": 22427
         },
         "name": "services/harnesses/ReActHarness.ts",
-        "start": 577,
+        "start": 576,
         "startLoc": {
-          "column": 19,
-          "line": 577,
-          "position": 21870
+          "column": 78,
+          "line": 576,
+          "position": 21847
         }
       },
       "format": "typescript",
-      "fragment": "    toolCalls: pass.pendingToolCalls.map((toolCall: ToolCall) => {\n      const matchingResult = results.find((result) => result.id === toolCall.id);\n      return {\n        id: toolCall.id || null,\n        responsesItemId: toolCall.responsesItemId || undefined,\n        name: toolCall.name,\n        args: toolCall.args,\n        thoughtSignature: toolCall.thoughtSignature || undefined,\n        reasoningItem: toolCall.reasoningItem || undefined,\n        result: matchingResult ? matchingResult.result : null,\n        durationMs: matchingResult?.durationMs,\n      };\n    }),\n  });",
+      "fragment": "    ...(pass.thinkingSignature && { thinkingSignature: pass.thinkingSignature }),\n    toolCalls: pass.pendingToolCalls.map((toolCall: ToolCall) => {\n      const matchingResult = results.find((result) => result.id === toolCall.id);\n      return {\n        id: toolCall.id || null,\n        responsesItemId: toolCall.responsesItemId || undefined,\n        name: toolCall.name,\n        args: toolCall.args,\n        thoughtSignature: toolCall.thoughtSignature || undefined,\n        reasoningItem: toolCall.reasoningItem || undefined,\n        result: matchingResult ? matchingResult.result : null,\n        durationMs: matchingResult?.durationMs,\n      };\n    }),\n  });",
       "isNew": false,
       "kind": "exact",
-      "lines": 14,
+      "lines": 15,
       "secondFile": {
-        "end": 243,
+        "end": 458,
         "endLoc": {
           "column": 3,
-          "line": 243,
-          "position": 8987
+          "line": 458,
+          "position": 16967
         },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 230,
+        "name": "services/harnesses/strategies/shared.ts",
+        "start": 444,
         "startLoc": {
-          "column": 30,
-          "line": 230,
-          "position": 8430
+          "column": 4,
+          "line": 444,
+          "position": 16387
         }
       },
-      "tokens": 100
-    },
-    {
-      "firstFile": {
-        "end": 590,
-        "endLoc": {
-          "column": 3,
-          "line": 590,
-          "position": 22427
-        },
-        "name": "services/harnesses/ReActHarness.ts",
-        "start": 577,
-        "startLoc": {
-          "column": 19,
-          "line": 577,
-          "position": 21870
-        }
-      },
-      "format": "typescript",
-      "fragment": "    toolCalls: pass.pendingToolCalls.map((toolCall: ToolCall) => {\n      const matchingResult = results.find((result) => result.id === toolCall.id);\n      return {\n        id: toolCall.id || null,\n        responsesItemId: toolCall.responsesItemId || undefined,\n        name: toolCall.name,\n        args: toolCall.args,\n        thoughtSignature: toolCall.thoughtSignature || undefined,\n        reasoningItem: toolCall.reasoningItem || undefined,\n        result: matchingResult ? matchingResult.result : null,\n        durationMs: matchingResult?.durationMs,\n      };\n    }),\n  });",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 14,
-      "secondFile": {
-        "end": 626,
-        "endLoc": {
-          "column": 3,
-          "line": 626,
-          "position": 22297
-        },
-        "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 613,
-        "startLoc": {
-          "column": 27,
-          "line": 613,
-          "position": 21740
-        }
-      },
-      "tokens": 100
+      "tokens": 106
     },
     {
       "firstFile": {
@@ -6178,29 +5950,29 @@
       "kind": "exact",
       "lines": 15,
       "secondFile": {
-        "end": 574,
+        "end": 342,
         "endLoc": {
           "column": 44,
-          "line": 574,
-          "position": 20483
+          "line": 342,
+          "position": 12334
         },
         "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 562,
+        "start": 330,
         "startLoc": {
           "column": 42,
-          "line": 562,
-          "position": 20114
+          "line": 330,
+          "position": 11965
         }
       },
       "tokens": 76
     },
     {
       "firstFile": {
-        "end": 262,
+        "end": 259,
         "endLoc": {
-          "column": 56,
-          "line": 262,
-          "position": 9793
+          "column": 6,
+          "line": 259,
+          "position": 9691
         },
         "name": "services/harnesses/VisionLanguageHarness.ts",
         "start": 249,
@@ -6211,64 +5983,26 @@
         }
       },
       "format": "typescript",
-      "fragment": "          id: toolCall.id || null,\n          responsesItemId: toolCall.responsesItemId || undefined,\n          name: toolCall.name,\n          args: toolCall.args,\n          thoughtSignature: toolCall.thoughtSignature || undefined,\n          reasoningItem: toolCall.reasoningItem || undefined,\n          result: matchingResult ? matchingResult.result : null,\n          durationMs: matchingResult?.durationMs,\n        };\n      }),\n    };\n    currentMessages.push(assistantMessage);\n\n    const retryGuidanceMessage = buildToolRetryGuidance(",
+      "fragment": "          id: toolCall.id || null,\n          responsesItemId: toolCall.responsesItemId || undefined,\n          name: toolCall.name,\n          args: toolCall.args,\n          thoughtSignature: toolCall.thoughtSignature || undefined,\n          reasoningItem: toolCall.reasoningItem || undefined,\n          result: matchingResult ? matchingResult.result : null,\n          durationMs: matchingResult?.durationMs,\n        };\n      }),\n    };",
       "isNew": false,
       "kind": "exact",
-      "lines": 14,
+      "lines": 11,
       "secondFile": {
-        "end": 246,
+        "end": 458,
         "endLoc": {
-          "column": 54,
-          "line": 246,
-          "position": 9086
+          "column": 4,
+          "line": 458,
+          "position": 16968
         },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 233,
+        "name": "services/harnesses/strategies/shared.ts",
+        "start": 448,
         "startLoc": {
           "column": 31,
-          "line": 233,
-          "position": 8606
+          "line": 448,
+          "position": 16586
         }
       },
-      "tokens": 72
-    },
-    {
-      "firstFile": {
-        "end": 262,
-        "endLoc": {
-          "column": 56,
-          "line": 262,
-          "position": 9793
-        },
-        "name": "services/harnesses/VisionLanguageHarness.ts",
-        "start": 249,
-        "startLoc": {
-          "column": 33,
-          "line": 249,
-          "position": 9289
-        }
-      },
-      "format": "typescript",
-      "fragment": "          id: toolCall.id || null,\n          responsesItemId: toolCall.responsesItemId || undefined,\n          name: toolCall.name,\n          args: toolCall.args,\n          thoughtSignature: toolCall.thoughtSignature || undefined,\n          reasoningItem: toolCall.reasoningItem || undefined,\n          result: matchingResult ? matchingResult.result : null,\n          durationMs: matchingResult?.durationMs,\n        };\n      }),\n    };\n    currentMessages.push(assistantMessage);\n\n    const retryGuidanceMessage = buildToolRetryGuidance(",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 14,
-      "secondFile": {
-        "end": 629,
-        "endLoc": {
-          "column": 54,
-          "line": 629,
-          "position": 22396
-        },
-        "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 616,
-        "startLoc": {
-          "column": 31,
-          "line": 616,
-          "position": 21916
-        }
-      },
-      "tokens": 72
+      "tokens": 60
     },
     {
       "firstFile": {
@@ -6292,18 +6026,18 @@
       "kind": "exact",
       "lines": 16,
       "secondFile": {
-        "end": 649,
+        "end": 394,
         "endLoc": {
           "column": 27,
-          "line": 649,
-          "position": 22878
+          "line": 394,
+          "position": 13839
         },
         "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 634,
+        "start": 379,
         "startLoc": {
           "column": 4,
-          "line": 634,
-          "position": 22493
+          "line": 379,
+          "position": 13454
         }
       },
       "tokens": 71
@@ -6319,9 +6053,9 @@
         "name": "services/harnesses/VisionLanguageHarness.ts",
         "start": 494,
         "startLoc": {
-          "column": 59,
+          "column": 39,
           "line": 494,
-          "position": 18369
+          "position": 18349
         }
       },
       "format": "typescript",
@@ -6330,21 +6064,21 @@
       "kind": "exact",
       "lines": 11,
       "secondFile": {
-        "end": 573,
+        "end": 431,
         "endLoc": {
           "column": 5,
-          "line": 573,
-          "position": 20111
+          "line": 431,
+          "position": 14917
         },
         "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 563,
+        "start": 421,
         "startLoc": {
-          "column": 55,
-          "line": 563,
-          "position": 19744
+          "column": 32,
+          "line": 421,
+          "position": 14530
         }
       },
-      "tokens": 63
+      "tokens": 64
     },
     {
       "firstFile": {
@@ -6368,18 +6102,18 @@
       "kind": "exact",
       "lines": 12,
       "secondFile": {
-        "end": 749,
+        "end": 590,
         "endLoc": {
           "column": 38,
-          "line": 749,
-          "position": 25246
+          "line": 590,
+          "position": 19544
         },
         "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 738,
+        "start": 579,
         "startLoc": {
           "column": 23,
-          "line": 738,
-          "position": 24813
+          "line": 579,
+          "position": 19111
         }
       },
       "tokens": 60
@@ -6410,14 +6144,14 @@
         "endLoc": {
           "column": 28,
           "line": 312,
-          "position": 9558
+          "position": 9565
         },
         "name": "websocket/index.ts",
         "start": 304,
         "startLoc": {
           "column": 38,
           "line": 304,
-          "position": 9244
+          "position": 9251
         }
       },
       "tokens": 79
@@ -6448,14 +6182,14 @@
         "endLoc": {
           "column": 9,
           "line": 323,
-          "position": 9989
+          "position": 9996
         },
         "name": "websocket/index.ts",
         "start": 313,
         "startLoc": {
           "column": 38,
           "line": 313,
-          "position": 9617
+          "position": 9624
         }
       },
       "tokens": 78
@@ -6500,170 +6234,56 @@
     },
     {
       "firstFile": {
-        "end": 74,
+        "end": 60,
         "endLoc": {
-          "column": 5,
-          "line": 74,
-          "position": 2872
+          "column": 8,
+          "line": 60,
+          "position": 2643
         },
         "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 23,
+        "start": 24,
         "startLoc": {
-          "column": 25,
-          "line": 23,
-          "position": 754
+          "column": 11,
+          "line": 24,
+          "position": 889
         }
       },
       "format": "typescript",
-      "fragment": "  BeforePromptHookContext,\n} from \"../types.ts\";\nimport {\n  SERVER_SENT_EVENT_TYPES,\n  STATUS_MESSAGES,\n  MAX_TOOL_ITERATIONS,\n} from \"@rodrigo-barraza/utilities-library/taxonomy\";\nimport logger from \"../../../utils/logger.ts\";\nimport PromptLocaleService from \"../../PromptLocaleService.ts\";\nimport { getErrorMessage } from \"../../../utils/ErrorHelpers.ts\";\nimport RequestLogger from \"../../RequestLogger.ts\";\nimport { createStandardHooks } from \"../lifecycle/HookInitializer.ts\";\nimport { executeToolBatch } from \"../lifecycle/ToolExecutor.ts\";\nimport {\n  emitPostExecutionStatus,\n  processToolResultMedia,\n  trackToolErrors,\n} from \"../lifecycle/PostExecutionEmitter.ts\";\nimport { runExhaustionRecoveryPass } from \"../lifecycle/ExhaustionRecovery.ts\";\nimport {\n  runPlanningPhase,\n  checkForPlanModeEntry,\n} from \"../lifecycle/PlanModeController.ts\";\nimport { validateAfterToolExecution } from \"../lifecycle/ValidationInterceptor.ts\";\nimport { buildToolRetryGuidance } from \"../lifecycle/ToolRetryInterceptor.ts\";\nimport {\n  isOutputTruncated,\n  isAtOutputCeiling,\n  injectContinuationContext,\n  injectErrorAsConversationMessage,\n  buildExhaustedRecoveryMessage,\n  buildProviderErrorMessage,\n  MAX_OUTPUT_TRUNCATION_RECOVERIES,\n} from \"../lifecycle/OutputTruncationRecovery.ts\";\nimport { manageContextPressure } from \"../lifecycle/ContextPressureManager.ts\";\nimport { logKVCacheHitRate } from \"../lifecycle/KVCacheReporter.ts\";\nimport { injectToolDiscoveryNudge } from \"../lifecycle/ToolDiscoveryNudge.ts\";\nimport { finalizePassTracker } from \"../lifecycle/TrackerFinalizer.ts\";\nimport { handleCodexPlanningResponse } from \"../lifecycle/CodexPlanningDetector.ts\";\nimport { maybeInjectSystemReminder, cleanupReminderCache } from \"../lifecycle/SystemReminderInjector.ts\";\nimport { checkCostBudget } from \"../lifecycle/CostBudgetEnforcer.ts\";\nimport { createSandboxCheckpoint, restoreSandboxCheckpoint } from \"../lifecycle/SandboxExecutor.ts\";\n\ninterface IterationPassOptions extends AgenticOptions {\n  project: string;\n  agent?: string | null;\n  username: string;\n}\n\nconst MAX_CONSECUTIVE_TOOL_ERRORS = 3;\nconst DEFAULT_BRANCH_COUNT = 3;\nconst DEFAULT_VALUE_THRESHOLD = 5.0;",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 52,
-      "secondFile": {
-        "end": 94,
-        "endLoc": {
-          "column": 5,
-          "line": 94,
-          "position": 3858
-        },
-        "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 43,
-        "startLoc": {
-          "column": 14,
-          "line": 43,
-          "position": 1740
-        }
-      },
-      "tokens": 208
-    },
-    {
-      "firstFile": {
-        "end": 126,
-        "endLoc": {
-          "column": 12,
-          "line": 126,
-          "position": 5125
-        },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 117,
-        "startLoc": {
-          "column": 33,
-          "line": 117,
-          "position": 4756
-        }
-      },
-      "format": "typescript",
-      "fragment": "async function runGoTBeforePrompt(\n  harness: BaseAgenticHarness,\n  currentMessages: ConversationMessage[],\n  hooks: ReturnType<typeof createStandardHooks>[\"hooks\"],\n  resolvedAgentConversationId: string,\n): Promise<void> {\n  const context = harness[\"context\"];\n  const tools = harness[\"tools\"];\n  const { options, conversationId, traceId, project, username, agent, workspaceRoot, emit } =\n    context;",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 10,
-      "secondFile": {
-        "end": 158,
-        "endLoc": {
-          "column": 102,
-          "line": 158,
-          "position": 6740
-        },
-        "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 150,
-        "startLoc": {
-          "column": 37,
-          "line": 150,
-          "position": 6375
-        }
-      },
-      "tokens": 70
-    },
-    {
-      "firstFile": {
-        "end": 171,
-        "endLoc": {
-          "column": 1,
-          "line": 171,
-          "position": 6510
-        },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 135,
-        "startLoc": {
-          "column": 2,
-          "line": 135,
-          "position": 5274
-        }
-      },
-      "format": "typescript",
-      "fragment": "  const hookContext: BeforePromptHookContext = {\n    messages: currentMessages,\n    project,\n    username,\n    agent,\n    traceId,\n    conversationId,\n    agentConversationId: resolvedAgentConversationId,\n    parentAgentConversationId: context.parentAgentConversationId,\n    agentContext: options.agentContext,\n    enabledTools: tools.resolvedEnabledTools,\n    resolvedToolNames: tools.finalTools.map((tool: ToolSchema) => tool.name),\n    workspaceRoot: workspaceRoot || undefined,\n    workspaceEnabled: options.workspaceEnabled as boolean | undefined,\n    locale: options.locale as string | undefined,\n  };\n  await hooks.run(\"beforePrompt\", hookContext);\n\n  if (hookContext._assembledSystemPrompt) {\n    const assembledPrompt = hookContext._assembledSystemPrompt as string;\n    context.conversationMeta = {\n      ...(context.conversationMeta || {}),\n      systemPrompt: assembledPrompt,\n    };\n    if (!options.systemPrompt) {\n      options.systemPrompt = assembledPrompt;\n    }\n  }\n\n  if (Array.isArray(hookContext._injectedSkills) && hookContext._injectedSkills.length > 0) {\n    emit({\n      type: SERVER_SENT_EVENT_TYPES.STATUS,\n      message: STATUS_MESSAGES.SKILLS_INJECTED,\n      skills: hookContext._injectedSkills,\n    });\n  }\n}",
+      "fragment": "  PassState,\n} from \"../types.ts\";\nimport { SERVER_SENT_EVENT_TYPES, STATUS_MESSAGES } from \"@rodrigo-barraza/utilities-library/taxonomy\";\nimport logger from \"../../../utils/logger.ts\";\nimport PromptLocaleService from \"../../PromptLocaleService.ts\";\nimport { createStandardHooks } from \"../lifecycle/HookInitializer.ts\";\nimport { executeToolBatch } from \"../lifecycle/ToolExecutor.ts\";\nimport {\n  emitPostExecutionStatus,\n  processToolResultMedia,\n  trackToolErrors,\n} from \"../lifecycle/PostExecutionEmitter.ts\";\nimport { runExhaustionRecoveryPass } from \"../lifecycle/ExhaustionRecovery.ts\";\nimport {\n  runPlanningPhase,\n  checkForPlanModeEntry,\n} from \"../lifecycle/PlanModeController.ts\";\nimport { validateAfterToolExecution } from \"../lifecycle/ValidationInterceptor.ts\";\nimport { buildToolRetryGuidance } from \"../lifecycle/ToolRetryInterceptor.ts\";\nimport {\n  isOutputTruncated,\n  isAtOutputCeiling,\n  injectContinuationContext,\n  injectErrorAsConversationMessage,\n  buildExhaustedRecoveryMessage,\n  buildProviderErrorMessage,\n  MAX_OUTPUT_TRUNCATION_RECOVERIES,\n} from \"../lifecycle/OutputTruncationRecovery.ts\";\nimport { manageContextPressure } from \"../lifecycle/ContextPressureManager.ts\";\nimport { logKVCacheHitRate } from \"../lifecycle/KVCacheReporter.ts\";\nimport { injectToolDiscoveryNudge } from \"../lifecycle/ToolDiscoveryNudge.ts\";\nimport { finalizePassTracker } from \"../lifecycle/TrackerFinalizer.ts\";\nimport { handleCodexPlanningResponse } from \"../lifecycle/CodexPlanningDetector.ts\";\nimport { maybeInjectSystemReminder, cleanupReminderCache } from \"../lifecycle/SystemReminderInjector.ts\";\nimport { checkCostBudget } from \"../lifecycle/CostBudgetEnforcer.ts\";\nimport { createSandboxCheckpoint } from \"../lifecycle/SandboxExecutor.ts\";\nimport {",
       "isNew": false,
       "kind": "exact",
       "lines": 37,
       "secondFile": {
-        "end": 195,
-        "endLoc": {
-          "column": 1,
-          "line": 195,
-          "position": 7979
-        },
-        "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 160,
-        "startLoc": {
-          "column": 2,
-          "line": 160,
-          "position": 6744
-        }
-      },
-      "tokens": 198
-    },
-    {
-      "firstFile": {
-        "end": 173,
+        "end": 83,
         "endLoc": {
           "column": 8,
-          "line": 173,
-          "position": 6520
-        },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 143,
-        "startLoc": {
-          "column": 39,
-          "line": 143,
-          "position": 5516
-        }
-      },
-      "format": "typescript",
-      "fragment": "    parentAgentConversationId: context.parentAgentConversationId,\n    agentContext: options.agentContext,\n    enabledTools: tools.resolvedEnabledTools,\n    resolvedToolNames: tools.finalTools.map((tool: ToolSchema) => tool.name),\n    workspaceRoot: workspaceRoot || undefined,\n    workspaceEnabled: options.workspaceEnabled as boolean | undefined,\n    locale: options.locale as string | undefined,\n  };\n  await hooks.run(\"beforePrompt\", hookContext);\n\n  if (hookContext._assembledSystemPrompt) {\n    const assembledPrompt = hookContext._assembledSystemPrompt as string;\n    context.conversationMeta = {\n      ...(context.conversationMeta || {}),\n      systemPrompt: assembledPrompt,\n    };\n    if (!options.systemPrompt) {\n      options.systemPrompt = assembledPrompt;\n    }\n  }\n\n  if (Array.isArray(hookContext._injectedSkills) && hookContext._injectedSkills.length > 0) {\n    emit({\n      type: SERVER_SENT_EVENT_TYPES.STATUS,\n      message: STATUS_MESSAGES.SKILLS_INJECTED,\n      skills: hookContext._injectedSkills,\n    });\n  }\n}\n\nfunction handleGoTProactiveBacktrack(",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 31,
-      "secondFile": {
-        "end": 197,
-        "endLoc": {
-          "column": 5,
-          "line": 197,
-          "position": 7986
+          "line": 83,
+          "position": 3664
         },
         "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 168,
+        "start": 47,
         "startLoc": {
-          "column": 39,
-          "line": 168,
-          "position": 6986
+          "column": 20,
+          "line": 47,
+          "position": 1910
         }
       },
-      "tokens": 170
+      "tokens": 161
     },
     {
       "firstFile": {
-        "end": 536,
+        "end": 395,
         "endLoc": {
           "column": 17,
-          "line": 536,
-          "position": 18876
+          "line": 395,
+          "position": 13782
         },
         "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 525,
+        "start": 384,
         "startLoc": {
           "column": 49,
-          "line": 525,
-          "position": 18352
+          "line": 384,
+          "position": 13258
         }
       },
       "format": "typescript",
@@ -6672,36 +6292,36 @@
       "kind": "exact",
       "lines": 12,
       "secondFile": {
-        "end": 878,
+        "end": 573,
         "endLoc": {
           "column": 17,
-          "line": 878,
-          "position": 31967
+          "line": 573,
+          "position": 20600
         },
         "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 867,
+        "start": 562,
         "startLoc": {
           "column": 48,
-          "line": 867,
-          "position": 31443
+          "line": 562,
+          "position": 20076
         }
       },
       "tokens": 86
     },
     {
       "firstFile": {
-        "end": 557,
+        "end": 416,
         "endLoc": {
           "column": 10,
-          "line": 557,
-          "position": 19430
+          "line": 416,
+          "position": 14336
         },
         "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 543,
+        "start": 402,
         "startLoc": {
           "column": 40,
-          "line": 543,
-          "position": 19098
+          "line": 402,
+          "position": 14004
         }
       },
       "format": "typescript",
@@ -6710,211 +6330,59 @@
       "kind": "exact",
       "lines": 15,
       "secondFile": {
-        "end": 891,
+        "end": 586,
         "endLoc": {
           "column": 93,
-          "line": 891,
-          "position": 32487
+          "line": 586,
+          "position": 21120
         },
         "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 885,
+        "start": 580,
         "startLoc": {
           "column": 39,
-          "line": 885,
-          "position": 32187
+          "line": 580,
+          "position": 20820
         }
       },
       "tokens": 61
     },
     {
       "firstFile": {
-        "end": 826,
+        "end": 436,
         "endLoc": {
-          "column": 1,
-          "line": 826,
-          "position": 27828
+          "column": 77,
+          "line": 436,
+          "position": 15119
         },
         "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 792,
-        "startLoc": {
-          "column": 4,
-          "line": 792,
-          "position": 26864
-        }
-      },
-      "format": "typescript",
-      "fragment": "    branchMessages.push({\n      role: \"user\",\n      content: diversityInstruction,\n    });\n  }\n\n  const pass = harness.createPassState(passOptions);\n  const { agentConversationId } = context;\n  const resolvedAgentConversationId = agentConversationId || \"\";\n  const requestIdBase =\n    context.requestId ||\n    resolvedAgentConversationId ||\n    crypto.randomUUID();\n  const passRequestId = `${requestIdBase}-iter-${state.iterations}-branch-${branchIndex}`;\n  pass.requestId = passRequestId;\n  harness.registerTrackerRequest(passRequestId);\n\n  const stream = await harness.createProviderStream(branchMessages, passOptions);\n  await harness.consumeStream(stream, pass, allowedToolNames);\n\n  return {\n    branchIndex,\n    text: pass.streamedText,\n    thinking: pass.streamedThinking,\n    thinkingSignature: pass.thinkingSignature,\n    score: 0,\n    criteriaScores: {\n      correctness: 0,\n      risk: 0,\n      efficiency: 0,\n      completeness: 0,\n    },\n    pass,\n  };\n}",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 35,
-      "secondFile": {
-        "end": 1146,
-        "endLoc": {
-          "column": 1,
-          "line": 1146,
-          "position": 41387
-        },
-        "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 1112,
-        "startLoc": {
-          "column": 4,
-          "line": 1112,
-          "position": 40423
-        }
-      },
-      "tokens": 159
-    },
-    {
-      "firstFile": {
-        "end": 966,
-        "endLoc": {
-          "column": 18,
-          "line": 966,
-          "position": 33667
-        },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 951,
-        "startLoc": {
-          "column": 29,
-          "line": 951,
-          "position": 33117
-        }
-      },
-      "format": "typescript",
-      "fragment": "  const candidateSummaries = branches\n    .map((branch, index) => {\n      const textPreview = (branch.text || branch.thinking || \"(no output)\")\n        .slice(0, 500)\n        .trim();\n      const toolCallCount = branch.pass.pendingToolCalls.length;\n      const toolCallNames = branch.pass.pendingToolCalls\n        .map((toolCall) => toolCall.name)\n        .join(\", \");\n      return (\n        `[Candidate ${index + 1}] ` +\n        `${toolCallCount} tool call(s)${toolCallNames ? ` (${toolCallNames})` : \"\"}.\\n` +\n        `Output: ${textPreview}`\n      );\n    })\n    .join(\"\\n\\n\");",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 16,
-      "secondFile": {
-        "end": 1164,
-        "endLoc": {
-          "column": 18,
-          "line": 1164,
-          "position": 42364
-        },
-        "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 1153,
-        "startLoc": {
-          "column": 9,
-          "line": 1153,
-          "position": 41850
-        }
-      },
-      "tokens": 106
-    },
-    {
-      "firstFile": {
-        "end": 1006,
-        "endLoc": {
-          "column": 8,
-          "line": 1006,
-          "position": 35358
-        },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 983,
-        "startLoc": {
-          "column": 36,
-          "line": 983,
-          "position": 34269
-        }
-      },
-      "format": "typescript",
-      "fragment": "function parseGoTMultiCriteriaScores(scoreResponseText: string, branches: ScoredBranch[]): void {\n  const linePattern =\n    /(\\d+)\\s*:\\s*correctness\\s*=\\s*(\\d+(?:\\.\\d+)?)\\s*,\\s*risk\\s*=\\s*(\\d+(?:\\.\\d+)?)\\s*,\\s*efficiency\\s*=\\s*(\\d+(?:\\.\\d+)?)\\s*,\\s*completeness\\s*=\\s*(\\d+(?:\\.\\d+)?)/gi;\n  let lineMatch: RegExpExecArray | null;\n  while ((lineMatch = linePattern.exec(scoreResponseText)) !== null) {\n    const candidateIndex = parseInt(lineMatch[1], 10) - 1;\n    if (candidateIndex >= 0 && candidateIndex < branches.length) {\n      const criteria: CriteriaScores = {\n        correctness: Math.min(10, Math.max(0, parseFloat(lineMatch[2]))),\n        risk: Math.min(10, Math.max(0, parseFloat(lineMatch[3]))),\n        efficiency: Math.min(10, Math.max(0, parseFloat(lineMatch[4]))),\n        completeness: Math.min(10, Math.max(0, parseFloat(lineMatch[5]))),\n      };\n      branches[candidateIndex].criteriaScores = criteria;\n      branches[candidateIndex].score =\n        criteria.correctness * 0.4 +\n        criteria.risk * 0.25 +\n        criteria.efficiency * 0.15 +\n        criteria.completeness * 0.2;\n    }\n  }\n}\n\nfunction parseGoTSimpleScores(scoreResponseText: string, branches: ScoredBranch[]): void {",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 24,
-      "secondFile": {
-        "end": 774,
-        "endLoc": {
-          "column": 8,
-          "line": 774,
-          "position": 27919
-        },
-        "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 751,
-        "startLoc": {
-          "column": 36,
-          "line": 751,
-          "position": 26830
-        }
-      },
-      "tokens": 218
-    },
-    {
-      "firstFile": {
-        "end": 1027,
-        "endLoc": {
-          "column": 1,
-          "line": 1027,
-          "position": 36151
-        },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 1006,
-        "startLoc": {
-          "column": 89,
-          "line": 1006,
-          "position": 35439
-        }
-      },
-      "format": "typescript",
-      "fragment": "function parseGoTSimpleScores(scoreResponseText: string, branches: ScoredBranch[]): void {\n  const simpleScorePattern = /(\\d+)\\s*:\\s*(\\d+(?:\\.\\d+)?)/g;\n  let simpleMatch: RegExpExecArray | null;\n  while ((simpleMatch = simpleScorePattern.exec(scoreResponseText)) !== null) {\n    const candidateIndex = parseInt(simpleMatch[1], 10) - 1;\n    const candidateScore = parseFloat(simpleMatch[2]);\n    if (\n      candidateIndex >= 0 &&\n      candidateIndex < branches.length &&\n      candidateScore >= 0 &&\n      candidateScore <= 10\n    ) {\n      branches[candidateIndex].score = candidateScore;\n      branches[candidateIndex].criteriaScores = {\n        correctness: candidateScore,\n        risk: candidateScore,\n        efficiency: candidateScore,\n        completeness: candidateScore,\n      };\n    }\n  }\n}",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 22,
-      "secondFile": {
-        "end": 792,
-        "endLoc": {
-          "column": 3,
-          "line": 792,
-          "position": 28854
-        },
-        "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 776,
+        "start": 425,
         "startLoc": {
           "column": 31,
-          "line": 776,
-          "position": 28140
-        }
-      },
-      "tokens": 114
-    },
-    {
-      "firstFile": {
-        "end": 1093,
-        "endLoc": {
-          "column": 19,
-          "line": 1093,
-          "position": 38223
-        },
-        "name": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "start": 1054,
-        "startLoc": {
-          "column": 56,
-          "line": 1054,
-          "position": 36838
+          "line": 425,
+          "position": 14712
         }
       },
       "format": "typescript",
-      "fragment": "    const scoringPrompt = buildGoTScoringPrompt(branches);\n    const scoringMessages = [{ role: \"user\" as const, content: scoringPrompt }];\n    const scoringOptions = {\n      maxTokens: 200,\n      temperature: 0,\n      signal: AbortSignal.timeout(15_000),\n    };\n\n    let scoreResponseText = \"\";\n    const scoringRequestStartMs = performance.now();\n    const scoringStream = context.provider.generateTextStream(\n      scoringMessages,\n      context.resolvedModel,\n      scoringOptions,\n    );\n\n    for await (const chunk of scoringStream) {\n      if (typeof chunk === \"string\") {\n        scoreResponseText += chunk;\n      }\n    }\n\n    RequestLogger.logBackgroundLlmCall({\n      requestId: `${context.requestId || context.agentConversationId || \"unknown\"}-scoring-iter-${harness[\"state\"].iterations}`,\n      endpoint: \"/agent\",\n      operation: \"agent:scoring\",\n      project: context.project,\n      username: context.username,\n      agent: context.agent || null,\n      provider: context.providerName,\n      model: context.resolvedModel,\n      traceId: context.traceId || null,\n      agentConversationId: context.agentConversationId || null,\n      aiMessages: scoringMessages as Parameters<typeof RequestLogger.logBackgroundLlmCall>[0][\"aiMessages\"],\n      resultText: scoreResponseText,\n      success: true,\n      errorMessage: null,\n      requestStartMs: scoringRequestStartMs,\n    }).catch((scoringLogError: unknown) =>\n      logger.error(",
+      "fragment": "  let hasCleanTextBreak = false;\n\n  const { hooks } = createStandardHooks({\n    workspaceRoot: workspaceRoot || undefined,\n    enableCriticGate: options.enableCriticGate === true,\n    criticModel: options.criticModel || undefined,\n  });\n\n  await runBeforePromptPhase(harness, currentMessages, hooks, resolvedAgentConversationId);\n\n  if (state.planModeActive) {\n    const { planApproved } = await runPlanningPhase(harness, currentMessages, \"GraphOfThoughts\");",
       "isNew": false,
       "kind": "exact",
-      "lines": 40,
+      "lines": 12,
       "secondFile": {
-        "end": 1236,
+        "end": 605,
         "endLoc": {
-          "column": 19,
-          "line": 1236,
-          "position": 44862
+          "column": 77,
+          "line": 605,
+          "position": 21936
         },
         "name": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "start": 1196,
+        "start": 594,
         "startLoc": {
-          "column": 15,
-          "line": 1196,
-          "position": 43476
+          "column": 47,
+          "line": 594,
+          "position": 21529
         }
       },
-      "tokens": 229
+      "tokens": 65
     },
     {
       "firstFile": {
@@ -7644,14 +7112,14 @@
         "endLoc": {
           "column": 7,
           "line": 686,
-          "position": 32695
+          "position": 32702
         },
         "name": "services/wallgarden/WallgardenService.ts",
         "start": 681,
         "startLoc": {
           "column": 89,
           "line": 681,
-          "position": 32483
+          "position": 32490
         }
       },
       "format": "typescript",
@@ -7664,14 +7132,14 @@
         "endLoc": {
           "column": 7,
           "line": 1380,
-          "position": 63940
+          "position": 63947
         },
         "name": "services/wallgarden/WallgardenService.ts",
         "start": 1375,
         "startLoc": {
           "column": 80,
           "line": 1375,
-          "position": 63728
+          "position": 63735
         }
       },
       "tokens": 62
@@ -7682,14 +7150,14 @@
         "endLoc": {
           "column": 36,
           "line": 691,
-          "position": 33042
+          "position": 33049
         },
         "name": "services/wallgarden/WallgardenService.ts",
         "start": 686,
         "startLoc": {
           "column": 47,
           "line": 686,
-          "position": 32735
+          "position": 32742
         }
       },
       "format": "typescript",
@@ -7702,14 +7170,14 @@
         "endLoc": {
           "column": 36,
           "line": 1384,
-          "position": 64224
+          "position": 64231
         },
         "name": "services/wallgarden/WallgardenService.ts",
         "start": 1379,
         "startLoc": {
           "column": 41,
           "line": 1379,
-          "position": 63917
+          "position": 63924
         }
       },
       "tokens": 97
@@ -7720,14 +7188,14 @@
         "endLoc": {
           "column": 5,
           "line": 71,
-          "position": 3162
+          "position": 3169
         },
         "name": "utils/SseUtilities.ts",
         "start": 63,
         "startLoc": {
           "column": 6,
           "line": 63,
-          "position": 2840
+          "position": 2847
         }
       },
       "format": "typescript",
@@ -7740,14 +7208,14 @@
         "endLoc": {
           "column": 7,
           "line": 262,
-          "position": 9601
+          "position": 9608
         },
         "name": "utils/SseUtilities.ts",
         "start": 254,
         "startLoc": {
           "column": 8,
           "line": 254,
-          "position": 9263
+          "position": 9270
         }
       },
       "tokens": 78
@@ -7758,14 +7226,14 @@
         "endLoc": {
           "column": 5,
           "line": 175,
-          "position": 5042
+          "position": 5049
         },
         "name": "websocket/index.ts",
         "start": 164,
         "startLoc": {
           "column": 7,
           "line": 164,
-          "position": 4731
+          "position": 4738
         }
       },
       "format": "typescript",
@@ -7778,46 +7246,46 @@
         "endLoc": {
           "column": 5,
           "line": 208,
-          "position": 5903
+          "position": 5910
         },
         "name": "websocket/index.ts",
         "start": 197,
         "startLoc": {
           "column": 8,
           "line": 197,
-          "position": 5592
+          "position": 5599
         }
       },
       "tokens": 75
     }
   ],
   "statistics": {
-    "detectionDate": "2026-10-29T22:00:04.916Z",
+    "detectionDate": "2026-10-29T23:31:08.125Z",
     "formats": {
       "typescript": {
-        "clones": 205,
-        "duplicatedLines": 3179,
-        "duplicatedTokens": 18695,
-        "lines": 108095,
+        "clones": 191,
+        "duplicatedLines": 2834,
+        "duplicatedTokens": 16533,
+        "lines": 108487,
         "newClones": 0,
         "newDuplicatedLines": 0,
-        "percentage": 2.9409315879550397,
-        "percentageTokens": 3.3089901163943245,
-        "sources": 356,
-        "tokens": 564976
+        "percentage": 2.612294560638602,
+        "percentageTokens": 2.91921440943867,
+        "sources": 362,
+        "tokens": 566351
       }
     },
     "total": {
-      "clones": 205,
-      "duplicatedLines": 3179,
-      "duplicatedTokens": 18695,
-      "lines": 108095,
+      "clones": 191,
+      "duplicatedLines": 2834,
+      "duplicatedTokens": 16533,
+      "lines": 108487,
       "newClones": 0,
       "newDuplicatedLines": 0,
-      "percentage": 2.9409315879550397,
-      "percentageTokens": 3.3089901163943245,
-      "sources": 356,
-      "tokens": 564976
+      "percentage": 2.612294560638602,
+      "percentageTokens": 2.91921440943867,
+      "sources": 362,
+      "tokens": 566351
     }
   }
 }

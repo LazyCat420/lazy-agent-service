@@ -111,7 +111,7 @@ export class CanonicalProviderBudget {
 
   private async *runBudgetedStream(
     target: any,
-    method: Function,
+    method: (...args: any[]) => AsyncIterable<any>,
     messages: unknown[],
     model: string,
     options: any = {},

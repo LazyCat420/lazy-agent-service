@@ -970,6 +970,69 @@
     "agents": []
   },
   {
+    "name": "code_health",
+    "description": "Measure code health of files you wrote or edited, deterministically and offline. Submit the file paths and their current content; get back per-function McCabe complexity, oversized functions, duplicate token windows across the submitted files, and exported names nothing references. Use this before claiming a code change is done: fix anything it flags, then re-run it. Limits: it lexes TypeScript/JavaScript (comments and strings stripped), it does not resolve imports or type-check.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "description": "Files to measure. Submit only the files you changed (plus their siblings when checking duplicate code).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Repo-relative path, e.g. src/services/Foo.ts"
+              },
+              "content": {
+                "type": "string",
+                "description": "Full current file content."
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ]
+          }
+        },
+        "max_complexity": {
+          "type": "number",
+          "description": "Complexity ceiling per function (default 30)."
+        },
+        "max_lines": {
+          "type": "number",
+          "description": "Line ceiling per function (default 150)."
+        },
+        "min_duplicate_tokens": {
+          "type": "number",
+          "description": "Token window size treated as duplication (default 60)."
+        }
+      },
+      "required": [
+        "files"
+      ]
+    },
+    "owner_app": "shared",
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 20000,
+    "tags": [
+      "quality",
+      "verification",
+      "code-health"
+    ],
+    "domain": "Development & Verification",
+    "labels": [
+      "quality",
+      "verification",
+      "code-health"
+    ]
+  },
+  {
     "name": "news_search",
     "description": "Current news stories, with REAL publisher URLs and REAL article photos. TWO MODES. (1) Leave `topic` EMPTY for TODAY'S TOP HEADLINES: these come from editorial front pages (Google News plus NYT/BBC/NPR/ABC), ranked by how many independent newsrooms led with the same story, and optionally narrowed with `category`. An empty topic is a VALID request and is the RIGHT way to ask for the top stories — do NOT search for the words 'top stories', which matches roundup pages containing that phrase rather than the news. (2) Give a `topic` to SEARCH: this rotates across keyed providers (gnews, worldnewsapi, currentsapi, thenewsapi, newsapi) so no single provider's daily limit blocks a request. Prefer this tool over a generic web search for anything time-sensitive: web search returns news-site homepages rather than stories. Each item carries {title, url, image, source, snippet, date}; top-headline items also carry {category, consensus, stub}. `consensus` is how many newsrooms carried the story — 2 or more means it is genuinely a top story. `stub: true` marks a Google redirect link: it is safe to SHOW and to link, but it has no article photo and must NOT be scraped. Results default to the US; pass country='gb'/'in'/etc for another market, or country='' for worldwide. An empty items list means no source had a usable story, not an error.",
     "parameters": {

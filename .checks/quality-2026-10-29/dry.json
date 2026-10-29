@@ -1,19 +1,13 @@
 {
-  "generatedAt": "2026-10-29T22:00:05.164Z",
+  "generatedAt": "2026-10-29T23:31:08.398Z",
   "minTokens": 60,
   "logic": {
     "name": "logic",
-    "percent": 2.9409315879550397,
-    "lines": 108095,
-    "duplicatedLines": 3179,
-    "clones": 205,
+    "percent": 2.612294560638602,
+    "lines": 108487,
+    "duplicatedLines": 2834,
+    "clones": 191,
     "top": [
-      {
-        "tokens": 362,
-        "lines": 50,
-        "a": "routes/admin/AdminStatsRoutes.ts:37",
-        "b": "routes/admin/AdminTraceRoutes.ts:47"
-      },
       {
         "tokens": 315,
         "lines": 64,
@@ -27,28 +21,10 @@
         "b": "core/loop/RunsAdapter.ts:317"
       },
       {
-        "tokens": 229,
-        "lines": 40,
-        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:1054",
-        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:1196"
-      },
-      {
-        "tokens": 218,
-        "lines": 24,
-        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:983",
-        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:751"
-      },
-      {
         "tokens": 208,
         "lines": 40,
         "a": "providers/anthropic.ts:546",
         "b": "providers/anthropic.ts:775"
-      },
-      {
-        "tokens": 208,
-        "lines": 52,
-        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:23",
-        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:43"
       },
       {
         "tokens": 201,
@@ -63,26 +39,44 @@
         "b": "providers/openai.ts:1191"
       },
       {
-        "tokens": 198,
+        "tokens": 190,
+        "lines": 35,
+        "a": "routes/TextRoutes.ts:54",
+        "b": "routes/admin/AdminContentRoutes.ts:397"
+      },
+      {
+        "tokens": 172,
+        "lines": 25,
+        "a": "routes/admin/AdminStatsRoutes.ts:31",
+        "b": "routes/admin/AdminTraceRoutes.ts:34"
+      },
+      {
+        "tokens": 161,
+        "lines": 21,
+        "a": "providers/lm-studio.ts:303",
+        "b": "utils/openai-compat.ts:1107"
+      },
+      {
+        "tokens": 161,
         "lines": 37,
-        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:135",
-        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:160"
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:24",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:47"
+      },
+      {
+        "tokens": 144,
+        "lines": 29,
+        "a": "providers/llama-cpp.ts:397",
+        "b": "providers/lm-studio.ts:1556"
       }
     ]
   },
   "all": {
     "name": "all",
-    "percent": 3.2446217108165825,
-    "lines": 113326,
-    "duplicatedLines": 3677,
-    "clones": 231,
+    "percent": 2.929977752569886,
+    "lines": 113721,
+    "duplicatedLines": 3332,
+    "clones": 217,
     "top": [
-      {
-        "tokens": 362,
-        "lines": 50,
-        "a": "routes/admin/AdminStatsRoutes.ts:37",
-        "b": "routes/admin/AdminTraceRoutes.ts:47"
-      },
       {
         "tokens": 315,
         "lines": 64,
@@ -96,28 +90,10 @@
         "b": "core/loop/RunsAdapter.ts:317"
       },
       {
-        "tokens": 229,
-        "lines": 40,
-        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:1054",
-        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:1196"
-      },
-      {
-        "tokens": 218,
-        "lines": 24,
-        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:983",
-        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:751"
-      },
-      {
         "tokens": 208,
         "lines": 40,
         "a": "providers/anthropic.ts:546",
         "b": "providers/anthropic.ts:775"
-      },
-      {
-        "tokens": 208,
-        "lines": 52,
-        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:23",
-        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:43"
       },
       {
         "tokens": 201,
@@ -132,10 +108,34 @@
         "b": "providers/openai.ts:1191"
       },
       {
-        "tokens": 198,
+        "tokens": 190,
+        "lines": 35,
+        "a": "routes/TextRoutes.ts:54",
+        "b": "routes/admin/AdminContentRoutes.ts:397"
+      },
+      {
+        "tokens": 178,
+        "lines": 36,
+        "a": "config/models.ts:711",
+        "b": "config/models.ts:751"
+      },
+      {
+        "tokens": 172,
+        "lines": 25,
+        "a": "routes/admin/AdminStatsRoutes.ts:31",
+        "b": "routes/admin/AdminTraceRoutes.ts:34"
+      },
+      {
+        "tokens": 161,
+        "lines": 21,
+        "a": "providers/lm-studio.ts:303",
+        "b": "utils/openai-compat.ts:1107"
+      },
+      {
+        "tokens": 161,
         "lines": 37,
-        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:135",
-        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:160"
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:24",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:47"
       }
     ]
   }

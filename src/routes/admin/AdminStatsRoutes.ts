@@ -27,7 +27,7 @@ router.use(requireDb);
 async function buildMatchFilter(
   req: Request,
 ): Promise<Record<string, unknown>> {
-  const { from, to, project, agent, provider, model, workspace } = req.query;
+  const { from, to, workspace } = req.query;
   const match = buildAdminMatch(req.query as Record<string, unknown>);
 
   applyDateRangeFilter(match, from as string, to as string);
@@ -63,7 +63,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
       const match = await buildMatchFilter(req);
-      const { from, to, project, provider, model, workspace } = req.query;
+      const { from, to, workspace } = req.query;
 
       const pipeline: Record<string, unknown>[] = [
         ...(Object.keys(match).length ? [{ $match: match }] : []),

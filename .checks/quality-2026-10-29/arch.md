@@ -1,14 +1,11 @@
-# Architecture report (2026-10-29T22:19:42.841Z)
+# Architecture report (2026-10-29T23:31:10.569Z)
 
-Modules: 554 · dependencies: 2515
+Modules: 566 · dependencies: 2542
 
-## error (3)
+## error (0)
 
-- **services-no-routes**: src/services/BenchmarkService.ts → src/routes/ChatRoutes.ts
-- **services-no-routes**: src/services/wallgarden/WallgardenService.ts → src/routes/ChatRoutes.ts
-- **services-no-routes**: src/services/WorkflowExecutionService.ts → src/routes/ChatRoutes.ts
 
-## warn (135)
+## warn (136)
 
 - **no-circular**: src/core/loop/SpillBuffer.ts → src/core/loop/types.ts
 - **no-circular**: src/providers/anthropic.ts → src/types/ProviderTypes.ts
@@ -36,7 +33,6 @@ Modules: 554 · dependencies: 2515
 - **no-circular**: src/providers/openai.ts → src/utils/openai-compat.ts
 - **no-circular**: src/providers/vllm.ts → src/types/provider.ts
 - **no-circular**: src/providers/vllm.ts → src/utils/openai-compat.ts
-- **no-circular**: src/routes/ChatRoutes.ts → src/utils/SseUtilities.ts
 - **no-circular**: src/services/AgenticLoopService.ts → src/core/loop/AgentRouteAdapter.ts
 - **no-circular**: src/services/AgenticLoopService.ts → src/services/AgenticToolResolver.ts
 - **no-circular**: src/services/AgenticLoopService.ts → src/services/harnesses/HarnessRegistry.ts
@@ -50,3 +46,4 @@ Modules: 554 · dependencies: 2515
 - **no-circular**: src/services/DelegateTool.ts → src/services/AgenticLoopService.ts
 - **no-circular**: src/services/harnesses/BaseAgenticHarness.ts → src/services/harnesses/lifecycle/Finalizer.ts
 - **no-circular**: src/services/harnesses/BaseAgenticHarness.ts → src/services/harnesses/lifecycle/TurnTranscript.ts
+- **no-circular**: src/services/harnesses/BaseAgenticHarness.ts → src/services/OrchestratorService.ts

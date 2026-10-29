@@ -1,6 +1,7 @@
 import logger from "../../../utils/logger.ts";
 import { APPROVAL_TIERS, toolTier } from "../../ToolAuthorization.ts";
 import PromptLocaleService from "../../PromptLocaleService.ts";
+import { resolveIndependentCriticModel } from "./IndependentJudge.ts";
 import RequestLogger from "../../RequestLogger.ts";
 
 import type { ToolCall, AgenticContext } from "../types.ts";
@@ -30,6 +31,8 @@ interface CriticReviewResult {
   isApproved: boolean;
   reason: string;
   criticModel: string;
+  /** False when the critic fell back to the author model (no independent signal). */
+  judgeIndependent: boolean;
 }
 
 export default class CriticGate {
@@ -37,6 +40,19 @@ export default class CriticGate {
 
   constructor(options: CriticGateOptions = {}) {
     this.criticModel = options.model || undefined;
+  }
+
+  /**
+   * Resolve the critic: an explicit model is used as configured; otherwise a
+   * different model of the same provider, so the judge never reviews its own
+   * author's output with identical weights.
+   */
+  private selectJudge(authorModel: string): { model: string; independent: boolean } {
+    if (this.criticModel) {
+      return { model: this.criticModel, independent: this.criticModel !== authorModel };
+    }
+    const selection = resolveIndependentCriticModel(authorModel);
+    return { model: selection.model, independent: selection.independent };
   }
 
   /**
@@ -51,7 +67,8 @@ export default class CriticGate {
   ): Promise<CriticReviewResult> {
     const tier = toolTier(toolCall.name);
 
-    const activeCriticModel = this.criticModel || context.resolvedModel;
+    const judge = this.selectJudge(context.resolvedModel);
+    const activeCriticModel = judge.model;
 
     // Only review DANGER tier tools
     if (tier !== APPROVAL_TIERS.DANGER) {
@@ -59,6 +76,7 @@ export default class CriticGate {
         isApproved: true,
         reason: "below_danger_tier",
         criticModel: activeCriticModel,
+        judgeIndependent: judge.independent,
       };
     }
 
@@ -68,6 +86,7 @@ export default class CriticGate {
         isApproved: true,
         reason: "critic_skipped",
         criticModel: activeCriticModel,
+        judgeIndependent: judge.independent,
       };
     }
 
@@ -81,7 +100,10 @@ export default class CriticGate {
         context,
         activeCriticModel,
       );
-      return this.parseReviewResponse(criticResponse, activeCriticModel);
+      return {
+        ...this.parseReviewResponse(criticResponse, activeCriticModel),
+        judgeIndependent: judge.independent,
+      };
     } catch (criticError: unknown) {
       // On critic failure, default to allowing (fail-open for usability).
       // A fail-closed approach would block all DANGER tools on critic downtime.
@@ -92,6 +114,7 @@ export default class CriticGate {
         isApproved: true,
         reason: "critic_error_fallback",
         criticModel: activeCriticModel,
+        judgeIndependent: judge.independent,
       };
     }
   }
@@ -185,7 +208,7 @@ export default class CriticGate {
   private parseReviewResponse(
     response: string,
     activeModel: string,
-  ): CriticReviewResult {
+  ): Omit<CriticReviewResult, "judgeIndependent"> {
     const firstLine = response.split("\n")[0].trim().toUpperCase();
 
     if (firstLine.startsWith("APPROVE")) {

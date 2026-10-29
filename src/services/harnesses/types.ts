@@ -151,6 +151,8 @@ export interface ModelDefinition {
   pricing?: Record<string, number>;
   outputTypes?: string[];
   inputTypes?: string[];
+  /** Audio models: which steering field the provider accepts ("delivery_mode" | "temperature"). */
+  ttsSteering?: "delivery_mode" | "temperature";
   [key: string]: unknown;
 }
 

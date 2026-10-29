@@ -1151,6 +1151,7 @@ export const MODELS = {
   INWORLD_TTS_2: {
     description:
       "Inworld's most powerful Text-to-Speech model with natural language steering for expressive, directed speech across 200+ languages.",
+    ttsSteering: "delivery_mode" as const,
     name: "inworld-tts-2",
     label: "Inworld TTS-2",
     provider: PROVIDERS.INWORLD,
@@ -1165,6 +1166,7 @@ export const MODELS = {
   INWORLD_TTS_1_5_MAX: {
     description:
       "Inworld's previous-generation premium TTS engine with low latency and 15-language support.",
+    ttsSteering: "temperature" as const,
     name: "inworld-tts-1.5-max",
     label: "Inworld TTS 1.5 Max",
     provider: PROVIDERS.INWORLD,
@@ -1178,6 +1180,7 @@ export const MODELS = {
   INWORLD_TTS_1_5_MINI: {
     description:
       "Inworld's ultra-fast, cost-efficient TTS engine with 15-language support and ~120ms latency.",
+    ttsSteering: "temperature" as const,
     name: "inworld-tts-1.5-mini",
     label: "Inworld TTS 1.5 Mini",
     provider: PROVIDERS.INWORLD,

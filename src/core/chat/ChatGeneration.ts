@@ -6,7 +6,6 @@ import {
 } from "../../services/ToolAuthorization.ts";
 import type { PolicyRule } from "../../services/PolicyEngine.ts";
 import { scheduleToolCalls } from "../../utils/ToolScheduling.ts";
-import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import {
   formatCostTag,
   roundMilliseconds,
@@ -17,7 +16,6 @@ import {
   DEFAULT_TOPOLOGY,
   DEFAULT_CONVERSATION_TITLE,
 } from "@rodrigo-barraza/utilities-library/taxonomy";
-import express, { Request, Response, NextFunction } from "express";
 import {
   finalizeTextGeneration,
   getCollectionOpts,
@@ -63,8 +61,6 @@ import {
   markGenerating,
   appendAndFinalize,
 } from "../../utils/ConversationUtilities.ts";
-import { handleSseRequest, handleJsonRequest } from "../../utils/SseUtilities.ts";
-import { wantsSse } from "../../utils/StreamNegotiation.ts";
 import { SseEvent } from "../../types/SseTypes.ts";
 import { ChatRequestSchema } from "../../types/index.ts";
 import type {
