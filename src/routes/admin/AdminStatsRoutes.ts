@@ -11,7 +11,11 @@ import AgentPersonaRegistry from "../../services/AgentPersonaRegistry.ts";
 import ToolOrchestratorService from "../../services/ToolOrchestratorService.ts";
 import logger from "../../utils/logger.ts";
 import { getErrorMessage } from "../../utils/ErrorHelpers.ts";
-import { applyDateRangeFilter, buildAdminMatch } from "../../utils/QueryBuilders.ts";
+import {
+  applyDateRangeFilter,
+  buildAdminMatch,
+  parseCsvFilter,
+} from "../../utils/QueryBuilders.ts";
 import requireDb from "../../middleware/RequireDbMiddleware.ts";
 import { hours as hoursToMs } from "@rodrigo-barraza/utilities-library";
 
@@ -208,19 +212,11 @@ router.get(
       const convMatch: Record<string, unknown> = {};
       if (project) convMatch.project = project;
       if (workspace) convMatch.workspaceRoot = workspace;
-      if (provider) {
-        const providerNames = String(provider).split(",").filter(Boolean);
-        if (providerNames.length === 1) convMatch.providers = providerNames[0];
-        else if (providerNames.length > 1)
-          convMatch.providers = { $in: providerNames };
-      }
-      if (model) {
-        const modelNames = String(model).split(",").filter(Boolean);
-        if (modelNames.length === 1)
-          convMatch["messages.model"] = modelNames[0];
-        else if (modelNames.length > 1)
-          convMatch["messages.model"] = { $in: modelNames };
-      }
+      const providerFilter = parseCsvFilter(provider);
+      if (providerFilter !== undefined) convMatch.providers = providerFilter;
+
+      const modelFilter = parseCsvFilter(model);
+      if (modelFilter !== undefined) convMatch["messages.model"] = modelFilter;
       applyDateRangeFilter(
         convMatch,
         from as string,
