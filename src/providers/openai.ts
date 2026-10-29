@@ -69,6 +69,21 @@ function useResponsesAPI(model: string): boolean {
 }
 
 /**
+ * Catalog-first reasoning policy for the Chat Completions path.
+ *
+ * A known model takes the reasoning path when its catalog entry says
+ * `thinking: true`. An unknown model id takes the reasoning path too: sending
+ * temperature/top_p to a reasoning model is a 400, while omitting them on a
+ * normal model is harmless. Never sniff the model name for "o1"/"o3" — the
+ * harness must work with whatever model an operator has loaded.
+ */
+function isReasoningModel(model: string): boolean {
+  const definition = getModelByName(model);
+  if (!definition) return true;
+  return "thinking" in definition && definition.thinking === true;
+}
+
+/**
  * Truncate a tool array to the Chat Completions API maximum (128).
  * Tool-discovery tools (discover_and_enable_tools, search_tools, enable_tools)
  * are prioritized to the front so the agent can always dynamically discover
@@ -945,13 +960,7 @@ const openaiProvider = {
     model: string,
     options: ProviderOptions,
   ) {
-    const modelDefinition = getModelByName(model);
-    const isReasoning =
-      (modelDefinition &&
-        "thinking" in modelDefinition &&
-        (modelDefinition as { thinking?: boolean }).thinking === true) ||
-      model.includes("o1") ||
-      model.includes("o3");
+    const isReasoning = isReasoningModel(model);
     const prepared = prepareOpenAIMessages(messages);
     const payload: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
       model,
@@ -1421,13 +1430,7 @@ const openaiProvider = {
     model: string,
     options: ProviderOptions,
   ) {
-    const modelDefinition = getModelByName(model);
-    const isReasoning =
-      (modelDefinition &&
-        "thinking" in modelDefinition &&
-        (modelDefinition as { thinking?: boolean }).thinking === true) ||
-      model.includes("o1") ||
-      model.includes("o3");
+    const isReasoning = isReasoningModel(model);
     const prepared = prepareOpenAIMessages(messages);
     const payload: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
       model,
