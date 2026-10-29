@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-10-29T23:31:08.398Z",
+  "generatedAt": "2026-10-29T23:43:44.069Z",
   "minTokens": 60,
   "logic": {
     "name": "logic",
-    "percent": 2.612294560638602,
-    "lines": 108487,
+    "percent": 2.611620513293093,
+    "lines": 108515,
     "duplicatedLines": 2834,
     "clones": 191,
     "top": [
@@ -72,8 +72,8 @@
   },
   "all": {
     "name": "all",
-    "percent": 2.929977752569886,
-    "lines": 113721,
+    "percent": 2.929256520936448,
+    "lines": 113749,
     "duplicatedLines": 3332,
     "clones": 217,
     "top": [

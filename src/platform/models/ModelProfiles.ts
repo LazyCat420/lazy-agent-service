@@ -19,6 +19,16 @@
  *                       minimal system prompt), "standard" for the rest
  */
 
+import { getModelByName } from "../../config.ts";
+
+/** The catalog fields that describe a model's request surface. */
+interface CatalogCapabilities {
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  thinking?: boolean;
+  thinkingLevels?: string[];
+}
+
 export type SamplingParameter =
   | "temperature"
   | "topP"
@@ -174,19 +184,37 @@ export function isLightweightModel(model: string): boolean {
   return size !== null && size <= LIGHTWEIGHT_MAX_BILLION_PARAMETERS;
 }
 
-/** The profile of `model`, derived from its name. */
+/** The effort vocabulary: name-derived traits plus any levels the catalog declares. */
+function resolveEfforts(
+  traits: FamilyTraits,
+  definition: CatalogCapabilities | null,
+): string[] | null {
+  if (definition?.thinking === false) return null;
+  const merged = [...(traits.efforts ?? [])];
+  for (const level of definition?.thinkingLevels ?? []) {
+    if (!merged.includes(level)) merged.push(level);
+  }
+  return merged.length ? merged : null;
+}
+
+/**
+ * The profile of `model`: catalog capabilities first (limits, effort
+ * vocabulary, whether the model thinks at all), name-derived family traits
+ * second, and the safe "unknown" traits when the catalog has never seen it.
+ */
 export function getModelProfile(model: string): ModelProfile {
   const family = modelFamilyOf(model);
   const traits = FAMILY_TRAITS[family];
   const lightweight = isLightweightModel(model);
+  const definition = getModelByName(model) as CatalogCapabilities | null;
   return {
     model,
     family,
     rejectedParameters: [...(traits.rejectedParameters ?? [])],
-    efforts: traits.efforts ? [...traits.efforts] : null,
+    efforts: resolveEfforts(traits, definition),
     toolChoice: [...(traits.toolChoice ?? ALL_TOOL_CHOICE)],
-    contextWindow: traits.contextWindow,
-    maxOutputTokens: traits.maxOutputTokens ?? null,
+    contextWindow: definition?.maxInputTokens ?? traits.contextWindow,
+    maxOutputTokens: definition?.maxOutputTokens ?? traits.maxOutputTokens ?? null,
     budget: BUDGET_PRESETS[lightweight ? "lightweight" : "standard"],
   };
 }

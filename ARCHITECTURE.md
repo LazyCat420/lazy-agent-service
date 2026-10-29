@@ -146,6 +146,36 @@ The following categories of code must live in `trading-service`:
    services that mount it (trading-service, HTML-Notes, scraper-service). This
    repo is Node-only and must not vendor a copy of it.
 6. **Never rename the MCP registration** — see the Names table at the top.
+7. **Never branch on a model name** — capability comes from the catalog
+   (`thinking`, `responsesAPI`, `ttsSteering`, `maxInputTokens`, …) or live
+   discovery (`discoverContextWindow`). Unknown models take the
+   reasoning-safe/current-protocol path, never a guessed name match.
+
+## Quality Gates
+
+`npm run verify` (CI: `.github/workflows/quality.yml`) runs typecheck, ESLint,
+the full test suite, duplication, architecture and prompt-budget gates; it
+takes ~35 s on `main`. Reports land in `.checks/quality-<date>/`.
+
+| gate | command | threshold |
+|---|---|---|
+| McCabe complexity (ESLint) | `npm run lint` | warn at 30 per function, `max-depth` 5, `max-params` 6, `max-lines-per-function` 150 |
+| CRAP + coverage | `npm run quality:crap` | fails at cx > 30 or CRAP > 60 per function |
+| Duplication (jscpd) | `npm run quality:dry` | logic duplication ≤ 8 % (declarative tables excluded) |
+| Architecture (dependency-cruiser) | `npm run quality:arch` | 0 errors: services/utils must not import routes |
+| Dead code (knip) | `npm run quality:deadcode` | report only |
+| Prompt budget | `npm run quality:prompt` | compact tool disclosure ≤ 50 % of full, full catalog ≤ 15 000 tokens |
+
+The ratchet is deliberate: warnings are visible but do not block until the
+corresponding batch lands. See `documentation/chapters/17-code-quality-gates-2026-10-29.md`
+for the measured baseline and the before/after numbers.
+
+Agents can call the `code_health` tool mid-run with the files they wrote
+(`files: [{path, content}]`) to get deterministic complexity, long-function,
+duplicate-window and unused-export findings before claiming a change is done.
+`CriticGate` now reviews with a different model of the same provider and
+reports `judgeIndependent`, so an approval is never the author model grading
+itself.
 
 ## HTML-Notes Widget System
 

@@ -1175,6 +1175,7 @@
         "src/services/OrchestratorService.ts",
         "src/services/DelegateTool.ts",
         "src/services/SettingsService.ts",
+        "src/platform/models/ModelProfiles.ts",
         "src/services/AgenticToolResolver.ts",
         "src/services/harnesses/BaseAgenticHarness.ts",
         "src/services/harnesses/lifecycle/Finalizer.ts",
@@ -22847,9 +22848,28 @@
     },
     {
       "source": "src/platform/models/ModelProfiles.ts",
-      "dependencies": [],
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../../config.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/config.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
       "dependents": [
-        "src/platform/models/applyModelProfile.ts"
+        "src/platform/models/applyModelProfile.ts",
+        "src/platform/models/__tests__/ModelProfileCatalog.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -53369,6 +53389,31 @@
       "valid": true
     },
     {
+      "source": "src/platform/models/__tests__/ModelProfileCatalog.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../ModelProfiles.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/platform/models/ModelProfiles.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/providers/__tests__/CutStream.test.ts",
       "dependencies": [
         {
@@ -71420,8 +71465,8 @@
     "info": 0,
     "ignore": 0,
     "advisedExitCode": 0,
-    "totalCruised": 566,
-    "totalDependenciesCruised": 2542,
+    "totalCruised": 567,
+    "totalDependenciesCruised": 2544,
     "optionsUsed": {
       "baseDir": "/home/lazycat/github/projects/sun/agents/lazy-agent-service",
       "combinedDependencies": false,
