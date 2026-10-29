@@ -178,6 +178,143 @@ function sanitizeMessage(message: MessagePayload) {
     ...(message.name ? { name: message.name } : {}),
   };
 }
+// ─── Chat Generation Telemetry ──────────────────────────────────────────────
+
+/** Provider-native tool names map to the display names used in the UI. */
+const API_TO_CANONICAL_LOOKUP: Record<string, string> = API_TO_CANONICAL;
+
+interface UsageMetrics {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+function extractUsageMetrics(usage: TokenUsage | undefined): UsageMetrics {
+  return {
+    inputTokens: usage ? getTotalInputTokens(usage) : 0,
+    outputTokens: usage?.outputTokens || 0,
+    cacheReadInputTokens: usage?.cacheReadInputTokens || 0,
+    cacheCreationInputTokens: usage?.cacheCreationInputTokens || 0,
+    reasoningOutputTokens: usage?.reasoningOutputTokens || 0,
+  };
+}
+
+/** Modalities of the exchange, computed from the same function conversations use. */
+function buildChatModalities(
+  messages: MessagePayload[],
+  text: string | null,
+  thinking: string | null,
+  images: string[],
+  toolCalls: ToolCallPayload[],
+  audioRef: string | null,
+) {
+  // Build synthetic message array for computeModalities
+  const syntheticMessages = [
+    ...messages,
+    {
+      role: "assistant",
+      content: text || null,
+      ...(images && images.length > 0 ? { images } : {}),
+      ...(audioRef ? { audio: audioRef } : {}),
+      ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
+      ...(thinking ? { thinking } : {}),
+    },
+  ];
+  return computeModalities(
+    syntheticMessages as Parameters<typeof computeModalities>[0],
+  );
+}
+
+function buildToolTelemetry(toolCalls: ToolCallPayload[]) {
+  if (!toolCalls || toolCalls.length === 0) {
+    return { toolsUsed: false, toolDisplayNames: [], toolApiNames: [] };
+  }
+  return {
+    toolsUsed: true,
+    toolDisplayNames: [
+      ...new Set(
+        toolCalls.map(
+          (toolCall) =>
+            API_TO_CANONICAL_LOOKUP[toolCall.name] || toolCall.name,
+        ),
+      ),
+    ],
+    toolApiNames: [...new Set(toolCalls.map((toolCall) => toolCall.name))],
+  };
+}
+
+function buildChatRequestPayload(
+  messages: MessagePayload[],
+  options: LlmOptions,
+  agenticIteration: number | null,
+) {
+  const requestPayload: Record<string, unknown> = {
+    messages: messages?.map(sanitizeMessage) ?? [],
+  };
+  if (options?.tools) {
+    requestPayload.tools = options.tools.map(
+      (tool) => tool.name || tool.function?.name,
+    );
+  }
+  if (agenticIteration !== null) requestPayload.agenticIteration = agenticIteration;
+  return requestPayload;
+}
+
+function buildChatResponsePayload(
+  text: string | null,
+  thinking: string | null,
+  images: string[],
+  toolCalls: ToolCallPayload[],
+  audioRef: string | null,
+  usage: TokenUsage | undefined,
+) {
+  const responsePayload: Record<string, unknown> = {
+    text: text || null,
+    thinking: thinking || null,
+  };
+  if (images && images.length > 0) responsePayload.images = images;
+  responsePayload.toolCalls =
+    toolCalls && toolCalls.length > 0
+      ? toolCalls.map((toolCall) => ({
+          name:
+            API_TO_CANONICAL_LOOKUP[toolCall.name] || toolCall.name,
+          id: toolCall.id,
+          args: toolCall.args,
+        }))
+      : null;
+  if (audioRef) responsePayload.audioRef = audioRef;
+  responsePayload.usage = usage;
+  return responsePayload;
+}
+
+function countInputCharacters(messages: MessagePayload[]) {
+  return (
+    messages?.reduce(
+      (sum, message) =>
+        sum + (typeof message.content === "string" ? message.content.length : 0),
+      0,
+    ) ?? 0
+  );
+}
+
+/** First non-nullish numeric option among `keys`, mirroring `??` chaining. */
+function optionNumber(
+  options: LlmOptions | undefined,
+  keys: string[],
+): number | null {
+  for (const key of keys) {
+    const value = options?.[key];
+    if (value !== undefined && value !== null) {
+      // LlmOptions values are untyped; these fields are numeric by contract.
+      const numeric = value as number;
+      return numeric;
+    }
+  }
+  return null;
+}
+
 const RequestLogger = {
   async log({
     requestId,
@@ -339,28 +476,19 @@ const RequestLogger = {
     agenticIteration = null,
     rateLimits = null,
   }: LogChatGenerationParams) {
-    const inputTokens = usage
-      ? getTotalInputTokens(usage as Parameters<typeof getTotalInputTokens>[0])
-      : 0;
-    const outputTokens = usage ? usage.outputTokens || 0 : 0;
-    const cacheReadInputTokens = usage?.cacheReadInputTokens || 0;
-    const cacheCreationInputTokens = usage?.cacheCreationInputTokens || 0;
-    const reasoningOutputTokens = usage?.reasoningOutputTokens || 0;
-    // Build synthetic message array for computeModalities (same function used by conversations)
-    const syntheticMessages = [
-      ...messages,
-      {
-        role: "assistant",
-        content: text || null,
-        ...(images && images.length > 0 ? { images } : {}),
-        ...(audioRef ? { audio: audioRef } : {}),
-        ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(thinking ? { thinking } : {}),
-      },
-    ];
-    const modalities = computeModalities(
-      syntheticMessages as Parameters<typeof computeModalities>[0],
+    const metrics = extractUsageMetrics(usage);
+    const modalities = buildChatModalities(
+      messages,
+      text,
+      thinking,
+      images,
+      toolCalls,
+      audioRef,
     );
+    const toolTelemetry = buildToolTelemetry(toolCalls);
+    // LlmOptions values are untyped; harness is a string by contract.
+    const optionHarness = options?.harness as string | undefined;
+
     return this.log({
       requestId,
       endpoint,
@@ -369,43 +497,26 @@ const RequestLogger = {
       username,
       clientIp,
       agent,
-      harness: (harness as string) || (options?.harness as string) || null,
+      harness: harness || optionHarness || null,
       provider,
       model,
       conversationId,
       traceId,
       agentConversationId,
       parentAgentConversationId,
-      toolsUsed: toolCalls && toolCalls.length > 0,
-      toolDisplayNames:
-        toolCalls && toolCalls.length > 0
-          ? [
-              ...new Set(
-                toolCalls.map(
-                  (toolCall) =>
-                    (API_TO_CANONICAL as Record<string, string>)[
-                      toolCall.name
-                    ] || toolCall.name,
-                ),
-              ),
-            ]
-          : [],
-      toolApiNames:
-        toolCalls && toolCalls.length > 0
-          ? [...new Set(toolCalls.map((toolCall) => toolCall.name))]
-          : [],
+      ...toolTelemetry,
       success,
       errorMessage,
-      inputTokens: inputTokens as number,
-      outputTokens: outputTokens as number,
-      ...(Number(cacheReadInputTokens) > 0 && {
-        cacheReadInputTokens: Number(cacheReadInputTokens),
+      inputTokens: metrics.inputTokens,
+      outputTokens: metrics.outputTokens,
+      ...(metrics.cacheReadInputTokens > 0 && {
+        cacheReadInputTokens: metrics.cacheReadInputTokens,
       }),
-      ...(Number(cacheCreationInputTokens) > 0 && {
-        cacheCreationInputTokens: Number(cacheCreationInputTokens),
+      ...(metrics.cacheCreationInputTokens > 0 && {
+        cacheCreationInputTokens: metrics.cacheCreationInputTokens,
       }),
-      ...(Number(reasoningOutputTokens) > 0 && {
-        reasoningOutputTokens: Number(reasoningOutputTokens),
+      ...(metrics.reasoningOutputTokens > 0 && {
+        reasoningOutputTokens: metrics.reasoningOutputTokens,
       }),
       estimatedCost,
       tokensPerSec,
@@ -417,13 +528,7 @@ const RequestLogger = {
       presencePenalty: options?.presencePenalty ?? null,
       stopSequences: options?.stopSequences ?? null,
       messageCount: messages?.length ?? 0,
-      inputCharacters:
-        messages?.reduce(
-          (sum, message) =>
-            sum +
-            (typeof message.content === "string" ? message.content.length : 0),
-          0,
-        ) ?? 0,
+      inputCharacters: countInputCharacters(messages),
       outputCharacters,
       timeToGeneration:
         timeToGenerationSec !== null
@@ -432,51 +537,32 @@ const RequestLogger = {
       generationTime:
         generationSec !== null ? roundMilliseconds(generationSec) : null,
       totalTime: totalSec !== null ? roundMilliseconds(totalSec) : null,
-      requestPayload: {
-        messages: messages?.map(sanitizeMessage) ?? [],
-        ...(options?.tools
-          ? {
-              tools: options.tools.map(
-                (tool: { name?: string; function?: { name: string } }) =>
-                  tool.name || tool.function?.name,
-              ),
-            }
-          : {}),
-        ...(agenticIteration !== null ? { agenticIteration } : {}),
-      },
-      responsePayload: {
-        text: text || null,
-        thinking: thinking || null,
-        ...(images && images.length > 0 ? { images } : {}),
-        toolCalls:
-          toolCalls && toolCalls.length > 0
-            ? toolCalls.map((toolCall) => ({
-                name:
-                  (API_TO_CANONICAL as Record<string, string>)[toolCall.name] ||
-                  toolCall.name,
-                id: toolCall.id,
-                args: toolCall.args,
-              }))
-            : null,
-        ...(audioRef ? { audioRef } : {}),
+      requestPayload: buildChatRequestPayload(messages, options, agenticIteration),
+      responsePayload: buildChatResponsePayload(
+        text,
+        thinking,
+        images,
+        toolCalls,
+        audioRef,
         usage,
-      },
+      ),
       modalities,
       rateLimits,
-      contextLength:
-        (options?._loadedContextLength as number) ??
-        (options?.contextLength as number) ??
-        null,
-      evalBatchSize:
-        (options?._loadedEvalBatchSize as number) ??
-        (options?.eval_batch_size as number) ??
-        null,
-      physicalBatchSize:
-        (options?._loadedPhysicalBatchSize as number) ??
-        (options?.eval_batch_size as number) ??
-        null,
+      contextLength: optionNumber(options, [
+        "_loadedContextLength",
+        "contextLength",
+      ]),
+      evalBatchSize: optionNumber(options, [
+        "_loadedEvalBatchSize",
+        "eval_batch_size",
+      ]),
+      physicalBatchSize: optionNumber(options, [
+        "_loadedPhysicalBatchSize",
+        "eval_batch_size",
+      ]),
     });
   },
+
   /**
    * Log a background (non-streaming) LLM call with automatic cost estimation.
    * Centralises the identical pattern used by MemoryService, MemoryExtractor,
