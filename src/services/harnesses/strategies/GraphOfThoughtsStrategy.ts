@@ -8,29 +8,24 @@
  * the best aspects of ALL branches into a unified response
  * (aggregation > selection). Core differentiator from ToT.
  *
+ * Branch generation, scoring and the shared validation plumbing live
+ * in ./shared.ts; this file keeps the GoT-specific synthesis pass.
+ *
  * See ThoughtStructureRegistry.ts → THOUGHT_STRUCTURE_DEFINITIONS
  * (id: "graph_of_thoughts") for full paper-alignment metadata.
  */
+import type AgentHooks from "../../AgentHooks.ts";
 import type BaseAgenticHarness from "../BaseAgenticHarness.ts";
 import type AgenticLoopState from "../../AgenticLoopState.ts";
 import type {
   ConversationMessage,
-  ToolCall,
   ToolSchema,
   ToolResult,
-  AgenticOptions,
   PassState,
-  BeforePromptHookContext,
 } from "../types.ts";
-import {
-  SERVER_SENT_EVENT_TYPES,
-  STATUS_MESSAGES,
-  MAX_TOOL_ITERATIONS,
-} from "@rodrigo-barraza/utilities-library/taxonomy";
+import { SERVER_SENT_EVENT_TYPES, STATUS_MESSAGES } from "@rodrigo-barraza/utilities-library/taxonomy";
 import logger from "../../../utils/logger.ts";
 import PromptLocaleService from "../../PromptLocaleService.ts";
-import { getErrorMessage } from "../../../utils/ErrorHelpers.ts";
-import RequestLogger from "../../RequestLogger.ts";
 import { createStandardHooks } from "../lifecycle/HookInitializer.ts";
 import { executeToolBatch } from "../lifecycle/ToolExecutor.ts";
 import {
@@ -61,114 +56,25 @@ import { finalizePassTracker } from "../lifecycle/TrackerFinalizer.ts";
 import { handleCodexPlanningResponse } from "../lifecycle/CodexPlanningDetector.ts";
 import { maybeInjectSystemReminder, cleanupReminderCache } from "../lifecycle/SystemReminderInjector.ts";
 import { checkCostBudget } from "../lifecycle/CostBudgetEnforcer.ts";
-import { createSandboxCheckpoint, restoreSandboxCheckpoint } from "../lifecycle/SandboxExecutor.ts";
-
-interface IterationPassOptions extends AgenticOptions {
-  project: string;
-  agent?: string | null;
-  username: string;
-}
-
-const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
-const DEFAULT_BRANCH_COUNT = 3;
-const DEFAULT_VALUE_THRESHOLD = 5.0;
-const MAX_PROACTIVE_BACKTRACKS = 3;
-
-interface ScoredBranch {
-  branchIndex: number;
-  text: string;
-  thinking: string;
-  thinkingSignature: string;
-  score: number;
-  criteriaScores: CriteriaScores;
-  pass: PassState;
-}
-
-interface CriteriaScores {
-  correctness: number;
-  risk: number;
-  efficiency: number;
-  completeness: number;
-}
-
-const BRANCH_STRATEGY_DESCRIPTORS = [
-  "",
-  "Focus on a MINIMAL approach — use the fewest tools and smallest changes possible. " +
-    "Prefer precision over coverage. Choose the simplest solution that could work.",
-  "Focus on a THOROUGH approach — maximize correctness and safety. " +
-    "Add validation, error handling, and defensive checks even if it means more steps.",
-  "Focus on an ALTERNATIVE ARCHITECTURE — if branch 1 would modify code in place, " +
-    "consider creating new files. If branch 1 would iterate, consider a batch approach. " +
-    "Deliberately diverge from the obvious first solution.",
-  "Focus on RISK MINIMIZATION — what approach has the lowest chance of breaking " +
-    "existing functionality? Prefer reversible, incremental changes over large rewrites.",
-];
+import { createSandboxCheckpoint } from "../lifecycle/SandboxExecutor.ts";
+import {
+  MAX_CONSECUTIVE_TOOL_ERRORS,
+  MAX_PROACTIVE_BACKTRACKS,
+  applyProactiveBacktrack,
+  buildToolCallAssistantMessage,
+  exploreBfsBranches,
+  formatValidationErrorBlock,
+  resolveBranchConfig,
+  resolveMaxIterations,
+  restoreCheckpointIfPresent,
+  runBeforePromptPhase,
+  type IterationPassOptions,
+  type ScoredBranch,
+} from "./shared.ts";
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Public API — called by ReActHarness when thoughtStructure === "graph_of_thoughts"
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-function resolveGoTMaxIterations(clientMaxIterations: number | undefined): number {
-  if (clientMaxIterations === 0) return Infinity;
-  if (clientMaxIterations) return Math.min(100, Math.max(1, clientMaxIterations));
-  return MAX_TOOL_ITERATIONS;
-}
-
-async function runGoTBeforePrompt(
-  harness: BaseAgenticHarness,
-  currentMessages: ConversationMessage[],
-  hooks: ReturnType<typeof createStandardHooks>["hooks"],
-  resolvedAgentConversationId: string,
-): Promise<void> {
-  const context = harness["context"];
-  const tools = harness["tools"];
-  const { options, conversationId, traceId, project, username, agent, workspaceRoot, emit } =
-    context;
-
-  if (options.planFirst) {
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.STATUS,
-      message: STATUS_MESSAGES.PLAN_MODE_ENTERED,
-    });
-  }
-
-  const hookContext: BeforePromptHookContext = {
-    messages: currentMessages,
-    project,
-    username,
-    agent,
-    traceId,
-    conversationId,
-    agentConversationId: resolvedAgentConversationId,
-    parentAgentConversationId: context.parentAgentConversationId,
-    agentContext: options.agentContext,
-    enabledTools: tools.resolvedEnabledTools,
-    resolvedToolNames: tools.finalTools.map((tool: ToolSchema) => tool.name),
-    workspaceRoot: workspaceRoot || undefined,
-    workspaceEnabled: options.workspaceEnabled as boolean | undefined,
-    locale: options.locale as string | undefined,
-  };
-  await hooks.run("beforePrompt", hookContext);
-
-  if (hookContext._assembledSystemPrompt) {
-    const assembledPrompt = hookContext._assembledSystemPrompt as string;
-    context.conversationMeta = {
-      ...(context.conversationMeta || {}),
-      systemPrompt: assembledPrompt,
-    };
-    if (!options.systemPrompt) {
-      options.systemPrompt = assembledPrompt;
-    }
-  }
-
-  if (Array.isArray(hookContext._injectedSkills) && hookContext._injectedSkills.length > 0) {
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.STATUS,
-      message: STATUS_MESSAGES.SKILLS_INJECTED,
-      skills: hookContext._injectedSkills,
-    });
-  }
-}
 
 function handleGoTProactiveBacktrack(
   state: AgenticLoopState,
@@ -177,71 +83,28 @@ function handleGoTProactiveBacktrack(
   currentMessages: ConversationMessage[],
   context: BaseAgenticHarness["context"],
 ): void {
-  state.proactiveBacktracks++;
-  state.branchesBacktracked++;
-
-  const bestScore = scoredBranches[0]?.score ?? 0;
-  context.emit({
-    type: SERVER_SENT_EVENT_TYPES.STATUS,
-    message: STATUS_MESSAGES.BRANCH_BACKTRACKED,
+  applyProactiveBacktrack({
+    state,
+    emit: context.emit,
+    currentMessages,
+    options: context.options,
+    localeKey: "harness.graphOfThoughts.proactiveBacktrack",
     branchIndex: -1,
-    reason: "proactive_value_threshold",
-    bestScore,
+    bestScore: scoredBranches[0]?.score ?? 0,
     threshold: valueThreshold,
-    proactiveBacktracks: state.proactiveBacktracks,
-    maxProactiveBacktracks: MAX_PROACTIVE_BACKTRACKS,
-  });
-
-  logger.info(
-    `[GraphOfThoughts] Proactive backtrack — best score ${bestScore.toFixed(1)} ` +
-      `< threshold ${valueThreshold}. Re-branching (${state.proactiveBacktracks}/${MAX_PROACTIVE_BACKTRACKS}).`,
-  );
-
-  currentMessages.push({
-    role: "system",
-    content: PromptLocaleService.get(
-      (context.options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(),
-      "harness.graphOfThoughts.proactiveBacktrack",
-      {
-        bestScore: bestScore.toFixed(1),
-        threshold: String(valueThreshold),
-      },
-    ),
+    logPrefix: "[GraphOfThoughts]",
   });
 }
 
 function appendGoTCompletedToolMessages(
-  synthesizedPass: Awaited<ReturnType<typeof synthesizeBranches>>,
+  synthesizedPass: PassState,
   results: ToolResult[],
   currentMessages: ConversationMessage[],
   state: AgenticLoopState,
   context: BaseAgenticHarness["context"],
   harness: BaseAgenticHarness,
 ): ConversationMessage[] {
-  const assistantMessage: ConversationMessage = {
-    role: "assistant",
-    content: synthesizedPass.streamedText || "",
-    ...(synthesizedPass.streamedThinking.trim() && {
-      thinking: synthesizedPass.streamedThinking.trim(),
-    }),
-    ...(synthesizedPass.thinkingSignature && {
-      thinkingSignature: synthesizedPass.thinkingSignature,
-    }),
-    toolCalls: synthesizedPass.pendingToolCalls.map((toolCall: ToolCall) => {
-      const matchingResult = results.find((result) => result.id === toolCall.id);
-      return {
-        id: toolCall.id || null,
-        responsesItemId: toolCall.responsesItemId || undefined,
-        name: toolCall.name,
-        args: toolCall.args,
-        thoughtSignature: toolCall.thoughtSignature || undefined,
-        reasoningItem: toolCall.reasoningItem || undefined,
-        result: matchingResult ? matchingResult.result : null,
-        durationMs: matchingResult?.durationMs,
-      };
-    }),
-  };
-  currentMessages.push(assistantMessage);
+  currentMessages.push(buildToolCallAssistantMessage(synthesizedPass, results));
 
   const retryGuidanceMessage = buildToolRetryGuidance(
     synthesizedPass.pendingToolCalls,
@@ -270,10 +133,10 @@ function appendGoTCompletedToolMessages(
 
 async function handleGoTToolExecution(
   harness: BaseAgenticHarness,
-  synthesizedPass: Awaited<ReturnType<typeof synthesizeBranches>>,
+  synthesizedPass: PassState,
   scoredBranches: ScoredBranch[],
   currentMessages: ConversationMessage[],
-  hooks: ReturnType<typeof createStandardHooks>["hooks"],
+  hooks: AgentHooks,
 ): Promise<{ messages: ConversationMessage[]; earlyReturn: boolean }> {
   const context = harness["context"];
   const state: AgenticLoopState = harness["state"];
@@ -321,13 +184,9 @@ async function handleGoTToolExecution(
 
   if (validationFeedback.length > 0) {
     state.branchesBacktracked++;
-    const errorBlock = validationFeedback
-      .map((feedback) => `### ${feedback.filePath} (${feedback.validatorType})\n${feedback.rawOutput}`)
-      .join("\n\n");
+    const errorBlock = formatValidationErrorBlock(validationFeedback);
 
-    if (sandboxCheckpointReference) {
-      restoreSandboxCheckpoint(workspaceRoot, sandboxCheckpointReference, emit);
-    }
+    restoreCheckpointIfPresent(workspaceRoot, sandboxCheckpointReference, emit);
 
     currentMessages.push({
       role: "system",
@@ -374,7 +233,7 @@ async function handleGoTToolExecution(
 
 function handleGoTTruncatedPass(
   harness: BaseAgenticHarness,
-  synthesizedPass: Awaited<ReturnType<typeof synthesizeBranches>>,
+  synthesizedPass: PassState,
   currentMessages: ConversationMessage[],
   truncationRecoveryCount: number,
 ): { shouldContinue: boolean; truncationRecoveryCount: number } {
@@ -422,7 +281,7 @@ function handleGoTTruncatedPass(
 
 function handleGoTNoToolPass(
   harness: BaseAgenticHarness,
-  synthesizedPass: Awaited<ReturnType<typeof synthesizeBranches>>,
+  synthesizedPass: PassState,
   currentMessages: ConversationMessage[],
   truncationRecoveryCount: number,
 ): { shouldBreak: boolean; hasCleanTextBreak: boolean; truncationRecoveryCount: number } {
@@ -494,7 +353,7 @@ function handleGoTNoToolPass(
 
 function finalizeGoTSynthesizedBranches(
   harness: BaseAgenticHarness,
-  synthesizedPass: Awaited<ReturnType<typeof synthesizeBranches>>,
+  synthesizedPass: PassState,
   branchesToSynthesize: ScoredBranch[],
   currentMessages: ConversationMessage[],
   state: AgenticLoopState,
@@ -517,7 +376,7 @@ async function handleGoTLoopError(
   loopError: unknown,
   harness: BaseAgenticHarness,
   currentMessages: ConversationMessage[],
-  hooks: ReturnType<typeof createStandardHooks>["hooks"],
+  hooks: AgentHooks,
 ): Promise<never> {
   const context = harness["context"];
   const state: AgenticLoopState = harness["state"];
@@ -558,9 +417,8 @@ export async function runGraphOfThoughts(
   } = context;
 
   const resolvedAgentConversationId = agentConversationId || "";
-  const initialBranchCount = Math.min(Math.max(1, options.branchCount || DEFAULT_BRANCH_COUNT), 5);
-  const valueThreshold = options.valueThreshold ?? DEFAULT_VALUE_THRESHOLD;
-  const resolvedMaxIterations = resolveGoTMaxIterations(options.maxIterations);
+  const { initialBranchCount, valueThreshold } = resolveBranchConfig(options);
+  const resolvedMaxIterations = resolveMaxIterations(options.maxIterations);
 
   let currentMessages: ConversationMessage[] = [...context.messages];
   let truncationRecoveryCount = 0;
@@ -572,7 +430,7 @@ export async function runGraphOfThoughts(
     criticModel: options.criticModel || undefined,
   });
 
-  await runGoTBeforePrompt(harness, currentMessages, hooks, resolvedAgentConversationId);
+  await runBeforePromptPhase(harness, currentMessages, hooks, resolvedAgentConversationId);
 
   if (state.planModeActive) {
     const { planApproved } = await runPlanningPhase(harness, currentMessages, "GraphOfThoughts");
@@ -616,37 +474,20 @@ export async function runGraphOfThoughts(
       currentMessages = pressureResult.messages;
       currentMessages = harness.enforceContextWindow(currentMessages, tools.finalTools.length);
 
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.STATUS,
-        message: STATUS_MESSAGES.BRANCHING_STARTED,
-        branchCount: adaptiveBranchCount,
-        iteration: state.iterations,
-      });
-
       const allowedToolNames = new Set(tools.finalTools.map((tool: ToolSchema) => tool.name));
 
-      const branchResults = await Promise.all(
-        Array.from({ length: adaptiveBranchCount }, (_, branchIndex) =>
-          generateBranch(
-            harness,
-            branchIndex,
-            adaptiveBranchCount,
-            currentMessages,
-            passOptions,
-            allowedToolNames,
-          ),
-        ),
-      );
-
-      if (signal?.aborted) break;
-      state.branchesExplored += adaptiveBranchCount;
-
-      const scoredBranches = await scoreBranchesMultiCriteria(
+      const bfsOutcome = await exploreBfsBranches(
         harness,
-        branchResults,
+        adaptiveBranchCount,
         currentMessages,
+        passOptions,
+        allowedToolNames,
+        undefined,
+        undefined,
+        "[GraphOfThoughts]",
       );
-      scoredBranches.sort((branchA, branchB) => branchB.score - branchA.score);
+      if (bfsOutcome.aborted) break;
+      const scoredBranches = bfsOutcome.scoredBranches;
       state.selectedBranchScores.push(scoredBranches[0]?.score ?? 0);
 
       emit({
@@ -764,68 +605,6 @@ export async function runGraphOfThoughts(
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Branch generation with structured diversity
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-async function generateBranch(
-  harness: BaseAgenticHarness,
-  branchIndex: number,
-  totalBranches: number,
-  currentMessages: ConversationMessage[],
-  passOptions: IterationPassOptions,
-  allowedToolNames: Set<string>,
-): Promise<ScoredBranch> {
-  const state: AgenticLoopState = harness["state"];
-  const context = harness["context"];
-
-  const branchMessages = [...currentMessages];
-
-  if (branchIndex > 0) {
-    const strategyDescriptor =
-      BRANCH_STRATEGY_DESCRIPTORS[
-        branchIndex % BRANCH_STRATEGY_DESCRIPTORS.length
-      ] || BRANCH_STRATEGY_DESCRIPTORS[1];
-
-    const diversityInstruction =
-      `[BRANCH ${branchIndex + 1}/${totalBranches}] ` + strategyDescriptor;
-
-    branchMessages.push({
-      role: "user",
-      content: diversityInstruction,
-    });
-  }
-
-  const pass = harness.createPassState(passOptions);
-  const { agentConversationId } = context;
-  const resolvedAgentConversationId = agentConversationId || "";
-  const requestIdBase =
-    context.requestId ||
-    resolvedAgentConversationId ||
-    crypto.randomUUID();
-  const passRequestId = `${requestIdBase}-iter-${state.iterations}-branch-${branchIndex}`;
-  pass.requestId = passRequestId;
-  harness.registerTrackerRequest(passRequestId);
-
-  const stream = await harness.createProviderStream(branchMessages, passOptions);
-  await harness.consumeStream(stream, pass, allowedToolNames);
-
-  return {
-    branchIndex,
-    text: pass.streamedText,
-    thinking: pass.streamedThinking,
-    thinkingSignature: pass.thinkingSignature,
-    score: 0,
-    criteriaScores: {
-      correctness: 0,
-      risk: 0,
-      efficiency: 0,
-      completeness: 0,
-    },
-    pass,
-  };
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Synthesis pass — merges branch outputs into a unified response
 //  (The core GoT differentiator vs ToT's pick-winner)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -842,9 +621,7 @@ async function synthesizeBranches(
 
   // If only one branch, skip synthesis — use it directly (same as ToT)
   if (scoredBranches.length <= 1) {
-    logger.info(
-      `[GraphOfThoughts] Single branch — skipping synthesis, using directly.`,
-    );
+    logger.info(`[GraphOfThoughts] Single branch — skipping synthesis, using directly.`);
     return scoredBranches[0].pass;
   }
 
@@ -899,12 +676,9 @@ async function synthesizeBranches(
       branchSummaries,
   };
 
-  const synthesisMessages = [
-    ...currentMessages,
-    synthesisInstruction,
-  ];
+  const synthesisMessages = [...currentMessages, synthesisInstruction];
 
-  emit({
+  context.emit({
     type: SERVER_SENT_EVENT_TYPES.STATUS,
     message: STATUS_MESSAGES.SYNTHESIS_STARTED,
     branchCount: scoredBranches.length,
@@ -918,10 +692,7 @@ async function synthesizeBranches(
   const synthesisPass = harness.createPassState(passOptions);
   const { agentConversationId } = context;
   const resolvedAgentConversationId = agentConversationId || "";
-  const requestIdBase =
-    context.requestId ||
-    resolvedAgentConversationId ||
-    crypto.randomUUID();
+  const requestIdBase = context.requestId || resolvedAgentConversationId || crypto.randomUUID();
   const passRequestId = `${requestIdBase}-iter-${state.iterations}-synthesis`;
   synthesisPass.requestId = passRequestId;
   harness.registerTrackerRequest(passRequestId);
@@ -936,187 +707,4 @@ async function synthesizeBranches(
   );
 
   return synthesisPass;
-
-  // Note: `emit` is captured from the outer `context` closure
-  function emit(event: { type: string; [key: string]: unknown }) {
-    context.emit(event);
-  }
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Multi-criteria scoring
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-function buildGoTScoringPrompt(branches: ScoredBranch[]): string {
-  const candidateSummaries = branches
-    .map((branch, index) => {
-      const textPreview = (branch.text || branch.thinking || "(no output)")
-        .slice(0, 500)
-        .trim();
-      const toolCallCount = branch.pass.pendingToolCalls.length;
-      const toolCallNames = branch.pass.pendingToolCalls
-        .map((toolCall) => toolCall.name)
-        .join(", ");
-      return (
-        `[Candidate ${index + 1}] ` +
-        `${toolCallCount} tool call(s)${toolCallNames ? ` (${toolCallNames})` : ""}.\n` +
-        `Output: ${textPreview}`
-      );
-    })
-    .join("\n\n");
-
-  return [
-    "Rate each candidate approach on 4 criteria (1-10 each):",
-    "- CORRECTNESS: Will this produce the right result?",
-    "- RISK: How safe is this? (10=very safe, 1=destructive)",
-    "- EFFICIENCY: Does it minimize unnecessary steps?",
-    "- COMPLETENESS: Does it address all parts of the task?",
-    "",
-    "Respond ONLY in this exact format (one line per candidate):",
-    "1: correctness=8, risk=7, efficiency=6, completeness=9",
-    "2: correctness=5, risk=9, efficiency=8, completeness=4",
-    "",
-    candidateSummaries,
-  ].join("\n");
-}
-
-function parseGoTMultiCriteriaScores(scoreResponseText: string, branches: ScoredBranch[]): void {
-  const linePattern =
-    /(\d+)\s*:\s*correctness\s*=\s*(\d+(?:\.\d+)?)\s*,\s*risk\s*=\s*(\d+(?:\.\d+)?)\s*,\s*efficiency\s*=\s*(\d+(?:\.\d+)?)\s*,\s*completeness\s*=\s*(\d+(?:\.\d+)?)/gi;
-  let lineMatch: RegExpExecArray | null;
-  while ((lineMatch = linePattern.exec(scoreResponseText)) !== null) {
-    const candidateIndex = parseInt(lineMatch[1], 10) - 1;
-    if (candidateIndex >= 0 && candidateIndex < branches.length) {
-      const criteria: CriteriaScores = {
-        correctness: Math.min(10, Math.max(0, parseFloat(lineMatch[2]))),
-        risk: Math.min(10, Math.max(0, parseFloat(lineMatch[3]))),
-        efficiency: Math.min(10, Math.max(0, parseFloat(lineMatch[4]))),
-        completeness: Math.min(10, Math.max(0, parseFloat(lineMatch[5]))),
-      };
-      branches[candidateIndex].criteriaScores = criteria;
-      branches[candidateIndex].score =
-        criteria.correctness * 0.4 +
-        criteria.risk * 0.25 +
-        criteria.efficiency * 0.15 +
-        criteria.completeness * 0.2;
-    }
-  }
-}
-
-function parseGoTSimpleScores(scoreResponseText: string, branches: ScoredBranch[]): void {
-  const simpleScorePattern = /(\d+)\s*:\s*(\d+(?:\.\d+)?)/g;
-  let simpleMatch: RegExpExecArray | null;
-  while ((simpleMatch = simpleScorePattern.exec(scoreResponseText)) !== null) {
-    const candidateIndex = parseInt(simpleMatch[1], 10) - 1;
-    const candidateScore = parseFloat(simpleMatch[2]);
-    if (
-      candidateIndex >= 0 &&
-      candidateIndex < branches.length &&
-      candidateScore >= 0 &&
-      candidateScore <= 10
-    ) {
-      branches[candidateIndex].score = candidateScore;
-      branches[candidateIndex].criteriaScores = {
-        correctness: candidateScore,
-        risk: candidateScore,
-        efficiency: candidateScore,
-        completeness: candidateScore,
-      };
-    }
-  }
-}
-
-function applyGoTDefaultBranchScore(branch: ScoredBranch, defaultValue: number): void {
-  branch.score = defaultValue;
-  branch.criteriaScores = {
-    correctness: defaultValue,
-    risk: defaultValue,
-    efficiency: defaultValue,
-    completeness: defaultValue,
-  };
-}
-
-async function scoreBranchesMultiCriteria(
-  harness: BaseAgenticHarness,
-  branches: ScoredBranch[],
-  _currentMessages: ConversationMessage[],
-): Promise<ScoredBranch[]> {
-  if (branches.length <= 1) {
-    if (branches[0]) {
-      applyGoTDefaultBranchScore(branches[0], 10);
-    }
-    return branches;
-  }
-
-  const context = harness["context"];
-
-  try {
-    const scoringPrompt = buildGoTScoringPrompt(branches);
-    const scoringMessages = [{ role: "user" as const, content: scoringPrompt }];
-    const scoringOptions = {
-      maxTokens: 200,
-      temperature: 0,
-      signal: AbortSignal.timeout(15_000),
-    };
-
-    let scoreResponseText = "";
-    const scoringRequestStartMs = performance.now();
-    const scoringStream = context.provider.generateTextStream(
-      scoringMessages,
-      context.resolvedModel,
-      scoringOptions,
-    );
-
-    for await (const chunk of scoringStream) {
-      if (typeof chunk === "string") {
-        scoreResponseText += chunk;
-      }
-    }
-
-    RequestLogger.logBackgroundLlmCall({
-      requestId: `${context.requestId || context.agentConversationId || "unknown"}-scoring-iter-${harness["state"].iterations}`,
-      endpoint: "/agent",
-      operation: "agent:scoring",
-      project: context.project,
-      username: context.username,
-      agent: context.agent || null,
-      provider: context.providerName,
-      model: context.resolvedModel,
-      traceId: context.traceId || null,
-      agentConversationId: context.agentConversationId || null,
-      aiMessages: scoringMessages as Parameters<typeof RequestLogger.logBackgroundLlmCall>[0]["aiMessages"],
-      resultText: scoreResponseText,
-      success: true,
-      errorMessage: null,
-      requestStartMs: scoringRequestStartMs,
-    }).catch((scoringLogError: unknown) =>
-      logger.error(
-        `[GraphOfThoughts] Failed to log scoring request: ${getErrorMessage(scoringLogError)}`,
-      ),
-    );
-
-    parseGoTMultiCriteriaScores(scoreResponseText, branches);
-    if (!branches.some((branch) => branch.criteriaScores.correctness > 0)) {
-      parseGoTSimpleScores(scoreResponseText, branches);
-    }
-
-    for (const branch of branches) {
-      if (branch.score === 0) {
-        applyGoTDefaultBranchScore(branch, 5);
-      }
-    }
-
-    logger.info(
-      `[GraphOfThoughts] Branch scores: ${branches.map((branch, index) => `${index + 1}:${branch.score.toFixed(1)}`).join(", ")}`,
-    );
-  } catch (scoringError: unknown) {
-    logger.warn(
-      `[GraphOfThoughts] Scoring failed: ${getErrorMessage(scoringError)}. Using equal scores.`,
-    );
-    for (const branch of branches) {
-      applyGoTDefaultBranchScore(branch, 5);
-    }
-  }
-
-  return branches;
 }
