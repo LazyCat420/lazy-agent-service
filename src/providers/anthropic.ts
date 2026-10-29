@@ -5,7 +5,7 @@ import { extractAnthropicRateLimits } from "../utils/rateLimits.ts";
 import { compressImageForSizeLimit } from "../utils/media.ts";
 import { EMPTY_USAGE } from "../utils/openai-compat.ts";
 import { ANTHROPIC_API_KEY } from "../../config.ts";
-import { TYPES, getDefaultModels, getModelByName } from "../config.ts";
+import { TYPES, getDefaultModels, getModelByName, type ModelDefinition } from "../config.ts";
 import { DEFAULT_MAX_OUTPUT_TOKENS } from "../constants/TokenBudgetDefaults.ts";
 import { sleep } from "@rodrigo-barraza/utilities-library";
 
@@ -532,6 +532,381 @@ function buildUsage(
   };
 }
 
+// ── Request payload ────────────────────────────────────────────
+
+/**
+ * Build the Messages API payload shared by generateText and generateTextStream.
+ * The streaming path additionally runs enforceImageSizeLimits on its messages,
+ * exactly as before.
+ */
+async function buildAnthropicPayload(
+  messages: ChatMessage[],
+  model: string,
+  options: ProviderOptions,
+): Promise<Record<string, unknown>> {
+  const prepared = await prepareMessages(messages);
+  const payload: Record<string, unknown> = {
+    cache_control: { type: "ephemeral" },
+    system: prepared.systemMessage,
+    model,
+    messages: prepared.messages,
+    max_tokens: options.maxTokens || DEFAULT_MAX_OUTPUT_TOKENS,
+    temperature:
+      options.temperature !== undefined ? Math.min(options.temperature, 1) : undefined,
+    top_p:
+      options.temperature === undefined && options.topP !== undefined
+        ? options.topP
+        : undefined,
+    top_k: options.topK !== undefined ? options.topK : undefined,
+    stop_sequences: options.stopSequences !== undefined ? options.stopSequences : undefined,
+    ...(options.serviceTier && {
+      service_tier:
+        options.serviceTier === "standard" ? "standard_only" : options.serviceTier,
+    }),
+    ...(options.responseFormat === "json_object" && {
+      output_config: {
+        format: {
+          type: "json_schema" as const,
+          schema: { type: "object", additionalProperties: false },
+        },
+      },
+    }),
+  };
+
+  // Server tools
+  const tools = buildTools(options);
+  if (tools) payload.tools = tools;
+
+  const isAdaptiveThinking = applyAnthropicSamplingLocks(payload, getModelByName(model));
+  applyAnthropicThinking(payload, isAdaptiveThinking, options);
+  return payload;
+}
+
+/**
+ * Opus 4.7+ lock sampling parameters — the API rejects non-default values.
+ * Returns whether the model's thinking is inherent (adaptive).
+ */
+function applyAnthropicSamplingLocks(
+  payload: Record<string, unknown>,
+  modelDefinition: ModelDefinition | null,
+): boolean {
+  const hasLockedSampling =
+    modelDefinition !== null &&
+    "lockedSampling" in modelDefinition &&
+    modelDefinition.lockedSampling === true;
+  if (hasLockedSampling) {
+    delete payload.temperature;
+    delete payload.top_p;
+    delete payload.top_k;
+  }
+
+  const isAdaptiveThinking =
+    modelDefinition !== null &&
+    "adaptiveThinking" in modelDefinition &&
+    modelDefinition.adaptiveThinking === true;
+  if (isAdaptiveThinking) delete payload.top_k;
+  return isAdaptiveThinking;
+}
+
+/**
+ * Adaptive thinking models (Fable 5, Mythos 5, Opus 4.7+) think by default
+ * unless explicitly disabled. Legacy models (Opus 4.x, Sonnet 4.x) get manual
+ * extended thinking with a budget_tokens. Anthropic requires temperature=1 and
+ * top_p/top_k unset when thinking is enabled.
+ */
+function applyAnthropicThinking(
+  payload: Record<string, unknown>,
+  isAdaptiveThinking: boolean,
+  options: ProviderOptions,
+) {
+  if (options.thinkingEnabled === false) return;
+
+  if (isAdaptiveThinking) {
+    payload.thinking = { type: "adaptive" };
+    if (options.reasoningEffort) {
+      // Payload fields are untyped by construction; output_config is an object when set.
+      const existingOutputConfig = (payload.output_config ?? {}) as Record<string, unknown>;
+      payload.output_config = { ...existingOutputConfig, effort: options.reasoningEffort };
+    }
+    payload.temperature = 1;
+    delete payload.top_p;
+    delete payload.top_k;
+    return;
+  }
+
+  if (!(options.thinkingEnabled === true || options.thinkingBudget || options.reasoningEffort)) {
+    return;
+  }
+  const budget = options.thinkingBudget
+    ? parseInt(String(options.thinkingBudget))
+    : (options.reasoningEffort ? EFFORT_BUDGET_MAP[options.reasoningEffort] : undefined) ||
+      EFFORT_BUDGET_MAP.high;
+  payload.thinking = { type: "enabled", budget_tokens: budget };
+  // Built above from options.maxTokens || DEFAULT_MAX_OUTPUT_TOKENS.
+  const maxTokens = payload.max_tokens as number;
+  if (maxTokens <= budget) {
+    payload.max_tokens = budget + 1024;
+  }
+  payload.temperature = 1;
+  delete payload.top_p;
+  delete payload.top_k;
+}
+
+// ── Streaming event reducers ───────────────────────────────────
+
+type AnthropicMessageStream = ReturnType<Anthropic["messages"]["stream"]>;
+type AnthropicStreamYield = Record<string, unknown> | string;
+
+interface AnthropicStreamState {
+  currentBlockType: string | null;
+  currentBlockName: string | null;
+  currentToolUseId: string | null;
+  codeInput: string;
+  usage: TokenUsage | null;
+  messageStartUsage: {
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    cache_read_input_tokens?: number | null;
+    cache_creation_input_tokens?: number | null;
+  } | null;
+  rateLimits: ReturnType<typeof extractAnthropicRateLimits> | null;
+}
+
+function createAnthropicStreamState(): AnthropicStreamState {
+  return {
+    currentBlockType: null,
+    currentBlockName: null,
+    currentToolUseId: null,
+    codeInput: "",
+    usage: null,
+    messageStartUsage: null,
+    rateLimits: null,
+  };
+}
+
+/**
+ * One Anthropic stream event in, the chunks to yield out. Pure with respect to
+ * the stream itself: state carries the block/usage accumulators.
+ */
+function reduceAnthropicStreamEvent(
+  state: AnthropicStreamState,
+  chunk: Anthropic.MessageStreamEvent,
+  stream: AnthropicMessageStream,
+  model: string,
+): AnthropicStreamYield[] {
+  switch (chunk.type) {
+    case "message_start":
+      return reduceAnthropicMessageStart(state, chunk, stream, model);
+    case "content_block_start":
+      return reduceAnthropicBlockStart(state, chunk);
+    case "content_block_stop":
+      return reduceAnthropicBlockStop(state);
+    case "content_block_delta":
+      return reduceAnthropicBlockDelta(state, chunk);
+    case "message_delta":
+      return reduceAnthropicMessageDelta(state, chunk);
+    default:
+      return [];
+  }
+}
+
+/** Capture input tokens and rate limits from message_start (sent once). */
+function reduceAnthropicMessageStart(
+  state: AnthropicStreamState,
+  chunk: Anthropic.MessageStreamEvent & { type: "message_start" },
+  stream: AnthropicMessageStream,
+  model: string,
+): AnthropicStreamYield[] {
+  if (chunk.message?.usage) {
+    state.messageStartUsage = chunk.message.usage;
+    if (!state.rateLimits && stream.response) {
+      state.rateLimits = extractAnthropicRateLimits(stream.response, model);
+    }
+  }
+  return [];
+}
+
+/** Track the block kind; emit the tool-call disclosure and server tool results. */
+function reduceAnthropicBlockStart(
+  state: AnthropicStreamState,
+  chunk: Anthropic.MessageStreamEvent & { type: "content_block_start" },
+): AnthropicStreamYield[] {
+  const block = chunk.content_block;
+  state.currentBlockType = block?.type || null;
+  state.currentBlockName = "name" in block ? block.name : null;
+  state.currentToolUseId = "id" in block ? block.id : null;
+  state.codeInput = "";
+
+  const events: AnthropicStreamYield[] = [];
+  if (block?.type === "tool_use" && state.currentBlockName && state.currentToolUseId) {
+    events.push({
+      type: "toolCallStart",
+      id: state.currentToolUseId,
+      name: state.currentBlockName,
+    });
+  }
+  events.push(...reduceAnthropicBlockResult(block));
+  return events;
+}
+
+/** Server tool results arrive as their own content blocks. */
+function reduceAnthropicBlockResult(
+  block: Anthropic.ContentBlock | undefined,
+): AnthropicStreamYield[] {
+  if (block?.type === "code_execution_tool_result") {
+    const result = block.content;
+    if (!("stdout" in result)) return [];
+    return [
+      {
+        type: "codeExecutionResult",
+        output: result.stdout || result.stderr || "",
+        outcome: result.return_code === 0 ? "OK" : "ERROR",
+      },
+    ];
+  }
+  if (
+    block?.type === "web_search_tool_result" ||
+    block?.type === "web_fetch_tool_result"
+  ) {
+    const results = extractAnthropicWebResults(block.content);
+    return results ? [{ type: "webSearchResult", results }] : [];
+  }
+  return [];
+}
+
+/** Search/fetch result links, only when the block carries a result array. */
+function extractAnthropicWebResults(
+  content: unknown,
+): Array<{ url: string; title: string; pageAge: string | null }> | null {
+  if (!Array.isArray(content)) return null;
+  const results = content
+    .filter(
+      (entry): entry is { url: string; title: string; page_age: string | null; type: string } =>
+        entry !== null &&
+        typeof entry === "object" &&
+        "type" in entry &&
+        (entry.type === "web_search_result" || entry.type === "web_fetch_result"),
+    )
+    .map((entry) => ({ url: entry.url, title: entry.title, pageAge: entry.page_age }));
+  return results.length > 0 ? results : null;
+}
+
+/** A block ended: flush accumulated code / tool arguments and reset the block. */
+function reduceAnthropicBlockStop(state: AnthropicStreamState): AnthropicStreamYield[] {
+  const events: AnthropicStreamYield[] = [];
+
+  if (
+    state.currentBlockType === "server_tool_use" &&
+    state.currentBlockName === "code_execution" &&
+    state.codeInput
+  ) {
+    try {
+      // Parsed from the model's streamed JSON; shape checked before use.
+      const parsed = JSON.parse(state.codeInput) as {
+        code?: string;
+        language?: string;
+      } | null;
+      if (parsed?.code) {
+        events.push({
+          type: "executableCode",
+          code: parsed.code,
+          language: parsed.language || "bash",
+        });
+      }
+    } catch {
+      // Not valid JSON, skip
+    }
+  }
+
+  if (state.currentBlockType === "tool_use") {
+    let args: unknown = {};
+    if (state.codeInput) {
+      try {
+        args = JSON.parse(state.codeInput);
+      } catch {
+        // Not valid JSON, use empty
+      }
+    }
+    events.push({
+      type: "toolCall",
+      id: state.currentToolUseId,
+      name: state.currentBlockName,
+      args,
+    });
+  }
+
+  state.currentBlockType = null;
+  state.currentBlockName = null;
+  state.currentToolUseId = null;
+  state.codeInput = "";
+  return events;
+}
+
+/** Thinking, signature and text deltas; input JSON accumulates for tools. */
+function reduceAnthropicBlockDelta(
+  state: AnthropicStreamState,
+  chunk: Anthropic.MessageStreamEvent & { type: "content_block_delta" },
+): AnthropicStreamYield[] {
+  const delta = chunk.delta;
+  if (delta.type === "thinking_delta") {
+    return [{ type: "thinking", content: delta.thinking }];
+  }
+  if (delta.type === "signature_delta") {
+    return [{ type: "thinking_signature", signature: delta.signature }];
+  }
+  if (delta.type === "text_delta") return [delta.text];
+  if (
+    delta.type === "input_json_delta" &&
+    (state.currentBlockType === "server_tool_use" || state.currentBlockType === "tool_use")
+  ) {
+    const partial = delta.partial_json || "";
+    state.codeInput += partial;
+    // Progress event keeps generation throughput tracking alive during FC
+    // argument streaming.
+    if (state.currentBlockType === "tool_use" && partial.length > 0) {
+      return [{ type: "toolCallDelta", characters: partial.length }];
+    }
+  }
+  return [];
+}
+
+/** message_delta carries output_tokens plus stop details. */
+function reduceAnthropicMessageDelta(
+  state: AnthropicStreamState,
+  chunk: Anthropic.MessageStreamEvent & { type: "message_delta" },
+): AnthropicStreamYield[] {
+  const events: AnthropicStreamYield[] = [];
+  if (chunk.usage) {
+    state.usage = {
+      inputTokens: state.messageStartUsage?.input_tokens ?? 0,
+      outputTokens: chunk.usage.output_tokens ?? 0,
+      cacheReadInputTokens: state.messageStartUsage?.cache_read_input_tokens ?? 0,
+      cacheCreationInputTokens: state.messageStartUsage?.cache_creation_input_tokens ?? 0,
+    };
+  }
+  if (chunk.delta?.stop_reason) {
+    events.push({ type: "stopReason", stopReason: chunk.delta.stop_reason });
+  }
+  if (chunk.delta && "stop_details" in chunk.delta) {
+    events.push({ type: "stopDetails", stopDetails: chunk.delta.stop_details });
+  }
+  return events;
+}
+
+/** Prefer the finalized message's usage; fall back to message_delta usage. */
+async function resolveAnthropicStreamUsage(
+  state: AnthropicStreamState,
+  stream: AnthropicMessageStream,
+): Promise<TokenUsage> {
+  try {
+    const finalMessage = await stream.finalMessage();
+    if (finalMessage?.usage) return buildUsage(finalMessage.usage);
+  } catch {
+    // finalMessage() can throw for tool_use stop reasons — use message_delta usage
+  }
+  return state.usage ?? EMPTY_USAGE;
+}
+
 const anthropicProvider = {
   name: "anthropic",
 
@@ -542,104 +917,15 @@ const anthropicProvider = {
   ) {
     logger.provider("Anthropic", `generateText model=${model}`);
 
-    const prepared = await prepareMessages(messages);
-    const payload: Record<string, unknown> = {
-      cache_control: { type: "ephemeral" },
-      system: prepared.systemMessage,
-      model,
-      messages: prepared.messages,
-      max_tokens: options.maxTokens || DEFAULT_MAX_OUTPUT_TOKENS,
-      temperature:
-        options.temperature !== undefined
-          ? Math.min(options.temperature, 1)
-          : undefined,
-      top_p:
-        options.temperature === undefined && options.topP !== undefined
-          ? options.topP
-          : undefined,
-      top_k: options.topK !== undefined ? options.topK : undefined,
-      stop_sequences:
-        options.stopSequences !== undefined ? options.stopSequences : undefined,
-      ...(options.serviceTier && {
-        service_tier:
-          options.serviceTier === "standard"
-            ? "standard_only"
-            : options.serviceTier,
-      }),
-      ...(options.responseFormat === "json_object" && {
-        output_config: {
-          format: {
-            type: "json_schema" as const,
-            schema: { type: "object", additionalProperties: false },
-          },
-        },
-      }),
-    };
-
-    // Opus 4.7+ lock sampling parameters — API rejects non-default values
-    const modelDefinition = getModelByName(model);
-    const hasLockedSampling =
-      (modelDefinition as Record<string, unknown> | null)?.lockedSampling ===
-      true;
-    if (hasLockedSampling) {
-      delete payload.temperature;
-      delete payload.top_p;
-      delete payload.top_k;
-    }
-
-    const isAdaptiveThinking =
-      (modelDefinition as Record<string, unknown> | null)?.adaptiveThinking ===
-      true;
-    if (isAdaptiveThinking) {
-      delete payload.top_k;
-    }
-
-    // Server tools
-    const tools = buildTools(options);
-    if (tools) payload.tools = tools;
-
-    // Adaptive thinking models (Fable 5, Mythos 5, Opus 4.7+): thinking is
-    // inherent to the model — enable by default unless explicitly disabled.
-    if (options.thinkingEnabled !== false && isAdaptiveThinking) {
-      payload.thinking = { type: "adaptive" };
-      if (options.reasoningEffort) {
-        payload.output_config = {
-          ...((payload.output_config as Record<string, unknown>) || {}),
-          effort: options.reasoningEffort,
-        };
-      }
-      payload.temperature = 1;
-      delete payload.top_p;
-      delete payload.top_k;
-    } else if (
-      options.thinkingEnabled !== false &&
-      (options.thinkingEnabled === true ||
-        options.thinkingBudget ||
-        options.reasoningEffort)
-    ) {
-      // Legacy models (Opus 4.x, Sonnet 4.x): manual extended thinking with budget_tokens
-      const budget = options.thinkingBudget
-        ? parseInt(String(options.thinkingBudget))
-        : (options.reasoningEffort
-            ? EFFORT_BUDGET_MAP[options.reasoningEffort]
-            : undefined) || EFFORT_BUDGET_MAP.high;
-      payload.thinking = { type: "enabled", budget_tokens: budget };
-      if ((payload.max_tokens as number) <= budget) {
-        payload.max_tokens = budget + 1024;
-      }
-      // Anthropic requires temperature=1 and top_p/top_k unset when thinking is enabled
-      payload.temperature = 1;
-      delete payload.top_p;
-      delete payload.top_k;
-    }
+    const payload = await buildAnthropicPayload(messages, model, options);
+    // Built above as a Messages API payload.
+    const request = payload as unknown as Anthropic.MessageCreateParamsNonStreaming;
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const { data: response, response: rawResponse } = await getClient()
-          .messages.create(
-            payload as unknown as Anthropic.MessageCreateParamsNonStreaming,
-          )
+          .messages.create(request)
           .withResponse();
         const rateLimits = extractAnthropicRateLimits(rawResponse, model);
         const message = response as Anthropic.Messages.Message;
@@ -685,6 +971,7 @@ const anthropicProvider = {
       lastError,
     );
   },
+
   async captionImage(
     images: string[],
     prompt: string = "Describe this image.",
@@ -771,344 +1058,29 @@ const anthropicProvider = {
   ): AsyncGenerator<Record<string, unknown> | string> {
     logger.provider("Anthropic", `generateTextStream model=${model}`);
     try {
-      const prepared = await prepareMessages(messages);
-      const streamPayload: Record<string, unknown> = {
-        cache_control: { type: "ephemeral" },
-        system: prepared.systemMessage,
-        model,
-        messages: prepared.messages,
-        max_tokens: options.maxTokens || DEFAULT_MAX_OUTPUT_TOKENS,
-        temperature:
-          options.temperature !== undefined
-            ? Math.min(options.temperature, 1)
-            : undefined,
-        top_p:
-          options.temperature === undefined && options.topP !== undefined
-            ? options.topP
-            : undefined,
-        top_k: options.topK !== undefined ? options.topK : undefined,
-        stop_sequences:
-          options.stopSequences !== undefined
-            ? options.stopSequences
-            : undefined,
-        ...(options.serviceTier && {
-          service_tier:
-            options.serviceTier === "standard"
-              ? "standard_only"
-              : options.serviceTier,
-        }),
-        ...(options.responseFormat === "json_object" && {
-          output_config: {
-            format: {
-              type: "json_schema" as const,
-              schema: { type: "object", additionalProperties: false },
-            },
-          },
-        }),
-      };
+      const payload = await buildAnthropicPayload(messages, model, options);
+      // Built above from prepareMessages(); enforceImageSizeLimits mutates it.
+      const preparedMessages = payload.messages as ChatMessage[];
+      await enforceImageSizeLimits(preparedMessages);
 
-      // Opus 4.7+ lock sampling parameters — API rejects non-default values
-      const modelDefinition = getModelByName(model);
-      const hasLockedSampling =
-        (modelDefinition as Record<string, unknown> | null)?.lockedSampling ===
-        true;
-      if (hasLockedSampling) {
-        delete streamPayload.temperature;
-        delete streamPayload.top_p;
-        delete streamPayload.top_k;
-      }
+      // Built above as a Messages API payload.
+      const request = payload as unknown as Anthropic.MessageCreateParamsNonStreaming;
+      const stream = getClient().messages.stream(request, {
+        ...(options.signal && { signal: options.signal }),
+      });
 
-      const isAdaptiveThinking =
-        (modelDefinition as Record<string, unknown> | null)
-          ?.adaptiveThinking === true;
-      if (isAdaptiveThinking) {
-        delete streamPayload.top_k;
-      }
-
-      // Server tools
-      const tools = buildTools(options);
-      if (tools) streamPayload.tools = tools;
-
-      // Adaptive thinking models (Fable 5, Mythos 5, Opus 4.7+): thinking is
-      // inherent to the model — enable by default unless explicitly disabled.
-      if (options.thinkingEnabled !== false && isAdaptiveThinking) {
-        streamPayload.thinking = { type: "adaptive" };
-        if (options.reasoningEffort) {
-          streamPayload.output_config = {
-            ...((streamPayload.output_config as Record<string, unknown>) || {}),
-            effort: options.reasoningEffort,
-          };
-        }
-        streamPayload.temperature = 1;
-        delete streamPayload.top_p;
-        delete streamPayload.top_k;
-      } else if (
-        options.thinkingEnabled !== false &&
-        (options.thinkingEnabled === true ||
-          options.thinkingBudget ||
-          options.reasoningEffort)
-      ) {
-        // Legacy models (Opus 4.x, Sonnet 4.x): manual extended thinking with budget_tokens
-        const budget = options.thinkingBudget
-          ? parseInt(String(options.thinkingBudget))
-          : (options.reasoningEffort
-              ? EFFORT_BUDGET_MAP[options.reasoningEffort]
-              : undefined) || EFFORT_BUDGET_MAP.high;
-        streamPayload.thinking = { type: "enabled", budget_tokens: budget };
-        if ((streamPayload.max_tokens as number) <= budget) {
-          streamPayload.max_tokens = budget + 1024;
-        }
-        // Anthropic requires temperature=1 and top_p/top_k unset when thinking is enabled
-        streamPayload.temperature = 1;
-        delete streamPayload.top_p;
-        delete streamPayload.top_k;
-      }
-
-      await enforceImageSizeLimits(streamPayload.messages as ChatMessage[]);
-
-      const stream = getClient().messages.stream(
-        streamPayload as unknown as Anthropic.MessageCreateParamsNonStreaming,
-        {
-          ...(options.signal && { signal: options.signal }),
-        },
-      );
-
-      // Track current content block type for server tool response processing
-      let currentBlockType: string | null = null;
-      let currentBlockName: string | null = null;
-      let currentToolUseId: string | null = null;
-      let codeInput = "";
-      let usage: TokenUsage | null = null;
-      let messageStartUsage: {
-        input_tokens?: number | null;
-        output_tokens?: number | null;
-        cache_read_input_tokens?: number | null;
-        cache_creation_input_tokens?: number | null;
-      } | null = null;
-      let rateLimits: ReturnType<typeof extractAnthropicRateLimits> | null =
-        null;
-
+      const state = createAnthropicStreamState();
       for await (const chunk of stream) {
         if (options.signal?.aborted) {
           stream.abort();
           break;
         }
-        // Capture input token counts from message_start (sent once at stream start).
-        // Anthropic sends input_tokens, cache_read_input_tokens, and
-        // cache_creation_input_tokens here — message_delta only has output_tokens.
-        if (chunk.type === "message_start" && chunk.message?.usage) {
-          messageStartUsage = chunk.message.usage;
-          // Capture rate-limit headers from the stream's initial response
-          if (!rateLimits && stream.response) {
-            rateLimits = extractAnthropicRateLimits(stream.response, model);
-          }
-          continue;
-        }
-        // Content block start — track what kind of block we're in
-        if (chunk.type === "content_block_start") {
-          const block = chunk.content_block;
-          currentBlockType = block?.type || null;
-          currentBlockName = ("name" in block ? block.name : null) as
-            | string
-            | null;
-          currentToolUseId = ("id" in block ? block.id : null) as string | null;
-          codeInput = "";
-
-          // Server tool use start — yield the tool name being invoked
-          if (
-            block?.type === "server_tool_use" &&
-            "name" in block &&
-            block.name === "code_execution"
-          ) {
-            // Code execution starting — we'll accumulate the input
-          }
-
-          // Custom tool_use start — emit early disclosure before argument streaming
-          if (
-            block?.type === "tool_use" &&
-            currentBlockName &&
-            currentToolUseId
-          ) {
-            yield {
-              type: "toolCallStart",
-              id: currentToolUseId,
-              name: currentBlockName,
-            };
-          }
-
-          // Code execution tool result
-          if (block?.type === "code_execution_tool_result") {
-            const result = (
-              block as {
-                content?: {
-                  stdout?: string;
-                  stderr?: string;
-                  return_code?: number;
-                };
-              }
-            ).content;
-            if (result) {
-              yield {
-                type: "codeExecutionResult",
-                output: result.stdout || result.stderr || "",
-                outcome: result.return_code === 0 ? "OK" : "ERROR",
-              };
-            }
-          }
-
-          // Web search / web fetch tool result — extract citations
-          if (
-            block?.type === "web_search_tool_result" ||
-            block?.type === "web_fetch_tool_result"
-          ) {
-            const content = (block as { content?: AnthropicBlock[] }).content;
-            if (Array.isArray(content)) {
-              const results = content
-                .filter(
-                  (r: AnthropicBlock) =>
-                    r.type === "web_search_result" ||
-                    r.type === "web_fetch_result",
-                )
-                .map((r: AnthropicBlock) => ({
-                  url: r.url,
-                  title: r.title,
-                  pageAge: r.page_age,
-                }));
-              if (results.length > 0) {
-                yield { type: "webSearchResult", results };
-              }
-            }
-          }
-
-          continue;
-        }
-
-        // Content block stop
-        if (chunk.type === "content_block_stop") {
-          // Server code execution — yield code
-          if (
-            currentBlockType === "server_tool_use" &&
-            currentBlockName === "code_execution" &&
-            codeInput
-          ) {
-            try {
-              const parsed = JSON.parse(codeInput);
-              if (parsed.code) {
-                yield {
-                  type: "executableCode",
-                  code: parsed.code,
-                  language: parsed.language || "bash",
-                };
-              }
-            } catch {
-              // Not valid JSON, skip
-            }
-          }
-          // Custom tool_use block ended — emit toolCall
-          if (currentBlockType === "tool_use") {
-            let args: Record<string, unknown> = {};
-            if (codeInput) {
-              try {
-                args = JSON.parse(codeInput);
-              } catch {
-                // Not valid JSON, use empty
-              }
-            }
-            yield {
-              type: "toolCall",
-              id: currentToolUseId,
-              name: currentBlockName,
-              args,
-            };
-          }
-          currentBlockType = null;
-          currentBlockName = null;
-          currentToolUseId = null;
-          codeInput = "";
-          continue;
-        }
-
-        // Content block deltas
-        if (chunk.type === "content_block_delta") {
-          // Thinking delta
-          if (chunk.delta.type === "thinking_delta") {
-            yield { type: "thinking", content: chunk.delta.thinking };
-            continue;
-          }
-          // Signature delta — Anthropic sends the thinking block's cryptographic
-          // signature as a separate delta event. This MUST be captured and passed
-          // back verbatim in multi-turn conversations, otherwise the API rejects
-          // the request with a 400.
-          if (chunk.delta.type === "signature_delta") {
-            yield {
-              type: "thinking_signature",
-              signature: chunk.delta.signature,
-            };
-            continue;
-          }
-          // Text delta
-          if (chunk.delta.type === "text_delta") {
-            yield chunk.delta.text;
-            continue;
-          }
-          // Input JSON delta for server tool use or custom tool_use (accumulate)
-          if (
-            chunk.delta.type === "input_json_delta" &&
-            (currentBlockType === "server_tool_use" ||
-              currentBlockType === "tool_use")
-          ) {
-            const partial = chunk.delta.partial_json || "";
-            codeInput += partial;
-            // Yield progress event for tool_use blocks so generation
-            // throughput tracking stays alive during FC argument streaming.
-            if (currentBlockType === "tool_use" && partial.length > 0) {
-              yield { type: "toolCallDelta", characters: partial.length };
-            }
-            continue;
-          }
-        }
-
-        // Message delta (final usage + stop details) — carries output_tokens only
-        if (chunk.type === "message_delta") {
-          if (chunk.usage) {
-            usage = {
-              inputTokens: messageStartUsage?.input_tokens ?? 0,
-              outputTokens: chunk.usage.output_tokens ?? 0,
-              cacheReadInputTokens:
-                messageStartUsage?.cache_read_input_tokens ?? 0,
-              cacheCreationInputTokens:
-                messageStartUsage?.cache_creation_input_tokens ?? 0,
-            };
-          }
-          // Forward structured stop details for observability (SDK 0.82+)
-          if (chunk.delta?.stop_reason) {
-            yield { type: "stopReason", stopReason: chunk.delta.stop_reason };
-          }
-          if (chunk.delta && "stop_details" in chunk.delta) {
-            yield {
-              type: "stopDetails",
-              stopDetails: chunk.delta.stop_details,
-            };
-          }
-        }
+        yield* reduceAnthropicStreamEvent(state, chunk, stream, model);
       }
 
-      // Get full usage from the finalized message
-      try {
-        const finalMessage = await stream.finalMessage();
-        if (finalMessage?.usage) {
-          usage = buildUsage(finalMessage.usage);
-        }
-      } catch {
-        // finalMessage() can throw for tool_use stop reasons — use message_delta usage
-      }
-      if (usage) {
-        yield { type: "usage", usage };
-      } else {
-        yield { type: "usage", usage: EMPTY_USAGE };
-      }
-      if (rateLimits) {
-        yield { type: "rateLimits", rateLimits };
+      yield { type: "usage", usage: await resolveAnthropicStreamUsage(state, stream) };
+      if (state.rateLimits) {
+        yield { type: "rateLimits", rateLimits: state.rateLimits };
       }
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") return;
@@ -1136,6 +1108,7 @@ const anthropicProvider = {
       );
     }
   },
+
 };
 
 export default anthropicProvider;
