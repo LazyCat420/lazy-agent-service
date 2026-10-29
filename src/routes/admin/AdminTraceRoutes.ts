@@ -6,6 +6,7 @@ import logger from "../../utils/logger.ts";
 import { getErrorMessage } from "../../utils/ErrorHelpers.ts";
 import {
   applyDateRangeFilter,
+  buildAdminMatch,
   parsePaginationParams,
 } from "../../utils/QueryBuilders.ts";
 import requireDb from "../../middleware/RequireDbMiddleware.ts";
@@ -40,37 +41,7 @@ router.get(
         req.query,
       );
 
-      const match: Record<string, unknown> = { traceId: { $ne: null } };
-      if (project) match.project = project;
-      if (username) match.username = username;
-
-      if (agent) {
-        const agentIds = String(agent).split(",").filter(Boolean);
-        if (agentIds.length === 1) {
-          match.agent = agentIds[0];
-        } else if (agentIds.length > 1) {
-          match.agent = { $in: agentIds };
-        }
-      }
-
-      if (provider) {
-        const providerNames = String(provider).split(",").filter(Boolean);
-        if (providerNames.length === 1) {
-          match.provider = providerNames[0];
-        } else if (providerNames.length > 1) {
-          match.provider = { $in: providerNames };
-        }
-      }
-
-      if (model) {
-        const modelNames = String(model).split(",").filter(Boolean);
-        if (modelNames.length === 1) {
-          match.model = modelNames[0];
-        } else if (modelNames.length > 1) {
-          match.model = { $in: modelNames };
-        }
-      }
-
+      const match = buildAdminMatch(req.query as Record<string, unknown>, { traceOnly: true });
       applyDateRangeFilter(match, from as string, to as string);
 
       if (workspace) {
