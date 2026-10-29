@@ -77,3 +77,32 @@ export const CONVERSATION_LIST_BASE_PROJECTION: Record<string, 1> = {
   parentConversationId: 1,
   hasSubAgents: 1,
 };
+
+/**
+ * Comma-separated query value → single value or Mongo $in filter.
+ */
+export function parseCsvFilter(value: unknown): string | { $in: string[] } | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const parts = String(value)
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return undefined;
+  return parts.length === 1 ? parts[0] : { $in: parts };
+}
+
+/** The admin list filters shared by every admin route (project/agent/provider/model). */
+export function buildAdminMatch(
+  query: Record<string, unknown>,
+  opts: { traceOnly?: boolean } = {},
+): Record<string, unknown> {
+  const match: Record<string, unknown> = opts.traceOnly ? { traceId: { $ne: null } } : {};
+  if (query.project) match.project = query.project;
+  const agent = parseCsvFilter(query.agent);
+  if (agent !== undefined) match.agent = agent;
+  const provider = parseCsvFilter(query.provider);
+  if (provider !== undefined) match.provider = provider;
+  const model = parseCsvFilter(query.model);
+  if (model !== undefined) match.model = model;
+  return match;
+}

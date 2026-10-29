@@ -11,7 +11,7 @@ import AgentPersonaRegistry from "../../services/AgentPersonaRegistry.ts";
 import ToolOrchestratorService from "../../services/ToolOrchestratorService.ts";
 import logger from "../../utils/logger.ts";
 import { getErrorMessage } from "../../utils/ErrorHelpers.ts";
-import { applyDateRangeFilter } from "../../utils/QueryBuilders.ts";
+import { applyDateRangeFilter, buildAdminMatch } from "../../utils/QueryBuilders.ts";
 import requireDb from "../../middleware/RequireDbMiddleware.ts";
 import { hours as hoursToMs } from "@rodrigo-barraza/utilities-library";
 
@@ -28,38 +28,7 @@ async function buildMatchFilter(
   req: Request,
 ): Promise<Record<string, unknown>> {
   const { from, to, project, agent, provider, model, workspace } = req.query;
-  const match: Record<string, unknown> = {};
-
-  if (project) {
-    match.project = project;
-  }
-
-  if (agent) {
-    const agentIds = String(agent).split(",").filter(Boolean);
-    if (agentIds.length === 1) {
-      match.agent = agentIds[0];
-    } else if (agentIds.length > 1) {
-      match.agent = { $in: agentIds };
-    }
-  }
-
-  if (provider) {
-    const providerNames = String(provider).split(",").filter(Boolean);
-    if (providerNames.length === 1) {
-      match.provider = providerNames[0];
-    } else if (providerNames.length > 1) {
-      match.provider = { $in: providerNames };
-    }
-  }
-
-  if (model) {
-    const modelNames = String(model).split(",").filter(Boolean);
-    if (modelNames.length === 1) {
-      match.model = modelNames[0];
-    } else if (modelNames.length > 1) {
-      match.model = { $in: modelNames };
-    }
-  }
+  const match = buildAdminMatch(req.query as Record<string, unknown>);
 
   applyDateRangeFilter(match, from as string, to as string);
 
@@ -125,28 +94,9 @@ router.get(
         { $count: "total" },
       ];
 
-      const convMatch: Record<string, unknown> = {};
-      if (project) convMatch.project = project;
+      const convMatch = buildAdminMatch(req.query as Record<string, unknown>);
       if (workspace) convMatch.workspaceRoot = workspace;
-      if (provider) {
-        const providerNames = String(provider).split(",").filter(Boolean);
-        if (providerNames.length === 1) convMatch.providers = providerNames[0];
-        else if (providerNames.length > 1)
-          convMatch.providers = { $in: providerNames };
-      }
-      if (model) {
-        const modelNames = String(model).split(",").filter(Boolean);
-        if (modelNames.length === 1)
-          convMatch["messages.model"] = modelNames[0];
-        else if (modelNames.length > 1)
-          convMatch["messages.model"] = { $in: modelNames };
-      }
-      applyDateRangeFilter(
-        convMatch,
-        from as string,
-        to as string,
-        "createdAt",
-      );
+      applyDateRangeFilter(convMatch, from as string, to as string, "createdAt");
 
       const traceMatch = { ...match, traceId: { $ne: null } };
 
