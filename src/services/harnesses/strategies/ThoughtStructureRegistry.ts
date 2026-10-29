@@ -1,36 +1,21 @@
 import { THOUGHT_STRUCTURES } from "@rodrigo-barraza/utilities-library/taxonomy";
+import {
+  createDefinitionRegistry,
+  type DefinitionAlignmentEntry,
+  type DefinitionBase,
+  type DefinitionConfigOption,
+} from "../../orchestrator/definitionRegistry.ts";
 
-export interface ThoughtStructureAlignmentEntry {
-  component: string;
-  status: "aligned" | "simplified" | "extended";
-  detail: string;
-}
-
-export interface ThoughtStructureConfigOption {
-  name: string;
-  type: "number" | "string" | "boolean";
-  defaultValue: string;
-  description: string;
-}
-
-export interface ThoughtStructureDefinition {
-  id: string;
-  displayName: string;
-  abbreviation: string;
-  description: string;
+export type ThoughtStructureAlignmentEntry = DefinitionAlignmentEntry;
+export type ThoughtStructureConfigOption = DefinitionConfigOption;
+export type ThoughtStructureDefinition = DefinitionBase & {
   paperTitle: string;
   paperAuthors: string;
   paperYear: number;
   paperUrl: string;
-  implementationFile: string;
-  categoryLabel: string;
-  phases: string[];
-  configOptions: ThoughtStructureConfigOption[];
-  alignment: ThoughtStructureAlignmentEntry[];
-  flowDescription: string;
-}
+};
 
-export const THOUGHT_STRUCTURE_DEFINITIONS: ThoughtStructureDefinition[] = [
+const thoughtStructureRegistry = createDefinitionRegistry<ThoughtStructureDefinition>([
   {
     id: THOUGHT_STRUCTURES.CHAIN_OF_THOUGHT,
     displayName: "Chain of Thought",
@@ -133,8 +118,11 @@ export const THOUGHT_STRUCTURE_DEFINITIONS: ThoughtStructureDefinition[] = [
     ],
     flowDescription: "[B₁ B₂ B₃] → [Score] → [Synthesize All] → [Execute] → [Validate]",
   },
-];
+]);
+
+export const THOUGHT_STRUCTURE_DEFINITIONS: ThoughtStructureDefinition[] =
+  thoughtStructureRegistry.definitions;
 
 export function getThoughtStructureById(structureId: string): ThoughtStructureDefinition | undefined {
-  return THOUGHT_STRUCTURE_DEFINITIONS.find((definition) => definition.id === structureId);
+  return thoughtStructureRegistry.getById(structureId);
 }

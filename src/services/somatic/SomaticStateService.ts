@@ -504,6 +504,106 @@ function extractMessageContent(formattedText: string): string {
   return formattedText.trim();
 }
 
+type StatDirection = "increase" | "decrease";
+
+interface SomaticKeywordEffect {
+  /** Keyword matcher (from SOMATIC_KEYWORDS). */
+  pattern: RegExp;
+  /** Debug-log label, e.g. "🍖 Food". */
+  label: string;
+  /** Stat driven by the keyword. */
+  stat: PhysicalStatName;
+  /** Display name used in the debug log line. */
+  statDisplayName: string;
+  direction: StatDirection;
+  /** Additional stat nudged by the same match (food/drink also fill the bladder). */
+  extra?: { stat: PhysicalStatName; direction: StatDirection };
+}
+
+const SOMATIC_KEYWORD_EFFECTS: SomaticKeywordEffect[] = [
+  {
+    pattern: SOMATIC_KEYWORDS.food,
+    label: "🍖 Food",
+    stat: "hunger",
+    statDisplayName: "Hunger",
+    direction: "decrease",
+    extra: { stat: "bathroom", direction: "increase" },
+  },
+  {
+    pattern: SOMATIC_KEYWORDS.drink,
+    label: "💧 Drink",
+    stat: "thirst",
+    statDisplayName: "Thirst",
+    direction: "decrease",
+    extra: { stat: "bathroom", direction: "increase" },
+  },
+  {
+    pattern: SOMATIC_KEYWORDS.rest,
+    label: "💤 Rest",
+    stat: "energy",
+    statDisplayName: "Energy",
+    direction: "increase",
+  },
+  {
+    pattern: SOMATIC_KEYWORDS.work,
+    label: "🔨 Work",
+    stat: "energy",
+    statDisplayName: "Energy",
+    direction: "decrease",
+  },
+  {
+    pattern: SOMATIC_KEYWORDS.sick,
+    label: "🤮 Sickness",
+    stat: "sickness",
+    statDisplayName: "Sickness",
+    direction: "increase",
+  },
+  {
+    pattern: SOMATIC_KEYWORDS.alcohol,
+    label: "🍺 Alcohol",
+    stat: "alcohol",
+    statDisplayName: "Alcohol",
+    direction: "increase",
+  },
+  {
+    pattern: SOMATIC_KEYWORDS.substance,
+    label: "🌿 Substance",
+    stat: "substance",
+    statDisplayName: "Substance",
+    direction: "increase",
+  },
+  {
+    pattern: SOMATIC_KEYWORDS.bathroom,
+    label: "🚽 Bathroom",
+    stat: "bathroom",
+    statDisplayName: "Bathroom",
+    direction: "decrease",
+  },
+];
+
+/**
+ * Apply every keyword effect whose pattern matches the message, in table order.
+ * Independent matches stack (a message can feed and water the agent at once).
+ */
+function applyKeywordStatEffects(
+  state: AgentSomaticState,
+  cleanText: string,
+  agentId: string,
+): void {
+  for (const effect of SOMATIC_KEYWORD_EFFECTS) {
+    if (!effect.pattern.test(cleanText)) continue;
+    if (effect.direction === "increase") state[effect.stat].increase();
+    else state[effect.stat].decrease();
+    if (effect.extra) {
+      if (effect.extra.direction === "increase") state[effect.extra.stat].increase();
+      else state[effect.extra.stat].decrease();
+    }
+    logger.debug(
+      `[SomaticStateService] ${effect.label} keyword for "${agentId}". ${effect.statDisplayName}: ${state[effect.stat].getLevel()}`,
+    );
+  }
+}
+
 const SomaticStateService = {
   initialize(): void {
     startPersistenceLoop();
@@ -744,63 +844,7 @@ const SomaticStateService = {
       );
     }
 
-    if (SOMATIC_KEYWORDS.food.test(cleanText)) {
-      state.hunger.decrease();
-      state.bathroom.increase();
-      logger.debug(
-        `[SomaticStateService] 🍖 Food keyword for "${agentId}". Hunger: ${state.hunger.getLevel()}`,
-      );
-    }
-
-    if (SOMATIC_KEYWORDS.drink.test(cleanText)) {
-      state.thirst.decrease();
-      state.bathroom.increase();
-      logger.debug(
-        `[SomaticStateService] 💧 Drink keyword for "${agentId}". Thirst: ${state.thirst.getLevel()}`,
-      );
-    }
-
-    if (SOMATIC_KEYWORDS.rest.test(cleanText)) {
-      state.energy.increase();
-      logger.debug(
-        `[SomaticStateService] 💤 Rest keyword for "${agentId}". Energy: ${state.energy.getLevel()}`,
-      );
-    }
-
-    if (SOMATIC_KEYWORDS.work.test(cleanText)) {
-      state.energy.decrease();
-      logger.debug(
-        `[SomaticStateService] 🔨 Work keyword for "${agentId}". Energy: ${state.energy.getLevel()}`,
-      );
-    }
-
-    if (SOMATIC_KEYWORDS.sick.test(cleanText)) {
-      state.sickness.increase();
-      logger.debug(
-        `[SomaticStateService] 🤮 Sickness keyword for "${agentId}". Sickness: ${state.sickness.getLevel()}`,
-      );
-    }
-
-    if (SOMATIC_KEYWORDS.alcohol.test(cleanText)) {
-      state.alcohol.increase();
-      logger.debug(
-        `[SomaticStateService] 🍺 Alcohol keyword for "${agentId}". Alcohol: ${state.alcohol.getLevel()}`,
-      );
-    }
-
-    if (SOMATIC_KEYWORDS.substance.test(cleanText)) {
-      state.substance.increase();
-      logger.debug(
-        `[SomaticStateService] 🌿 Substance keyword for "${agentId}". Substance: ${state.substance.getLevel()}`,
-      );
-    }
-
-    if (SOMATIC_KEYWORDS.bathroom.test(cleanText)) {
-      state.bathroom.decrease();
-      logger.debug(
-        `[SomaticStateService] 🚽 Bathroom keyword for "${agentId}". Bathroom: ${state.bathroom.getLevel()}`,
-      );
-    }
+    applyKeywordStatEffects(state, cleanText, agentId);
 
     state.isDirty = true;
   },

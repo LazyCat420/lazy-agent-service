@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parseFrontmatter } from "../frontmatter.ts";
 
 /**
  * SkillRegistry — discovers on-demand skill packages under
@@ -34,52 +35,11 @@ export interface SkillSummary {
 
 const DEFAULT_SKILLS_ROOT = path.resolve(process.cwd(), "skills");
 
-/** Parse `---` frontmatter scalars and string lists (shared minimal parser). */
-function parseSkillFrontmatter(
-  content: string,
-): { frontmatter: Record<string, string | string[]>; body: string } | null {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(content);
-  if (!match) return null;
-  const frontmatter: Record<string, string | string[]> = {};
-  let currentKey: string | null = null;
-  for (const rawLine of match[1].split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line === "" || line.startsWith("#")) continue;
-    const listItem = /^-\s+(.+)$/.exec(line);
-    if (listItem && currentKey) {
-      const list = frontmatter[currentKey];
-      if (!Array.isArray(list)) continue;
-      list.push(unquote(listItem[1]));
-      continue;
-    }
-    const kv = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line);
-    if (!kv) continue;
-    currentKey = kv[1];
-    const value = kv[2].trim();
-    if (value === "") {
-      frontmatter[currentKey] = [];
-    } else if (value.startsWith("[") && value.endsWith("]")) {
-      frontmatter[currentKey] = value
-        .slice(1, -1)
-        .split(",")
-        .map(unquote)
-        .filter((entry) => entry.length > 0);
-    } else {
-      frontmatter[currentKey] = unquote(value);
-    }
-  }
-  return { frontmatter, body: match[2] };
-}
-
-function unquote(value: string): string {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
-}
+/** Skill files historically keep inline-array whitespace and drop stray list items. */
+const SKILL_FRONTMATTER_OPTIONS = {
+  listWithoutArrayKey: "ignore",
+  trimInlineArrayEntries: false,
+} as const;
 
 export class SkillRegistry {
   private skillsRoot: string;
@@ -113,7 +73,7 @@ export class SkillRegistry {
       } catch {
         continue;
       }
-      const parsed = parseSkillFrontmatter(content);
+      const parsed = parseFrontmatter(content, SKILL_FRONTMATTER_OPTIONS);
       if (!parsed) continue;
       skills.push({
         name:
@@ -148,7 +108,7 @@ export class SkillRegistry {
     if (!skill) return null;
     try {
       const content = fs.readFileSync(skill.source, "utf8");
-      const parsed = parseSkillFrontmatter(content);
+      const parsed = parseFrontmatter(content, SKILL_FRONTMATTER_OPTIONS);
       return parsed ? parsed.body.trim() : null;
     } catch {
       return null;

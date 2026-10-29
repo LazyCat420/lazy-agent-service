@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parseFrontmatter } from "../frontmatter.ts";
 
 /**
  * RuleLoader — loads path-scoped markdown rules from `<repoRoot>/rules/*.md`.
@@ -78,52 +79,7 @@ export function globMatches(glob: string, filePath: string): boolean {
 }
 
 /** Parse `---` frontmatter into a record of scalars and string arrays. */
-export function parseFrontmatter(
-  content: string,
-): { frontmatter: Record<string, string | string[]>; body: string } | null {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(content);
-  if (!match) return null;
-  const frontmatter: Record<string, string | string[]> = {};
-  let currentKey: string | null = null;
-  for (const rawLine of match[1].split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line === "" || line.startsWith("#")) continue;
-    const listItem = /^-\s+(.+)$/.exec(line);
-    if (listItem && currentKey) {
-      const existing = frontmatter[currentKey];
-      const list = Array.isArray(existing) ? existing : [];
-      list.push(stripQuotes(listItem[1]));
-      frontmatter[currentKey] = list;
-      continue;
-    }
-    const kv = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line);
-    if (!kv) continue;
-    currentKey = kv[1];
-    const value = kv[2].trim();
-    if (value === "") {
-      frontmatter[currentKey] = [];
-    } else if (value.startsWith("[") && value.endsWith("]")) {
-      frontmatter[currentKey] = value
-        .slice(1, -1)
-        .split(",")
-        .map((entry) => stripQuotes(entry.trim()))
-        .filter((entry) => entry.length > 0);
-    } else {
-      frontmatter[currentKey] = stripQuotes(value);
-    }
-  }
-  return { frontmatter, body: match[2] };
-}
-
-function stripQuotes(value: string): string {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
-}
+export { parseFrontmatter };
 
 export class RuleLoader {
   private rulesDir: string;
