@@ -754,15 +754,7 @@ function reduceAnthropicBlockResult(
   block: Anthropic.ContentBlock | undefined,
 ): AnthropicStreamYield[] {
   if (block?.type === "code_execution_tool_result") {
-    const result = block.content;
-    if (!("stdout" in result)) return [];
-    return [
-      {
-        type: "codeExecutionResult",
-        output: result.stdout || result.stderr || "",
-        outcome: result.return_code === 0 ? "OK" : "ERROR",
-      },
-    ];
+    return reduceAnthropicCodeResult(block.content);
   }
   if (
     block?.type === "web_search_tool_result" ||
@@ -772,6 +764,19 @@ function reduceAnthropicBlockResult(
     return results ? [{ type: "webSearchResult", results }] : [];
   }
   return [];
+}
+
+function reduceAnthropicCodeResult(
+  result: Anthropic.CodeExecutionToolResultBlock["content"],
+): AnthropicStreamYield[] {
+  if (!("stdout" in result)) return [];
+  return [
+    {
+      type: "codeExecutionResult",
+      output: result.stdout || result.stderr || "",
+      outcome: result.return_code === 0 ? "OK" : "ERROR",
+    },
+  ];
 }
 
 /** Search/fetch result links, only when the block carries a result array. */
@@ -793,53 +798,70 @@ function extractAnthropicWebResults(
 
 /** A block ended: flush accumulated code / tool arguments and reset the block. */
 function reduceAnthropicBlockStop(state: AnthropicStreamState): AnthropicStreamYield[] {
-  const events: AnthropicStreamYield[] = [];
-
-  if (
-    state.currentBlockType === "server_tool_use" &&
-    state.currentBlockName === "code_execution" &&
-    state.codeInput
-  ) {
-    try {
-      // Parsed from the model's streamed JSON; shape checked before use.
-      const parsed = JSON.parse(state.codeInput) as {
-        code?: string;
-        language?: string;
-      } | null;
-      if (parsed?.code) {
-        events.push({
-          type: "executableCode",
-          code: parsed.code,
-          language: parsed.language || "bash",
-        });
-      }
-    } catch {
-      // Not valid JSON, skip
-    }
-  }
-
-  if (state.currentBlockType === "tool_use") {
-    let args: unknown = {};
-    if (state.codeInput) {
-      try {
-        args = JSON.parse(state.codeInput);
-      } catch {
-        // Not valid JSON, use empty
-      }
-    }
-    events.push({
-      type: "toolCall",
-      id: state.currentToolUseId,
-      name: state.currentBlockName,
-      args,
-    });
-  }
-
+  const events = [
+    ...reduceAnthropicCodeExecutionStop(state),
+    ...reduceAnthropicToolUseStop(state),
+  ];
   state.currentBlockType = null;
   state.currentBlockName = null;
   state.currentToolUseId = null;
   state.codeInput = "";
   return events;
+}
+
+/** Server code execution: parse the accumulated input JSON into a code event. */
+function reduceAnthropicCodeExecutionStop(
+  state: AnthropicStreamState,
+): AnthropicStreamYield[] {
+  if (
+    state.currentBlockType !== "server_tool_use" ||
+    state.currentBlockName !== "code_execution" ||
+    !state.codeInput
+  ) {
+    return [];
+  }
+  try {
+    // Parsed from the model's streamed JSON; shape checked before use.
+    const parsed = JSON.parse(state.codeInput) as {
+      code?: string;
+      language?: string;
+    } | null;
+    return parsed?.code
+      ? [
+          {
+            type: "executableCode",
+            code: parsed.code,
+            language: parsed.language || "bash",
+          },
+        ]
+      : [];
+  } catch {
+    // Not valid JSON, skip
+    return [];
+  }
+}
+
+/** Custom tool_use block ended — emit the finalized tool call. */
+function reduceAnthropicToolUseStop(
+  state: AnthropicStreamState,
+): AnthropicStreamYield[] {
+  if (state.currentBlockType !== "tool_use") return [];
+  let args: unknown = {};
+  if (state.codeInput) {
+    try {
+      args = JSON.parse(state.codeInput);
+    } catch {
+      // Not valid JSON, use empty
+    }
+  }
+  return [
+    {
+      type: "toolCall",
+      id: state.currentToolUseId,
+      name: state.currentBlockName,
+      args,
+    },
+  ];
 }
 
 /** Thinking, signature and text deltas; input JSON accumulates for tools. */
@@ -875,7 +897,6 @@ function reduceAnthropicMessageDelta(
   state: AnthropicStreamState,
   chunk: Anthropic.MessageStreamEvent & { type: "message_delta" },
 ): AnthropicStreamYield[] {
-  const events: AnthropicStreamYield[] = [];
   if (chunk.usage) {
     state.usage = {
       inputTokens: state.messageStartUsage?.input_tokens ?? 0,
@@ -884,11 +905,18 @@ function reduceAnthropicMessageDelta(
       cacheCreationInputTokens: state.messageStartUsage?.cache_creation_input_tokens ?? 0,
     };
   }
-  if (chunk.delta?.stop_reason) {
-    events.push({ type: "stopReason", stopReason: chunk.delta.stop_reason });
+  return reduceAnthropicStopDetails(chunk.delta);
+}
+
+function reduceAnthropicStopDetails(
+  delta: { stop_reason?: string | null; stop_details?: unknown } | undefined,
+): AnthropicStreamYield[] {
+  const events: AnthropicStreamYield[] = [];
+  if (delta?.stop_reason) {
+    events.push({ type: "stopReason", stopReason: delta.stop_reason });
   }
-  if (chunk.delta && "stop_details" in chunk.delta) {
-    events.push({ type: "stopDetails", stopDetails: chunk.delta.stop_details });
+  if (delta && "stop_details" in delta) {
+    events.push({ type: "stopDetails", stopDetails: delta.stop_details });
   }
   return events;
 }
@@ -907,6 +935,65 @@ async function resolveAnthropicStreamUsage(
   return state.usage ?? EMPTY_USAGE;
 }
 
+/**
+ * Send a Messages API request, retrying overloaded/rate-limited responses with
+ * the same delay and attempt policy as before.
+ */
+async function requestAnthropicMessage(
+  request: Anthropic.MessageCreateParamsNonStreaming,
+  model: string,
+): Promise<AnthropicGenerateResult> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const { data: response, response: rawResponse } = await getClient()
+        .messages.create(request)
+        .withResponse();
+      const rateLimits = extractAnthropicRateLimits(rawResponse, model);
+      const message = response as Anthropic.Messages.Message;
+
+      const { text, thinking, thinkingSignature, citations, toolCalls } =
+        extractResponseContent(message.content as AnthropicBlock[]);
+      const result: AnthropicGenerateResult = {
+        text,
+        usage: buildUsage(message.usage),
+      };
+      if (thinking) result.thinking = thinking;
+      if (thinkingSignature) result.thinkingSignature = thinkingSignature;
+      if (citations.length > 0) result.citations = citations;
+      if (toolCalls.length > 0) result.toolCalls = toolCalls;
+      if (rateLimits) result.rateLimits = rateLimits;
+      // Forward structured stop details for observability (SDK 0.82+)
+      if (message.stop_reason) result.stopReason = message.stop_reason;
+      if ("stop_details" in message && message.stop_details)
+        result.stopDetails = { ...message.stop_details };
+      return result;
+    } catch (error: unknown) {
+      lastError = error;
+      if (isRetryableError(error) && attempt < MAX_RETRIES) {
+        logger.warn(
+          `[anthropic] Overloaded on attempt ${attempt}/${MAX_RETRIES} for generateText model=${model}. Retrying in ${RETRY_DELAY_MS / 1000}s...`,
+        );
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+      throw new ProviderError(
+        "anthropic",
+        getErrorMessage(error),
+        (error as AnthropicSdkError)?.status || 500,
+        error,
+      );
+    }
+  }
+  // Should never reach here, but safety net
+  throw new ProviderError(
+    "anthropic",
+    lastError instanceof Error ? lastError.message : "Max retries exceeded",
+    (lastError as AnthropicSdkError)?.status || 500,
+    lastError,
+  );
+}
+
 const anthropicProvider = {
   name: "anthropic",
 
@@ -921,55 +1008,7 @@ const anthropicProvider = {
     // Built above as a Messages API payload.
     const request = payload as unknown as Anthropic.MessageCreateParamsNonStreaming;
 
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const { data: response, response: rawResponse } = await getClient()
-          .messages.create(request)
-          .withResponse();
-        const rateLimits = extractAnthropicRateLimits(rawResponse, model);
-        const message = response as Anthropic.Messages.Message;
-
-        const { text, thinking, thinkingSignature, citations, toolCalls } =
-          extractResponseContent(message.content as AnthropicBlock[]);
-        const result: AnthropicGenerateResult = {
-          text,
-          usage: buildUsage(message.usage),
-        };
-        if (thinking) result.thinking = thinking;
-        if (thinkingSignature) result.thinkingSignature = thinkingSignature;
-        if (citations.length > 0) result.citations = citations;
-        if (toolCalls.length > 0) result.toolCalls = toolCalls;
-        if (rateLimits) result.rateLimits = rateLimits;
-        // Forward structured stop details for observability (SDK 0.82+)
-        if (message.stop_reason) result.stopReason = message.stop_reason;
-        if ("stop_details" in message && message.stop_details)
-          result.stopDetails = { ...message.stop_details };
-        return result;
-      } catch (error: unknown) {
-        lastError = error;
-        if (isRetryableError(error) && attempt < MAX_RETRIES) {
-          logger.warn(
-            `[anthropic] Overloaded on attempt ${attempt}/${MAX_RETRIES} for generateText model=${model}. Retrying in ${RETRY_DELAY_MS / 1000}s...`,
-          );
-          await sleep(RETRY_DELAY_MS);
-          continue;
-        }
-        throw new ProviderError(
-          "anthropic",
-          getErrorMessage(error),
-          (error as AnthropicSdkError)?.status || 500,
-          error,
-        );
-      }
-    }
-    // Should never reach here, but safety net
-    throw new ProviderError(
-      "anthropic",
-      lastError instanceof Error ? lastError.message : "Max retries exceeded",
-      (lastError as AnthropicSdkError)?.status || 500,
-      lastError,
-    );
+    return await requestAnthropicMessage(request, model);
   },
 
   async captionImage(

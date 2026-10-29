@@ -299,6 +299,168 @@ function countInputCharacters(messages: MessagePayload[]) {
   );
 }
 
+
+
+// ─── Defaulted Chat Log Parameters ──────────────────────────────────────────
+
+/** Identity/log fields, defaulted exactly as the public signature documents. */
+function normalizeLogIdentity(params: LogChatGenerationParams) {
+  const {
+    requestId,
+    endpoint = "chat",
+    operation = null,
+    project,
+    username,
+    clientIp = null,
+    agent = null,
+    harness = null,
+    provider,
+    model,
+    conversationId = null,
+    traceId = null,
+    agentConversationId = null,
+    parentAgentConversationId = null,
+  } = params;
+  return {
+    requestId,
+    endpoint,
+    operation,
+    project,
+    username,
+    clientIp,
+    agent,
+    harness,
+    provider,
+    model,
+    conversationId,
+    traceId,
+    agentConversationId,
+    parentAgentConversationId,
+  };
+}
+
+function normalizeLogTelemetry(params: LogChatGenerationParams) {
+  const {
+    success = true,
+    errorMessage = null,
+    usage,
+    estimatedCost = null,
+    tokensPerSec = null,
+    timeToGenerationSec = null,
+    generationSec = null,
+    totalSec = null,
+  } = params;
+  return {
+    success,
+    errorMessage,
+    usage,
+    estimatedCost,
+    tokensPerSec,
+    timeToGenerationSec,
+    generationSec,
+    totalSec,
+  };
+}
+
+function normalizeLogInputs(params: LogChatGenerationParams) {
+  const { options = {}, messages = [] } = params;
+  return { options, messages };
+}
+
+function normalizeLogOutputs(params: LogChatGenerationParams) {
+  const {
+    text = null,
+    thinking = null,
+    images = [],
+    toolCalls = [],
+    outputCharacters = 0,
+    audioRef = null,
+    agenticIteration = null,
+    rateLimits = null,
+  } = params;
+  return {
+    text,
+    thinking,
+    images,
+    toolCalls,
+    outputCharacters,
+    audioRef,
+    agenticIteration,
+    rateLimits,
+  };
+}
+
+function buildUsageLogFields(metrics: UsageMetrics) {
+  return {
+    inputTokens: metrics.inputTokens,
+    outputTokens: metrics.outputTokens,
+    ...(metrics.cacheReadInputTokens > 0 && {
+      cacheReadInputTokens: metrics.cacheReadInputTokens,
+    }),
+    ...(metrics.cacheCreationInputTokens > 0 && {
+      cacheCreationInputTokens: metrics.cacheCreationInputTokens,
+    }),
+    ...(metrics.reasoningOutputTokens > 0 && {
+      reasoningOutputTokens: metrics.reasoningOutputTokens,
+    }),
+  };
+}
+
+function buildOptionLogFields(options: LlmOptions | undefined) {
+  return {
+    temperature: options?.temperature ?? null,
+    maxTokens: options?.maxTokens ?? null,
+    topP: options?.topP ?? null,
+    topK: options?.topK ?? null,
+    frequencyPenalty: options?.frequencyPenalty ?? null,
+    presencePenalty: options?.presencePenalty ?? null,
+    stopSequences: options?.stopSequences ?? null,
+    contextLength: optionNumber(options, [
+      "_loadedContextLength",
+      "contextLength",
+    ]),
+    evalBatchSize: optionNumber(options, [
+      "_loadedEvalBatchSize",
+      "eval_batch_size",
+    ]),
+    physicalBatchSize: optionNumber(options, [
+      "_loadedPhysicalBatchSize",
+      "eval_batch_size",
+    ]),
+  };
+}
+
+function buildTimingFields(
+  timeToGenerationSec: number | null,
+  generationSec: number | null,
+  totalSec: number | null,
+) {
+  return {
+    timeToGeneration:
+      timeToGenerationSec !== null ? roundMilliseconds(timeToGenerationSec) : null,
+    generationTime:
+      generationSec !== null ? roundMilliseconds(generationSec) : null,
+    totalTime: totalSec !== null ? roundMilliseconds(totalSec) : null,
+  };
+}
+
+function buildMessageStats(messages: MessagePayload[]) {
+  return {
+    messageCount: messages?.length ?? 0,
+    inputCharacters: countInputCharacters(messages),
+  };
+}
+
+/** A caller's harness wins; otherwise the option's harness, then null. */
+function resolveHarnessName(
+  harness: string | null,
+  options: LlmOptions | undefined,
+) {
+  // LlmOptions values are untyped; harness is a string by contract.
+  const optionHarness = options?.harness as string | undefined;
+  return harness || optionHarness || null;
+}
+
 /** First non-nullish numeric option among `keys`, mirroring `??` chaining. */
 function optionNumber(
   options: LlmOptions | undefined,
@@ -438,44 +600,45 @@ const RequestLogger = {
    * High-level utility to format and log a chat-like generation.
    * Centralizes the formatting of request payloads, telemetry, and tokens.
    */
-  async logChatGeneration({
-    requestId,
-    endpoint = "chat",
-    operation = null,
-    project,
-    username,
-    clientIp = null,
-    agent = null,
-    harness = null,
-    provider,
-    model,
-    conversationId = null,
-    traceId = null,
-    agentConversationId = null,
-    parentAgentConversationId = null,
-    success = true,
-    errorMessage = null,
-    // Telemetry
-    usage,
-    estimatedCost = null,
-    tokensPerSec = null,
-    timeToGenerationSec = null,
-    generationSec = null,
-    totalSec = null,
-    // Inputs
-    options = {},
-    messages = [],
-    // Outputs
-    text = null,
-    thinking = null,
-    images = [],
-    toolCalls = [],
-    outputCharacters = 0,
-    audioRef = null,
-    // Optional
-    agenticIteration = null,
-    rateLimits = null,
-  }: LogChatGenerationParams) {
+  async logChatGeneration(params: LogChatGenerationParams) {
+    const {
+      requestId,
+      endpoint,
+      operation,
+      project,
+      username,
+      clientIp,
+      agent,
+      harness,
+      provider,
+      model,
+      conversationId,
+      traceId,
+      agentConversationId,
+      parentAgentConversationId,
+    } = normalizeLogIdentity(params);
+    const {
+      success,
+      errorMessage,
+      usage,
+      estimatedCost,
+      tokensPerSec,
+      timeToGenerationSec,
+      generationSec,
+      totalSec,
+    } = normalizeLogTelemetry(params);
+    const { options, messages } = normalizeLogInputs(params);
+    const {
+      text,
+      thinking,
+      images,
+      toolCalls,
+      outputCharacters,
+      audioRef,
+      agenticIteration,
+      rateLimits,
+    } = normalizeLogOutputs(params);
+
     const metrics = extractUsageMetrics(usage);
     const modalities = buildChatModalities(
       messages,
@@ -486,8 +649,6 @@ const RequestLogger = {
       audioRef,
     );
     const toolTelemetry = buildToolTelemetry(toolCalls);
-    // LlmOptions values are untyped; harness is a string by contract.
-    const optionHarness = options?.harness as string | undefined;
 
     return this.log({
       requestId,
@@ -497,7 +658,7 @@ const RequestLogger = {
       username,
       clientIp,
       agent,
-      harness: harness || optionHarness || null,
+      harness: resolveHarnessName(harness, options),
       provider,
       model,
       conversationId,
@@ -507,36 +668,13 @@ const RequestLogger = {
       ...toolTelemetry,
       success,
       errorMessage,
-      inputTokens: metrics.inputTokens,
-      outputTokens: metrics.outputTokens,
-      ...(metrics.cacheReadInputTokens > 0 && {
-        cacheReadInputTokens: metrics.cacheReadInputTokens,
-      }),
-      ...(metrics.cacheCreationInputTokens > 0 && {
-        cacheCreationInputTokens: metrics.cacheCreationInputTokens,
-      }),
-      ...(metrics.reasoningOutputTokens > 0 && {
-        reasoningOutputTokens: metrics.reasoningOutputTokens,
-      }),
+      ...buildUsageLogFields(metrics),
       estimatedCost,
       tokensPerSec,
-      temperature: options?.temperature ?? null,
-      maxTokens: options?.maxTokens ?? null,
-      topP: options?.topP ?? null,
-      topK: options?.topK ?? null,
-      frequencyPenalty: options?.frequencyPenalty ?? null,
-      presencePenalty: options?.presencePenalty ?? null,
-      stopSequences: options?.stopSequences ?? null,
-      messageCount: messages?.length ?? 0,
-      inputCharacters: countInputCharacters(messages),
+      ...buildOptionLogFields(options),
+      ...buildMessageStats(messages),
       outputCharacters,
-      timeToGeneration:
-        timeToGenerationSec !== null
-          ? roundMilliseconds(timeToGenerationSec)
-          : null,
-      generationTime:
-        generationSec !== null ? roundMilliseconds(generationSec) : null,
-      totalTime: totalSec !== null ? roundMilliseconds(totalSec) : null,
+      ...buildTimingFields(timeToGenerationSec, generationSec, totalSec),
       requestPayload: buildChatRequestPayload(messages, options, agenticIteration),
       responsePayload: buildChatResponsePayload(
         text,
@@ -548,18 +686,6 @@ const RequestLogger = {
       ),
       modalities,
       rateLimits,
-      contextLength: optionNumber(options, [
-        "_loadedContextLength",
-        "contextLength",
-      ]),
-      evalBatchSize: optionNumber(options, [
-        "_loadedEvalBatchSize",
-        "eval_batch_size",
-      ]),
-      physicalBatchSize: optionNumber(options, [
-        "_loadedPhysicalBatchSize",
-        "eval_batch_size",
-      ]),
     });
   },
 

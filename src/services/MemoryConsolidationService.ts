@@ -635,49 +635,67 @@ async function persistConsolidation({
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
+/**
+ * Normalize consolidation options once: identity defaults, logging context and
+ * the scope keys used by the run-count guards.
+ */
+function prepareConsolidation(options: ConsolidateOptions) {
+  const startTime = performance.now();
+  const agentId = options.agent || AGENT_IDS.CODING;
+  const persona = AgentPersonaRegistry.get(agentId);
+  const agentType = persona?.type || "";
+  const isConversational = agentType === "conversational";
+  logger.info(
+    `[MemoryConsolidation] Starting ${agentType || "general"} consolidation for agent "${agentId}", project "${options.project}" (trigger: ${options.trigger})`,
+  );
+  return {
+    startTime,
+    agentId,
+    agentType,
+    isConversational,
+    // Scope used by the daily cost guard and run-count resets.
+    scopeKey: options.project || options.guildId || "global",
+    projectScope: options.project || null,
+    usernameOwner: options.username || "system",
+    triggerName: options.trigger || "manual",
+  };
+}
+
 const MemoryConsolidationService = {
   /**
    * Run memory consolidation for a specific agent within a project.
    * Processes memories in batches to avoid context window overflow.
    */
-  async consolidate({
-    agent = AGENT_IDS.CODING,
-    project,
-    username,
-    trigger = "manual",
-    broadcast,
-    endpoint,
-    traceId,
-    agentConversationId,
-    guildId,
-  }: ConsolidateOptions) {
-    const startTime = performance.now();
-    const agentId = agent || AGENT_IDS.CODING;
-    const persona = AgentPersonaRegistry.get(agentId);
-    const agentType = persona?.type || "";
-    const isConversational = agentType === "conversational";
-    logger.info(
-      `[MemoryConsolidation] Starting ${agentType || "general"} consolidation for agent "${agentId}", project "${project}" (trigger: ${trigger})`,
-    );
+  async consolidate(options: ConsolidateOptions) {
+    const {
+      startTime,
+      agentId,
+      agentType,
+      isConversational,
+      scopeKey,
+      projectScope,
+      usernameOwner,
+      triggerName,
+    } = prepareConsolidation(options);
 
     // Cost guard — check daily budget
-    if (!(await canRunToday(project || guildId || "global"))) {
+    if (!(await canRunToday(scopeKey))) {
       return { skipped: true, reason: "daily_limit_reached", total: 0 };
     }
 
     const allMemories = await loadConsolidationMemories(
       MongoWrapper.getDb(MONGO_DB_NAME),
       agentId,
-      project || null,
+      projectScope,
       isConversational,
-      guildId,
+      options.guildId,
     );
 
     if (allMemories.length < 2) {
       logger.info(
         `[MemoryConsolidation] Only ${allMemories.length} memories — skipping`,
       );
-      await resetRunCount(project || guildId || "global");
+      await resetRunCount(scopeKey);
       return {
         skipped: true,
         reason: "insufficient memories",
@@ -723,8 +741,8 @@ const MemoryConsolidationService = {
       allMemories,
       agentId,
       isConversational,
-      project || null,
-      guildId,
+      projectScope,
+      options.guildId,
     );
     if (candidates.batches.length === 0) {
       if (isConversational) {
@@ -745,13 +763,13 @@ const MemoryConsolidationService = {
       consolidationProvider: target.providerId,
       consolidationModel: target.model,
       agent: agentId,
-      project: project || null,
-      username: username || "system",
-      trigger: trigger || "manual",
-      endpoint,
-      traceId,
-      agentConversationId,
-      broadcast,
+      project: projectScope,
+      username: usernameOwner,
+      trigger: triggerName,
+      endpoint: options.endpoint,
+      traceId: options.traceId,
+      agentConversationId: options.agentConversationId,
+      broadcast: options.broadcast,
       isConversational,
     });
 
@@ -759,7 +777,7 @@ const MemoryConsolidationService = {
       logger.info(
         "[MemoryConsolidation] LLM found no actions needed across all batches",
       );
-      await resetRunCount(project || guildId || "global");
+      await resetRunCount(scopeKey);
       return {
         actions: 0,
         summary: "No consolidation needed",
@@ -775,11 +793,11 @@ const MemoryConsolidationService = {
       allActions,
       agentId,
       agentType,
-      project || null,
-      username || "system",
+      projectScope,
+      usernameOwner,
       {
-        traceId,
-        endpoint,
+        traceId: options.traceId,
+        endpoint: options.endpoint,
         memoryLookup: isConversational ? memoryLookup : undefined,
       },
     );
@@ -789,10 +807,10 @@ const MemoryConsolidationService = {
       allActions,
       batches: candidates.batches,
       total: allMemories.length,
-      project: project || null,
-      guildId,
-      trigger,
-      broadcast,
+      project: projectScope,
+      guildId: options.guildId,
+      trigger: options.trigger,
+      broadcast: options.broadcast,
       startTime,
     });
   },

@@ -539,55 +539,66 @@ function reduceGoogleStreamChunk(
 }
 
 /** Function calls, thoughts, text, images and code execution from one part. */
+/** A function-call part becomes a toolCall, carrying the wire-only signature. */
+function buildGoogleToolCallEvent(part: Part) {
+  // SDK Part lacks the thought signature field; it is present on the wire.
+  const partWithSignature = part as PartWithThoughtSignature;
+  return {
+    type: "toolCall",
+    id: `google-toolCall-${crypto.randomUUID()}`,
+    name: part.functionCall?.name || "any",
+    args: (part.functionCall?.args || {}) as Record<string, unknown>,
+    thoughtSignature: partWithSignature.thoughtSignature,
+  };
+}
+
+function buildGoogleImageEvent(inlineData: NonNullable<Part["inlineData"]>) {
+  return {
+    type: "image",
+    data: inlineData.data || "",
+    mimeType: inlineData.mimeType || "image/png",
+  };
+}
+
+function buildGoogleExecutableCodeEvent(
+  executableCode: NonNullable<Part["executableCode"]>,
+) {
+  return {
+    type: "executableCode",
+    code: executableCode.code,
+    language: executableCode.language || "python",
+  };
+}
+
+function buildGoogleCodeResultEvent(
+  result: NonNullable<Part["codeExecutionResult"]>,
+) {
+  return {
+    type: "codeExecutionResult",
+    output: result.output || "",
+    outcome: result.outcome || "OK",
+  };
+}
+
 function reduceGoogleStreamPart(
   state: GoogleStreamState,
   part: Part,
   maxImages: number,
 ): Array<Record<string, unknown> | string> {
-  if (part.functionCall) {
-    // SDK Part lacks the thought signature field; it is present on the wire.
-    const partWithSignature = part as PartWithThoughtSignature;
-    return [
-      {
-        type: "toolCall",
-        id: `google-toolCall-${crypto.randomUUID()}`,
-        name: part.functionCall.name || "any",
-        args: (part.functionCall.args || {}) as Record<string, unknown>,
-        thoughtSignature: partWithSignature.thoughtSignature,
-      },
-    ];
-  }
+  if (part.functionCall) return [buildGoogleToolCallEvent(part)];
   if (part.thought && part.text) {
     return [{ type: "thinking", content: part.text }];
   }
   if (part.text) return [part.text];
   if (part.inlineData && state.imageCount < maxImages) {
     state.imageCount++;
-    return [
-      {
-        type: "image",
-        data: part.inlineData.data || "",
-        mimeType: part.inlineData.mimeType || "image/png",
-      },
-    ];
+    return [buildGoogleImageEvent(part.inlineData)];
   }
   if (part.executableCode?.code) {
-    return [
-      {
-        type: "executableCode",
-        code: part.executableCode.code,
-        language: part.executableCode.language || "python",
-      },
-    ];
+    return [buildGoogleExecutableCodeEvent(part.executableCode)];
   }
   if (part.codeExecutionResult) {
-    return [
-      {
-        type: "codeExecutionResult",
-        output: part.codeExecutionResult.output || "",
-        outcome: part.codeExecutionResult.outcome || "OK",
-      },
-    ];
+    return [buildGoogleCodeResultEvent(part.codeExecutionResult)];
   }
   return [];
 }
@@ -728,17 +739,8 @@ function handleLiveServerMessage(
     return;
   }
 
-  if (message.serverContent?.modelTurn?.parts) {
-    enqueueLiveTurnParts(message.serverContent.modelTurn.parts, queue);
-  }
-
-  // Output transcription — TEXT transcript of the audio output.
-  // This is the primary text content for the SSE chat flow.
-  if (message.serverContent?.outputTranscription?.text) {
-    queue.enqueue({
-      type: "text",
-      content: message.serverContent.outputTranscription.text,
-    });
+  if (message.serverContent) {
+    handleLiveServerContent(message.serverContent, queue, state);
   }
 
   // Tool calls from the server
@@ -749,9 +751,29 @@ function handleLiveServerMessage(
   if (message.usageMetadata) {
     enqueueLiveUsage(message.usageMetadata, queue);
   }
+}
+
+/** Model turn parts, output transcription and turn completion for one message. */
+function handleLiveServerContent(
+  serverContent: NonNullable<LiveServerMessage["serverContent"]>,
+  queue: LiveEventQueue,
+  state: LiveStreamState,
+) {
+  if (serverContent.modelTurn?.parts) {
+    enqueueLiveTurnParts(serverContent.modelTurn.parts, queue);
+  }
+
+  // Output transcription — TEXT transcript of the audio output.
+  // This is the primary text content for the SSE chat flow.
+  if (serverContent.outputTranscription?.text) {
+    queue.enqueue({
+      type: "text",
+      content: serverContent.outputTranscription.text,
+    });
+  }
 
   // Turn complete — signal we're done
-  if (message.serverContent?.turnComplete) {
+  if (serverContent.turnComplete) {
     state.done = true;
     queue.enqueue({ type: "done" });
   }

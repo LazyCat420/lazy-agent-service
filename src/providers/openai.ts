@@ -1177,6 +1177,18 @@ function takePendingReasoningItem(state: ResponsesStreamState):
   return pairedReasoningItem;
 }
 
+/** Arguments arrive as streamed JSON; a partial payload must not break the turn. */
+function parseStreamedToolArguments(
+  streamed: string | undefined,
+  accumulated: string | undefined,
+): Record<string, unknown> {
+  try {
+    return JSON.parse(streamed || accumulated || "{}");
+  } catch {
+    return {};
+  }
+}
+
 function reduceResponsesArgumentsDone(
   state: ResponsesStreamState,
   event: OpenAI.Responses.ResponseFunctionCallArgumentsDoneEvent,
@@ -1188,12 +1200,10 @@ function reduceResponsesArgumentsDone(
   const tracked = state.pendingFunctions[doneEvent.item_id];
   const name = tracked?.name || doneEvent.name || "unknown";
   const callId = tracked?.callId || doneEvent.call_id || doneEvent.item_id;
-  let args: Record<string, unknown> = {};
-  try {
-    args = JSON.parse(doneEvent.arguments || tracked?.args || "{}");
-  } catch {
-    /* ignore */
-  }
+  const args = parseStreamedToolArguments(
+    doneEvent.arguments,
+    tracked?.args,
+  );
   const pairedReasoningItem = takePendingReasoningItem(state);
   const toolCall: Record<string, unknown> = {
     type: "toolCall",
@@ -1250,13 +1260,27 @@ function reduceChatCompletionChunk(
   if (chunk.usage) state.usage = normalizeUsage(chunk.usage);
 
   const choice = chunk.choices?.[0];
-  const delta = choice?.delta;
-  if (delta?.content) events.push(delta.content);
+  events.push(...reduceChatDelta(state, choice?.delta));
 
   // Track the last finish_reason for truncation detection
   if (choice?.finish_reason) state.lastFinishReason = choice.finish_reason;
 
-  if (delta?.tool_calls) {
+  // If finish_reason is "tool_calls", yield accumulated tool calls
+  if (choice?.finish_reason === "tool_calls") {
+    events.push(...finalizeChatToolCalls(state));
+  }
+  return events;
+}
+
+/** Content deltas and tool-call deltas within one chunk choice. */
+function reduceChatDelta(
+  state: ChatCompletionsStreamState,
+  delta: OpenAI.Chat.ChatCompletionChunk.Choice.Delta | undefined,
+): ResponsesStreamYield[] {
+  const events: ResponsesStreamYield[] = [];
+  if (!delta) return events;
+  if (delta.content) events.push(delta.content);
+  if (delta.tool_calls) {
     const { starts, deltaChars } = accumulateChatToolCalls(
       state,
       delta.tool_calls,
@@ -1268,15 +1292,9 @@ function reduceChatCompletionChunk(
       events.push({ type: "toolCallDelta", characters: deltaChars });
     }
   }
-
-  // If finish_reason is "tool_calls", yield accumulated tool calls
-  if (choice?.finish_reason === "tool_calls") {
-    events.push(...finalizeChatToolCalls(state));
-  }
   return events;
 }
 
-/** Merge streamed tool-call fragments; emit the disclosure once id+name land. */
 function accumulateChatToolCalls(
   state: ChatCompletionsStreamState,
   toolCalls: OpenAI.Chat.ChatCompletionChunk.Choice.Delta.ToolCall[],
@@ -1284,28 +1302,56 @@ function accumulateChatToolCalls(
   const starts: ResponsesStreamYield[] = [];
   let deltaChars = 0;
   for (const toolCall of toolCalls) {
-    const index = toolCall.index;
-    if (!state.pendingToolCalls[index]) {
-      state.pendingToolCalls[index] = {
-        id: toolCall.id || "",
-        name: toolCall.function?.name || "",
-        args: "",
-        startEmitted: false,
-      };
-    }
-    const pending = state.pendingToolCalls[index];
-    if (toolCall.id) pending.id = toolCall.id;
-    if (toolCall.function?.name) pending.name = toolCall.function.name;
-    if (toolCall.function?.arguments) {
-      pending.args += toolCall.function.arguments;
-      deltaChars += toolCall.function.arguments.length;
-    }
-    if (!pending.startEmitted && pending.name && pending.id) {
-      pending.startEmitted = true;
-      starts.push({ type: "toolCallStart", id: pending.id, name: pending.name });
-    }
+    const merged = mergeChatToolCall(state, toolCall);
+    deltaChars += merged.deltaChars;
+    if (merged.start) starts.push(merged.start);
   }
   return { starts, deltaChars };
+}
+
+/** Merge one streamed tool-call fragment; emit toolCallStart once id+name exist. */
+function mergeChatToolCall(
+  state: ChatCompletionsStreamState,
+  toolCall: OpenAI.Chat.ChatCompletionChunk.Choice.Delta.ToolCall,
+): { start?: ResponsesStreamYield; deltaChars: number } {
+  const pending = ensurePendingToolCall(state, toolCall);
+  if (toolCall.id) pending.id = toolCall.id;
+  if (toolCall.function?.name) pending.name = toolCall.function.name;
+
+  let deltaChars = 0;
+  if (toolCall.function?.arguments) {
+    pending.args += toolCall.function.arguments;
+    deltaChars = toolCall.function.arguments.length;
+  }
+  return { start: emitChatToolCallStart(pending), deltaChars };
+}
+
+/** First fragment for an index seeds the pending call (id/name may arrive later). */
+function ensurePendingToolCall(
+  state: ChatCompletionsStreamState,
+  toolCall: OpenAI.Chat.ChatCompletionChunk.Choice.Delta.ToolCall,
+) {
+  const index = toolCall.index;
+  if (!state.pendingToolCalls[index]) {
+    state.pendingToolCalls[index] = {
+      id: toolCall.id || "",
+      name: toolCall.function?.name || "",
+      args: "",
+      startEmitted: false,
+    };
+  }
+  return state.pendingToolCalls[index];
+}
+
+/** Announce a tool call exactly once, when both id and name are known. */
+function emitChatToolCallStart(pending: {
+  id: string;
+  name: string;
+  startEmitted: boolean;
+}): ResponsesStreamYield | undefined {
+  if (pending.startEmitted || !pending.name || !pending.id) return undefined;
+  pending.startEmitted = true;
+  return { type: "toolCallStart", id: pending.id, name: pending.name };
 }
 
 function finalizeChatToolCalls(
