@@ -178,6 +178,305 @@ function sanitizeMessage(message: MessagePayload) {
     ...(message.name ? { name: message.name } : {}),
   };
 }
+// ─── Chat Generation Telemetry ──────────────────────────────────────────────
+
+/** Provider-native tool names map to the display names used in the UI. */
+const API_TO_CANONICAL_LOOKUP: Record<string, string> = API_TO_CANONICAL;
+
+interface UsageMetrics {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+function extractUsageMetrics(usage: TokenUsage | undefined): UsageMetrics {
+  return {
+    inputTokens: usage ? getTotalInputTokens(usage) : 0,
+    outputTokens: usage?.outputTokens || 0,
+    cacheReadInputTokens: usage?.cacheReadInputTokens || 0,
+    cacheCreationInputTokens: usage?.cacheCreationInputTokens || 0,
+    reasoningOutputTokens: usage?.reasoningOutputTokens || 0,
+  };
+}
+
+/** Modalities of the exchange, computed from the same function conversations use. */
+function buildChatModalities(
+  messages: MessagePayload[],
+  text: string | null,
+  thinking: string | null,
+  images: string[],
+  toolCalls: ToolCallPayload[],
+  audioRef: string | null,
+) {
+  // Build synthetic message array for computeModalities
+  const syntheticMessages = [
+    ...messages,
+    {
+      role: "assistant",
+      content: text || null,
+      ...(images && images.length > 0 ? { images } : {}),
+      ...(audioRef ? { audio: audioRef } : {}),
+      ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
+      ...(thinking ? { thinking } : {}),
+    },
+  ];
+  return computeModalities(
+    syntheticMessages as Parameters<typeof computeModalities>[0],
+  );
+}
+
+function buildToolTelemetry(toolCalls: ToolCallPayload[]) {
+  if (!toolCalls || toolCalls.length === 0) {
+    return { toolsUsed: false, toolDisplayNames: [], toolApiNames: [] };
+  }
+  return {
+    toolsUsed: true,
+    toolDisplayNames: [
+      ...new Set(
+        toolCalls.map(
+          (toolCall) =>
+            API_TO_CANONICAL_LOOKUP[toolCall.name] || toolCall.name,
+        ),
+      ),
+    ],
+    toolApiNames: [...new Set(toolCalls.map((toolCall) => toolCall.name))],
+  };
+}
+
+function buildChatRequestPayload(
+  messages: MessagePayload[],
+  options: LlmOptions,
+  agenticIteration: number | null,
+) {
+  const requestPayload: Record<string, unknown> = {
+    messages: messages?.map(sanitizeMessage) ?? [],
+  };
+  if (options?.tools) {
+    requestPayload.tools = options.tools.map(
+      (tool) => tool.name || tool.function?.name,
+    );
+  }
+  if (agenticIteration !== null) requestPayload.agenticIteration = agenticIteration;
+  return requestPayload;
+}
+
+function buildChatResponsePayload(
+  text: string | null,
+  thinking: string | null,
+  images: string[],
+  toolCalls: ToolCallPayload[],
+  audioRef: string | null,
+  usage: TokenUsage | undefined,
+) {
+  const responsePayload: Record<string, unknown> = {
+    text: text || null,
+    thinking: thinking || null,
+  };
+  if (images && images.length > 0) responsePayload.images = images;
+  responsePayload.toolCalls =
+    toolCalls && toolCalls.length > 0
+      ? toolCalls.map((toolCall) => ({
+          name:
+            API_TO_CANONICAL_LOOKUP[toolCall.name] || toolCall.name,
+          id: toolCall.id,
+          args: toolCall.args,
+        }))
+      : null;
+  if (audioRef) responsePayload.audioRef = audioRef;
+  responsePayload.usage = usage;
+  return responsePayload;
+}
+
+function countInputCharacters(messages: MessagePayload[]) {
+  return (
+    messages?.reduce(
+      (sum, message) =>
+        sum + (typeof message.content === "string" ? message.content.length : 0),
+      0,
+    ) ?? 0
+  );
+}
+
+
+
+// ─── Defaulted Chat Log Parameters ──────────────────────────────────────────
+
+/** Identity/log fields, defaulted exactly as the public signature documents. */
+function normalizeLogIdentity(params: LogChatGenerationParams) {
+  const {
+    requestId,
+    endpoint = "chat",
+    operation = null,
+    project,
+    username,
+    clientIp = null,
+    agent = null,
+    harness = null,
+    provider,
+    model,
+    conversationId = null,
+    traceId = null,
+    agentConversationId = null,
+    parentAgentConversationId = null,
+  } = params;
+  return {
+    requestId,
+    endpoint,
+    operation,
+    project,
+    username,
+    clientIp,
+    agent,
+    harness,
+    provider,
+    model,
+    conversationId,
+    traceId,
+    agentConversationId,
+    parentAgentConversationId,
+  };
+}
+
+function normalizeLogTelemetry(params: LogChatGenerationParams) {
+  const {
+    success = true,
+    errorMessage = null,
+    usage,
+    estimatedCost = null,
+    tokensPerSec = null,
+    timeToGenerationSec = null,
+    generationSec = null,
+    totalSec = null,
+  } = params;
+  return {
+    success,
+    errorMessage,
+    usage,
+    estimatedCost,
+    tokensPerSec,
+    timeToGenerationSec,
+    generationSec,
+    totalSec,
+  };
+}
+
+function normalizeLogInputs(params: LogChatGenerationParams) {
+  const { options = {}, messages = [] } = params;
+  return { options, messages };
+}
+
+function normalizeLogOutputs(params: LogChatGenerationParams) {
+  const {
+    text = null,
+    thinking = null,
+    images = [],
+    toolCalls = [],
+    outputCharacters = 0,
+    audioRef = null,
+    agenticIteration = null,
+    rateLimits = null,
+  } = params;
+  return {
+    text,
+    thinking,
+    images,
+    toolCalls,
+    outputCharacters,
+    audioRef,
+    agenticIteration,
+    rateLimits,
+  };
+}
+
+function buildUsageLogFields(metrics: UsageMetrics) {
+  return {
+    inputTokens: metrics.inputTokens,
+    outputTokens: metrics.outputTokens,
+    ...(metrics.cacheReadInputTokens > 0 && {
+      cacheReadInputTokens: metrics.cacheReadInputTokens,
+    }),
+    ...(metrics.cacheCreationInputTokens > 0 && {
+      cacheCreationInputTokens: metrics.cacheCreationInputTokens,
+    }),
+    ...(metrics.reasoningOutputTokens > 0 && {
+      reasoningOutputTokens: metrics.reasoningOutputTokens,
+    }),
+  };
+}
+
+function buildOptionLogFields(options: LlmOptions | undefined) {
+  return {
+    temperature: options?.temperature ?? null,
+    maxTokens: options?.maxTokens ?? null,
+    topP: options?.topP ?? null,
+    topK: options?.topK ?? null,
+    frequencyPenalty: options?.frequencyPenalty ?? null,
+    presencePenalty: options?.presencePenalty ?? null,
+    stopSequences: options?.stopSequences ?? null,
+    contextLength: optionNumber(options, [
+      "_loadedContextLength",
+      "contextLength",
+    ]),
+    evalBatchSize: optionNumber(options, [
+      "_loadedEvalBatchSize",
+      "eval_batch_size",
+    ]),
+    physicalBatchSize: optionNumber(options, [
+      "_loadedPhysicalBatchSize",
+      "eval_batch_size",
+    ]),
+  };
+}
+
+function buildTimingFields(
+  timeToGenerationSec: number | null,
+  generationSec: number | null,
+  totalSec: number | null,
+) {
+  return {
+    timeToGeneration:
+      timeToGenerationSec !== null ? roundMilliseconds(timeToGenerationSec) : null,
+    generationTime:
+      generationSec !== null ? roundMilliseconds(generationSec) : null,
+    totalTime: totalSec !== null ? roundMilliseconds(totalSec) : null,
+  };
+}
+
+function buildMessageStats(messages: MessagePayload[]) {
+  return {
+    messageCount: messages?.length ?? 0,
+    inputCharacters: countInputCharacters(messages),
+  };
+}
+
+/** A caller's harness wins; otherwise the option's harness, then null. */
+function resolveHarnessName(
+  harness: string | null,
+  options: LlmOptions | undefined,
+) {
+  // LlmOptions values are untyped; harness is a string by contract.
+  const optionHarness = options?.harness as string | undefined;
+  return harness || optionHarness || null;
+}
+
+/** First non-nullish numeric option among `keys`, mirroring `??` chaining. */
+function optionNumber(
+  options: LlmOptions | undefined,
+  keys: string[],
+): number | null {
+  for (const key of keys) {
+    const value = options?.[key];
+    if (value !== undefined && value !== null) {
+      // LlmOptions values are untyped; these fields are numeric by contract.
+      const numeric = value as number;
+      return numeric;
+    }
+  }
+  return null;
+}
+
 const RequestLogger = {
   async log({
     requestId,
@@ -301,66 +600,56 @@ const RequestLogger = {
    * High-level utility to format and log a chat-like generation.
    * Centralizes the formatting of request payloads, telemetry, and tokens.
    */
-  async logChatGeneration({
-    requestId,
-    endpoint = "chat",
-    operation = null,
-    project,
-    username,
-    clientIp = null,
-    agent = null,
-    harness = null,
-    provider,
-    model,
-    conversationId = null,
-    traceId = null,
-    agentConversationId = null,
-    parentAgentConversationId = null,
-    success = true,
-    errorMessage = null,
-    // Telemetry
-    usage,
-    estimatedCost = null,
-    tokensPerSec = null,
-    timeToGenerationSec = null,
-    generationSec = null,
-    totalSec = null,
-    // Inputs
-    options = {},
-    messages = [],
-    // Outputs
-    text = null,
-    thinking = null,
-    images = [],
-    toolCalls = [],
-    outputCharacters = 0,
-    audioRef = null,
-    // Optional
-    agenticIteration = null,
-    rateLimits = null,
-  }: LogChatGenerationParams) {
-    const inputTokens = usage
-      ? getTotalInputTokens(usage as Parameters<typeof getTotalInputTokens>[0])
-      : 0;
-    const outputTokens = usage ? usage.outputTokens || 0 : 0;
-    const cacheReadInputTokens = usage?.cacheReadInputTokens || 0;
-    const cacheCreationInputTokens = usage?.cacheCreationInputTokens || 0;
-    const reasoningOutputTokens = usage?.reasoningOutputTokens || 0;
-    // Build synthetic message array for computeModalities (same function used by conversations)
-    const syntheticMessages = [
-      ...messages,
-      {
-        role: "assistant",
-        content: text || null,
-        ...(images && images.length > 0 ? { images } : {}),
-        ...(audioRef ? { audio: audioRef } : {}),
-        ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(thinking ? { thinking } : {}),
-      },
-    ];
-    const modalities = computeModalities(
-      syntheticMessages as Parameters<typeof computeModalities>[0],
+  async logChatGeneration(params: LogChatGenerationParams) {
+    const {
+      requestId,
+      endpoint,
+      operation,
+      project,
+      username,
+      clientIp,
+      agent,
+      harness,
+      provider,
+      model,
+      conversationId,
+      traceId,
+      agentConversationId,
+      parentAgentConversationId,
+    } = normalizeLogIdentity(params);
+    const {
+      success,
+      errorMessage,
+      usage,
+      estimatedCost,
+      tokensPerSec,
+      timeToGenerationSec,
+      generationSec,
+      totalSec,
+    } = normalizeLogTelemetry(params);
+    const { options, messages } = normalizeLogInputs(params);
+    const {
+      text,
+      thinking,
+      images,
+      toolCalls,
+      outputCharacters,
+      audioRef,
+      agenticIteration,
+      rateLimits,
+    } = normalizeLogOutputs(params);
+
+    const metrics = extractUsageMetrics(usage);
+    const modalities = buildChatModalities(
+      messages,
+      text,
+      thinking,
+      images,
+      toolCalls,
+      audioRef,
     );
+    const toolTelemetry = buildToolTelemetry(toolCalls);
+
     return this.log({
       requestId,
       endpoint,
@@ -369,114 +658,37 @@ const RequestLogger = {
       username,
       clientIp,
       agent,
-      harness: (harness as string) || (options?.harness as string) || null,
+      harness: resolveHarnessName(harness, options),
       provider,
       model,
       conversationId,
       traceId,
       agentConversationId,
       parentAgentConversationId,
-      toolsUsed: toolCalls && toolCalls.length > 0,
-      toolDisplayNames:
-        toolCalls && toolCalls.length > 0
-          ? [
-              ...new Set(
-                toolCalls.map(
-                  (toolCall) =>
-                    (API_TO_CANONICAL as Record<string, string>)[
-                      toolCall.name
-                    ] || toolCall.name,
-                ),
-              ),
-            ]
-          : [],
-      toolApiNames:
-        toolCalls && toolCalls.length > 0
-          ? [...new Set(toolCalls.map((toolCall) => toolCall.name))]
-          : [],
+      ...toolTelemetry,
       success,
       errorMessage,
-      inputTokens: inputTokens as number,
-      outputTokens: outputTokens as number,
-      ...(Number(cacheReadInputTokens) > 0 && {
-        cacheReadInputTokens: Number(cacheReadInputTokens),
-      }),
-      ...(Number(cacheCreationInputTokens) > 0 && {
-        cacheCreationInputTokens: Number(cacheCreationInputTokens),
-      }),
-      ...(Number(reasoningOutputTokens) > 0 && {
-        reasoningOutputTokens: Number(reasoningOutputTokens),
-      }),
+      ...buildUsageLogFields(metrics),
       estimatedCost,
       tokensPerSec,
-      temperature: options?.temperature ?? null,
-      maxTokens: options?.maxTokens ?? null,
-      topP: options?.topP ?? null,
-      topK: options?.topK ?? null,
-      frequencyPenalty: options?.frequencyPenalty ?? null,
-      presencePenalty: options?.presencePenalty ?? null,
-      stopSequences: options?.stopSequences ?? null,
-      messageCount: messages?.length ?? 0,
-      inputCharacters:
-        messages?.reduce(
-          (sum, message) =>
-            sum +
-            (typeof message.content === "string" ? message.content.length : 0),
-          0,
-        ) ?? 0,
+      ...buildOptionLogFields(options),
+      ...buildMessageStats(messages),
       outputCharacters,
-      timeToGeneration:
-        timeToGenerationSec !== null
-          ? roundMilliseconds(timeToGenerationSec)
-          : null,
-      generationTime:
-        generationSec !== null ? roundMilliseconds(generationSec) : null,
-      totalTime: totalSec !== null ? roundMilliseconds(totalSec) : null,
-      requestPayload: {
-        messages: messages?.map(sanitizeMessage) ?? [],
-        ...(options?.tools
-          ? {
-              tools: options.tools.map(
-                (tool: { name?: string; function?: { name: string } }) =>
-                  tool.name || tool.function?.name,
-              ),
-            }
-          : {}),
-        ...(agenticIteration !== null ? { agenticIteration } : {}),
-      },
-      responsePayload: {
-        text: text || null,
-        thinking: thinking || null,
-        ...(images && images.length > 0 ? { images } : {}),
-        toolCalls:
-          toolCalls && toolCalls.length > 0
-            ? toolCalls.map((toolCall) => ({
-                name:
-                  (API_TO_CANONICAL as Record<string, string>)[toolCall.name] ||
-                  toolCall.name,
-                id: toolCall.id,
-                args: toolCall.args,
-              }))
-            : null,
-        ...(audioRef ? { audioRef } : {}),
+      ...buildTimingFields(timeToGenerationSec, generationSec, totalSec),
+      requestPayload: buildChatRequestPayload(messages, options, agenticIteration),
+      responsePayload: buildChatResponsePayload(
+        text,
+        thinking,
+        images,
+        toolCalls,
+        audioRef,
         usage,
-      },
+      ),
       modalities,
       rateLimits,
-      contextLength:
-        (options?._loadedContextLength as number) ??
-        (options?.contextLength as number) ??
-        null,
-      evalBatchSize:
-        (options?._loadedEvalBatchSize as number) ??
-        (options?.eval_batch_size as number) ??
-        null,
-      physicalBatchSize:
-        (options?._loadedPhysicalBatchSize as number) ??
-        (options?.eval_batch_size as number) ??
-        null,
     });
   },
+
   /**
    * Log a background (non-streaming) LLM call with automatic cost estimation.
    * Centralises the identical pattern used by MemoryService, MemoryExtractor,

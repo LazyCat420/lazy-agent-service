@@ -69,6 +69,21 @@ function useResponsesAPI(model: string): boolean {
 }
 
 /**
+ * Catalog-first reasoning policy for the Chat Completions path.
+ *
+ * A known model takes the reasoning path when its catalog entry says
+ * `thinking: true`. An unknown model id takes the reasoning path too: sending
+ * temperature/top_p to a reasoning model is a 400, while omitting them on a
+ * normal model is harmless. Never sniff the model name for "o1"/"o3" — the
+ * harness must work with whatever model an operator has loaded.
+ */
+function isReasoningModel(model: string): boolean {
+  const definition = getModelByName(model);
+  if (!definition) return true;
+  return "thinking" in definition && definition.thinking === true;
+}
+
+/**
  * Truncate a tool array to the Chat Completions API maximum (128).
  * Tool-discovery tools (discover_and_enable_tools, search_tools, enable_tools)
  * are prioritized to the front so the agent can always dynamically discover
@@ -729,6 +744,637 @@ export function prepareResponsesInput(
   return result;
 }
 
+// ── Request payload builders ──────────────────────────────────
+
+/** Responses API payload shared by the streaming and non-streaming paths. */
+function buildResponsesPayload(
+  messages: OpenAIMessage[],
+  model: string,
+  options: ProviderOptions,
+  stream: boolean,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    model,
+    input: prepareResponsesInput(messages),
+  };
+  if (stream) payload.stream = true;
+
+  applyResponsesReasoning(payload, options);
+  applyResponsesTextConfig(payload, options);
+  if (options.maxTokens) payload.max_output_tokens = options.maxTokens;
+  // Seed for reproducibility
+  if (options.seed !== undefined) {
+    payload.seed =
+      typeof options.seed === "number"
+        ? options.seed
+        : parseInt(String(options.seed), 10);
+  }
+  // Service tier: auto / default / priority
+  if (options.serviceTier) payload.service_tier = options.serviceTier;
+  applyResponsesSampling(payload, options);
+  applyResponsesTools(payload, options);
+  return payload;
+}
+
+function applyResponsesReasoning(
+  payload: Record<string, unknown>,
+  options: ProviderOptions,
+) {
+  const reasoning: Reasoning = {};
+  if (options.reasoningEffort) {
+    reasoning.effort = options.reasoningEffort as ReasoningEffort;
+  }
+  if (options.reasoningSummary) {
+    reasoning.summary = options.reasoningSummary as
+      | "auto"
+      | "concise"
+      | "detailed";
+  } else if (reasoning.effort) {
+    reasoning.summary = "auto";
+  }
+  if (Object.keys(reasoning).length > 0) payload.reasoning = reasoning;
+}
+
+function applyResponsesTextConfig(
+  payload: Record<string, unknown>,
+  options: ProviderOptions,
+) {
+  const text: OpenAI.Responses.ResponseTextConfig = {};
+  if (options.verbosity) {
+    text.format = { type: "text" };
+    text.verbosity = options.verbosity as "low" | "medium" | "high";
+  }
+  if (options.responseFormat === "json_object") {
+    text.format = { type: "json_object" };
+  } else if (
+    options.responseFormat === "json_schema" &&
+    options.responseSchema
+  ) {
+    text.format = {
+      type: "json_schema",
+      json_schema: options.responseSchema,
+    } as unknown as OpenAI.Responses.ResponseFormatTextJSONSchemaConfig;
+  }
+  if (Object.keys(text).length > 0) payload.text = text;
+}
+
+/** Temperature/topP only work with reasoning.effort=none. */
+function applyResponsesSampling(
+  payload: Record<string, unknown>,
+  options: ProviderOptions,
+) {
+  if (options.reasoningEffort !== "none") return;
+  if (options.temperature !== undefined)
+    payload.temperature = options.temperature;
+  if (options.topP !== undefined) payload.top_p = options.topP;
+  if (options.frequencyPenalty !== undefined)
+    payload.frequency_penalty = options.frequencyPenalty;
+  if (options.presencePenalty !== undefined)
+    payload.presence_penalty = options.presencePenalty;
+  if (options.stopSequences !== undefined)
+    payload.stop = options.stopSequences;
+}
+
+function applyResponsesTools(
+  payload: Record<string, unknown>,
+  options: ProviderOptions,
+) {
+  if (options.webSearch) {
+    payload.tools = [{ type: "web_search" }];
+  }
+  const customTools = convertToolsToResponsesAPI(
+    options.tools as ToolSchema[] | null | undefined,
+  );
+  if (customTools) {
+    // Built above as the Responses tool array.
+    const existingTools = (payload.tools ?? []) as OpenAI.Responses.Tool[];
+    payload.tools = [...existingTools, ...customTools];
+  }
+  // Parallel tool calls — defaults to true; set false for sequential FC
+  if (options.parallelToolCalls === false) {
+    payload.parallel_tool_calls = false;
+  }
+  // Response persistence — defaults to true; set false for privacy
+  if (options.store === false) payload.store = false;
+  // Log probabilities — top N candidate tokens per step
+  if (options.topLogprobs && options.topLogprobs > 0) {
+    payload.top_logprobs = options.topLogprobs;
+  }
+}
+
+/** Chat Completions payload shared by the streaming and non-streaming paths. */
+function buildChatCompletionsPayload(
+  messages: OpenAIMessage[],
+  model: string,
+  options: ProviderOptions,
+  stream: boolean,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    model,
+    messages: prepareOpenAIMessages(messages),
+  };
+  if (stream) {
+    payload.stream = true;
+    payload.stream_options = { include_usage: true };
+  }
+
+  applyChatSampling(payload, options, isReasoningModel(model));
+  // Seed for reproducibility
+  if (options.seed !== undefined) {
+    payload.seed =
+      typeof options.seed === "number"
+        ? options.seed
+        : parseInt(String(options.seed), 10);
+  }
+  // Service tier: auto / default / priority
+  if (options.serviceTier) payload.service_tier = options.serviceTier;
+  // Response format (JSON mode)
+  if (options.responseFormat === "json_object") {
+    payload.response_format = { type: "json_object" };
+  }
+  applyChatTools(payload, options);
+  return payload;
+}
+
+function applyChatSampling(
+  payload: Record<string, unknown>,
+  options: ProviderOptions,
+  isReasoning: boolean,
+) {
+  if (isReasoning) {
+    if (options.maxTokens) payload.max_completion_tokens = options.maxTokens;
+    if (options.reasoningEffort) {
+      payload.reasoning_effort = options.reasoningEffort;
+    }
+    return;
+  }
+  if (options.temperature !== undefined)
+    payload.temperature = options.temperature;
+  if (options.topP !== undefined) payload.top_p = options.topP;
+  if (options.frequencyPenalty !== undefined)
+    payload.frequency_penalty = options.frequencyPenalty;
+  if (options.presencePenalty !== undefined)
+    payload.presence_penalty = options.presencePenalty;
+  if (options.stopSequences !== undefined)
+    payload.stop = options.stopSequences;
+  if (options.maxTokens) payload.max_completion_tokens = options.maxTokens;
+}
+
+function applyChatTools(
+  payload: Record<string, unknown>,
+  options: ProviderOptions,
+) {
+  if (options.webSearch) {
+    payload.tools = [{ type: "web_search" }];
+  }
+  // Custom function calling tools — truncate to 128 max for Chat Completions API
+  const customTools = convertToolsToOpenAI(
+    options.tools as ToolSchema[] | null | undefined,
+  ) as OpenAI.Chat.ChatCompletionTool[] | null;
+  if (customTools) {
+    // Built above as the Chat Completions tool array.
+    const existingTools = (payload.tools ?? []) as OpenAI.Chat.ChatCompletionTool[];
+    payload.tools = truncateToolsForChatCompletions([
+      ...existingTools,
+      ...customTools,
+    ]);
+  }
+}
+
+/**
+ * Retry once after stripping parameters the model rejects (e.g. gpt-5-nano
+ * refuses temperature). Returns whether anything was stripped.
+ */
+function stripUnsupportedChatParams(
+  payload: Record<string, unknown>,
+  errorObject: ErrorRecord,
+  model: string,
+  retryLabel: string,
+): boolean {
+  if (
+    errorObject.status !== 400 ||
+    !errorObject.message?.includes("Unsupported")
+  ) {
+    return false;
+  }
+  const unsupportedParams = [
+    "temperature",
+    "top_p",
+    "frequency_penalty",
+    "presence_penalty",
+    "max_completion_tokens",
+  ];
+  let stripped = false;
+  for (const param of unsupportedParams) {
+    if (
+      errorObject.message?.includes(`'${param}'`) &&
+      payload[param] !== undefined
+    ) {
+      logger.provider(
+        "OpenAI",
+        `Stripping unsupported param '${param}' for ${model} and retrying${retryLabel}`,
+      );
+      delete payload[param];
+      stripped = true;
+    }
+  }
+  return stripped;
+}
+
+/** Images and function calls from a completed Responses API response. */
+interface ResponsesExtractedOutput {
+  images: Array<{ type: string; data: string; mimeType: string }>;
+  toolCalls: Array<{
+    id: string;
+    responsesItemId?: string;
+    name: string;
+    args: Record<string, unknown>;
+    reasoningItem?: {
+      id: string;
+      summary: Array<{ type: string; text: string }>;
+    };
+  }>;
+}
+
+function extractResponsesOutput(
+  output: OpenAI.Responses.ResponseOutputItem[] | undefined,
+): ResponsesExtractedOutput {
+  const images: ResponsesExtractedOutput["images"] = [];
+  const toolCalls: ResponsesExtractedOutput["toolCalls"] = [];
+  if (!output) return { images, toolCalls };
+
+  // Track pending reasoning items to pair with subsequent function calls
+  const pendingReasoningItems: Array<{
+    id: string;
+    summary: Array<{ type: string; text: string }>;
+  }> = [];
+  for (const item of output) {
+    if (item.type === "image_generation_call" && item.result) {
+      images.push({
+        type: "image",
+        data: item.result,
+        mimeType: "image/png",
+      });
+    } else if (item.type === "reasoning") {
+      if (item.id) {
+        pendingReasoningItems.push({
+          id: item.id,
+          summary: item.summary || [],
+        });
+      }
+    } else if (item.type === "function_call") {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(item.arguments || "{}");
+      } catch {
+        /* ignore */
+      }
+      const pairedReasoningItem = pendingReasoningItems.shift();
+      toolCalls.push({
+        id: item.call_id,
+        responsesItemId: item.id,
+        name: item.name,
+        args,
+        ...(pairedReasoningItem ? { reasoningItem: pairedReasoningItem } : {}),
+      });
+    }
+  }
+  return { images, toolCalls };
+}
+
+// ── Responses stream reducers ─────────────────────────────────
+
+type ResponsesStreamYield = Record<string, unknown> | string;
+
+interface ResponsesStreamState {
+  usage: TokenUsage | null;
+  // Track function names from output_item.added events; the arguments.done
+  // event may not include the name property (known OpenAI SDK issue).
+  pendingFunctions: Record<
+    string,
+    { name: string; callId: string; args: string }
+  >;
+  pendingReasoningItems: Array<{
+    id: string;
+    summary: Array<{ type: string; text: string }>;
+  }>;
+  reasoningSummaryAccumulator: Record<string, string>;
+}
+
+function createResponsesStreamState(): ResponsesStreamState {
+  return {
+    usage: null,
+    pendingFunctions: {},
+    pendingReasoningItems: [],
+    reasoningSummaryAccumulator: {},
+  };
+}
+
+function reduceResponsesStreamEvent(
+  state: ResponsesStreamState,
+  event: OpenAI.Responses.ResponseStreamEvent,
+): ResponsesStreamYield[] {
+  switch (event.type) {
+    case "response.output_text.delta":
+      return [event.delta || ""];
+    case "response.reasoning_summary_text.delta":
+      return reduceResponsesReasoningDelta(state, event);
+    case "response.image_generation_call.completed": {
+      // SDK type omits the generated image payload; it is present on the wire.
+      const imageEvent = event as OpenAI.Responses.ResponseImageGenCallCompletedEvent & {
+        result?: string;
+      };
+      return imageEvent.result
+        ? [{ type: "image", data: imageEvent.result, mimeType: "image/png" }]
+        : [];
+    }
+    case "response.output_item.added":
+      return reduceResponsesItemAdded(state, event);
+    case "response.function_call_arguments.delta":
+      return reduceResponsesArgumentsDelta(state, event);
+    case "response.function_call_arguments.done":
+      return reduceResponsesArgumentsDone(state, event);
+    case "response.completed":
+      return reduceResponsesCompleted(state, event);
+    default:
+      return [];
+  }
+}
+
+/** Reasoning summaries are accumulated so the item can be reconstructed. */
+function reduceResponsesReasoningDelta(
+  state: ResponsesStreamState,
+  event: OpenAI.Responses.ResponseReasoningSummaryTextDeltaEvent,
+): ResponsesStreamYield[] {
+  const itemId = event.item_id;
+  if (itemId) {
+    state.reasoningSummaryAccumulator[itemId] =
+      (state.reasoningSummaryAccumulator[itemId] || "") +
+      (event.delta || "");
+  }
+  return [{ type: "thinking", content: event.delta || "" }];
+}
+
+/** Track reasoning and function-call metadata from output_item.added. */
+function reduceResponsesItemAdded(
+  state: ResponsesStreamState,
+  event: OpenAI.Responses.ResponseOutputItemAddedEvent,
+): ResponsesStreamYield[] {
+  const item = event.item;
+  if (item?.type === "reasoning") {
+    if (item.id) {
+      state.pendingReasoningItems.push({
+        id: item.id,
+        summary: item.summary || [],
+      });
+    }
+    return [];
+  }
+  if (item?.type === "function_call") {
+    if (!item.id) return [];
+    state.pendingFunctions[item.id] = {
+      name: item.name,
+      callId: item.call_id,
+      args: "",
+    };
+    return item.name && item.call_id
+      ? [{ type: "toolCallStart", id: item.call_id, name: item.name }]
+      : [];
+  }
+  return [];
+}
+
+/** Accumulate argument deltas (keyed by item_id). */
+function reduceResponsesArgumentsDelta(
+  state: ResponsesStreamState,
+  event: OpenAI.Responses.ResponseFunctionCallArgumentsDeltaEvent,
+): ResponsesStreamYield[] {
+  const entry = state.pendingFunctions[event.item_id];
+  const partial = event.delta || "";
+  if (entry) entry.args += partial;
+  // Progress event keeps generation throughput tracking alive during FC
+  // argument streaming.
+  return partial.length > 0
+    ? [{ type: "toolCallDelta", characters: partial.length }]
+    : [];
+}
+
+/** Pop the most recent pending reasoning item and finalize its summary. */
+function takePendingReasoningItem(state: ResponsesStreamState):
+  | { id: string; summary: Array<{ type: string; text: string }> }
+  | undefined {
+  if (state.pendingReasoningItems.length === 0) return undefined;
+  const pairedReasoningItem = state.pendingReasoningItems.shift();
+  if (!pairedReasoningItem) return undefined;
+  const accumulatedText =
+    state.reasoningSummaryAccumulator[pairedReasoningItem.id];
+  if (accumulatedText) {
+    pairedReasoningItem.summary = [
+      { type: "summary_text", text: accumulatedText },
+    ];
+    delete state.reasoningSummaryAccumulator[pairedReasoningItem.id];
+  }
+  return pairedReasoningItem;
+}
+
+/** Arguments arrive as streamed JSON; a partial payload must not break the turn. */
+function parseStreamedToolArguments(
+  streamed: string | undefined,
+  accumulated: string | undefined,
+): Record<string, unknown> {
+  try {
+    return JSON.parse(streamed || accumulated || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function reduceResponsesArgumentsDone(
+  state: ResponsesStreamState,
+  event: OpenAI.Responses.ResponseFunctionCallArgumentsDoneEvent,
+): ResponsesStreamYield[] {
+  // SDK type omits call_id on this event; it is present on the wire.
+  const doneEvent = event as OpenAI.Responses.ResponseFunctionCallArgumentsDoneEvent & {
+    call_id?: string;
+  };
+  const tracked = state.pendingFunctions[doneEvent.item_id];
+  const name = tracked?.name || doneEvent.name || "unknown";
+  const callId = tracked?.callId || doneEvent.call_id || doneEvent.item_id;
+  const args = parseStreamedToolArguments(
+    doneEvent.arguments,
+    tracked?.args,
+  );
+  const pairedReasoningItem = takePendingReasoningItem(state);
+  const toolCall: Record<string, unknown> = {
+    type: "toolCall",
+    id: callId,
+    // Responses API internal item ID (starts with "fc_")
+    responsesItemId: doneEvent.item_id,
+    name,
+    args,
+  };
+  if (pairedReasoningItem) toolCall.reasoningItem = pairedReasoningItem;
+  delete state.pendingFunctions[doneEvent.item_id];
+  return [toolCall];
+}
+
+/** Completed response — extract usage and detect max_output_tokens truncation. */
+function reduceResponsesCompleted(
+  state: ResponsesStreamState,
+  event: OpenAI.Responses.ResponseCompletedEvent,
+): ResponsesStreamYield[] {
+  if (event.response?.usage) {
+    state.usage = normalizeResponsesUsage(event.response.usage);
+  }
+  const status = event.response?.status;
+  const incompleteDetails = event.response?.incomplete_details;
+  if (
+    status === "incomplete" ||
+    incompleteDetails?.reason === "max_output_tokens"
+  ) {
+    return [{ type: "stopReason", stopReason: "length" }];
+  }
+  return [];
+}
+
+// ── Chat Completions stream reducers ──────────────────────────
+
+interface ChatCompletionsStreamState {
+  usage: TokenUsage | null;
+  lastFinishReason: string | null;
+  pendingToolCalls: Record<
+    number,
+    { id: string; name: string; args: string; startEmitted: boolean }
+  >;
+}
+
+function createChatCompletionsStreamState(): ChatCompletionsStreamState {
+  return { usage: null, lastFinishReason: null, pendingToolCalls: {} };
+}
+
+function reduceChatCompletionChunk(
+  state: ChatCompletionsStreamState,
+  chunk: OpenAI.Chat.ChatCompletionChunk,
+): ResponsesStreamYield[] {
+  const events: ResponsesStreamYield[] = [];
+  if (chunk.usage) state.usage = normalizeUsage(chunk.usage);
+
+  const choice = chunk.choices?.[0];
+  events.push(...reduceChatDelta(state, choice?.delta));
+
+  // Track the last finish_reason for truncation detection
+  if (choice?.finish_reason) state.lastFinishReason = choice.finish_reason;
+
+  // If finish_reason is "tool_calls", yield accumulated tool calls
+  if (choice?.finish_reason === "tool_calls") {
+    events.push(...finalizeChatToolCalls(state));
+  }
+  return events;
+}
+
+/** Content deltas and tool-call deltas within one chunk choice. */
+function reduceChatDelta(
+  state: ChatCompletionsStreamState,
+  delta: OpenAI.Chat.ChatCompletionChunk.Choice.Delta | undefined,
+): ResponsesStreamYield[] {
+  const events: ResponsesStreamYield[] = [];
+  if (!delta) return events;
+  if (delta.content) events.push(delta.content);
+  if (delta.tool_calls) {
+    const { starts, deltaChars } = accumulateChatToolCalls(
+      state,
+      delta.tool_calls,
+    );
+    events.push(...starts);
+    // Progress event keeps generation throughput tracking alive during FC
+    // argument streaming.
+    if (deltaChars > 0) {
+      events.push({ type: "toolCallDelta", characters: deltaChars });
+    }
+  }
+  return events;
+}
+
+function accumulateChatToolCalls(
+  state: ChatCompletionsStreamState,
+  toolCalls: OpenAI.Chat.ChatCompletionChunk.Choice.Delta.ToolCall[],
+): { starts: ResponsesStreamYield[]; deltaChars: number } {
+  const starts: ResponsesStreamYield[] = [];
+  let deltaChars = 0;
+  for (const toolCall of toolCalls) {
+    const merged = mergeChatToolCall(state, toolCall);
+    deltaChars += merged.deltaChars;
+    if (merged.start) starts.push(merged.start);
+  }
+  return { starts, deltaChars };
+}
+
+/** Merge one streamed tool-call fragment; emit toolCallStart once id+name exist. */
+function mergeChatToolCall(
+  state: ChatCompletionsStreamState,
+  toolCall: OpenAI.Chat.ChatCompletionChunk.Choice.Delta.ToolCall,
+): { start?: ResponsesStreamYield; deltaChars: number } {
+  const pending = ensurePendingToolCall(state, toolCall);
+  if (toolCall.id) pending.id = toolCall.id;
+  if (toolCall.function?.name) pending.name = toolCall.function.name;
+
+  let deltaChars = 0;
+  if (toolCall.function?.arguments) {
+    pending.args += toolCall.function.arguments;
+    deltaChars = toolCall.function.arguments.length;
+  }
+  return { start: emitChatToolCallStart(pending), deltaChars };
+}
+
+/** First fragment for an index seeds the pending call (id/name may arrive later). */
+function ensurePendingToolCall(
+  state: ChatCompletionsStreamState,
+  toolCall: OpenAI.Chat.ChatCompletionChunk.Choice.Delta.ToolCall,
+) {
+  const index = toolCall.index;
+  if (!state.pendingToolCalls[index]) {
+    state.pendingToolCalls[index] = {
+      id: toolCall.id || "",
+      name: toolCall.function?.name || "",
+      args: "",
+      startEmitted: false,
+    };
+  }
+  return state.pendingToolCalls[index];
+}
+
+/** Announce a tool call exactly once, when both id and name are known. */
+function emitChatToolCallStart(pending: {
+  id: string;
+  name: string;
+  startEmitted: boolean;
+}): ResponsesStreamYield | undefined {
+  if (pending.startEmitted || !pending.name || !pending.id) return undefined;
+  pending.startEmitted = true;
+  return { type: "toolCallStart", id: pending.id, name: pending.name };
+}
+
+function finalizeChatToolCalls(
+  state: ChatCompletionsStreamState,
+): ResponsesStreamYield[] {
+  const events: ResponsesStreamYield[] = [];
+  for (const toolCall of Object.values(state.pendingToolCalls)) {
+    let args: Record<string, unknown> = {};
+    try {
+      args = JSON.parse(toolCall.args || "{}");
+    } catch {
+      /* ignore */
+    }
+    events.push({
+      type: "toolCall",
+      id: toolCall.id,
+      name: toolCall.name,
+      args,
+    });
+  }
+  return events;
+}
+
 const openaiProvider = {
   name: "openai",
 
@@ -755,181 +1401,26 @@ const openaiProvider = {
     model: string,
     options: ProviderOptions,
   ) {
-    const input = prepareResponsesInput(messages);
-    const payload: OpenAI.Responses.ResponseCreateParamsNonStreaming & {
+    const payload = buildResponsesPayload(messages, model, options, false);
+    // Built above as a Responses API payload.
+    const request = payload as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming & {
       seed?: number;
       frequency_penalty?: number;
       presence_penalty?: number;
       stop?: string[];
-    } = { model, input };
-
-    // Reasoning
-    const reasoning: Reasoning = {};
-    if (options.reasoningEffort) {
-      reasoning.effort = options.reasoningEffort as ReasoningEffort;
-    }
-    if (options.reasoningSummary) {
-      reasoning.summary = options.reasoningSummary as
-        | "auto"
-        | "concise"
-        | "detailed";
-    } else if (reasoning.effort) {
-      reasoning.summary = "auto";
-    }
-    if (Object.keys(reasoning).length > 0) {
-      payload.reasoning = reasoning;
-    }
-
-    // Text / verbosity
-    const text: OpenAI.Responses.ResponseTextConfig = {};
-    if (options.verbosity) {
-      text.format = { type: "text" };
-      text.verbosity = options.verbosity as "low" | "medium" | "high";
-    }
-
-    if (options.maxTokens) payload.max_output_tokens = options.maxTokens;
-
-    // Seed for reproducibility
-    if (options.seed !== undefined) {
-      payload.seed =
-        typeof options.seed === "number"
-          ? options.seed
-          : parseInt(String(options.seed), 10);
-    }
-
-    // Service tier: auto / default / priority
-    if (options.serviceTier) {
-      payload.service_tier =
-        options.serviceTier as OpenAI.Responses.ResponseCreateParamsNonStreaming["service_tier"];
-    }
-
-    // Response format (JSON mode) — maps to text.format for Responses API
-    if (options.responseFormat === "json_object") {
-      text.format = { type: "json_object" };
-    } else if (
-      options.responseFormat === "json_schema" &&
-      options.responseSchema
-    ) {
-      text.format = {
-        type: "json_schema",
-        json_schema: options.responseSchema,
-      } as unknown as OpenAI.Responses.ResponseFormatTextJSONSchemaConfig;
-    }
-    if (Object.keys(text).length > 0) {
-      payload.text = text;
-    }
-
-    // Temperature/topP only work with reasoning.effort=none
-    if (options.reasoningEffort === "none") {
-      if (options.temperature !== undefined)
-        payload.temperature = options.temperature;
-      if (options.topP !== undefined) payload.top_p = options.topP;
-      if (options.frequencyPenalty !== undefined)
-        payload.frequency_penalty = options.frequencyPenalty;
-      if (options.presencePenalty !== undefined)
-        payload.presence_penalty = options.presencePenalty;
-      if (options.stopSequences !== undefined)
-        payload.stop = options.stopSequences;
-    }
-
-    // Web search tool
-    if (options.webSearch) {
-      payload.tools = [{ type: "web_search" } as OpenAI.Responses.Tool];
-    }
-
-    // Custom function calling tools
-    const customTools = convertToolsToResponsesAPI(
-      options.tools as ToolSchema[] | null | undefined,
-    );
-    if (customTools) {
-      payload.tools = [
-        ...((payload.tools as OpenAI.Responses.Tool[]) || []),
-        ...customTools,
-      ];
-    }
-
-    // Parallel tool calls — defaults to true; set false for sequential FC
-    if (options.parallelToolCalls === false) {
-      payload.parallel_tool_calls = false;
-    }
-
-    // Response persistence — defaults to true; set false for privacy
-    if (options.store === false) {
-      payload.store = false;
-    }
-
-    // Log probabilities — top N candidate tokens per step
-    if (options.topLogprobs && options.topLogprobs > 0) {
-      payload.top_logprobs = options.topLogprobs;
-    }
+    };
 
     logger.info(
-      `[OpenAI/Responses] Sending non-stream payload: ${JSON.stringify(payload)}`,
+      `[OpenAI/Responses] Sending non-stream payload: ${JSON.stringify(request)}`,
     );
 
     const { data: response, response: rawResponse } = await getClient()
-      .responses.create(payload)
+      .responses.create(request)
       .withResponse();
 
     // Extract rate-limit headers
     const rateLimits = extractOpenAIRateLimits(rawResponse, model);
-
-    // Collect tool calls and images from output items
-    const images: Array<{ type: string; data: string; mimeType: string }> = [];
-    const toolCalls: Array<{
-      id: string;
-      responsesItemId?: string;
-      name: string;
-      args: Record<string, unknown>;
-      reasoningItem?: {
-        id: string;
-        summary: Array<{ type: string; text: string }>;
-      };
-    }> = [];
-    if (response.output) {
-      // Track pending reasoning items to pair with subsequent function calls
-      const pendingReasoningItems: Array<{
-        id: string;
-        summary: Array<{ type: string; text: string }>;
-      }> = [];
-      for (const item of response.output) {
-        if (item.type === "image_generation_call" && item.result) {
-          images.push({
-            type: "image",
-            data: item.result,
-            mimeType: "image/png",
-          });
-        } else if (item.type === "reasoning") {
-          const reasoningOutputItem = item as unknown as {
-            id: string;
-            summary?: Array<{ type: string; text: string }>;
-          };
-          if (reasoningOutputItem.id) {
-            pendingReasoningItems.push({
-              id: reasoningOutputItem.id,
-              summary: reasoningOutputItem.summary || [],
-            });
-          }
-        } else if (item.type === "function_call") {
-          let args: Record<string, unknown> = {};
-          try {
-            args = JSON.parse(item.arguments || "{}");
-          } catch {
-            /* ignore */
-          }
-          const pairedReasoningItem = pendingReasoningItems.shift();
-          toolCalls.push({
-            id: item.call_id,
-            responsesItemId: item.id,
-            name: item.name,
-            args,
-            ...(pairedReasoningItem
-              ? { reasoningItem: pairedReasoningItem }
-              : {}),
-          });
-        }
-      }
-    }
+    const { images, toolCalls } = extractResponsesOutput(response.output);
 
     const result: Record<string, unknown> = {
       text: response.output_text || "",
@@ -945,78 +1436,13 @@ const openaiProvider = {
     model: string,
     options: ProviderOptions,
   ) {
-    const modelDefinition = getModelByName(model);
-    const isReasoning =
-      (modelDefinition &&
-        "thinking" in modelDefinition &&
-        (modelDefinition as { thinking?: boolean }).thinking === true) ||
-      model.includes("o1") ||
-      model.includes("o3");
-    const prepared = prepareOpenAIMessages(messages);
-    const payload: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
-      model,
-      messages: prepared,
-    };
-    if (isReasoning) {
-      if (options.maxTokens) payload.max_completion_tokens = options.maxTokens;
-      if (options.reasoningEffort) {
-        payload.reasoning_effort =
-          options.reasoningEffort as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming["reasoning_effort"];
-      }
-    } else {
-      if (options.temperature !== undefined)
-        payload.temperature = options.temperature;
-      if (options.topP !== undefined) payload.top_p = options.topP;
-      if (options.frequencyPenalty !== undefined)
-        payload.frequency_penalty = options.frequencyPenalty;
-      if (options.presencePenalty !== undefined)
-        payload.presence_penalty = options.presencePenalty;
-      if (options.stopSequences !== undefined)
-        payload.stop =
-          options.stopSequences as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming["stop"];
-      if (options.maxTokens) payload.max_completion_tokens = options.maxTokens;
-    }
-
-    // Seed for reproducibility
-    if (options.seed !== undefined) {
-      payload.seed =
-        typeof options.seed === "number"
-          ? options.seed
-          : parseInt(String(options.seed), 10);
-    }
-
-    // Service tier: auto / default / priority
-    if (options.serviceTier) {
-      payload.service_tier =
-        options.serviceTier as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming["service_tier"];
-    }
-
-    // Response format (JSON mode)
-    if (options.responseFormat === "json_object") {
-      payload.response_format = { type: "json_object" };
-    }
-
-    if (options.webSearch) {
-      payload.tools = [
-        { type: "web_search" } as unknown as OpenAI.Chat.ChatCompletionTool,
-      ];
-    }
-
-    // Custom function calling tools — truncate to 128 max for Chat Completions API
-    const customTools = convertToolsToOpenAI(
-      options.tools as ToolSchema[] | null | undefined,
-    ) as OpenAI.Chat.ChatCompletionTool[] | null;
-    if (customTools) {
-      const allTools = [
-        ...((payload.tools as OpenAI.Chat.ChatCompletionTool[]) || []),
-        ...customTools,
-      ];
-      payload.tools = truncateToolsForChatCompletions(allTools);
-    }
+    const payload = buildChatCompletionsPayload(messages, model, options, false);
+    // Built above as Chat Completions params.
+    const request = payload as unknown as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming;
 
     try {
       const { data: response, response: rawResponse } = await getClient()
-        .chat.completions.create(payload)
+        .chat.completions.create(request)
         .withResponse();
       const rateLimits = extractOpenAIRateLimits(rawResponse, model);
       const message = response.choices[0].message;
@@ -1052,44 +1478,16 @@ const openaiProvider = {
     } catch (error: unknown) {
       const errorObject = asErrorRecord(error);
       // Retry once after stripping unsupported parameters (e.g. gpt-5-nano rejects temperature)
-      if (
-        errorObject.status === 400 &&
-        errorObject.message?.includes("Unsupported")
-      ) {
-        const unsupportedParams = [
-          "temperature",
-          "top_p",
-          "frequency_penalty",
-          "presence_penalty",
-          "max_completion_tokens",
-        ];
-        let stripped = false;
-        const payloadRecord = payload as unknown as Record<string, unknown>;
-        for (const param of unsupportedParams) {
-          if (
-            errorObject.message?.includes(`'${param}'`) &&
-            payloadRecord[param] !== undefined
-          ) {
-            logger.provider(
-              "OpenAI",
-              `Stripping unsupported param '${param}' for ${model} and retrying`,
-            );
-            delete payloadRecord[param];
-            stripped = true;
-          }
-        }
-        if (stripped) {
-          const response = await getClient().chat.completions.create(payload);
-          return {
-            text: response.choices[0].message.content,
-            usage: normalizeUsage(response.usage),
-          };
-        }
+      if (stripUnsupportedChatParams(payload, errorObject, model, "")) {
+        const response = await getClient().chat.completions.create(request);
+        return {
+          text: response.choices[0].message.content,
+          usage: normalizeUsage(response.usage),
+        };
       }
       throw error;
     }
   },
-
   async *generateTextStream(
     messages: OpenAIMessage[],
     model: string = getDefaultModels(TYPES.TEXT, TYPES.TEXT).openai,
@@ -1120,298 +1518,35 @@ const openaiProvider = {
     model: string,
     options: ProviderOptions,
   ) {
-    const input = prepareResponsesInput(messages);
-    const payload: OpenAI.Responses.ResponseCreateParamsStreaming & {
+    const payload = buildResponsesPayload(messages, model, options, true);
+    // Built above as a streaming Responses API payload.
+    const request = payload as unknown as OpenAI.Responses.ResponseCreateParamsStreaming & {
       seed?: number;
       frequency_penalty?: number;
       presence_penalty?: number;
       stop?: string[];
-    } = { model, input, stream: true };
-
-    // Reasoning
-    const reasoning: Reasoning = {};
-    if (options.reasoningEffort) {
-      reasoning.effort = options.reasoningEffort as ReasoningEffort;
-    }
-    if (options.reasoningSummary) {
-      reasoning.summary = options.reasoningSummary as
-        | "auto"
-        | "concise"
-        | "detailed";
-    } else if (reasoning.effort) {
-      reasoning.summary = "auto";
-    }
-    if (Object.keys(reasoning).length > 0) {
-      payload.reasoning = reasoning;
-    }
-
-    // Text / verbosity
-    const text: OpenAI.Responses.ResponseTextConfig = {};
-    if (options.verbosity) {
-      text.format = { type: "text" };
-      text.verbosity = options.verbosity as "low" | "medium" | "high";
-    }
-
-    if (options.maxTokens) payload.max_output_tokens = options.maxTokens;
-
-    // Seed for reproducibility
-    if (options.seed !== undefined) {
-      payload.seed =
-        typeof options.seed === "number"
-          ? options.seed
-          : parseInt(String(options.seed), 10);
-    }
-
-    // Service tier: auto / default / priority
-    if (options.serviceTier) {
-      payload.service_tier =
-        options.serviceTier as OpenAI.Responses.ResponseCreateParamsStreaming["service_tier"];
-    }
-
-    // Response format (JSON mode) — maps to text.format for Responses API
-    if (options.responseFormat === "json_object") {
-      text.format = { type: "json_object" };
-    } else if (
-      options.responseFormat === "json_schema" &&
-      options.responseSchema
-    ) {
-      text.format = {
-        type: "json_schema",
-        json_schema: options.responseSchema,
-      } as unknown as OpenAI.Responses.ResponseFormatTextJSONSchemaConfig;
-    }
-    if (Object.keys(text).length > 0) {
-      payload.text = text;
-    }
-
-    // Temperature/topP only work with reasoning.effort=none
-    if (options.reasoningEffort === "none") {
-      if (options.temperature !== undefined)
-        payload.temperature = options.temperature;
-      if (options.topP !== undefined) payload.top_p = options.topP;
-      if (options.frequencyPenalty !== undefined)
-        payload.frequency_penalty = options.frequencyPenalty;
-      if (options.presencePenalty !== undefined)
-        payload.presence_penalty = options.presencePenalty;
-      if (options.stopSequences !== undefined)
-        payload.stop = options.stopSequences;
-    }
-
-    // Web search tool
-    if (options.webSearch) {
-      payload.tools = [{ type: "web_search" } as OpenAI.Responses.Tool];
-    }
-
-    // Custom function calling tools
-    const customTools = convertToolsToResponsesAPI(
-      options.tools as ToolSchema[] | null | undefined,
-    );
-    if (customTools) {
-      payload.tools = [
-        ...((payload.tools as OpenAI.Responses.Tool[]) || []),
-        ...customTools,
-      ];
-    }
-
-    // Parallel tool calls — defaults to true; set false for sequential FC
-    if (options.parallelToolCalls === false) {
-      payload.parallel_tool_calls = false;
-    }
-
-    // Response persistence — defaults to true; set false for privacy
-    if (options.store === false) {
-      payload.store = false;
-    }
-
-    // Log probabilities — top N candidate tokens per step
-    if (options.topLogprobs && options.topLogprobs > 0) {
-      payload.top_logprobs = options.topLogprobs;
-    }
+    };
 
     logger.info(
-      `[OpenAI/Responses] Sending stream payload: ${JSON.stringify(payload)}`,
+      `[OpenAI/Responses] Sending stream payload: ${JSON.stringify(request)}`,
     );
 
     const { data: streamData, response: rawStreamResponse } = await getClient()
-      .responses.create(payload, {
+      .responses.create(request, {
         ...(options.signal && { signal: options.signal }),
       })
       .withResponse();
     const rateLimits = extractOpenAIRateLimits(rawStreamResponse, model);
-    let usage: TokenUsage | null = null;
-    // Track function names from output_item.added events; the arguments.done
-    // event may not include the name property (known OpenAI SDK issue).
-    const pendingFunctions: Record<
-      string,
-      { name: string; callId: string; args: string }
-    > = {};
-    // Track reasoning output items so we can pair them with subsequent function calls.
-    // The Responses API emits reasoning items before their paired function_call items.
-    const pendingReasoningItems: Array<{
-      id: string;
-      summary: Array<{ type: string; text: string }>;
-    }> = [];
-    const reasoningSummaryAccumulator: Record<string, string> = {};
+
+    const state = createResponsesStreamState();
     for await (const event of streamData) {
       if (options.signal?.aborted) break;
-      // Text delta from output_text
-      if (event.type === "response.output_text.delta") {
-        const typedEvent = event as OpenAI.Responses.ResponseTextDeltaEvent;
-        yield typedEvent.delta || "";
-      }
-      // Reasoning / thinking summary delta — also accumulate for reasoning item reconstruction
-      if (event.type === "response.reasoning_summary_text.delta") {
-        const typedEvent =
-          event as OpenAI.Responses.ResponseReasoningSummaryTextDeltaEvent;
-        const itemId = (typedEvent as unknown as { item_id?: string }).item_id;
-        if (itemId) {
-          reasoningSummaryAccumulator[itemId] =
-            (reasoningSummaryAccumulator[itemId] || "") +
-            (typedEvent.delta || "");
-        }
-        yield { type: "thinking", content: typedEvent.delta || "" };
-      }
-      // Image generation completed
-      if (event.type === "response.image_generation_call.completed") {
-        const typedEvent =
-          event as OpenAI.Responses.ResponseImageGenCallCompletedEvent & {
-            result?: string;
-          };
-        if (typedEvent.result) {
-          yield {
-            type: "image",
-            data: typedEvent.result,
-            mimeType: "image/png",
-          };
-        }
-      }
-      // Track reasoning and function call metadata from output_item.added
-      if (event.type === "response.output_item.added") {
-        const typedEvent =
-          event as OpenAI.Responses.ResponseOutputItemAddedEvent;
-        if (typedEvent.item?.type === "reasoning") {
-          const reasoningItem = typedEvent.item as unknown as {
-            id: string;
-            summary?: Array<{ type: string; text: string }>;
-          };
-          if (reasoningItem.id) {
-            pendingReasoningItems.push({
-              id: reasoningItem.id,
-              summary: reasoningItem.summary || [],
-            });
-          }
-        } else if (typedEvent.item?.type === "function_call") {
-          const item =
-            typedEvent.item as OpenAI.Responses.ResponseFunctionToolCall;
-          if (item.id) {
-            pendingFunctions[item.id] = {
-              name: item.name,
-              callId: item.call_id,
-              args: "",
-            };
-            if (item.name && item.call_id) {
-              yield {
-                type: "toolCallStart",
-                id: item.call_id,
-                name: item.name,
-              };
-            }
-          }
-        }
-      }
-      // Accumulate argument deltas (keyed by item_id)
-      if (event.type === "response.function_call_arguments.delta") {
-        const typedEvent =
-          event as OpenAI.Responses.ResponseFunctionCallArgumentsDeltaEvent;
-        const entry = pendingFunctions[typedEvent.item_id];
-        const partial = typedEvent.delta || "";
-        if (entry) {
-          entry.args += partial;
-        }
-        // Yield progress event so generation throughput tracking stays
-        // alive during FC argument streaming.
-        if (partial.length > 0) {
-          yield { type: "toolCallDelta", characters: partial.length };
-        }
-      }
-      // Function call completed (Responses API)
-      if (event.type === "response.function_call_arguments.done") {
-        const typedEvent =
-          event as OpenAI.Responses.ResponseFunctionCallArgumentsDoneEvent & {
-            call_id?: string;
-          };
-        const tracked = pendingFunctions[typedEvent.item_id];
-        const name = tracked?.name || typedEvent.name || "unknown";
-        const callId =
-          tracked?.callId || typedEvent.call_id || typedEvent.item_id;
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(typedEvent.arguments || tracked?.args || "{}");
-        } catch {
-          /* ignore */
-        }
-        // Pop the most recent pending reasoning item and finalize its summary
-        // text from the accumulated deltas. This pairs the reasoning item with
-        // this function call for referential integrity on subsequent turns.
-        let pairedReasoningItem:
-          | { id: string; summary: Array<{ type: string; text: string }> }
-          | undefined;
-        if (pendingReasoningItems.length > 0) {
-          pairedReasoningItem = pendingReasoningItems.shift();
-          if (pairedReasoningItem) {
-            const accumulatedText =
-              reasoningSummaryAccumulator[pairedReasoningItem.id];
-            if (accumulatedText) {
-              pairedReasoningItem.summary = [
-                { type: "summary_text", text: accumulatedText },
-              ];
-              delete reasoningSummaryAccumulator[pairedReasoningItem.id];
-            }
-          }
-        }
-        yield {
-          type: "toolCall",
-          id: callId,
-          // Responses API internal item ID (starts with "fc_")
-          responsesItemId: typedEvent.item_id,
-          name,
-          args,
-          ...(pairedReasoningItem
-            ? { reasoningItem: pairedReasoningItem }
-            : {}),
-        };
-        // Clean up
-        delete pendingFunctions[typedEvent.item_id];
-      }
-      // Completed response — extract usage and detect truncation
-      if (event.type === "response.completed") {
-        const typedEvent = event as OpenAI.Responses.ResponseCompletedEvent;
-        if (typedEvent.response?.usage) {
-          usage = normalizeResponsesUsage(typedEvent.response.usage);
-        }
-        // Detect max_tokens truncation (Responses API uses "incomplete" status)
-        const responseRecord = typedEvent.response as unknown as Record<
-          string,
-          unknown
-        >;
-        const responseStatus = responseRecord?.status;
-        const incompleteReason = responseRecord?.incomplete_details;
-        if (
-          responseStatus === "incomplete" ||
-          (incompleteReason &&
-            typeof incompleteReason === "object" &&
-            (incompleteReason as Record<string, unknown>).reason ===
-              "max_output_tokens")
-        ) {
-          yield { type: "stopReason", stopReason: "length" };
-        }
-      }
+      yield* reduceResponsesStreamEvent(state, event);
     }
-    if (usage) {
-      yield { type: "usage", usage };
-    } else {
-      yield { type: "usage", usage: { inputTokens: 0, outputTokens: 0 } };
-    }
+    yield {
+      type: "usage",
+      usage: state.usage ?? { inputTokens: 0, outputTokens: 0 },
+    };
     if (rateLimits) {
       yield { type: "rateLimits", rateLimits };
     }
@@ -1421,228 +1556,53 @@ const openaiProvider = {
     model: string,
     options: ProviderOptions,
   ) {
-    const modelDefinition = getModelByName(model);
-    const isReasoning =
-      (modelDefinition &&
-        "thinking" in modelDefinition &&
-        (modelDefinition as { thinking?: boolean }).thinking === true) ||
-      model.includes("o1") ||
-      model.includes("o3");
-    const prepared = prepareOpenAIMessages(messages);
-    const payload: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
-      model,
-      messages: prepared,
-      stream: true,
-      stream_options: { include_usage: true },
-    };
-    if (isReasoning) {
-      if (options.maxTokens) payload.max_completion_tokens = options.maxTokens;
-      if (options.reasoningEffort) {
-        payload.reasoning_effort =
-          options.reasoningEffort as OpenAI.Chat.ChatCompletionCreateParamsStreaming["reasoning_effort"];
-      }
-    } else {
-      if (options.temperature !== undefined)
-        payload.temperature = options.temperature;
-      if (options.topP !== undefined) payload.top_p = options.topP;
-      if (options.frequencyPenalty !== undefined)
-        payload.frequency_penalty = options.frequencyPenalty;
-      if (options.presencePenalty !== undefined)
-        payload.presence_penalty = options.presencePenalty;
-      if (options.stopSequences !== undefined)
-        payload.stop =
-          options.stopSequences as OpenAI.Chat.ChatCompletionCreateParamsStreaming["stop"];
-      if (options.maxTokens) payload.max_completion_tokens = options.maxTokens;
-    }
-
-    // Seed for reproducibility
-    if (options.seed !== undefined) {
-      payload.seed =
-        typeof options.seed === "number"
-          ? options.seed
-          : parseInt(String(options.seed), 10);
-    }
-
-    // Service tier: auto / default / priority
-    if (options.serviceTier) {
-      payload.service_tier =
-        options.serviceTier as OpenAI.Chat.ChatCompletionCreateParamsStreaming["service_tier"];
-    }
-
-    // Response format (JSON mode)
-    if (options.responseFormat === "json_object") {
-      payload.response_format = { type: "json_object" };
-    }
-
-    if (options.webSearch) {
-      payload.tools = [
-        { type: "web_search" } as unknown as OpenAI.Chat.ChatCompletionTool,
-      ];
-    }
-
-    // Custom function calling tools — truncate to 128 max for Chat Completions API
-    const customTools = convertToolsToOpenAI(
-      options.tools as ToolSchema[] | null | undefined,
-    ) as OpenAI.Chat.ChatCompletionTool[] | null;
-    if (customTools) {
-      const allTools = [
-        ...((payload.tools as OpenAI.Chat.ChatCompletionTool[]) || []),
-        ...customTools,
-      ];
-      payload.tools = truncateToolsForChatCompletions(allTools);
-    }
+    const payload = buildChatCompletionsPayload(messages, model, options, true);
+    // Built above as streaming Chat Completions params.
+    const request = payload as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming;
 
     let stream: Stream<OpenAI.Chat.ChatCompletionChunk>;
     let rateLimits: OpenAIRateLimits | null = null;
     try {
-      const { data: streamData, response: rawStreamResponse } =
-        await getClient()
-          .chat.completions.create(payload, {
-            ...(options.signal && { signal: options.signal }),
-          })
-          .withResponse();
+      const { data: streamData, response: rawStreamResponse } = await getClient()
+        .chat.completions.create(request, {
+          ...(options.signal && { signal: options.signal }),
+        })
+        .withResponse();
       stream = streamData;
       rateLimits = extractOpenAIRateLimits(rawStreamResponse, model);
     } catch (error: unknown) {
       const errorObject = asErrorRecord(error);
       // Retry once after stripping unsupported parameters (e.g. gpt-5-nano rejects temperature)
-      if (
-        errorObject.status === 400 &&
-        errorObject.message?.includes("Unsupported")
-      ) {
-        const unsupportedParams = [
-          "temperature",
-          "top_p",
-          "frequency_penalty",
-          "presence_penalty",
-          "max_completion_tokens",
-        ];
-        let stripped = false;
-        const payloadRecord = payload as unknown as Record<string, unknown>;
-        for (const param of unsupportedParams) {
-          if (
-            errorObject.message?.includes(`'${param}'`) &&
-            payloadRecord[param] !== undefined
-          ) {
-            logger.provider(
-              "OpenAI",
-              `Stripping unsupported param '${param}' for ${model} and retrying (stream)`,
-            );
-            delete payloadRecord[param];
-            stripped = true;
-          }
-        }
-        if (stripped) {
-          const retryResult = await getClient()
-            .chat.completions.create(payload, {
-              ...(options.signal && { signal: options.signal }),
-            })
-            .withResponse();
-          stream = retryResult.data;
-          rateLimits = extractOpenAIRateLimits(retryResult.response, model);
-        } else {
-          throw error;
-        }
-      } else {
+      if (!stripUnsupportedChatParams(payload, errorObject, model, " (stream)")) {
         throw error;
       }
+      const retryResult = await getClient()
+        .chat.completions.create(request, {
+          ...(options.signal && { signal: options.signal }),
+        })
+        .withResponse();
+      stream = retryResult.data;
+      rateLimits = extractOpenAIRateLimits(retryResult.response, model);
     }
 
-    let usage: TokenUsage | null = null;
-    let lastFinishReason: string | null = null;
-    // Accumulate tool calls across chunks
-    const pendingToolCalls: Record<
-      number,
-      { id: string; name: string; args: string; startEmitted: boolean }
-    > = {};
-
+    const state = createChatCompletionsStreamState();
     for await (const chunk of stream) {
       if (options.signal?.aborted) break;
-      if (chunk.usage) {
-        usage = normalizeUsage(chunk.usage);
-      }
-      const delta = chunk.choices?.[0]?.delta;
-      const content = delta?.content || "";
-      if (content) {
-        yield content;
-      }
-
-      // Track the last finish_reason for truncation detection
-      const finishReason = chunk.choices?.[0]?.finish_reason;
-      if (finishReason) lastFinishReason = finishReason;
-
-      // Accumulate tool call deltas
-      if (delta?.tool_calls) {
-        let deltaChars = 0;
-        for (const toolCall of delta.tool_calls) {
-          const index = toolCall.index;
-          if (!pendingToolCalls[index]) {
-            pendingToolCalls[index] = {
-              id: toolCall.id || "",
-              name: toolCall.function?.name || "",
-              args: "",
-              startEmitted: false,
-            };
-          }
-          if (toolCall.id) pendingToolCalls[index].id = toolCall.id;
-          if (toolCall.function?.name)
-            pendingToolCalls[index].name = toolCall.function.name;
-          if (toolCall.function?.arguments) {
-            pendingToolCalls[index].args += toolCall.function.arguments;
-            deltaChars += toolCall.function.arguments.length;
-          }
-          if (
-            !pendingToolCalls[index].startEmitted &&
-            pendingToolCalls[index].name &&
-            pendingToolCalls[index].id
-          ) {
-            pendingToolCalls[index].startEmitted = true;
-            yield {
-              type: "toolCallStart",
-              id: pendingToolCalls[index].id,
-              name: pendingToolCalls[index].name,
-            };
-          }
-        }
-        // Yield progress event so generation throughput tracking stays
-        // alive during FC argument streaming.
-        if (deltaChars > 0) {
-          yield { type: "toolCallDelta", characters: deltaChars };
-        }
-      }
-
-      // If finish_reason is "tool_calls", yield accumulated tool calls
-      if (finishReason === "tool_calls") {
-        for (const toolCall of Object.values(pendingToolCalls)) {
-          let args: Record<string, unknown> = {};
-          try {
-            args = JSON.parse(toolCall.args || "{}");
-          } catch {
-            /* ignore */
-          }
-          yield {
-            type: "toolCall",
-            id: toolCall.id,
-            name: toolCall.name,
-            args,
-          };
-        }
-      }
+      yield* reduceChatCompletionChunk(state, chunk);
     }
+
     // Surface max_tokens truncation so harnesses can detect and warn the user
-    if (lastFinishReason === "length") {
+    if (state.lastFinishReason === "length") {
       yield { type: "stopReason", stopReason: "length" };
     }
-    if (usage) {
-      yield { type: "usage", usage };
-    } else {
-      yield { type: "usage", usage: { inputTokens: 0, outputTokens: 0 } };
-    }
+    yield {
+      type: "usage",
+      usage: state.usage ?? { inputTokens: 0, outputTokens: 0 },
+    };
     if (rateLimits) {
       yield { type: "rateLimits", rateLimits };
     }
   },
-
   async generateSpeech(
     text: string,
     voice: string = DEFAULT_VOICES.openai,

@@ -331,72 +331,371 @@ async function processBatch(
   return parsed.actions || [];
 }
 
+// ─── Candidate Collection ────────────────────────────────────────────────────
+
+interface CandidateCollection {
+  batches: ConsolidationBatch[];
+  /** Key used for run-count resets when this path finds nothing to do. */
+  resetKey: string;
+}
+
+/** Cluster/stale detection plus batching for the conversational agent path. */
+function collectConversationalBatches(
+  allMemories: MemoryDoc[],
+  agentId: string,
+): ConsolidationBatch[] {
+  const partitions = partitionConversationalMemories(allMemories);
+  logger.info(
+    `[MemoryConsolidation] Conversational (${agentId}): ${partitions.size} partitions (unique observer→subject pairs)`,
+  );
+
+  const batches: ConsolidationBatch[] = [];
+  for (const [key, memories] of partitions) {
+    if (memories.length < 2) continue;
+
+    // Cluster within this partition using the higher conversational threshold
+    const partitionClusters = findClusters(
+      memories,
+      CONVERSATIONAL_CLUSTER_THRESHOLD,
+    );
+    const partitionStale = findStaleConversationalMemories(memories);
+
+    // ── Release embeddings after clustering ──────────────────────
+    // Versioned embeddings (768-dim float arrays) are only needed
+    // for cosine similarity in findClusters(). Strip them now so
+    // GC can reclaim before the LLM batch loop.
+    for (const message of memories) {
+      delete message.semanticEmbedding;
+    }
+
+    if (partitionClusters.length === 0 && partitionStale.length === 0) continue;
+
+    // Extract metadata for the partition header
+    const sample = memories[0];
+    const partitionMeta: PartitionMeta = {
+      aboutUserId: sample.aboutUserId || "",
+      aboutUsername: sample.aboutUsername || "",
+      sourceUserId: sample.sourceUserId || "",
+      sourceUsername: sample.sourceUsername || "",
+    };
+
+    // Build batches for this partition
+    const partitionBatches = buildBatches(partitionClusters, partitionStale);
+    for (const batch of partitionBatches) {
+      batch.partitionMeta = partitionMeta;
+    }
+    batches.push(...partitionBatches);
+
+    logger.info(
+      `[MemoryConsolidation] Conversational partition ${key}: ${memories.length} memories → ${partitionClusters.length} clusters, ${partitionStale.length} stale`,
+    );
+  }
+  return batches;
+}
+
+/** Cluster/stale detection plus batching for the coding/default path. */
+function collectDefaultBatches(allMemories: MemoryDoc[]): ConsolidationBatch[] {
+  const clusters = findClusters(allMemories);
+
+  // ── Release embeddings after clustering ──────────────────────
+  // Versioned embeddings (768-dim float arrays) are only needed
+  // for cosine similarity in findClusters(). Strip them now so
+  // GC can reclaim before the LLM batch loop.
+  for (const message of allMemories) {
+    delete message.semanticEmbedding;
+  }
+
+  logger.info(
+    `[MemoryConsolidation] Found ${clusters.length} clusters from ${allMemories.length} memories`,
+  );
+
+  const staleMemories = allMemories.filter((message) => {
+    const age = daysSince(message.createdAt);
+    return (
+      age > STALENESS_DAYS &&
+      (message.type === "project" || message.type === "reference")
+    );
+  });
+  logger.info(
+    `[MemoryConsolidation] Found ${staleMemories.length} stale memories (>${STALENESS_DAYS} days, ephemeral types)`,
+  );
+
+  if (clusters.length === 0 && staleMemories.length === 0) {
+    logger.info(
+      "[MemoryConsolidation] No clusters or stale memories — nothing to consolidate",
+    );
+    return [];
+  }
+
+  const batches = buildBatches(clusters, staleMemories);
+  logger.info(
+    `[MemoryConsolidation] Split into ${batches.length} batch(es) ` +
+      `(${clusters.length} clusters, ${staleMemories.length} stale)`,
+  );
+  return batches;
+}
+
+function collectCandidates(
+  allMemories: MemoryDoc[],
+  agentId: string,
+  isConversational: boolean,
+  project: string | null,
+  guildId: string | undefined,
+): CandidateCollection {
+  if (isConversational) {
+    return {
+      batches: collectConversationalBatches(allMemories, agentId),
+      resetKey: project || guildId || "global",
+    };
+  }
+  return {
+    batches: collectDefaultBatches(allMemories),
+    resetKey: project || "global",
+  };
+}
+
+// ─── Model Resolution & Loading ──────────────────────────────────────────────
+
+/**
+ * Resolve the configured consolidation model onto a live instance. Throws when
+ * no sibling instance has it loaded — consolidation cannot run anywhere.
+ */
+async function resolveConsolidationTarget(
+  consolidationProvider: string,
+  consolidationModel: string,
+): Promise<{ providerId: string; model: string }> {
+  const baseType =
+    getInstanceType(consolidationProvider) || consolidationProvider;
+  const siblings = getInstancesByType(baseType);
+  const modelRes = await resolveModelForInstances(consolidationModel, siblings);
+
+  if (modelRes.usable.length === 0) {
+    throw new Error(
+      `[MemoryConsolidation] Model resolution failed: "${consolidationModel}" is not loaded on any instances of provider type "${baseType}".`,
+    );
+  }
+
+  const providerId = modelRes.usable[0].id;
+  const override = modelRes.modelOverrides.get(providerId);
+  return { providerId, model: override ?? consolidationModel };
+}
+
+/** Load the agent's memories with the embeddings clustering needs. */
+async function loadConsolidationMemories(
+  db: ReturnType<typeof MongoWrapper.getDb>,
+  agentId: string,
+  project: string | null,
+  isConversational: boolean,
+  guildId: string | undefined,
+): Promise<MemoryDoc[]> {
+  if (!db) throw new Error("Database not available");
+
+  const query: Record<string, unknown> = { agent: agentId };
+  if (project) query.project = project;
+  if (isConversational && guildId) query.guildId = guildId;
+
+  // LUPOS needs extra fields for attribution-preserving merges.
+  const projection = isConversational
+    ? {
+        semanticEmbedding: 1,
+        id: 1,
+        type: 1,
+        title: 1,
+        content: 1,
+        createdAt: 1,
+        aboutUserId: 1,
+        aboutUsername: 1,
+        sourceUserId: 1,
+        sourceUsername: 1,
+        guildId: 1,
+      }
+    : { semanticEmbedding: 1, id: 1, type: 1, title: 1, content: 1, createdAt: 1 };
+
+  return (await db
+    .collection(COLLECTIONS.MEMORIES)
+    .find(query)
+    .project(projection)
+    .toArray()) as MemoryDoc[];
+}
+
+// ─── Batch Planning ──────────────────────────────────────────────────────────
+
+interface PlanActionsContext {
+  provider: ProcessBatchOptions["provider"];
+  consolidationProvider: string;
+  consolidationModel: string;
+  agent: string;
+  project: string | null;
+  username: string;
+  trigger: string;
+  endpoint: string | undefined;
+  traceId: string | null | undefined;
+  agentConversationId: string | null | undefined;
+  broadcast: ConsolidateOptions["broadcast"];
+  isConversational: boolean;
+}
+
+/** Run every batch through the LLM and flatten the returned actions. */
+async function planActions(
+  batches: ConsolidationBatch[],
+  context: PlanActionsContext,
+): Promise<ConsolidationAction[]> {
+  const allActions: ConsolidationAction[] = [];
+  const conversationalOptions = context.isConversational
+    ? {
+        systemPrompt: CONVERSATIONAL_CONSOLIDATION_PROMPT,
+        inputBuilder: buildConversationalBatchInput,
+      }
+    : {};
+
+  for (let i = 0; i < batches.length; i++) {
+    const batchActions = await processBatch(batches[i], i, batches.length, {
+      provider: context.provider,
+      consolidationProvider: context.consolidationProvider,
+      consolidationModel: context.consolidationModel,
+      agent: context.agent,
+      project: context.project,
+      username: context.username,
+      trigger: context.trigger,
+      endpoint: context.endpoint,
+      traceId: context.traceId,
+      agentConversationId: context.agentConversationId,
+      broadcast: context.broadcast,
+      ...conversationalOptions,
+    });
+    allActions.push(...batchActions);
+  }
+  return allActions;
+}
+
+// ─── Persistence ─────────────────────────────────────────────────────────────
+
+interface PersistConsolidationParams {
+  results: { merged: number; deleted: number; errors: number };
+  allActions: ConsolidationAction[];
+  batches: ConsolidationBatch[];
+  total: number;
+  project: string | null;
+  guildId: string | undefined;
+  trigger: string;
+  broadcast: ConsolidateOptions["broadcast"];
+  startTime: number;
+}
+
+/** Reset the run counter, record history and broadcast the completion. */
+async function persistConsolidation({
+  results,
+  allActions,
+  batches,
+  total,
+  project,
+  guildId,
+  trigger,
+  broadcast,
+  startTime,
+}: PersistConsolidationParams) {
+  await resetRunCount(project || guildId || "global");
+  const summary = `Merged ${results.merged}, deleted ${results.deleted} (${batches.length} batches)`;
+  const durationMs = Math.round(performance.now() - startTime);
+  logger.info(`[MemoryConsolidation] Complete: ${summary} (${durationMs}ms)`);
+
+  // Record history for audit trail
+  await recordHistory(
+    project || guildId || "global",
+    trigger || "manual",
+    total,
+    allActions,
+    summary,
+    durationMs,
+  );
+  const consolidationResult = {
+    ...results,
+    actionsApplied: allActions.length,
+    batchCount: batches.length,
+    summary,
+    total,
+    trigger,
+    durationMs,
+  };
+  // Broadcast to connected clients if callback provided
+  if (typeof broadcast === "function") {
+    try {
+      broadcast({
+        type: "memory_consolidation_complete",
+        project: project || null,
+        ...consolidationResult,
+      });
+    } catch (error: unknown) {
+      logger.warn(
+        `[MemoryConsolidation] Broadcast failed: ${getErrorMessage(error)}`,
+      );
+    }
+  }
+  return consolidationResult;
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
+/**
+ * Normalize consolidation options once: identity defaults, logging context and
+ * the scope keys used by the run-count guards.
+ */
+function prepareConsolidation(options: ConsolidateOptions) {
+  const startTime = performance.now();
+  const agentId = options.agent || AGENT_IDS.CODING;
+  const persona = AgentPersonaRegistry.get(agentId);
+  const agentType = persona?.type || "";
+  const isConversational = agentType === "conversational";
+  logger.info(
+    `[MemoryConsolidation] Starting ${agentType || "general"} consolidation for agent "${agentId}", project "${options.project}" (trigger: ${options.trigger})`,
+  );
+  return {
+    startTime,
+    agentId,
+    agentType,
+    isConversational,
+    // Scope used by the daily cost guard and run-count resets.
+    scopeKey: options.project || options.guildId || "global",
+    projectScope: options.project || null,
+    usernameOwner: options.username || "system",
+    triggerName: options.trigger || "manual",
+  };
+}
+
 const MemoryConsolidationService = {
   /**
    * Run memory consolidation for a specific agent within a project.
    * Processes memories in batches to avoid context window overflow.
    */
-  async consolidate({
-    agent = AGENT_IDS.CODING,
-    project,
-    username,
-    trigger = "manual",
-    broadcast,
-    endpoint,
-    traceId,
-    agentConversationId,
-    guildId,
-  }: ConsolidateOptions) {
-    const startTime = performance.now();
-    const agentId = agent || AGENT_IDS.CODING;
-    const persona = AgentPersonaRegistry.get(agentId);
-    const agentType = persona?.type || "";
-    const isConversational = agentType === "conversational";
-    logger.info(
-      `[MemoryConsolidation] Starting ${agentType || "general"} consolidation for agent "${agentId}", project "${project}" (trigger: ${trigger})`,
-    );
+  async consolidate(options: ConsolidateOptions) {
+    const {
+      startTime,
+      agentId,
+      agentType,
+      isConversational,
+      scopeKey,
+      projectScope,
+      usernameOwner,
+      triggerName,
+    } = prepareConsolidation(options);
 
     // Cost guard — check daily budget
-    if (!(await canRunToday(project || guildId || "global"))) {
+    if (!(await canRunToday(scopeKey))) {
       return { skipped: true, reason: "daily_limit_reached", total: 0 };
     }
 
-    // Load all memories with embeddings (LUPOS needs extra fields)
-    const db = MongoWrapper.getDb(MONGO_DB_NAME);
-    if (!db) throw new Error("Database not available");
-
-    const query: Record<string, unknown> = { agent: agentId };
-    if (project) query.project = project;
-    if (isConversational && guildId) query.guildId = guildId;
-
-    const projection = isConversational
-      ? {
-          semanticEmbedding: 1,
-          id: 1,
-          type: 1,
-          title: 1,
-          content: 1,
-          createdAt: 1,
-          aboutUserId: 1,
-          aboutUsername: 1,
-          sourceUserId: 1,
-          sourceUsername: 1,
-          guildId: 1,
-        }
-      : { semanticEmbedding: 1, id: 1, type: 1, title: 1, content: 1, createdAt: 1 };
-
-    const allMemories = (await db
-      .collection(COLLECTIONS.MEMORIES)
-      .find(query)
-      .project(projection)
-      .toArray()) as MemoryDoc[];
+    const allMemories = await loadConsolidationMemories(
+      MongoWrapper.getDb(MONGO_DB_NAME),
+      agentId,
+      projectScope,
+      isConversational,
+      options.guildId,
+    );
 
     if (allMemories.length < 2) {
       logger.info(
         `[MemoryConsolidation] Only ${allMemories.length} memories — skipping`,
       );
-      await resetRunCount(project || guildId || "global");
+      await resetRunCount(scopeKey);
       return {
         skipped: true,
         reason: "insufficient memories",
@@ -410,17 +709,15 @@ const MemoryConsolidationService = {
 
     // Resolve the consolidation model
     const config = await getConsolidationConfig();
-    let consolidationProvider = config.provider;
-    let consolidationModel = config.model;
 
     // Guard: consolidation is a chat/generation task. An embedding model only
     // exposes /v1/embeddings, so a generateText call against it 404s. Fail fast
     // with a clear message rather than emitting an opaque "404 Not Found".
     // (VllmModelSyncService should never heal this role onto an embedding model,
     // but a manual misconfiguration must not silently corrupt every run.)
-    if (/embed/i.test(consolidationModel)) {
+    if (/embed/i.test(config.model)) {
       logger.error(
-        `[MemoryConsolidation] Configured consolidation model "${consolidationModel}" is an embedding model — ` +
+        `[MemoryConsolidation] Configured consolidation model "${config.model}" is an embedding model — ` +
           `it cannot serve chat completions. Set a generation model in Settings → Memory Models.`,
       );
       return {
@@ -430,190 +727,57 @@ const MemoryConsolidationService = {
       };
     }
 
-    let resolvedModel = consolidationModel;
-    let targetProviderId = consolidationProvider;
-
-    const baseType = getInstanceType(consolidationProvider) || consolidationProvider;
-    const siblings = getInstancesByType(baseType);
-    const modelRes = await resolveModelForInstances(resolvedModel, siblings);
-    const usable = modelRes.usable;
-    const modelOverrides = modelRes.modelOverrides;
-
-    if (usable.length === 0) {
-      throw new Error(
-        `[MemoryConsolidation] Model resolution failed: "${consolidationModel}" is not loaded on any instances of provider type "${baseType}".`
-      );
-    }
-
-    targetProviderId = usable[0].id;
-    const override = modelOverrides.get(targetProviderId);
-    if (override) {
-      resolvedModel = override;
-    }
-
-    const provider = getProvider(targetProviderId);
-    consolidationProvider = targetProviderId;
-    consolidationModel = resolvedModel;
+    const target = await resolveConsolidationTarget(
+      config.provider,
+      config.model,
+    );
 
     // Build a lookup map for metadata preservation during merges
     const memoryLookup = new Map<string, MemoryDoc>(
       allMemories.map((message) => [message.id, message]),
     );
 
-    const allActions: ConsolidationAction[] = [];
-    let batches: ConsolidationBatch[] = [];
-
-    if (isConversational) {
-      // ── Conversational Path: partition by (aboutUserId, sourceUserId) ────
-      const partitions = partitionConversationalMemories(allMemories);
-      logger.info(
-        `[MemoryConsolidation] Conversational (${agentId}): ${partitions.size} partitions (unique observer→subject pairs)`,
-      );
-
-      for (const [key, memories] of partitions) {
-        if (memories.length < 2) continue;
-
-        // Cluster within this partition using the higher conversational threshold
-        const partitionClusters = findClusters(
-          memories,
-          CONVERSATIONAL_CLUSTER_THRESHOLD,
-        );
-        const partitionStale = findStaleConversationalMemories(memories);
-
-        // ── Release embeddings after clustering ──────────────────────
-        // Versioned embeddings (768-dim float arrays) are only needed
-        // for cosine similarity in findClusters(). Strip them now so
-        // GC can reclaim before the LLM batch loop.
-        for (const message of memories) {
-          delete message.semanticEmbedding;
-        }
-
-        if (partitionClusters.length === 0 && partitionStale.length === 0)
-          continue;
-
-        // Extract metadata for the partition header
-        const sample = memories[0];
-        const partitionMeta: PartitionMeta = {
-          aboutUserId: sample.aboutUserId || "",
-          aboutUsername: sample.aboutUsername || "",
-          sourceUserId: sample.sourceUserId || "",
-          sourceUsername: sample.sourceUsername || "",
-        };
-
-        // Build batches for this partition
-        const partitionBatches = buildBatches(
-          partitionClusters,
-          partitionStale,
-        );
-        for (const b of partitionBatches) {
-          b.partitionMeta = partitionMeta;
-        }
-        batches.push(...partitionBatches);
-
-        logger.info(
-          `[MemoryConsolidation] Conversational partition ${key}: ${memories.length} memories → ${partitionClusters.length} clusters, ${partitionStale.length} stale`,
-        );
-      }
-
-      if (batches.length === 0) {
+    const candidates = collectCandidates(
+      allMemories,
+      agentId,
+      isConversational,
+      projectScope,
+      options.guildId,
+    );
+    if (candidates.batches.length === 0) {
+      if (isConversational) {
         logger.info(
           `[MemoryConsolidation] Conversational (${agentId}): No consolidation candidates across partitions`,
         );
-        await resetRunCount(project || guildId || "global");
-        return {
-          skipped: true,
-          reason: "no candidates",
-          total: allMemories.length,
-        };
       }
-
-      // Process conversational batches with the conversational-specific prompt
-      for (let i = 0; i < batches.length; i++) {
-        const batchActions = await processBatch(batches[i], i, batches.length, {
-          provider,
-          consolidationProvider,
-          consolidationModel,
-          agent: agentId,
-          project: project || null,
-          username: username || "system",
-          trigger: trigger || "manual",
-          endpoint,
-          traceId,
-          agentConversationId,
-          broadcast,
-          systemPrompt: CONVERSATIONAL_CONSOLIDATION_PROMPT,
-          inputBuilder: buildConversationalBatchInput,
-        });
-        allActions.push(...batchActions);
-      }
-    } else {
-      // ── Coding / Default Path: original flow ───────────────────────
-      const clusters = findClusters(allMemories);
-
-      // ── Release embeddings after clustering ──────────────────────
-      // Versioned embeddings (768-dim float arrays) are only needed
-      // for cosine similarity in findClusters(). Strip them now so
-      // GC can reclaim before the LLM batch loop.
-      for (const message of allMemories) {
-        delete message.semanticEmbedding;
-      }
-
-      logger.info(
-        `[MemoryConsolidation] Found ${clusters.length} clusters from ${allMemories.length} memories`,
-      );
-
-      const staleMemories = allMemories.filter((message) => {
-        const age = daysSince(message.createdAt);
-        return (
-          age > STALENESS_DAYS &&
-          (message.type === "project" || message.type === "reference")
-        );
-      });
-      logger.info(
-        `[MemoryConsolidation] Found ${staleMemories.length} stale memories (>${STALENESS_DAYS} days, ephemeral types)`,
-      );
-
-      if (clusters.length === 0 && staleMemories.length === 0) {
-        logger.info(
-          "[MemoryConsolidation] No clusters or stale memories — nothing to consolidate",
-        );
-        await resetRunCount(project || "global");
-        return {
-          skipped: true,
-          reason: "no candidates",
-          total: allMemories.length,
-        };
-      }
-
-      batches = buildBatches(clusters, staleMemories);
-      logger.info(
-        `[MemoryConsolidation] Split into ${batches.length} batch(es) ` +
-          `(${clusters.length} clusters, ${staleMemories.length} stale)`,
-      );
-
-      for (let i = 0; i < batches.length; i++) {
-        const batchActions = await processBatch(batches[i], i, batches.length, {
-          provider,
-          consolidationProvider,
-          consolidationModel,
-          agent: agentId,
-          project: project || null,
-          username: username || "system",
-          trigger: trigger || "manual",
-          endpoint,
-          traceId,
-          agentConversationId,
-          broadcast,
-        });
-        allActions.push(...batchActions);
-      }
+      await resetRunCount(candidates.resetKey);
+      return {
+        skipped: true,
+        reason: "no candidates",
+        total: allMemories.length,
+      };
     }
+
+    const allActions = await planActions(candidates.batches, {
+      provider: getProvider(target.providerId),
+      consolidationProvider: target.providerId,
+      consolidationModel: target.model,
+      agent: agentId,
+      project: projectScope,
+      username: usernameOwner,
+      trigger: triggerName,
+      endpoint: options.endpoint,
+      traceId: options.traceId,
+      agentConversationId: options.agentConversationId,
+      broadcast: options.broadcast,
+      isConversational,
+    });
 
     if (allActions.length === 0) {
       logger.info(
         "[MemoryConsolidation] LLM found no actions needed across all batches",
       );
-      await resetRunCount(project || guildId || "global");
+      await resetRunCount(scopeKey);
       return {
         actions: 0,
         summary: "No consolidation needed",
@@ -623,59 +787,34 @@ const MemoryConsolidationService = {
 
     // Apply all accumulated actions
     logger.info(
-      `[MemoryConsolidation] Applying ${allActions.length} actions from ${batches.length} batch(es)`,
+      `[MemoryConsolidation] Applying ${allActions.length} actions from ${candidates.batches.length} batch(es)`,
     );
     const results = await applyActions(
       allActions,
       agentId,
       agentType,
-      project || null,
-      username || "system",
+      projectScope,
+      usernameOwner,
       {
-        traceId,
-        endpoint,
+        traceId: options.traceId,
+        endpoint: options.endpoint,
         memoryLookup: isConversational ? memoryLookup : undefined,
       },
     );
-    await resetRunCount(project || guildId || "global");
-    const summary = `Merged ${results.merged}, deleted ${results.deleted} (${batches.length} batches)`;
-    const durationMs = Math.round(performance.now() - startTime);
-    logger.info(`[MemoryConsolidation] Complete: ${summary} (${durationMs}ms)`);
 
-    // Record history for audit trail
-    await recordHistory(
-      project || guildId || "global",
-      trigger || "manual",
-      allMemories.length,
+    return persistConsolidation({
+      results,
       allActions,
-      summary,
-      durationMs,
-    );
-    const consolidationResult = {
-      ...results,
-      actionsApplied: allActions.length,
-      batchCount: batches.length,
-      summary,
+      batches: candidates.batches,
       total: allMemories.length,
-      trigger,
-      durationMs,
-    };
-    // Broadcast to connected clients if callback provided
-    if (typeof broadcast === "function") {
-      try {
-        broadcast({
-          type: "memory_consolidation_complete",
-          project: project || null,
-          ...consolidationResult,
-        });
-      } catch (error: unknown) {
-        logger.warn(
-          `[MemoryConsolidation] Broadcast failed: ${getErrorMessage(error)}`,
-        );
-      }
-    }
-    return consolidationResult;
+      project: projectScope,
+      guildId: options.guildId,
+      trigger: options.trigger,
+      broadcast: options.broadcast,
+      startTime,
+    });
   },
+
   /**
    * Check if consolidation should run and trigger if needed.
    * Called by MemoryExtractor after storing new memories.

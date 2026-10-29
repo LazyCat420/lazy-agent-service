@@ -10,6 +10,7 @@ import {
   type LiveServerMessage,
   MediaResolution,
   ServiceTier,
+  type GenerateContentResponse,
 } from "@google/genai";
 import crypto from "crypto";
 import { Readable } from "stream";
@@ -434,6 +435,497 @@ async function convertMessages(
   return result;
 }
 
+// ── Usage and result extraction ───────────────────────────────
+
+interface GoogleUsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  cachedContentTokenCount?: number;
+}
+
+/** Map Gemini usageMetadata to our TokenUsage shape (cache share included). */
+function buildGoogleUsage(metadata: GoogleUsageMetadata | undefined) {
+  return {
+    inputTokens: metadata?.promptTokenCount ?? 0,
+    outputTokens: metadata?.candidatesTokenCount ?? 0,
+    ...(metadata?.cachedContentTokenCount
+      ? { cacheReadInputTokens: metadata.cachedContentTokenCount }
+      : {}),
+  };
+}
+
+/** Collect text, function calls and images from a non-streamed response. */
+function extractGoogleTextResult(
+  response: GenerateContentResponse,
+  options: ProviderOptions,
+): GenerateTextResult {
+  interface ToolCallResult {
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+    thoughtSignature?: string;
+  }
+  interface ImageResult {
+    data: string;
+    mimeType: string;
+  }
+  const toolCalls: ToolCallResult[] = [];
+  const textParts: string[] = [];
+  const images: ImageResult[] = [];
+  const maxImages = options.imageCount || 1;
+  for (const part of response.candidates?.[0]?.content?.parts || []) {
+    if (part.functionCall) {
+      toolCalls.push({
+        id: `google-toolCall-${crypto.randomUUID()}`,
+        name: part.functionCall.name || "any",
+        args: (part.functionCall.args || {}) as Record<string, unknown>,
+        thoughtSignature: (part as PartWithThoughtSignature)
+          .thoughtSignature,
+      });
+    } else if (part.text) {
+      textParts.push(part.text);
+    } else if (part.inlineData && images.length < maxImages) {
+      images.push({
+        data: part.inlineData.data || "",
+        mimeType: part.inlineData.mimeType || "image/png",
+      });
+    }
+  }
+
+  const result: GenerateTextResult = {
+    text: textParts.join("") || response.text || "",
+    usage: buildGoogleUsage(response.usageMetadata),
+  };
+  if (toolCalls.length > 0) result.toolCalls = toolCalls;
+  if (images.length > 0) result.images = images;
+  return result;
+}
+
+// ── Streamed content reducers ─────────────────────────────────
+
+interface GoogleStreamState {
+  usage: ReturnType<typeof buildGoogleUsage> | null;
+  imageCount: number;
+  lastFinishReason: string | null;
+}
+
+function createGoogleStreamState(): GoogleStreamState {
+  return { usage: null, imageCount: 0, lastFinishReason: null };
+}
+
+/** One streamed chunk in, the chunks to yield out. */
+function reduceGoogleStreamChunk(
+  state: GoogleStreamState,
+  chunk: GenerateContentResponse,
+  maxImages: number,
+): Array<Record<string, unknown> | string> {
+  const events: Array<Record<string, unknown> | string> = [];
+  const candidate = chunk.candidates?.[0];
+  // Track finishReason for truncation detection
+  if (candidate?.finishReason) state.lastFinishReason = candidate.finishReason;
+
+  if (candidate?.content?.parts) {
+    for (const part of candidate.content.parts) {
+      events.push(...reduceGoogleStreamPart(state, part, maxImages));
+    }
+  } else if (chunk.text) {
+    events.push(chunk.text);
+  }
+
+  if (chunk.usageMetadata) {
+    state.usage = buildGoogleUsage(chunk.usageMetadata);
+  }
+  return events;
+}
+
+/** Function calls, thoughts, text, images and code execution from one part. */
+/** A function-call part becomes a toolCall, carrying the wire-only signature. */
+function buildGoogleToolCallEvent(part: Part) {
+  // SDK Part lacks the thought signature field; it is present on the wire.
+  const partWithSignature = part as PartWithThoughtSignature;
+  return {
+    type: "toolCall",
+    id: `google-toolCall-${crypto.randomUUID()}`,
+    name: part.functionCall?.name || "any",
+    args: (part.functionCall?.args || {}) as Record<string, unknown>,
+    thoughtSignature: partWithSignature.thoughtSignature,
+  };
+}
+
+function buildGoogleImageEvent(inlineData: NonNullable<Part["inlineData"]>) {
+  return {
+    type: "image",
+    data: inlineData.data || "",
+    mimeType: inlineData.mimeType || "image/png",
+  };
+}
+
+function buildGoogleExecutableCodeEvent(
+  executableCode: NonNullable<Part["executableCode"]>,
+) {
+  return {
+    type: "executableCode",
+    code: executableCode.code,
+    language: executableCode.language || "python",
+  };
+}
+
+function buildGoogleCodeResultEvent(
+  result: NonNullable<Part["codeExecutionResult"]>,
+) {
+  return {
+    type: "codeExecutionResult",
+    output: result.output || "",
+    outcome: result.outcome || "OK",
+  };
+}
+
+function reduceGoogleStreamPart(
+  state: GoogleStreamState,
+  part: Part,
+  maxImages: number,
+): Array<Record<string, unknown> | string> {
+  if (part.functionCall) return [buildGoogleToolCallEvent(part)];
+  if (part.thought && part.text) {
+    return [{ type: "thinking", content: part.text }];
+  }
+  if (part.text) return [part.text];
+  if (part.inlineData && state.imageCount < maxImages) {
+    state.imageCount++;
+    return [buildGoogleImageEvent(part.inlineData)];
+  }
+  if (part.executableCode?.code) {
+    return [buildGoogleExecutableCodeEvent(part.executableCode)];
+  }
+  if (part.codeExecutionResult) {
+    return [buildGoogleCodeResultEvent(part.codeExecutionResult)];
+  }
+  return [];
+}
+
+function buildGoogleStreamTools(
+  options: ProviderOptions,
+): GoogleToolConfigEntry[] {
+  const tools: GoogleToolConfigEntry[] = [];
+  if (options.webSearch) tools.push({ googleSearch: {} });
+  if (options.codeExecution) tools.push({ codeExecution: {} });
+  if (options.urlContext) tools.push({ urlContext: {} });
+  const customTools = convertToolsToGoogle(options.tools);
+  if (customTools) tools.push(...customTools);
+  return tools;
+}
+
+// ── Live API bridge ───────────────────────────────────────────
+
+type GoogleLiveSession = Awaited<ReturnType<GoogleGenAI["live"]["connect"]>>;
+
+interface LiveQueueItem {
+  type: string;
+  content?: string;
+  data?: string;
+  mimeType?: string;
+  id?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+  thoughtSignature?: string;
+  usage?: { inputTokens: number; outputTokens: number };
+  message?: string;
+}
+
+interface LiveEventQueue {
+  enqueue(item: LiveQueueItem): void;
+  dequeue(): Promise<LiveQueueItem | undefined>;
+  readonly size: number;
+}
+
+/** Async queue bridging Live API callbacks to the async generator. */
+function createLiveEventQueue(): LiveEventQueue {
+  const queue: LiveQueueItem[] = [];
+  let resolver: ((item: LiveQueueItem | undefined) => void) | null = null;
+  return {
+    enqueue(item) {
+      if (resolver) {
+        const resolve = resolver;
+        resolver = null;
+        resolve(item);
+      } else {
+        queue.push(item);
+      }
+    },
+    dequeue() {
+      if (queue.length > 0) return Promise.resolve(queue.shift());
+      return new Promise<LiveQueueItem | undefined>((resolve) => {
+        resolver = resolve;
+      });
+    },
+    get size() {
+      return queue.length;
+    },
+  };
+}
+
+interface LiveStreamState {
+  done: boolean;
+  setupComplete: boolean;
+}
+
+function buildLiveConfig(
+  messages: ConversationMessage[],
+  modelDefinition: ModelDefinition | undefined,
+  options: ProviderOptions,
+): Record<string, unknown> {
+  // This model ONLY supports AUDIO output modality.
+  // Text responses come via outputTranscription, not responseModalities.
+  const liveConfig: Record<string, unknown> = {
+    responseModalities: [Modality.AUDIO],
+    outputAudioTranscription: {},
+  };
+
+  if (options.temperature !== undefined)
+    liveConfig.temperature = options.temperature;
+  if (options.topP !== undefined) liveConfig.topP = options.topP;
+  if (options.topK !== undefined) liveConfig.topK = options.topK;
+  if (
+    options.maxTokens !== undefined &&
+    options.maxTokens !== null &&
+    options.maxTokens > 0
+  ) {
+    liveConfig.maxOutputTokens = options.maxTokens;
+  }
+
+  applyLiveThinkingConfig(liveConfig, modelDefinition, options);
+
+  // Tools
+  const tools: GoogleToolConfigEntry[] = [];
+  if (options.webSearch) tools.push({ googleSearch: {} });
+  const customTools = convertToolsToGoogle(options.tools);
+  if (customTools) tools.push(...customTools);
+  if (tools.length > 0) liveConfig.tools = tools;
+
+  // System instruction from messages[0] if role === "system"
+  const systemMessage = messages.find((message) => message.role === "system");
+  if (systemMessage?.content) {
+    liveConfig.systemInstruction = systemMessage.content;
+  }
+  return liveConfig;
+}
+
+function applyLiveThinkingConfig(
+  liveConfig: Record<string, unknown>,
+  modelDefinition: ModelDefinition | undefined,
+  options: ProviderOptions,
+) {
+  const supportsThinking = modelDefinition?.thinking === true;
+  if (!supportsThinking || options.thinkingEnabled === false) return;
+  const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
+  if (options.thinkingBudget !== undefined && options.thinkingBudget !== "") {
+    thinkingConfig.thinkingBudget = parseInt(String(options.thinkingBudget));
+  } else if (options.thinkingLevel && modelDefinition?.thinkingLevels) {
+    thinkingConfig.thinkingLevel = options.thinkingLevel;
+  }
+  liveConfig.thinkingConfig = thinkingConfig;
+}
+
+/** Translate one Live API server message into queue items. */
+function handleLiveServerMessage(
+  message: LiveServerMessage,
+  queue: LiveEventQueue,
+  state: LiveStreamState,
+) {
+  // Setup complete — signal we can send messages
+  if (message.setupComplete !== undefined) {
+    state.setupComplete = true;
+    queue.enqueue({ type: "setupComplete" });
+    return;
+  }
+
+  if (message.serverContent) {
+    handleLiveServerContent(message.serverContent, queue, state);
+  }
+
+  // Tool calls from the server
+  if (message.toolCall?.functionCalls) {
+    enqueueLiveFunctionCalls(message.toolCall.functionCalls, queue);
+  }
+
+  if (message.usageMetadata) {
+    enqueueLiveUsage(message.usageMetadata, queue);
+  }
+}
+
+/** Model turn parts, output transcription and turn completion for one message. */
+function handleLiveServerContent(
+  serverContent: NonNullable<LiveServerMessage["serverContent"]>,
+  queue: LiveEventQueue,
+  state: LiveStreamState,
+) {
+  if (serverContent.modelTurn?.parts) {
+    enqueueLiveTurnParts(serverContent.modelTurn.parts, queue);
+  }
+
+  // Output transcription — TEXT transcript of the audio output.
+  // This is the primary text content for the SSE chat flow.
+  if (serverContent.outputTranscription?.text) {
+    queue.enqueue({
+      type: "text",
+      content: serverContent.outputTranscription.text,
+    });
+  }
+
+  // Turn complete — signal we're done
+  if (serverContent.turnComplete) {
+    state.done = true;
+    queue.enqueue({ type: "done" });
+  }
+}
+
+function enqueueLiveTurnParts(parts: Part[], queue: LiveEventQueue) {
+  for (const part of parts) {
+    if (part.thought && part.text) {
+      queue.enqueue({ type: "thinking", content: part.text });
+    } else if (part.inlineData) {
+      // Audio chunks from the model — forward for playback
+      queue.enqueue({
+        type: "audio",
+        data: part.inlineData.data,
+        mimeType: part.inlineData.mimeType,
+      });
+    } else if (part.text) {
+      queue.enqueue({ type: "text", content: part.text });
+    } else if (part.functionCall) {
+      queue.enqueue({
+        type: "toolCall",
+        id: `google-toolCall-${crypto.randomUUID()}`,
+        name: part.functionCall.name,
+        args: part.functionCall.args || {},
+        thoughtSignature: part.thoughtSignature || undefined,
+      });
+    }
+  }
+}
+
+function enqueueLiveFunctionCalls(
+  functionCalls: NonNullable<LiveServerMessage["toolCall"]>["functionCalls"],
+  queue: LiveEventQueue,
+) {
+  for (const functionCall of functionCalls || []) {
+    queue.enqueue({
+      type: "toolCall",
+      id: `google-toolCall-${crypto.randomUUID()}`,
+      name: functionCall.name || "any",
+      args: (functionCall.args || {}) as Record<string, unknown>,
+    });
+  }
+}
+
+function enqueueLiveUsage(
+  usageMetadata: NonNullable<LiveServerMessage["usageMetadata"]>,
+  queue: LiveEventQueue,
+) {
+  if (usageMetadata.promptTokenCount || usageMetadata.responseTokenCount) {
+    queue.enqueue({
+      type: "usage",
+      usage: {
+        inputTokens: usageMetadata.promptTokenCount ?? 0,
+        outputTokens: usageMetadata.responseTokenCount ?? 0,
+        ...(usageMetadata.cachedContentTokenCount
+          ? { cacheReadInputTokens: usageMetadata.cachedContentTokenCount }
+          : {}),
+      },
+    });
+  }
+}
+
+/** Best-effort error message from the Live API's nested error payload. */
+function liveErrorMessage(error: unknown): string {
+  if (!error || typeof error !== "object") return "unknown error";
+  const inner = "error" in error ? error.error : null;
+  const innerMessage =
+    inner &&
+    typeof inner === "object" &&
+    "message" in inner &&
+    typeof inner.message === "string"
+      ? inner.message
+      : "";
+  const outerMessage =
+    "message" in error && typeof error.message === "string"
+      ? error.message
+      : "";
+  return innerMessage || outerMessage || "unknown error";
+}
+
+/** Wait for setupComplete; false means the session closed before setup. */
+async function waitForLiveSetup(queue: LiveEventQueue): Promise<boolean> {
+  for (;;) {
+    const item = await queue.dequeue();
+    if (item?.type === "setupComplete") return true;
+    if (item?.type === "error") {
+      throw new ProviderError("google", item.message || "Unknown error", 500);
+    }
+    if (item?.type === "done") return false;
+  }
+}
+
+/** Seed prior turns with sendClientContent, then send the last user message. */
+function sendLiveConversation(
+  session: GoogleLiveSession,
+  messages: ConversationMessage[],
+) {
+  const nonSystemMessages = messages.filter(
+    (message) => message.role !== "system",
+  );
+  const lastUserMessage = nonSystemMessages[nonSystemMessages.length - 1];
+  const priorMessages = nonSystemMessages.slice(0, -1);
+
+  // Build Content objects for prior history turns
+  if (priorMessages.length > 0) {
+    const historyTurns: Content[] = [];
+    for (const message of priorMessages) {
+      const parts: Part[] = [];
+      if (message.content) parts.push({ text: message.content });
+      if (parts.length > 0) {
+        historyTurns.push({
+          role: message.role === "assistant" ? "model" : "user",
+          parts,
+        });
+      }
+    }
+    if (historyTurns.length > 0) {
+      session.sendClientContent({
+        turns: historyTurns,
+        turnComplete: false,
+      });
+    }
+  }
+
+  // Send the final user message via sendRealtimeInput
+  if (lastUserMessage?.content) {
+    session.sendRealtimeInput({ text: lastUserMessage.content });
+  }
+}
+
+function* emitLiveQueueItem(
+  item: LiveQueueItem,
+): Generator<Record<string, unknown> | string | undefined, void, unknown> {
+  if (item.type === "text") {
+    yield item.content;
+  } else if (item.type === "thinking") {
+    yield { type: "thinking", content: item.content };
+  } else if (item.type === "toolCall") {
+    yield {
+      type: "toolCall",
+      id: item.id,
+      name: item.name,
+      args: item.args,
+      thoughtSignature: item.thoughtSignature,
+    };
+  } else if (item.type === "usage") {
+    yield { type: "usage", usage: item.usage };
+  } else if (item.type === "audio") {
+    yield { type: "audio", data: item.data, mimeType: item.mimeType };
+  }
+}
+
 const googleProvider = {
   name: "google",
 
@@ -477,57 +969,7 @@ const googleProvider = {
         contents,
         config,
       });
-
-      // Check for function calls, images, and text in the response
-      interface ToolCallResult {
-        id: string;
-        name: string;
-        args: Record<string, unknown>;
-        thoughtSignature?: string;
-      }
-      interface ImageResult {
-        data: string;
-        mimeType: string;
-      }
-      const toolCalls: ToolCallResult[] = [];
-      const textParts: string[] = [];
-      const images: ImageResult[] = [];
-      const maxImages = options.imageCount || 1;
-      for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if (part.functionCall) {
-          toolCalls.push({
-            id: `google-toolCall-${crypto.randomUUID()}`,
-            name: part.functionCall.name || "any",
-            args: (part.functionCall.args || {}) as Record<string, unknown>,
-            thoughtSignature: (part as PartWithThoughtSignature)
-              .thoughtSignature,
-          });
-        } else if (part.text) {
-          textParts.push(part.text);
-        } else if (part.inlineData && images.length < maxImages) {
-          images.push({
-            data: part.inlineData.data || "",
-            mimeType: part.inlineData.mimeType || "image/png",
-          });
-        }
-      }
-
-      const result: GenerateTextResult = {
-        text: textParts.join("") || response.text || "",
-        usage: {
-          inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-          outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
-          ...(response.usageMetadata?.cachedContentTokenCount
-            ? {
-                cacheReadInputTokens:
-                  response.usageMetadata.cachedContentTokenCount,
-              }
-            : {}),
-        },
-      };
-      if (toolCalls.length > 0) result.toolCalls = toolCalls;
-      if (images.length > 0) result.images = images;
-      return result;
+      return extractGoogleTextResult(response, options);
     } catch (error: unknown) {
       // Content safety blocks (PROHIBITED_CONTENT, SAFETY, IMAGE_SAFETY)
       // should return an empty result, not a 500. This lets consumers
@@ -545,7 +987,6 @@ const googleProvider = {
       throw new ProviderError("google", getErrorMessage(error), 500, error);
     }
   },
-
   async *generateTextStream(
     messages: ConversationMessage[],
     model: string = getDefaultModels(TYPES.TEXT, TYPES.TEXT).google,
@@ -560,15 +1001,7 @@ const googleProvider = {
       const config = buildGenerateConfig(options, modelDefinition);
 
       // Build tools array based on enabled options
-      const tools: GoogleToolConfigEntry[] = [];
-      if (options.webSearch) tools.push({ googleSearch: {} });
-      if (options.codeExecution) tools.push({ codeExecution: {} });
-      if (options.urlContext) tools.push({ urlContext: {} });
-
-      // Custom function calling tools
-      const customTools = convertToolsToGoogle(options.tools);
-      if (customTools) tools.push(...customTools);
-
+      const tools = buildGoogleStreamTools(options);
       if (tools.length > 0) config.tools = tools;
 
       // For models that output images, set responseModalities explicitly.
@@ -590,77 +1023,21 @@ const googleProvider = {
         contents,
         config: streamConfig,
       });
-      let usage: { inputTokens: number; outputTokens: number } | null = null;
+
+      const state = createGoogleStreamState();
       const maxImages = options.imageCount || 1;
-      let imageCount = 0;
-      let lastFinishReason: string | null = null;
       for await (const chunk of responseStream) {
         if (options.signal?.aborted) break;
-        // Track finishReason for truncation detection
-        const candidateFinishReason = chunk.candidates?.[0]?.finishReason;
-        if (candidateFinishReason) lastFinishReason = candidateFinishReason;
-        // Process all parts in the chunk
-        if (chunk.candidates?.[0]?.content?.parts) {
-          for (const part of chunk.candidates[0].content.parts) {
-            if (part.functionCall) {
-              yield {
-                type: "toolCall",
-                id: `google-toolCall-${crypto.randomUUID()}`,
-                name: part.functionCall.name || "any",
-                args: (part.functionCall.args || {}) as Record<string, unknown>,
-                thoughtSignature: (part as PartWithThoughtSignature)
-                  .thoughtSignature,
-              };
-            } else if (part.thought && part.text) {
-              yield { type: "thinking", content: part.text };
-            } else if (part.text) {
-              yield part.text;
-            } else if (part.inlineData && imageCount < maxImages) {
-              imageCount++;
-              yield {
-                type: "image",
-                data: part.inlineData.data || "",
-                mimeType: part.inlineData.mimeType || "image/png",
-              };
-            } else if (part.executableCode?.code) {
-              yield {
-                type: "executableCode",
-                code: part.executableCode.code,
-                language: part.executableCode.language || "python",
-              };
-            } else if (part.codeExecutionResult) {
-              yield {
-                type: "codeExecutionResult",
-                output: part.codeExecutionResult.output || "",
-                outcome: part.codeExecutionResult.outcome || "OK",
-              };
-            }
-          }
-        } else if (chunk.text) {
-          yield chunk.text;
-        }
-        if (chunk.usageMetadata) {
-          usage = {
-            inputTokens: chunk.usageMetadata.promptTokenCount ?? 0,
-            outputTokens: chunk.usageMetadata.candidatesTokenCount ?? 0,
-            ...(chunk.usageMetadata.cachedContentTokenCount
-              ? {
-                  cacheReadInputTokens:
-                    chunk.usageMetadata.cachedContentTokenCount,
-                }
-              : {}),
-          };
-        }
+        yield* reduceGoogleStreamChunk(state, chunk, maxImages);
       }
       // Surface max_tokens truncation so harnesses can detect and warn the user
-      if (lastFinishReason === "MAX_TOKENS") {
+      if (state.lastFinishReason === "MAX_TOKENS") {
         yield { type: "stopReason", stopReason: "max_tokens" };
       }
-      if (usage) {
-        yield { type: "usage", usage };
-      } else {
-        yield { type: "usage", usage: { inputTokens: 0, outputTokens: 0 } };
-      }
+      yield {
+        type: "usage",
+        usage: state.usage ?? { inputTokens: 0, outputTokens: 0 },
+      };
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") return;
       if (isSafetyBlockError(error)) {
@@ -677,7 +1054,6 @@ const googleProvider = {
       throw new ProviderError("google", getErrorMessage(error), 500, error);
     }
   },
-
   /**
    * Live API streaming — for models that only support the bidirectional
    * WebSocket-based BidiGenerateContent method (e.g. gemini-3.1-flash-live-preview).
@@ -697,98 +1073,13 @@ const googleProvider = {
     const modelDefinition = Object.values(MODELS).find(
       (modelDefinitionItem) => modelDefinitionItem.name === model,
     ) as ModelDefinition | undefined;
-    let session: Awaited<ReturnType<GoogleGenAI["live"]["connect"]>> | null =
-      null;
+    let session: GoogleLiveSession | null = null;
     try {
-      // ── Build Live API config ────────────────────────────────────
-      // This model ONLY supports AUDIO output modality.
-      // Text responses come via outputTranscription, not responseModalities.
-      const liveConfig: Record<string, unknown> = {
-        responseModalities: [Modality.AUDIO],
-        outputAudioTranscription: {},
-      };
-
-      if (options.temperature !== undefined)
-        liveConfig.temperature = options.temperature;
-      if (options.topP !== undefined) liveConfig.topP = options.topP;
-      if (options.topK !== undefined) liveConfig.topK = options.topK;
-      if (
-        options.maxTokens !== undefined &&
-        options.maxTokens !== null &&
-        options.maxTokens > 0
-      ) {
-        liveConfig.maxOutputTokens = options.maxTokens;
-      }
-
-      const supportsThinking = modelDefinition?.thinking === true;
-      if (supportsThinking && options.thinkingEnabled !== false) {
-        const thinkingConfig: Record<string, unknown> = {
-          includeThoughts: true,
-        };
-        if (
-          options.thinkingBudget !== undefined &&
-          options.thinkingBudget !== ""
-        ) {
-          thinkingConfig.thinkingBudget = parseInt(
-            String(options.thinkingBudget),
-          );
-        } else if (options.thinkingLevel && modelDefinition?.thinkingLevels) {
-          thinkingConfig.thinkingLevel = options.thinkingLevel;
-        }
-        liveConfig.thinkingConfig = thinkingConfig;
-      }
-
-      // Tools
-      const tools: GoogleToolConfigEntry[] = [];
-      if (options.webSearch) tools.push({ googleSearch: {} });
-      const customTools = convertToolsToGoogle(options.tools);
-      if (customTools) tools.push(...customTools);
-      if (tools.length > 0) liveConfig.tools = tools;
-
-      // System instruction from messages[0] if role === "system"
-      const systemMessage = messages.find(
-        (message) => message.role === "system",
-      );
-      if (systemMessage?.content) {
-        liveConfig.systemInstruction = systemMessage.content;
-      }
+      const liveConfig = buildLiveConfig(messages, modelDefinition, options);
 
       // ── Async queue to bridge callbacks → async generator ─────────
-      interface LiveQueueItem {
-        type: string;
-        content?: string;
-        data?: string;
-        mimeType?: string;
-        id?: string;
-        name?: string;
-        args?: Record<string, unknown>;
-        thoughtSignature?: string;
-        usage?: { inputTokens: number; outputTokens: number };
-        message?: string;
-      }
-      const queue: LiveQueueItem[] = [];
-      let resolver: ((item: LiveQueueItem) => void) | null = null;
-      let done = false;
-      let setupComplete = false;
-
-      function enqueue(item: LiveQueueItem) {
-        if (resolver) {
-          const r = resolver;
-          resolver = null;
-          r(item);
-        } else {
-          queue.push(item);
-        }
-      }
-
-      function dequeue(): Promise<LiveQueueItem | undefined> {
-        if (queue.length > 0) {
-          return Promise.resolve(queue.shift());
-        }
-        return new Promise<LiveQueueItem | undefined>((resolve) => {
-          resolver = resolve as (item: LiveQueueItem) => void;
-        });
-      }
+      const queue = createLiveEventQueue();
+      const state: LiveStreamState = { done: false, setupComplete: false };
 
       // ── Connect to Live API ───────────────────────────────────────
       session = await getClient().live.connect({
@@ -799,173 +1090,36 @@ const googleProvider = {
             logger.provider("Google", `Live API session opened for ${model}`);
           },
           onmessage: (message: LiveServerMessage) => {
-            // Setup complete — signal we can send messages
-            if (message.setupComplete !== undefined) {
-              setupComplete = true;
-              enqueue({ type: "setupComplete" });
-              return;
-            }
-
-            // Audio data from model turn (inlineData)
-            if (message.serverContent?.modelTurn?.parts) {
-              for (const part of message.serverContent.modelTurn.parts) {
-                if (part.thought && part.text) {
-                  enqueue({ type: "thinking", content: part.text });
-                } else if (part.inlineData) {
-                  // Audio chunks from the model — forward for playback
-                  enqueue({
-                    type: "audio",
-                    data: part.inlineData.data,
-                    mimeType: part.inlineData.mimeType,
-                  });
-                } else if (part.text) {
-                  enqueue({ type: "text", content: part.text });
-                } else if (part.functionCall) {
-                  enqueue({
-                    type: "toolCall",
-                    id: `google-toolCall-${crypto.randomUUID()}`,
-                    name: part.functionCall.name,
-                    args: part.functionCall.args || {},
-                    thoughtSignature: part.thoughtSignature || undefined,
-                  });
-                }
-              }
-            }
-
-            // Output transcription — TEXT transcript of the audio output.
-            // This is the primary text content for the SSE chat flow.
-            if (message.serverContent?.outputTranscription?.text) {
-              enqueue({
-                type: "text",
-                content: message.serverContent.outputTranscription.text,
-              });
-            }
-
-            // Tool calls from the server
-            if (message.toolCall?.functionCalls) {
-              for (const functionCall of message.toolCall.functionCalls) {
-                enqueue({
-                  type: "toolCall",
-                  id: `google-toolCall-${crypto.randomUUID()}`,
-                  name: functionCall.name || "any",
-                  args: (functionCall.args || {}) as Record<string, unknown>,
-                });
-              }
-            }
-
-            // Usage metadata
-            if (message.usageMetadata) {
-              const user = message.usageMetadata;
-              if (user.promptTokenCount || user.responseTokenCount) {
-                enqueue({
-                  type: "usage",
-                  usage: {
-                    inputTokens: user.promptTokenCount ?? 0,
-                    outputTokens: user.responseTokenCount ?? 0,
-                    ...((user as Record<string, unknown>)
-                      .cachedContentTokenCount
-                      ? {
-                          cacheReadInputTokens: (
-                            user as Record<string, unknown>
-                          ).cachedContentTokenCount as number,
-                        }
-                      : {}),
-                  },
-                });
-              }
-            }
-
-            // Turn complete — signal we're done
-            if (message.serverContent?.turnComplete) {
-              done = true;
-              enqueue({ type: "done" });
-            }
+            handleLiveServerMessage(message, queue, state);
           },
           onerror: (e: unknown) => {
-            const errorObject = e as Record<string, unknown> | null;
-            const innerError = (errorObject?.error ?? null) as Record<
-              string,
-              unknown
-            > | null;
-            const errorMessage =
-              (innerError?.message as string) ||
-              (errorObject?.message as string) ||
-              "unknown error";
+            const errorMessage = liveErrorMessage(e);
             logger.error(`[Google Live API] Error: ${errorMessage}`);
-            done = true;
-            enqueue({
+            state.done = true;
+            queue.enqueue({
               type: "error",
               message: errorMessage,
             });
           },
           onclose: () => {
             logger.provider("Google", "Live API session closed");
-            done = true;
-            enqueue({ type: "done" });
+            state.done = true;
+            queue.enqueue({ type: "done" });
           },
         },
       });
 
       // ── Wait for setupComplete before sending ─────────────────────
-      while (!setupComplete) {
-        const item = await dequeue();
-        if (item?.type === "setupComplete") break;
-        if (item?.type === "error")
-          throw new ProviderError(
-            "google",
-            item.message || "Unknown error",
-            500,
-          );
-        if (item?.type === "done") return;
-      }
+      if (!(await waitForLiveSetup(queue))) return;
 
       // ── Seed conversation history & send user message ─────────────
-      // sendClientContent works for seeding prior turns (turnComplete: false)
-      // but causes "invalid argument" when used as the final turn.
-      // So we seed history with sendClientContent, then send the last
-      // user message via sendRealtimeInput.
-      const nonSystemMessages = messages.filter(
-        (message) => message.role !== "system",
-      );
-      const lastUserMessage = nonSystemMessages[nonSystemMessages.length - 1];
-      const priorMessages = nonSystemMessages.slice(0, -1);
-
-      // Build Content objects for prior history turns
-      if (priorMessages.length > 0) {
-        const historyTurns: Content[] = [];
-        for (const message of priorMessages) {
-          const parts: Part[] = [];
-
-          if (message.content) {
-            parts.push({ text: message.content });
-          }
-
-          if (parts.length > 0) {
-            historyTurns.push({
-              role: message.role === "assistant" ? "model" : "user",
-              parts,
-            });
-          }
-        }
-
-        if (historyTurns.length > 0) {
-          session.sendClientContent({
-            turns: historyTurns,
-            turnComplete: false,
-          });
-        }
-      }
-
-      // Send the final user message via sendRealtimeInput
-      if (lastUserMessage?.content) {
-        session.sendRealtimeInput({ text: lastUserMessage.content });
-      }
+      sendLiveConversation(session, messages);
 
       // ── Yield chunks from the queue ───────────────────────────────
-      while (!done || queue.length > 0) {
+      while (!state.done || queue.size > 0) {
         if (options.signal?.aborted) break;
 
-        const item = await dequeue();
+        const item = await queue.dequeue();
         if (!item || item.type === "done") break;
 
         if (item.type === "error") {
@@ -976,23 +1130,7 @@ const googleProvider = {
           );
         }
 
-        if (item.type === "text") {
-          yield item.content;
-        } else if (item.type === "thinking") {
-          yield { type: "thinking", content: item.content };
-        } else if (item.type === "toolCall") {
-          yield {
-            type: "toolCall",
-            id: item.id,
-            name: item.name,
-            args: item.args,
-            thoughtSignature: item.thoughtSignature,
-          };
-        } else if (item.type === "usage") {
-          yield { type: "usage", usage: item.usage };
-        } else if (item.type === "audio") {
-          yield { type: "audio", data: item.data, mimeType: item.mimeType };
-        }
+        yield* emitLiveQueueItem(item);
       }
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") return;
@@ -1008,7 +1146,6 @@ const googleProvider = {
       }
     }
   },
-
   async captionImage(
     images: string[],
     prompt: string = "Describe this image.",
