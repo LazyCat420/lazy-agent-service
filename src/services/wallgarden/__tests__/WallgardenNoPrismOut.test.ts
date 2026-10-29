@@ -39,8 +39,8 @@ const { handleConversationCalls, handleConversationMock } = vi.hoisted(() => {
 });
 // Mock both specifier spellings — the source imports the `.js` alias of
 // ChatRoutes.ts, and the resolver may expose either.
-vi.mock("../../../routes/ChatRoutes.js", () => ({ handleConversation: handleConversationMock }));
-vi.mock("../../../routes/ChatRoutes.ts", () => ({ handleConversation: handleConversationMock }));
+vi.mock("../../../core/chat/ChatGeneration.js", () => ({ handleConversation: handleConversationMock }));
+vi.mock("../../../core/chat/ChatGeneration.ts", () => ({ handleConversation: handleConversationMock }));
 
 // Fail the test loudly if anything fetches — especially prism's :7777.
 const fetchCalls: string[] = [];

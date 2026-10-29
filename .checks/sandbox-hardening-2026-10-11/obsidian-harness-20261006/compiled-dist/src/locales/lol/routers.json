@@ -1,0 +1,56 @@
+{
+  "critic": {
+    "specializedRole": "ur a specialized critic w/ the following focus: {{criticRole}}\n",
+    "evaluator": "ur a critic evaluating a sub-agent's work output.",
+    "roundContext": "this is eval round {{roundNumber}} of {{maximumRounds}}.",
+    "originalTaskHeader": "## Orig Task",
+    "actorOutputHeader": "## Actor's Output",
+    "jobHeader": "## Ur Job",
+    "jobInstruction": "evaluate the actor's output rigorously against the orig task reqs.\nb adversarial — look 4 mistakes, missed edge cases, incomplete work, poor quality, or incorrect reasoning.",
+    "verdictInstruction": "respond w/ ONE of these verdicts:",
+    "passVerdict": "**PASS** — the output fully & correctly satisfies the task. explain briefly why it passes.",
+    "failVerdict": "**FAIL** — the output has issues that need fixing. provide specific, actionable feedback:\n- what exactly is wrong or missing\n- what specific changes r needed\n- ref file paths, line #s, or code snippets where applicable",
+    "verdictFormat": "start ur resp w/ either **PASS** or **FAIL** on the 1st line.",
+    "revisionHeader": "ur prev work was reviewed by {{criticCount}} critic(s) in round {{roundNumber}} & needs revision.",
+    "failedCount": "{{failedCount}} critic(s) FAILED ur output. u must addr ALL their feedback.",
+    "revisionInstructions": "1. addr ALL issues raised by EVERY failing critic.\n2. make the specific changes req'd.\n3. do NOT regress on areas that passed — critics who passed will review again.\n4. verify ur corrections (run tests, typecheck, etc.).\n5. commit & report what u changed.\n\nfocus on fixing the ID'd issues — do not restart from scratch unless the feedback needs it.",
+    "defaultPrompt": "review & evaluate the actor's output."
+  },
+  "jury": {
+    "judge": "ur a judge evaluating multiple competing solutions 2 the same task.",
+    "evaluateInstruction": "evaluate all {{actorCount}} solutions & select the BEST 1.\nscore ea on: correctness, completeness, code quality, & verification.",
+    "responseFormat": "respond w/ ONLY a JSON obj. no md fences, no explanations outside the JSON.",
+    "bestActorDescription": "- `bestActorIndex`: 0-based idx of the best actor\n- `verdict`: PASS if the best solution is complete, FAIL if it needs refinement\n- `feedback`: if FAIL, specific actionable feedback 4 improvement. if PASS, brief explanation.",
+    "revisionHeader": "ur prev work was selected as the best among competing actors, but it needs revision (round {{roundNumber}}).",
+    "revisionInstructions": "1. addr ALL issues raised by the judge.\n2. make the specific changes req'd.\n3. verify ur corrections (run tests, typecheck, etc.).\n4. commit & report what u changed.\n\nfocus on fixing the ID'd issues — do not restart from scratch unless the feedback needs it."
+  },
+  "divideAndConquer": {
+    "planner": "ur a task decomposition planner.",
+    "planInstruction": "ur job is 2 break down a complex task into subtasks that can b exec'd by separate sub-agents.",
+    "plannerInstructions": "1. analyze the task & ID {{maximumSubtasks}} or fewer subtasks.\n2. ea subtask should b as self-contained as possible.\n3. subtasks should NOT overlap in scope — avoid 2 subtasks modifying the same files.\n4. ea subtask must include specific file paths, fn names, & exact instructions.\n5. do NOT include meta-tasks like 'review' or 'verify' — focus on impl work.\n6. if a subtask depends on the output of another subtask (e.g., 'write tests' depends on 'implement feature'),\n   specify `dependsOn` as an array of 0-based subtask indices. independent subtasks should omit this field.",
+    "decompositionContext": "decompose the task based on the current sys arch & user reqs.",
+    "planFormat": "respond w/ ONLY a JSON array of subtask objs. no md fences, no explanations outside the JSON.",
+    "synthesizer": "ur a synthesis agent 4 a divide-and-conquer exec.",
+    "synthesizeInstruction": "combine the following subtask results into a unified final answer.\nresolve any conflicts between subtask results.",
+    "synthesizeInstructions": "1. analyze all subtask results above.\n2. verify that the orig task has been fully addr'd across all subtasks.\n3. ID any gaps — subtasks that failed or areas that weren't covered.\n4. produce a single, coherent synthesis that combines all subtask results.\n5. if any subtasks failed, note what remains 2 b done.\n6. b concise but thorough — produce an integrated summary, not a concatenation."
+  },
+  "hierarchical": {
+    "synthesizer": "ur a synthesis agent 4 the team \"{{teamName}}\".{{layerContext}}",
+    "mergeJobDescription": "{{memberCount}} sub-agents have completed their work. ur job is 2 merge their outputs into a single, unified result.",
+    "mergeInstructions": "1. analyze all sub-agent outputs above.\n2. ID agreements, conflicts, & complementary info.\n3. produce a single, coherent synthesis that combines the best reasoning & findings from ea sub-agent.\n4. if any sub-agents failed, note which ones & incorporate results from the successful ones.\n5. b concise but thorough. do not simply concatenate the outputs — produce an integrated result."
+  },
+  "mcts": {
+    "evaluator": "ur an evaluator in a Monte Carlo Tree Search (MCTS) 4 agent reasoning.",
+    "evaluateInstruction": "evaluate ea candidate solution & score them on a scale of 0.0 2 1.0 based on:\n- **Correctness** (0.3 weight) — is the solution technically correct?\n- **Completeness** (0.3 weight) — how much of the task is addr'd?\n- **Quality** (0.2 weight) — code quality, reasoning clarity, robustness\n- **Verification** (0.2 weight) — did the agent verify its work?",
+    "completeCheck": "also determine if the BEST candidate is a complete solution (no further iterations needed).\nprovide per-branch feedback explaining ea branch's strengths & weaknesses.",
+    "responseFormat": "respond w/ ONLY a JSON obj. no md fences, no explanations outside the JSON.",
+    "refinementContext": "ur continuing work on a task. a prev attempt was evaluated & selected as the best approach, but it needs refinement."
+  },
+  "tournament": {
+    "judge": "ur a judge 4 the team \"{{teamName}}\".",
+    "judgeJobDescription": "{{memberCount}} sub-agents have independently completed the same task. ur job is 2 evaluate their outputs & select the SINGLE BEST result.",
+    "judgeInstructions": "1. evaluate ea sub-agent's output on the following criteria:\n   - **Correctness** — is the solution factually & technically correct?\n   - **Completeness** — does it fully addr the task reqs?\n   - **Quality** — is the code/reasoning clean, well-structured, & robust?\n   - **Verification** — did the agent verify its work (tests, typechecks)?\n2. select the single best sub-agent result. state which sub-agent # u chose.\n3. reproduce the winning sub-agent's output VERBATIM — do not modify, merge, or improve it.\n4. briefly justify ur selection (2-3 sentences max).",
+    "judgeFormat": "format ur resp as:\n**Winner:** Sub-Agent #N\n**Justification:** [brief reason]\n\n**Selected Output:**\n[reproduce the winning output verbatim]",
+    "verifier": "ur a verification agent. run the following cmds & report PASS or FAIL 4 each:"
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ErrorCodesCatalogV1_2",
+  "version": "1.2.0",
+  "description": "Authoritative machine-readable error codes for the shared agent runtime.",
+  "errors": [
+    {
+      "code": "CONTRACT_VERSION_MISMATCH",
+      "category": "CLIENT",
+      "retryable": false,
+      "description": "Requested contract major version is incompatible with the runtime."
+    },
+    {
+      "code": "UNKNOWN_CAPABILITY",
+      "category": "POLICY",
+      "retryable": false,
+      "description": "Requested capability ID is not registered in the CapabilityRegistry."
+    },
+    {
+      "code": "UNSUPPORTED_CAPABILITY_VERSION",
+      "category": "POLICY",
+      "retryable": false,
+      "description": "Capability version specified in profile is incompatible with registered capability version."
+    },
+    {
+      "code": "PROFILE_NOT_FOUND",
+      "category": "CLIENT",
+      "retryable": false,
+      "description": "Requested agent profile could not be found in the registry or loaded from disk."
+    },
+    {
+      "code": "PROFILE_VALIDATION_ERROR",
+      "category": "POLICY",
+      "retryable": false,
+      "description": "Profile manifest violated schema, model constraints, or capability permissions."
+    },
+    {
+      "code": "POLICY_VIOLATION",
+      "category": "POLICY",
+      "retryable": false,
+      "description": "Tool invocation violated execution policy, security boundary, or confirmation requirement."
+    },
+    {
+      "code": "SCOPE_VIOLATION",
+      "category": "POLICY",
+      "retryable": false,
+      "description": "Tool invocation lacked required application or session scope (app_id, session_id)."
+    },
+    {
+      "code": "IDEMPOTENCY_CONFLICT",
+      "category": "CLIENT",
+      "retryable": true,
+      "description": "Concurrent execution in progress under the same idempotency key."
+    },
+    {
+      "code": "DEADLINE_EXCEEDED",
+      "category": "RESOURCE",
+      "retryable": false,
+      "description": "Run execution exceeded the allocated wall-clock deadline."
+    },
+    {
+      "code": "RUN_CANCELLED",
+      "category": "CLIENT",
+      "retryable": false,
+      "description": "Run was explicitly cancelled via abort signal or cancellation endpoint."
+    },
+    {
+      "code": "TOOL_EXECUTION_FAILED",
+      "category": "TOOL",
+      "retryable": false,
+      "description": "Runtime execution of an authorized global capability failed."
+    },
+    {
+      "code": "LOCAL_TOOL_ADMISSION_ERROR",
+      "category": "TOOL",
+      "retryable": false,
+      "description": "Local application tool could not be admitted due to authorization or scoping error."
+    },
+    {
+      "code": "RUNTIME_UNAVAILABLE",
+      "category": "RUNTIME",
+      "retryable": true,
+      "description": "Shared agent runtime is unavailable or unreachable."
+    },
+    {
+      "code": "MALFORMED_REQUEST",
+      "category": "CLIENT",
+      "retryable": false,
+      "description": "Payload failed validation against canonical CreateRunRequest schema."
+    }
+  ]
+}

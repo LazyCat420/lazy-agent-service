@@ -1,0 +1,1840 @@
+{
+  "issues": [
+    {
+      "file": "src/db.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [
+        {
+          "name": "src/db.ts"
+        }
+      ],
+      "types": []
+    },
+    {
+      "file": "src/telemetry/otel.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [
+        {
+          "name": "src/telemetry/otel.ts"
+        }
+      ],
+      "types": []
+    },
+    {
+      "file": "src/services/SkillService.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [
+        {
+          "name": "src/services/SkillService.ts"
+        }
+      ],
+      "types": []
+    },
+    {
+      "file": "src/platform/context/RepositoryMapService.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [
+        {
+          "name": "src/platform/context/RepositoryMapService.ts"
+        }
+      ],
+      "types": []
+    },
+    {
+      "file": "src/services/memory/index.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [
+        {
+          "name": "src/services/memory/index.ts"
+        }
+      ],
+      "types": []
+    },
+    {
+      "file": "src/services/somatic/index.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [
+        {
+          "name": "src/services/somatic/index.ts"
+        }
+      ],
+      "types": []
+    },
+    {
+      "file": "src/services/harnesses/lifecycle/ToolExecutor.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "executeToolSingle",
+          "line": 417,
+          "col": 23,
+          "pos": 14033
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/platform/rules/RuleLoader.ts",
+      "duplicates": [
+        [
+          {
+            "name": "RuleLoader",
+            "line": 128,
+            "col": 14,
+            "pos": 3965
+          },
+          {
+            "name": "default",
+            "line": 201,
+            "col": 16,
+            "pos": 5946
+          }
+        ]
+      ],
+      "exports": [
+        {
+          "name": "default",
+          "line": 201,
+          "col": 16,
+          "pos": 5946
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/harnesses/lifecycle/Finalizer.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "shouldSkipLearningForProject",
+          "line": 40,
+          "col": 10,
+          "pos": 1632
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/routes/AgentRoutes.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "dispatchAgentRouteWithRollback",
+          "line": 19,
+          "col": 3,
+          "pos": 873
+        },
+        {
+          "name": "runCoreLoopForAgent",
+          "line": 20,
+          "col": 3,
+          "pos": 907
+        },
+        {
+          "name": "shouldUseCoreLoopForAgent",
+          "line": 21,
+          "col": 3,
+          "pos": 930
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/routes/ExecuteRoutes.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "classifyToolResult",
+          "line": 57,
+          "col": 10,
+          "pos": 2137
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/DelegateTool.ts",
+      "duplicates": [
+        [
+          {
+            "name": "DelegateTool",
+            "line": 59,
+            "col": 14,
+            "pos": 2230
+          },
+          {
+            "name": "default",
+            "line": 197,
+            "col": 16,
+            "pos": 7233
+          }
+        ]
+      ],
+      "exports": [
+        {
+          "name": "default",
+          "line": 197,
+          "col": 16,
+          "pos": 7233
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/SubagentRegistry.ts",
+      "duplicates": [
+        [
+          {
+            "name": "SubagentRegistry",
+            "line": 119,
+            "col": 14,
+            "pos": 3795
+          },
+          {
+            "name": "default",
+            "line": 168,
+            "col": 16,
+            "pos": 5563
+          }
+        ]
+      ],
+      "exports": [
+        {
+          "name": "default",
+          "line": 168,
+          "col": 16,
+          "pos": 5563
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/learning/TradingLearningBoundary.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "compactQuery",
+          "line": 33,
+          "col": 17,
+          "pos": 1952
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/PolicyEngine.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "allowAll",
+          "line": 125,
+          "col": 17,
+          "pos": 3853
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/WebExtractService.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "namespace": "WebExtractModule",
+          "name": "webExtractStatus",
+          "line": 455,
+          "col": 17,
+          "pos": 20987
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/VllmModelSyncService.ts",
+      "duplicates": [
+        [
+          {
+            "name": "VllmModelSyncService",
+            "line": 70,
+            "col": 14,
+            "pos": 2730
+          },
+          {
+            "name": "default",
+            "line": 404,
+            "col": 16,
+            "pos": 15220
+          }
+        ]
+      ],
+      "exports": [
+        {
+          "name": "default",
+          "line": 404,
+          "col": 16,
+          "pos": 15220
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/utils/ProviderStreamResilience.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "callWithRetries",
+          "line": 476,
+          "col": 23,
+          "pos": 17436
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/constants/TokenBudgetDefaults.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "OUTPUT_TOKEN_CLAMP_SAFETY_MARGIN",
+          "line": 29,
+          "col": 14,
+          "pos": 1325
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/core/loop/SpillBuffer.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "READ_TOOL_SPILL_SCHEMA",
+          "line": 8,
+          "col": 14,
+          "pos": 284
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/core/loop/MessageCompactor.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "estimateMessageTokens",
+          "line": 56,
+          "col": 17,
+          "pos": 1695
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/harness2/HarnessTree.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "skillDescription",
+          "line": 46,
+          "col": 17,
+          "pos": 1704
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/harness2/Prompts.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "namespace": "prompts",
+          "name": "VERSION",
+          "line": 10,
+          "col": 14,
+          "pos": 417
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/harnesses/CodeInterpreter.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "__resetSandboxCheckForTests",
+          "line": 337,
+          "col": 17,
+          "pos": 15030
+        }
+      ],
+      "files": [],
+      "types": [
+        {
+          "name": "ExtractedCode",
+          "line": 51,
+          "col": 18,
+          "pos": 2275
+        }
+      ]
+    },
+    {
+      "file": "src/services/ToolTaxonomyConstants.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "DOMAINS",
+          "line": 2,
+          "col": 3,
+          "pos": 11
+        },
+        {
+          "name": "DOMAIN_TAGS",
+          "line": 3,
+          "col": 3,
+          "pos": 22
+        },
+        {
+          "name": "SERVER_SENT_EVENT_TYPES",
+          "line": 6,
+          "col": 3,
+          "pos": 70
+        },
+        {
+          "name": "STATUS_MESSAGES",
+          "line": 7,
+          "col": 3,
+          "pos": 97
+        },
+        {
+          "name": "AGENT_IDS",
+          "line": 8,
+          "col": 3,
+          "pos": 116
+        },
+        {
+          "name": "AGENTLESS_AGENT",
+          "line": 9,
+          "col": 3,
+          "pos": 129
+        },
+        {
+          "name": "TOPOLOGIES",
+          "line": 10,
+          "col": 3,
+          "pos": 148
+        },
+        {
+          "name": "DEFAULT_TOPOLOGY",
+          "line": 11,
+          "col": 3,
+          "pos": 162
+        },
+        {
+          "name": "DEFAULT_CONVERSATION_TITLE",
+          "line": 12,
+          "col": 3,
+          "pos": 182
+        },
+        {
+          "name": "DEFAULT_WORKFLOW_TITLE",
+          "line": 13,
+          "col": 3,
+          "pos": 212
+        },
+        {
+          "name": "DEFAULT_USERNAME",
+          "line": 14,
+          "col": 3,
+          "pos": 238
+        },
+        {
+          "name": "DEFAULT_PROJECT",
+          "line": 15,
+          "col": 3,
+          "pos": 258
+        },
+        {
+          "name": "isCoreDomain",
+          "line": 16,
+          "col": 3,
+          "pos": 277
+        }
+      ],
+      "files": [],
+      "types": [
+        {
+          "name": "ToolName",
+          "line": 20,
+          "col": 3,
+          "pos": 362
+        },
+        {
+          "name": "ServerSentEventType",
+          "line": 21,
+          "col": 3,
+          "pos": 374
+        },
+        {
+          "name": "StatusMessage",
+          "line": 22,
+          "col": 3,
+          "pos": 397
+        },
+        {
+          "name": "AgentId",
+          "line": 23,
+          "col": 3,
+          "pos": 414
+        },
+        {
+          "name": "TopologyType",
+          "line": 24,
+          "col": 3,
+          "pos": 425
+        },
+        {
+          "name": "DomainConstantKey",
+          "line": 25,
+          "col": 3,
+          "pos": 441
+        },
+        {
+          "name": "DomainEntry",
+          "line": 26,
+          "col": 3,
+          "pos": 462
+        },
+        {
+          "name": "DomainKey",
+          "line": 27,
+          "col": 3,
+          "pos": 477
+        },
+        {
+          "name": "DomainDisplayName",
+          "line": 28,
+          "col": 3,
+          "pos": 490
+        }
+      ]
+    },
+    {
+      "file": "src/constants.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "HARNESS_IDS",
+          "line": 159,
+          "col": 14,
+          "pos": 5141
+        },
+        {
+          "name": "THOUGHT_STRUCTURES",
+          "line": 164,
+          "col": 10,
+          "pos": 5266
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/utils/CleanupRegistry.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "runCleanupFunctions",
+          "line": 10,
+          "col": 3,
+          "pos": 419
+        },
+        {
+          "name": "cleanupCount",
+          "line": 12,
+          "col": 3,
+          "pos": 469
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/somatic/SomaticStateService.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "STAT_NAMES",
+          "line": 903,
+          "col": 10,
+          "pos": 27411
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/types/GlobalToolOrchestratorRegistry.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "getGlobalToolOrchestratorService",
+          "line": 10,
+          "col": 17,
+          "pos": 254
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/types/schemas.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "PostCustomToolSchema",
+          "line": 148,
+          "col": 14,
+          "pos": 5819
+        },
+        {
+          "name": "PutCustomToolSchema",
+          "line": 172,
+          "col": 14,
+          "pos": 6496
+        },
+        {
+          "name": "GetAgentConversationsQuerySchema",
+          "line": 362,
+          "col": 14,
+          "pos": 13313
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/types/index.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "ToolSchemaSchema",
+          "line": 29,
+          "col": 3,
+          "pos": 504
+        },
+        {
+          "name": "ChatMessageContentSchema",
+          "line": 30,
+          "col": 3,
+          "pos": 524
+        },
+        {
+          "name": "ChatMessageSchema",
+          "line": 31,
+          "col": 3,
+          "pos": 552
+        },
+        {
+          "name": "PostCustomToolSchema",
+          "line": 35,
+          "col": 3,
+          "pos": 644
+        },
+        {
+          "name": "PutCustomToolSchema",
+          "line": 36,
+          "col": 3,
+          "pos": 668
+        },
+        {
+          "name": "GetAgentConversationsQuerySchema",
+          "line": 56,
+          "col": 3,
+          "pos": 1164
+        },
+        {
+          "name": "MATCH_MODES",
+          "line": 114,
+          "col": 10,
+          "pos": 2281
+        },
+        {
+          "name": "COMPARATORS",
+          "line": 114,
+          "col": 23,
+          "pos": 2294
+        }
+      ],
+      "files": [],
+      "types": [
+        {
+          "name": "ProviderOptions",
+          "line": 2,
+          "col": 3,
+          "pos": 16
+        },
+        {
+          "name": "GoogleGenerateConfig",
+          "line": 3,
+          "col": 3,
+          "pos": 35
+        },
+        {
+          "name": "LmStudioLoadConfig",
+          "line": 4,
+          "col": 3,
+          "pos": 59
+        },
+        {
+          "name": "LmStudioModelMeta",
+          "line": 5,
+          "col": 3,
+          "pos": 81
+        },
+        {
+          "name": "LmStudioResponsesBody",
+          "line": 6,
+          "col": 3,
+          "pos": 102
+        },
+        {
+          "name": "StreamChunk",
+          "line": 7,
+          "col": 3,
+          "pos": 127
+        },
+        {
+          "name": "StreamThinkingChunk",
+          "line": 8,
+          "col": 3,
+          "pos": 142
+        },
+        {
+          "name": "StreamToolCallChunk",
+          "line": 9,
+          "col": 3,
+          "pos": 165
+        },
+        {
+          "name": "StreamUsageChunk",
+          "line": 10,
+          "col": 3,
+          "pos": 188
+        },
+        {
+          "name": "StreamImageChunk",
+          "line": 11,
+          "col": 3,
+          "pos": 208
+        },
+        {
+          "name": "StreamExecutableCodeChunk",
+          "line": 12,
+          "col": 3,
+          "pos": 228
+        },
+        {
+          "name": "StreamCodeExecutionResultChunk",
+          "line": 13,
+          "col": 3,
+          "pos": 257
+        },
+        {
+          "name": "GenerateTextResult",
+          "line": 14,
+          "col": 3,
+          "pos": 291
+        },
+        {
+          "name": "Request",
+          "line": 18,
+          "col": 3,
+          "pos": 352
+        },
+        {
+          "name": "Response",
+          "line": 19,
+          "col": 3,
+          "pos": 363
+        },
+        {
+          "name": "NextFunction",
+          "line": 20,
+          "col": 3,
+          "pos": 375
+        },
+        {
+          "name": "ErrorRequestHandler",
+          "line": 21,
+          "col": 3,
+          "pos": 391
+        },
+        {
+          "name": "RouteHandler",
+          "line": 22,
+          "col": 3,
+          "pos": 414
+        },
+        {
+          "name": "MongoMatch",
+          "line": 24,
+          "col": 3,
+          "pos": 445
+        },
+        {
+          "name": "CountMap",
+          "line": 25,
+          "col": 3,
+          "pos": 459
+        },
+        {
+          "name": "ChatRequest",
+          "line": 63,
+          "col": 15,
+          "pos": 1334
+        },
+        {
+          "name": "MemoryDocument",
+          "line": 66,
+          "col": 3,
+          "pos": 1386
+        },
+        {
+          "name": "MemorySearchResult",
+          "line": 67,
+          "col": 3,
+          "pos": 1404
+        },
+        {
+          "name": "MemoryStoreParams",
+          "line": 68,
+          "col": 3,
+          "pos": 1426
+        },
+        {
+          "name": "MemorySearchParams",
+          "line": 69,
+          "col": 3,
+          "pos": 1447
+        },
+        {
+          "name": "MemoryListParams",
+          "line": 70,
+          "col": 3,
+          "pos": 1469
+        },
+        {
+          "name": "ConsolidationAction",
+          "line": 71,
+          "col": 3,
+          "pos": 1489
+        },
+        {
+          "name": "ConsolidationResult",
+          "line": 72,
+          "col": 3,
+          "pos": 1512
+        },
+        {
+          "name": "ConsolidationParams",
+          "line": 73,
+          "col": 3,
+          "pos": 1535
+        },
+        {
+          "name": "ConsolidationBatch",
+          "line": 74,
+          "col": 3,
+          "pos": 1558
+        },
+        {
+          "name": "PartitionMeta",
+          "line": 75,
+          "col": 3,
+          "pos": 1580
+        },
+        {
+          "name": "ConsolidationRunResult",
+          "line": 76,
+          "col": 3,
+          "pos": 1597
+        },
+        {
+          "name": "ExtractedFact",
+          "line": 77,
+          "col": 3,
+          "pos": 1623
+        },
+        {
+          "name": "ExtractionMeta",
+          "line": 78,
+          "col": 3,
+          "pos": 1640
+        },
+        {
+          "name": "ExtractionParticipant",
+          "line": 79,
+          "col": 3,
+          "pos": 1658
+        },
+        {
+          "name": "SubAgentState",
+          "line": 83,
+          "col": 3,
+          "pos": 1720
+        },
+        {
+          "name": "WorktreeDiff",
+          "line": 84,
+          "col": 3,
+          "pos": 1737
+        },
+        {
+          "name": "SubAgentResult",
+          "line": 85,
+          "col": 3,
+          "pos": 1753
+        },
+        {
+          "name": "InstanceInfo",
+          "line": 86,
+          "col": 3,
+          "pos": 1771
+        },
+        {
+          "name": "InstanceAssignment",
+          "line": 87,
+          "col": 3,
+          "pos": 1787
+        },
+        {
+          "name": "OrchestratorSpawnParams",
+          "line": 88,
+          "col": 3,
+          "pos": 1809
+        },
+        {
+          "name": "OrchestratorContext",
+          "line": 89,
+          "col": 3,
+          "pos": 1836
+        },
+        {
+          "name": "ToolsApiResponse",
+          "line": 90,
+          "col": 3,
+          "pos": 1859
+        },
+        {
+          "name": "TeamEntry",
+          "line": 91,
+          "col": 3,
+          "pos": 1879
+        },
+        {
+          "name": "TeamMember",
+          "line": 92,
+          "col": 3,
+          "pos": 1892
+        },
+        {
+          "name": "TeamMemberResult",
+          "line": 93,
+          "col": 3,
+          "pos": 1906
+        },
+        {
+          "name": "DateRangeFilter",
+          "line": 97,
+          "col": 3,
+          "pos": 1969
+        },
+        {
+          "name": "AdminQueryParams",
+          "line": 98,
+          "col": 3,
+          "pos": 1988
+        },
+        {
+          "name": "RequestLogEntry",
+          "line": 99,
+          "col": 3,
+          "pos": 2008
+        },
+        {
+          "name": "ModalityFlags",
+          "line": 100,
+          "col": 3,
+          "pos": 2027
+        },
+        {
+          "name": "StatsOverview",
+          "line": 101,
+          "col": 3,
+          "pos": 2044
+        },
+        {
+          "name": "ProjectStats",
+          "line": 102,
+          "col": 3,
+          "pos": 2061
+        },
+        {
+          "name": "ModelStats",
+          "line": 103,
+          "col": 3,
+          "pos": 2077
+        },
+        {
+          "name": "MongoTimestampFilter",
+          "line": 104,
+          "col": 3,
+          "pos": 2091
+        },
+        {
+          "name": "LogChatGenerationParams",
+          "line": 105,
+          "col": 3,
+          "pos": 2115
+        },
+        {
+          "name": "LogBackgroundLlmCallParams",
+          "line": 106,
+          "col": 3,
+          "pos": 2142
+        },
+        {
+          "name": "TokenUsage",
+          "line": 107,
+          "col": 3,
+          "pos": 2172
+        },
+        {
+          "name": "GenerationOptions",
+          "line": 108,
+          "col": 3,
+          "pos": 2186
+        },
+        {
+          "name": "ToolEntry",
+          "line": 109,
+          "col": 3,
+          "pos": 2207
+        },
+        {
+          "name": "ToolCallEntry",
+          "line": 110,
+          "col": 3,
+          "pos": 2220
+        },
+        {
+          "name": "ChatMessage",
+          "line": 111,
+          "col": 3,
+          "pos": 2237
+        },
+        {
+          "name": "MatchMode",
+          "line": 117,
+          "col": 3,
+          "pos": 2348
+        },
+        {
+          "name": "TextAssertion",
+          "line": 118,
+          "col": 3,
+          "pos": 2361
+        },
+        {
+          "name": "ComparisonOperator",
+          "line": 119,
+          "col": 3,
+          "pos": 2378
+        },
+        {
+          "name": "AgentAssertion",
+          "line": 120,
+          "col": 3,
+          "pos": 2400
+        },
+        {
+          "name": "BenchmarkDefinition",
+          "line": 121,
+          "col": 3,
+          "pos": 2418
+        },
+        {
+          "name": "BenchmarkModelTarget",
+          "line": 122,
+          "col": 3,
+          "pos": 2441
+        },
+        {
+          "name": "ResolvedBenchmarkModel",
+          "line": 123,
+          "col": 3,
+          "pos": 2465
+        },
+        {
+          "name": "BenchmarkModelResult",
+          "line": 124,
+          "col": 3,
+          "pos": 2491
+        },
+        {
+          "name": "BenchmarkToolCall",
+          "line": 125,
+          "col": 3,
+          "pos": 2515
+        },
+        {
+          "name": "BenchmarkRun",
+          "line": 126,
+          "col": 3,
+          "pos": 2536
+        },
+        {
+          "name": "BenchmarkRunSummary",
+          "line": 127,
+          "col": 3,
+          "pos": 2552
+        },
+        {
+          "name": "BenchmarkExecutionData",
+          "line": 128,
+          "col": 3,
+          "pos": 2575
+        },
+        {
+          "name": "BenchmarkRunCallbacks",
+          "line": 129,
+          "col": 3,
+          "pos": 2601
+        },
+        {
+          "name": "BenchmarkStreamEvent",
+          "line": 130,
+          "col": 3,
+          "pos": 2626
+        },
+        {
+          "name": "ComparatorFn",
+          "line": 131,
+          "col": 3,
+          "pos": 2650
+        },
+        {
+          "name": "GraphNodeBase",
+          "line": 135,
+          "col": 3,
+          "pos": 2706
+        },
+        {
+          "name": "InputNode",
+          "line": 136,
+          "col": 3,
+          "pos": 2723
+        },
+        {
+          "name": "ModelNode",
+          "line": 137,
+          "col": 3,
+          "pos": 2736
+        },
+        {
+          "name": "ViewerNode",
+          "line": 138,
+          "col": 3,
+          "pos": 2749
+        },
+        {
+          "name": "GraphNode",
+          "line": 139,
+          "col": 3,
+          "pos": 2763
+        },
+        {
+          "name": "GraphEdge",
+          "line": 140,
+          "col": 3,
+          "pos": 2776
+        },
+        {
+          "name": "NodeResult",
+          "line": 141,
+          "col": 3,
+          "pos": 2789
+        },
+        {
+          "name": "NodeResultMap",
+          "line": 142,
+          "col": 3,
+          "pos": 2803
+        },
+        {
+          "name": "AssembledGraph",
+          "line": 143,
+          "col": 3,
+          "pos": 2820
+        },
+        {
+          "name": "WorkflowStep",
+          "line": 144,
+          "col": 3,
+          "pos": 2838
+        },
+        {
+          "name": "WorkflowMessage",
+          "line": 145,
+          "col": 3,
+          "pos": 2854
+        },
+        {
+          "name": "WorkflowDefinition",
+          "line": 146,
+          "col": 3,
+          "pos": 2873
+        },
+        {
+          "name": "ResolvedModalities",
+          "line": 147,
+          "col": 3,
+          "pos": 2895
+        },
+        {
+          "name": "Widget",
+          "line": 150,
+          "col": 15,
+          "pos": 2954
+        }
+      ]
+    },
+    {
+      "file": "src/services/ToolSchemaService.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "getToolSchemasForAI",
+          "line": 112,
+          "col": 17,
+          "pos": 2832
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/mcp/McpOAuth.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "resetMcpOAuthMemory",
+          "line": 163,
+          "col": 17,
+          "pos": 5626
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/mcp/McpSecretBox.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "isMcpOAuthConfigured",
+          "line": 46,
+          "col": 17,
+          "pos": 1369
+        },
+        {
+          "name": "resetSecretBoxKey",
+          "line": 79,
+          "col": 17,
+          "pos": 2380
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/types/benchmark.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "COMPARATORS",
+          "line": 171,
+          "col": 14,
+          "pos": 3989
+        }
+      ],
+      "files": [],
+      "types": [
+        {
+          "name": "BenchmarkDefinition",
+          "line": 35,
+          "col": 18,
+          "pos": 838
+        },
+        {
+          "name": "BenchmarkRun",
+          "line": 104,
+          "col": 18,
+          "pos": 2430
+        },
+        {
+          "name": "BenchmarkExecutionData",
+          "line": 125,
+          "col": 18,
+          "pos": 2851
+        },
+        {
+          "name": "BenchmarkRunCallbacks",
+          "line": 134,
+          "col": 18,
+          "pos": 3070
+        },
+        {
+          "name": "BenchmarkStreamEvent",
+          "line": 144,
+          "col": 18,
+          "pos": 3454
+        }
+      ]
+    },
+    {
+      "file": "src/services/somatic/SomaticConstants.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "EMOTION_COLORS",
+          "line": 107,
+          "col": 14,
+          "pos": 2477
+        },
+        {
+          "name": "EMOTION_BEHAVIOR_PROMPTS",
+          "line": 145,
+          "col": 14,
+          "pos": 3442
+        },
+        {
+          "name": "ALCOHOL_DESCRIPTIONS",
+          "line": 153,
+          "col": 14,
+          "pos": 3769
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/contracts/RuntimeWire.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "RuntimeRunRequest",
+          "line": 66,
+          "col": 13,
+          "pos": 2871
+        },
+        {
+          "name": "RuntimeRunEvent",
+          "line": 67,
+          "col": 13,
+          "pos": 2937
+        },
+        {
+          "name": "RuntimeRunResult",
+          "line": 68,
+          "col": 13,
+          "pos": 2999
+        },
+        {
+          "name": "RuntimeToolResultCommand",
+          "line": 69,
+          "col": 13,
+          "pos": 3063
+        },
+        {
+          "name": "RuntimeApprovalResolutionCommand",
+          "line": 70,
+          "col": 13,
+          "pos": 3143
+        },
+        {
+          "name": "RuntimeApproval",
+          "line": 71,
+          "col": 13,
+          "pos": 3239
+        }
+      ]
+    },
+    {
+      "file": "src/types/run.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "ToolCall",
+          "line": 18,
+          "col": 18,
+          "pos": 390
+        },
+        {
+          "name": "ToolResult",
+          "line": 33,
+          "col": 18,
+          "pos": 713
+        },
+        {
+          "name": "ContractVersion",
+          "line": 41,
+          "col": 13,
+          "pos": 848
+        }
+      ]
+    },
+    {
+      "file": "src/services/harness2/Harness2Service.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "RunView",
+          "line": 625,
+          "col": 15,
+          "pos": 24161
+        }
+      ]
+    },
+    {
+      "file": "src/services/AgentPersonaRegistry.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "Persona",
+          "line": 214,
+          "col": 15,
+          "pos": 7377
+        },
+        {
+          "name": "PersonaContext",
+          "line": 214,
+          "col": 24,
+          "pos": 7386
+        },
+        {
+          "name": "ToolPolicySection",
+          "line": 214,
+          "col": 40,
+          "pos": 7402
+        }
+      ]
+    },
+    {
+      "file": "src/types/admin.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "AgentConfigResponse",
+          "line": 11,
+          "col": 18,
+          "pos": 242
+        },
+        {
+          "name": "ToolSchemaResponse",
+          "line": 30,
+          "col": 18,
+          "pos": 664
+        },
+        {
+          "name": "AdminQueryParams",
+          "line": 44,
+          "col": 18,
+          "pos": 917
+        },
+        {
+          "name": "RequestLogEntry",
+          "line": 61,
+          "col": 18,
+          "pos": 1301
+        },
+        {
+          "name": "StatsOverview",
+          "line": 121,
+          "col": 18,
+          "pos": 2901
+        },
+        {
+          "name": "ProjectStats",
+          "line": 138,
+          "col": 18,
+          "pos": 3285
+        },
+        {
+          "name": "ModelStats",
+          "line": 157,
+          "col": 18,
+          "pos": 3703
+        },
+        {
+          "name": "MongoTimestampFilter",
+          "line": 175,
+          "col": 13,
+          "pos": 4106
+        },
+        {
+          "name": "MongoMatch",
+          "line": 180,
+          "col": 13,
+          "pos": 4181
+        },
+        {
+          "name": "MongoPipeline",
+          "line": 181,
+          "col": 13,
+          "pos": 4231
+        },
+        {
+          "name": "CountMap",
+          "line": 182,
+          "col": 13,
+          "pos": 4271
+        },
+        {
+          "name": "LogChatGenerationParams",
+          "line": 186,
+          "col": 18,
+          "pos": 4389
+        },
+        {
+          "name": "LogBackgroundLlmCallParams",
+          "line": 221,
+          "col": 18,
+          "pos": 5357
+        }
+      ]
+    },
+    {
+      "file": "src/services/EditorialHeadlinesService.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "Category",
+          "line": 77,
+          "col": 13,
+          "pos": 3345
+        }
+      ]
+    },
+    {
+      "file": "src/core/loop/types.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "RunCoreLoop",
+          "line": 231,
+          "col": 13,
+          "pos": 9475
+        }
+      ]
+    },
+    {
+      "file": "src/types/ProviderTypes.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "ProviderResponse",
+          "line": 50,
+          "col": 18,
+          "pos": 1099
+        }
+      ]
+    },
+    {
+      "file": "src/types/provider.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "GoogleGenerateConfig",
+          "line": 8,
+          "col": 18,
+          "pos": 268
+        },
+        {
+          "name": "LmStudioModelMeta",
+          "line": 41,
+          "col": 18,
+          "pos": 1072
+        },
+        {
+          "name": "LmStudioResponsesBody",
+          "line": 54,
+          "col": 18,
+          "pos": 1400
+        },
+        {
+          "name": "StreamTextChunk",
+          "line": 67,
+          "col": 18,
+          "pos": 1686
+        },
+        {
+          "name": "StreamRateLimitsChunk",
+          "line": 245,
+          "col": 18,
+          "pos": 5559
+        }
+      ]
+    },
+    {
+      "file": "src/core/loop/RunawayStreamWatch.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "StreamChannelVerdict",
+          "line": 23,
+          "col": 18,
+          "pos": 762
+        }
+      ]
+    },
+    {
+      "file": "src/types/orchestrator.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "InstanceInfo",
+          "line": 118,
+          "col": 18,
+          "pos": 2953
+        },
+        {
+          "name": "TeamEntry",
+          "line": 195,
+          "col": 18,
+          "pos": 5160
+        },
+        {
+          "name": "TeamMemberResult",
+          "line": 208,
+          "col": 18,
+          "pos": 5365
+        }
+      ]
+    },
+    {
+      "file": "src/services/orchestrator/TopologyRouter.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "TopologyType",
+          "line": 9,
+          "col": 15,
+          "pos": 230
+        }
+      ]
+    },
+    {
+      "file": "src/types/express.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "ErrorRequestHandler",
+          "line": 15,
+          "col": 48,
+          "pos": 328
+        },
+        {
+          "name": "RouteHandler",
+          "line": 38,
+          "col": 13,
+          "pos": 836
+        },
+        {
+          "name": "MongoMatch",
+          "line": 53,
+          "col": 13,
+          "pos": 1225
+        },
+        {
+          "name": "CountMap",
+          "line": 54,
+          "col": 13,
+          "pos": 1275
+        }
+      ]
+    },
+    {
+      "file": "src/types/memory.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "MemorySearchResult",
+          "line": 34,
+          "col": 18,
+          "pos": 822
+        },
+        {
+          "name": "MemoryStoreParams",
+          "line": 48,
+          "col": 18,
+          "pos": 1075
+        },
+        {
+          "name": "MemorySearchParams",
+          "line": 63,
+          "col": 18,
+          "pos": 1445
+        },
+        {
+          "name": "MemoryListParams",
+          "line": 75,
+          "col": 18,
+          "pos": 1705
+        },
+        {
+          "name": "ConsolidationResult",
+          "line": 98,
+          "col": 18,
+          "pos": 2133
+        },
+        {
+          "name": "ConsolidationParams",
+          "line": 103,
+          "col": 18,
+          "pos": 2228
+        },
+        {
+          "name": "ConsolidationBatch",
+          "line": 115,
+          "col": 18,
+          "pos": 2518
+        },
+        {
+          "name": "ConsolidationRunResult",
+          "line": 128,
+          "col": 18,
+          "pos": 2785
+        },
+        {
+          "name": "ExtractedFact",
+          "line": 141,
+          "col": 18,
+          "pos": 3053
+        },
+        {
+          "name": "ExtractionMeta",
+          "line": 151,
+          "col": 18,
+          "pos": 3249
+        },
+        {
+          "name": "ExtractionParticipant",
+          "line": 160,
+          "col": 18,
+          "pos": 3453
+        }
+      ]
+    },
+    {
+      "file": "src/types/workflow.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "WorkflowDefinition",
+          "line": 104,
+          "col": 18,
+          "pos": 2309
+        }
+      ]
+    },
+    {
+      "file": "src/types/widget.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "Widget",
+          "line": 1,
+          "col": 18,
+          "pos": 17
+        }
+      ]
+    },
+    {
+      "file": "src/platform/skills/SkillRegistry.ts",
+      "duplicates": [
+        [
+          {
+            "name": "SkillRegistry",
+            "line": 84,
+            "col": 14,
+            "pos": 2472
+          },
+          {
+            "name": "default",
+            "line": 159,
+            "col": 16,
+            "pos": 4685
+          }
+        ]
+      ],
+      "exports": [],
+      "files": [],
+      "types": []
+    }
+  ]
+}

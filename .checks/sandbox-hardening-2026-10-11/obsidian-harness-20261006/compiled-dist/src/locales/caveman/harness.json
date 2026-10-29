@@ -1,0 +1,79 @@
+{
+  "criticGate": {
+    "safetyReviewer": "Code safety reviewer. Agent wants to run tool call.",
+    "reviewCriteria": "Check safety — destructive command (rm -rf, DROP, DELETE, format), data exfiltration (curl to external, unauthorized network), privilege escalation (sudo, chmod 777), resource exhaustion.",
+    "responseFormat": "One word on first line: APPROVE or DENY\nIf DENY, explain why on second line."
+  },
+  "planningMode": {
+    "blocked": "PLAN MODE active. Tool [{{blockedNames}}] blocked — only exit_plan_mode works. Write plan as text, then call exit_plan_mode.",
+    "approvalResult": "Plan approved. Proceed with execution. Update todo if applicable.",
+    "rejectionStatus": "Plan rejected — cancelled.",
+    "planningInstruction": "## PLANNING MODE — TOOL RESTRICTED\n\nPLAN MODE. Only available:\n- **exit_plan_mode** — submit plan\n- **think** — reasoning\n\nAll other tool BLOCKED.\n\n**Steps:**\n1. Analyze request\n2. Design approach as text\n3. Call exit_plan_mode — user reviews before execution\n\nKeep concise. Simple task need brief summary."
+  },
+  "reminderExtractor": {
+    "extractionPrompt": "Analyze system prompt, extract critical behavioral rule.\n\nExtract 8-12 most important constraint agent MUST follow.\n\nFocus on:\n- Prohibition (never X, no Y)\n- Mandatory behavior (always X, must Y)\n- Safety constraint\n- Output format requirement\n- Identity boundary\n- Tool restriction\n\nOutput:\n- ONLY bullet list with `- ` prefix\n- Each bullet: one sentence, max 30 word\n- No header, explanation, numbering, formatting\n- Prioritize high-damage-if-forgotten rule\n- Skip obvious (e.g. 'be helpful')\n\nSystem prompt:\n<system_prompt>"
+  },
+  "visionFeed": {
+    "instruction": "\n\n## LIVE VISION FEED\nLive visual feed (webcam/screen). Last 3 frame attached to latest message (oldest→newest).\nUse to observe, notice change, refer naturally.\n"
+  },
+  "exhaustionRecovery": {
+    "message": "Max iteration reached. Summarize progress, report partial result, state remaining work."
+  },
+  "gotSynthesis": {
+    "instruction": "[GRAPH-OF-THOUGHTS SYNTHESIS]\n\n{{branchCount}} parallel branch generated and scored. Produce single optimal response SYNTHESIZING best aspect.\n\nRULE:\n1. Merge complementary strength — NOT just highest-scoring.\n2. COMPLEMENTARY (non-conflicting) tool call from different branch: include all.\n3. Disagreement: prefer highest CORRECTNESS, then RISK score.\n4. Incorporate defensive measure from THOROUGH branch even with MINIMAL core approach.\n5. Produce merged response with tool call as if executing.\n\n-- BRANCH OUTPUT --\n\n"
+  },
+  "planModeEntry": {
+    "message": "Plan mode entered. Explore codebase, design implementation.\n\nIn plan mode:\n1. Explore codebase, understand pattern\n2. Find similar feature and approach\n3. Consider approach and trade-off\n4. Design concrete strategy\n5. Call exit_plan_mode to present plan\n\nNo file write or edit. Read-only exploration."
+  },
+  "toolDiscoveryNudge": {
+    "autoEnabled": "Found {{count}} tool: {{toolNames}}. Already enabled — use now.",
+    "enableRequired": "Found {{count}} tool not enabled: {{toolNames}}. Call enable_tools. TIP: discover_and_enable_tools finds AND enables in one step."
+  },
+  "toolRetryGuidance": {
+    "header": "[TOOL RETRY] {{count}} call failed:",
+    "analyzeSteps": "Analyze:\n1. Which argument caused failure?\n2. What value needs correction?\n3. Prerequisite step needed?\n\nRetry with correction, or different approach if tool not appropriate."
+  },
+  "outputTruncation": {
+    "continuationPrompt": "Previous response hit output limit. Truncated text preserved. Continue where left off — don't repeat.",
+    "exhaustedRecovery": "Response hit **max_tokens** ({{configuredMaxTokens}}), {{maxAttempts}} continuation also hit. Typically large tool sequence. Increase **Max Tokens** or break into smaller step.",
+    "providerError": "Provider error on iteration {{iteration}}: `{{errorText}}`. Conversation preserved. Retry or try different model."
+  },
+  "contextWindow": {
+    "droppedMessages": "{{droppedCount}} old message removed — context window full."
+  },
+  "toolSetUpdated": {
+    "header": "[NEW TOOL] {{count}} enabled: {{toolNames}}",
+    "availableDocumentation": "Tool ready with documentation:",
+    "usageGuidelines": "## Tool Usage"
+  },
+  "validationError": {
+    "header": "[VALIDATION ERROR] Edit introduced {{errorCount}} error:",
+    "analyzePrompt": "ANALYZE:\n1. What assumption caused failure?\n2. What change avoids this error class?\n\nFix before proceeding. Don't continue until validation passes."
+  },
+  "systemReminder": {
+    "header": "[SYSTEM REMINDER — Iteration {{currentIteration}}]",
+    "preamble": "Critical rule still active:",
+    "footer": "Follow for remainder."
+  },
+  "codexPlanningDetector": {
+    "continuePrompt": "Execute next step with tool. If complete, report done without tool call."
+  },
+  "retryLabels": {
+    "attemptLabel": "(attempt {{attemptCount}})",
+    "errorLabel": "**error:** {{errorMessage}}",
+    "originalArguments": "**original arguments:**"
+  },
+  "errorAsContext": {
+    "wrapper": "**error:** {{errorDescription}}"
+  },
+  "treeOfThoughts": {
+    "proactiveBacktrack": "[BACKTRACK — ALL {{branchCount}} BRANCH BELOW THRESHOLD (best: {{bestScore}}/{{threshold}})]\n\nAll branch scored poorly. Approach failing.\n\nReconsider:\n1. Approach fundamentally flawed?\n2. Different strategy?\n3. Simpler, safer path?\n\nDIFFERENT approach next attempt.",
+    "frontierFallback": "[SWITCH — BRANCH {{branchIndex}} FAILED]\n\nPrevious: {{errorCount}} error:\n\n{{errorBlock}}\n\nSwitching to next-best. Avoid same error.",
+    "reflexion": "[REFLEXION — BRANCH {{branchIndex}} FAILED]\n\nPrevious: {{errorCount}} error:\n\n{{errorBlock}}\n\nANALYZE:\n1. What assumption caused failure?\n2. How correct solution differs?\n3. Alternative avoiding this error class?\n\nAnalyze, then DIFFERENT approach.",
+    "budgetExhausted": "[VALIDATION ERROR — NO RETRY LEFT]\n\n{{errorBlock}}\n\nMultiple approach failed. Fix remaining directly."
+  },
+  "graphOfThoughts": {
+    "proactiveBacktrack": "[BACKTRACK — ALL BRANCH BELOW THRESHOLD (best: {{bestScore}}/{{threshold}})]\n\nAll branch scored poorly. Approach failing.\n\nReconsider:\n1. Approach fundamentally flawed?\n2. Different strategy?\n3. Simpler, safer path?\n\nDIFFERENT approach next attempt.",
+    "synthesizedValidationError": "[VALIDATION ERROR — MERGED RESULT]\n\nMerged approach: {{errorCount}} error:\n\n{{errorBlock}}\n\nCombined {{branchCount}} branch but tool call still failed.\nFix remaining — NOT same tool call."
+  }
+}

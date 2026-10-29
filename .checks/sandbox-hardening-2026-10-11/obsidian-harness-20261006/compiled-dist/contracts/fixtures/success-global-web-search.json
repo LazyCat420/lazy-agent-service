@@ -1,0 +1,121 @@
+{
+  "contract_version": "1.2.0",
+  "fixture_id": "success-global-web-search",
+  "description": "Shared runtime executes global.web.search, records evidence, and synthesizes response.",
+  "request": {
+    "profile_id": "html-notes-researcher-v1",
+    "profile_version": "1.2.0",
+    "contract_version": "1.2.0",
+    "app_id": "html-notes",
+    "session_id": "sess_test_102",
+    "input": "Search for latest AI chip advances in 2026."
+  },
+  "events": [
+    {
+      "id": "evt-010",
+      "run_id": "run-search-102",
+      "type": "run.admitted",
+      "timestamp": "2026-09-19T11:01:00.000Z",
+      "data": {
+        "run_id": "run-search-102",
+        "status": "admitted"
+      }
+    },
+    {
+      "id": "evt-011",
+      "run_id": "run-search-102",
+      "type": "run.started",
+      "timestamp": "2026-09-19T11:01:00.030Z",
+      "data": {
+        "status": "running"
+      }
+    },
+    {
+      "id": "evt-012",
+      "run_id": "run-search-102",
+      "type": "tool.invoked",
+      "timestamp": "2026-09-19T11:01:00.300Z",
+      "data": {
+        "tool_call_id": "tc_search_01",
+        "tool_name": "global.web.search",
+        "execution": "shared",
+        "effect": "read",
+        "arguments": {
+          "query": "latest AI chip advances 2026",
+          "max_results": 3
+        },
+        "authorization_receipt": {
+          "receipt_id": "auth_rec_001",
+          "issued_at": "2026-09-19T11:01:00.300Z",
+          "tool_name": "global.web.search",
+          "execution": "shared",
+          "effect": "read"
+        }
+      }
+    },
+    {
+      "id": "evt-013",
+      "run_id": "run-search-102",
+      "type": "tool.completed",
+      "timestamp": "2026-09-19T11:01:01.200Z",
+      "data": {
+        "tool_call_id": "tc_search_01",
+        "tool_name": "global.web.search",
+        "result": {
+          "query": "latest AI chip advances 2026",
+          "results": [
+            {
+              "title": "Next-gen Accelerators",
+              "url": "https://example.com/chips",
+              "snippet": "New architectures deliver 4x efficiency."
+            }
+          ]
+        },
+        "evidence_records": [
+          {
+            "evidence_id": "ev_search_01",
+            "source": "global.web.search",
+            "provenance_hash": "sha256-11223344"
+          }
+        ]
+      }
+    },
+    {
+      "id": "evt-014",
+      "run_id": "run-search-102",
+      "type": "run.completed",
+      "timestamp": "2026-09-19T11:01:01.800Z",
+      "data": {
+        "status": "completed"
+      }
+    }
+  ],
+  "result": {
+    "contract_version": "1.2.0",
+    "run_id": "run-search-102",
+    "status": "completed",
+    "profile_id": "html-notes-researcher-v1",
+    "profile_version": "1.2.0",
+    "messages": [
+      {
+        "role": "assistant",
+        "content": "Recent 2026 AI accelerators deliver 4x efficiency gains."
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 120,
+      "completion_tokens": 45,
+      "total_tokens": 165,
+      "tool_calls_count": 1,
+      "retry_count": 0,
+      "duration_ms": 1800
+    },
+    "evidence_records": [
+      {
+        "evidence_id": "ev_search_01",
+        "source": "global.web.search",
+        "provenance_hash": "sha256-11223344"
+      }
+    ]
+  }
+}

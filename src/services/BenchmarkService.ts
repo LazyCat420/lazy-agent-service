@@ -2,7 +2,7 @@ import { sleep, roundMilliseconds } from "@rodrigo-barraza/utilities-library";
 import { TOOL_NAMES } from "@rodrigo-barraza/utilities-library/taxonomy";
 // ─── Custom LLM Accuracy Benchmarking ───────────────────────
 import crypto from "crypto";
-import { handleConversation, handleAgent } from "../routes/ChatRoutes.ts";
+import { handleConversation, handleAgent } from "../core/chat/ChatGeneration.ts";
 import { MODELS, MODEL_TYPES, getModelByName } from "../config.ts";
 import { getProvider } from "../providers/index.ts";
 import { isInstance } from "../providers/instance-registry.ts";

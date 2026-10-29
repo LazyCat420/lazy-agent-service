@@ -1,0 +1,1639 @@
+{
+  "contract_version": "1.2.0",
+  "generated_at": "2026-10-06T21:03:15.875Z",
+  "run_contract": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AgentRuntimeContractV1",
+    "version": "1.2.0",
+    "description": "Canonical Agent Runtime Execution Contract v1.2.0",
+    "definitions": {
+      "RunBudget": {
+        "type": "object",
+        "properties": {
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32768
+          },
+          "max_tool_calls": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 50
+          },
+          "max_retries": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "max_duration_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000
+          }
+        }
+      },
+      "ToolEffect": {
+        "type": "string",
+        "enum": [
+          "read",
+          "write",
+          "destructive"
+        ],
+        "description": "Side-effect classification for authorization and confirmation safety."
+      },
+      "ToolExecution": {
+        "type": "string",
+        "enum": [
+          "shared",
+          "local"
+        ],
+        "description": "Execution location boundary: 'shared' runs inside lazy-agent-service; 'local' is admitted by runtime but executed by caller application."
+      },
+      "RequiredScope": {
+        "type": "object",
+        "required": [
+          "app_id"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "Target application boundary identifier (e.g. 'html-notes', 'trading-service')."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Application session identifier preventing cross-session tool invocation."
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "AuthorizationReceipt": {
+        "type": "object",
+        "required": [
+          "receipt_id",
+          "issued_at",
+          "tool_name",
+          "execution"
+        ],
+        "properties": {
+          "receipt_id": {
+            "type": "string"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "execution": {
+            "$ref": "#/definitions/ToolExecution"
+          },
+          "effect": {
+            "$ref": "#/definitions/ToolEffect"
+          },
+          "signature": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "ToolCall": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "arguments",
+          "effect"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "effect": {
+            "$ref": "#/definitions/ToolEffect"
+          },
+          "execution": {
+            "$ref": "#/definitions/ToolExecution",
+            "default": "shared"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 100
+          },
+          "authorization_receipt": {
+            "$ref": "#/definitions/AuthorizationReceipt"
+          },
+          "required_scope": {
+            "$ref": "#/definitions/RequiredScope"
+          }
+        }
+      },
+      "ToolResult": {
+        "type": "object",
+        "required": [
+          "tool_call_id",
+          "name",
+          "result",
+          "is_error"
+        ],
+        "properties": {
+          "tool_call_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "result": {},
+          "is_error": {
+            "type": "boolean"
+          },
+          "error": {
+            "$ref": "#/definitions/StructuredError"
+          }
+        }
+      },
+      "EvidenceRecord": {
+        "type": "object",
+        "required": [
+          "evidence_id",
+          "source"
+        ],
+        "properties": {
+          "evidence_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "provenance_hash": {
+            "type": "string"
+          },
+          "redacted": {
+            "type": "boolean",
+            "default": false
+          },
+          "data": {}
+        }
+      },
+      "ContextReceipt": {
+        "type": "object",
+        "required": [
+          "receipt_id",
+          "timestamp",
+          "layers"
+        ],
+        "properties": {
+          "receipt_id": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "profile_version": {
+            "type": "string"
+          },
+          "layers": {
+            "type": "object",
+            "properties": {
+              "prefix": {
+                "type": "object",
+                "properties": {
+                  "hash": {
+                    "type": "string"
+                  }
+                }
+              },
+              "role_rules": {
+                "type": "object",
+                "properties": {
+                  "hash": {
+                    "type": "string"
+                  }
+                }
+              },
+              "project_scope": {
+                "type": "object",
+                "properties": {
+                  "hash": {
+                    "type": "string"
+                  }
+                }
+              },
+              "dynamic_state": {
+                "type": "object",
+                "properties": {
+                  "hash": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "total_chars": {
+            "type": "integer"
+          },
+          "total_tokens": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreateRunRequest": {
+        "type": "object",
+        "required": [
+          "profile_id",
+          "input"
+        ],
+        "properties": {
+          "contract_version": {
+            "type": "string",
+            "default": "1.2.0"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_version": {
+            "type": "string"
+          },
+          "app_id": {
+            "type": "string",
+            "description": "Calling application identifier for session and scope isolation."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Calling session identifier for local tool scoping."
+          },
+          "input": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "role",
+                    "content"
+                  ],
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "system",
+                        "user",
+                        "assistant",
+                        "tool"
+                      ]
+                    },
+                    "content": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "budget": {
+            "$ref": "#/definitions/RunBudget"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "deadline_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "runtime_overrides": {
+            "type": "object"
+          }
+        }
+      },
+      "RunEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "type",
+          "timestamp",
+          "data"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "run.admitted",
+              "run.started",
+              "message.delta",
+              "message.completed",
+              "tool.invoked",
+              "tool.completed",
+              "tool.failed",
+              "worker.dispatched",
+              "worker.completed",
+              "run.completed",
+              "run.failed",
+              "run.cancelled"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {
+            "type": "object"
+          }
+        }
+      },
+      "StructuredError": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "CLIENT",
+              "RUNTIME",
+              "PROVIDER",
+              "TOOL",
+              "POLICY",
+              "RESOURCE"
+            ]
+          },
+          "details": {
+            "type": "object"
+          }
+        }
+      },
+      "RunResult": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "messages"
+        ],
+        "properties": {
+          "contract_version": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "admitted",
+              "running",
+              "waiting_for_tool",
+              "waiting_for_worker",
+              "completed",
+              "failed",
+              "cancelled",
+              "timed_out"
+            ]
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "profile_version": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "prompt_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "completion_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "total_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tool_calls_count": {
+                "type": "integer"
+              },
+              "retry_count": {
+                "type": "integer"
+              },
+              "duration_ms": {
+                "type": "integer"
+              }
+            }
+          },
+          "context_receipt": {
+            "$ref": "#/definitions/ContextReceipt"
+          },
+          "evidence_records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/EvidenceRecord"
+            }
+          },
+          "error": {
+            "$ref": "#/definitions/StructuredError"
+          }
+        }
+      },
+      "ToolResultSubmission": {
+        "type": "object",
+        "required": [
+          "authorization_receipt",
+          "result",
+          "is_error"
+        ],
+        "properties": {
+          "authorization_receipt": {
+            "$ref": "#/definitions/AuthorizationReceipt"
+          },
+          "result": {},
+          "is_error": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "commands": {
+      "create": {
+        "method": "POST",
+        "path": "/v1/runs"
+      },
+      "get": {
+        "method": "GET",
+        "path": "/v1/runs/{run_id}"
+      },
+      "cancel": {
+        "method": "POST",
+        "path": "/v1/runs/{run_id}/cancel"
+      },
+      "submit_tool_result": {
+        "method": "POST",
+        "path": "/v1/runs/{run_id}/tools/{tool_call_id}/result",
+        "request": "#/definitions/ToolResultSubmission"
+      }
+    }
+  },
+  "capability_registry": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "GlobalCapabilityRegistryContractV1_2",
+    "version": "1.2.0",
+    "description": "Authoritative registry of app-neutral global capabilities provided by lazy-agent-service v1.2.",
+    "capabilities": [
+      {
+        "id": "global.web.search",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.web.search.input.json",
+        "output_schema_ref": "schemas/global.web.search.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": true,
+        "timeout_ms": 60000,
+        "retryable": true,
+        "rate_limit_class": "standard_search",
+        "description": "App-neutral web retrieval capability returning relevant search results with citations and source metadata.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "query"
+          ],
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The search query string."
+            },
+            "max_results": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "default": 5
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "query",
+            "results"
+          ],
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "results": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "url",
+                  "snippet"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "snippet": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "global.web.read_page",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.web.read_page.input.json",
+        "output_schema_ref": "schemas/global.web.read_page.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": true,
+        "timeout_ms": 30000,
+        "retryable": true,
+        "rate_limit_class": "web_scrape",
+        "description": "App-neutral page extraction capability converting public webpage HTML into clean, bounded markdown text.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "The public HTTP/HTTPS URL to retrieve."
+            },
+            "max_chars": {
+              "type": "integer",
+              "minimum": 500,
+              "maximum": 50000,
+              "default": 8000
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "url",
+            "content"
+          ],
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "character_count": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      {
+        "id": "global.web.fetch_metadata",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.web.fetch_metadata.input.json",
+        "output_schema_ref": "schemas/global.web.fetch_metadata.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": true,
+        "timeout_ms": 15000,
+        "retryable": true,
+        "rate_limit_class": "web_scrape",
+        "description": "Extract title, description, canonical URL, favicon, and image metadata from a webpage.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "canonical_url": {
+              "type": "string"
+            },
+            "image": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "id": "global.data.transform",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.data.transform.input.json",
+        "output_schema_ref": "schemas/global.data.transform.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": false,
+        "timeout_ms": 5000,
+        "retryable": false,
+        "rate_limit_class": "cpu_in_memory",
+        "description": "Pure side-effect-free in-memory JSON data structure remapping, field picking, and numeric aggregations.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "input",
+            "operations"
+          ],
+          "properties": {
+            "input": {
+              "description": "Source JSON object or array to transform."
+            },
+            "operations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "op"
+                ],
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "enum": [
+                      "pick",
+                      "omit",
+                      "rename",
+                      "aggregate"
+                    ]
+                  },
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "mapping": {
+                    "type": "object"
+                  },
+                  "aggregate_key": {
+                    "type": "string"
+                  },
+                  "aggregate_type": {
+                    "type": "string",
+                    "enum": [
+                      "sum",
+                      "avg",
+                      "min",
+                      "max",
+                      "count"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "output",
+            "operations_applied"
+          ],
+          "properties": {
+            "output": {},
+            "operations_applied": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      {
+        "id": "global.data.sort",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.data.sort.input.json",
+        "output_schema_ref": "schemas/global.data.sort.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": false,
+        "timeout_ms": 5000,
+        "retryable": false,
+        "rate_limit_class": "cpu_in_memory",
+        "description": "Pure side-effect-free in-memory sorting of object arrays by key and direction.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "items",
+            "key"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "key": {
+              "type": "string",
+              "description": "Field key on objects to sort by."
+            },
+            "direction": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "asc"
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "items",
+            "count"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "count": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      {
+        "id": "global.data.filter",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.data.filter.input.json",
+        "output_schema_ref": "schemas/global.data.filter.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": false,
+        "timeout_ms": 5000,
+        "retryable": false,
+        "rate_limit_class": "cpu_in_memory",
+        "description": "Pure side-effect-free in-memory filtering of object arrays against comparison criteria.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "items",
+            "predicate"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "predicate": {
+              "type": "object",
+              "required": [
+                "field",
+                "op",
+                "value"
+              ],
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "contains",
+                    "in"
+                  ]
+                },
+                "value": {}
+              }
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "items",
+            "count"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "count": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      {
+        "id": "global.data.group",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.data.group.input.json",
+        "output_schema_ref": "schemas/global.data.group.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": false,
+        "timeout_ms": 5000,
+        "retryable": false,
+        "rate_limit_class": "cpu_in_memory",
+        "description": "Pure side-effect-free in-memory grouping and aggregation of object arrays by key.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "items",
+            "group_by"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "group_by": {
+              "type": "string"
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "groups",
+            "group_count"
+          ],
+          "properties": {
+            "groups": {
+              "type": "object"
+            },
+            "group_count": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      {
+        "id": "global.data.extract",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.data.extract.input.json",
+        "output_schema_ref": "schemas/global.data.extract.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": false,
+        "timeout_ms": 5000,
+        "retryable": false,
+        "rate_limit_class": "cpu_in_memory",
+        "description": "Pure side-effect-free regex or keyword structured entity extraction from text.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "text",
+            "patterns"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "patterns": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Map of entity name to regular expression pattern."
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "entities"
+          ],
+          "properties": {
+            "entities": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      {
+        "id": "global.data.classify",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.data.classify.input.json",
+        "output_schema_ref": "schemas/global.data.classify.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": false,
+        "timeout_ms": 5000,
+        "retryable": false,
+        "rate_limit_class": "cpu_in_memory",
+        "description": "Pure deterministic classification, tagging, and rule-based categorization.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "item",
+            "rules"
+          ],
+          "properties": {
+            "item": {
+              "type": "object"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "field",
+                  "match",
+                  "category"
+                ],
+                "properties": {
+                  "field": {
+                    "type": "string"
+                  },
+                  "match": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "categories"
+          ],
+          "properties": {
+            "categories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "global.document.chunk",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.document.chunk.input.json",
+        "output_schema_ref": "schemas/global.document.chunk.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": false,
+        "timeout_ms": 10000,
+        "retryable": false,
+        "rate_limit_class": "cpu_in_memory",
+        "description": "App-neutral text segmentation and chunking with configurable overlap.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "chunk_size": {
+              "type": "integer",
+              "default": 1000
+            },
+            "overlap": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "chunks",
+            "count"
+          ],
+          "properties": {
+            "chunks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "count": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      {
+        "id": "global.time.now",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.time.now.input.json",
+        "output_schema_ref": "schemas/global.time.now.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": false,
+        "timeout_ms": 2000,
+        "retryable": false,
+        "rate_limit_class": "cpu_in_memory",
+        "description": "Canonical UTC and localized timestamp retrieval and timezone conversion.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "timezone": {
+              "type": "string",
+              "default": "UTC"
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "iso",
+            "timestamp",
+            "timezone"
+          ],
+          "properties": {
+            "iso": {
+              "type": "string"
+            },
+            "timestamp": {
+              "type": "integer"
+            },
+            "timezone": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "id": "global.math.calculate",
+        "version": "1.2.0",
+        "owner": "lazy-agent-service",
+        "execution": "shared",
+        "effect": "read",
+        "input_schema_ref": "schemas/global.math.calculate.input.json",
+        "output_schema_ref": "schemas/global.math.calculate.output.json",
+        "requires_confirmation": false,
+        "requires_user_scope": false,
+        "supports_evidence": false,
+        "timeout_ms": 2000,
+        "retryable": false,
+        "rate_limit_class": "cpu_in_memory",
+        "description": "Deterministic calculation and unit conversion.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "expression"
+          ],
+          "properties": {
+            "expression": {
+              "type": "string"
+            }
+          }
+        },
+        "returns": {
+          "type": "object",
+          "required": [
+            "result"
+          ],
+          "properties": {
+            "result": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "profile_contract": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AgentProfileV1_2",
+    "version": "1.2.0",
+    "type": "object",
+    "required": [
+      "profile_id",
+      "version",
+      "contract_version",
+      "role",
+      "workflow_type",
+      "system_prompt",
+      "model_constraints",
+      "budget_limits",
+      "retention_class"
+    ],
+    "properties": {
+      "profile_id": {
+        "type": "string",
+        "pattern": "^[a-z0-9-]+$"
+      },
+      "version": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+      },
+      "contract_version": {
+        "type": "string",
+        "enum": [
+          "1.0.0",
+          "1.1.0",
+          "1.2.0"
+        ],
+        "default": "1.2.0"
+      },
+      "role": {
+        "type": "string",
+        "description": "Functional agent role (e.g., 'financial-analyst', 'canvas-researcher')"
+      },
+      "workflow_type": {
+        "type": "string",
+        "enum": [
+          "structured_completion",
+          "interactive_agent",
+          "application_workflow"
+        ],
+        "description": "Declares the caller-owned workflow shape without selecting a different runtime lifecycle."
+      },
+      "description": {
+        "type": "string"
+      },
+      "system_prompt": {
+        "type": "string",
+        "description": "Canonical Layer 0 system instructions and persona."
+      },
+      "allowed_global_capabilities": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^global\\.[a-z0-9_.]+(\\@\\d+(\\.\\d+)?)?$"
+        },
+        "description": "Explicit whitelist of registered global capabilities with optional semver constraint."
+      },
+      "allowed_local_tools": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]+\\.[a-z0-9_.]+(\\@\\d+(\\.\\d+)?)?$"
+        },
+        "description": "Explicit whitelist of application-owned local tools."
+      },
+      "tool_policy": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "STRICT_WHITELIST",
+              "DENYLIST"
+            ]
+          },
+          "whitelist": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "denylist": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "require_signed_capability": {
+            "type": "boolean"
+          }
+        },
+        "description": "Transitional / legacy tool policy definition."
+      },
+      "model_constraints": {
+        "type": "object",
+        "required": [
+          "default_model",
+          "allowed_models",
+          "allowed_providers"
+        ],
+        "properties": {
+          "default_model": {
+            "type": "string"
+          },
+          "allowed_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowed_providers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "temperature_range": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      },
+      "budget_limits": {
+        "type": "object",
+        "required": [
+          "max_tokens",
+          "max_tool_calls",
+          "max_duration_ms"
+        ],
+        "properties": {
+          "max_tokens": {
+            "type": "integer",
+            "maximum": 32768
+          },
+          "max_tool_calls": {
+            "type": "integer",
+            "maximum": 50
+          },
+          "max_retries": {
+            "type": "integer",
+            "maximum": 5
+          },
+          "max_duration_ms": {
+            "type": "integer",
+            "maximum": 300000
+          },
+          "max_concurrent_workers": {
+            "type": "integer",
+            "maximum": 10
+          }
+        }
+      },
+      "plugins": {
+        "type": "object",
+        "properties": {
+          "context_contributors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verifiers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "worker_plugins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "retention_class": {
+        "type": "string",
+        "enum": [
+          "EPHEMERAL",
+          "AUDITED_SESSION",
+          "PERMANENT_RECORD"
+        ]
+      },
+      "observability_policy": {
+        "type": "object",
+        "properties": {
+          "telemetry_level": {
+            "type": "string",
+            "enum": [
+              "OFF",
+              "METRICS_ONLY",
+              "FULL_SPANS"
+            ]
+          },
+          "redact_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sample_rate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    }
+  },
+  "tool_contract": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ToolContractV1_2",
+    "version": "1.2.0",
+    "description": "Canonical Tool Contract v1.2 defining execution location, effect safety, and admission scopes.",
+    "definitions": {
+      "ToolDefinition": {
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "owner",
+          "execution",
+          "effect"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(global|[a-z0-9_-]+)\\.[a-z0-9_.]+$"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$"
+          },
+          "owner": {
+            "type": "string",
+            "description": "Service or repository owning this tool definition."
+          },
+          "execution": {
+            "type": "string",
+            "enum": [
+              "shared",
+              "local"
+            ],
+            "description": "'shared' executes inside lazy-agent-service runtime; 'local' executes in caller application domain."
+          },
+          "effect": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "destructive"
+            ]
+          },
+          "resource_type": {
+            "type": "string"
+          },
+          "required_scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Required scopes (e.g. ['app_id', 'session_id']) that must accompany local tool invocations."
+          },
+          "requires_confirmation": {
+            "type": "boolean",
+            "default": false
+          },
+          "requires_user_scope": {
+            "type": "boolean",
+            "default": false
+          },
+          "supports_evidence": {
+            "type": "boolean",
+            "default": false
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 100
+          },
+          "retryable": {
+            "type": "boolean",
+            "default": false
+          },
+          "legacy_aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "input_schema": {
+            "type": "object"
+          },
+          "result_schema": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  },
+  "error_codes": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ErrorCodesCatalogV1_2",
+    "version": "1.2.0",
+    "description": "Authoritative machine-readable error codes for the shared agent runtime.",
+    "errors": [
+      {
+        "code": "CONTRACT_VERSION_MISMATCH",
+        "category": "CLIENT",
+        "retryable": false,
+        "description": "Requested contract major version is incompatible with the runtime."
+      },
+      {
+        "code": "UNKNOWN_CAPABILITY",
+        "category": "POLICY",
+        "retryable": false,
+        "description": "Requested capability ID is not registered in the CapabilityRegistry."
+      },
+      {
+        "code": "UNSUPPORTED_CAPABILITY_VERSION",
+        "category": "POLICY",
+        "retryable": false,
+        "description": "Capability version specified in profile is incompatible with registered capability version."
+      },
+      {
+        "code": "PROFILE_NOT_FOUND",
+        "category": "CLIENT",
+        "retryable": false,
+        "description": "Requested agent profile could not be found in the registry or loaded from disk."
+      },
+      {
+        "code": "PROFILE_VALIDATION_ERROR",
+        "category": "POLICY",
+        "retryable": false,
+        "description": "Profile manifest violated schema, model constraints, or capability permissions."
+      },
+      {
+        "code": "POLICY_VIOLATION",
+        "category": "POLICY",
+        "retryable": false,
+        "description": "Tool invocation violated execution policy, security boundary, or confirmation requirement."
+      },
+      {
+        "code": "SCOPE_VIOLATION",
+        "category": "POLICY",
+        "retryable": false,
+        "description": "Tool invocation lacked required application or session scope (app_id, session_id)."
+      },
+      {
+        "code": "IDEMPOTENCY_CONFLICT",
+        "category": "CLIENT",
+        "retryable": true,
+        "description": "Concurrent execution in progress under the same idempotency key."
+      },
+      {
+        "code": "DEADLINE_EXCEEDED",
+        "category": "RESOURCE",
+        "retryable": false,
+        "description": "Run execution exceeded the allocated wall-clock deadline."
+      },
+      {
+        "code": "RUN_CANCELLED",
+        "category": "CLIENT",
+        "retryable": false,
+        "description": "Run was explicitly cancelled via abort signal or cancellation endpoint."
+      },
+      {
+        "code": "TOOL_EXECUTION_FAILED",
+        "category": "TOOL",
+        "retryable": false,
+        "description": "Runtime execution of an authorized global capability failed."
+      },
+      {
+        "code": "LOCAL_TOOL_ADMISSION_ERROR",
+        "category": "TOOL",
+        "retryable": false,
+        "description": "Local application tool could not be admitted due to authorization or scoping error."
+      },
+      {
+        "code": "RUNTIME_UNAVAILABLE",
+        "category": "RUNTIME",
+        "retryable": true,
+        "description": "Shared agent runtime is unavailable or unreachable."
+      },
+      {
+        "code": "MALFORMED_REQUEST",
+        "category": "CLIENT",
+        "retryable": false,
+        "description": "Payload failed validation against canonical CreateRunRequest schema."
+      }
+    ]
+  }
+}

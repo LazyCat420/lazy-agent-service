@@ -1,0 +1,21 @@
+import express from "express";
+import requestRoutes from "./admin/AdminRequestRoutes.js";
+import statsRoutes from "./admin/AdminStatsRoutes.js";
+import conversationRoutes from "./admin/AdminConversationRoutes.js";
+import contentRoutes from "./admin/AdminContentRoutes.js";
+import traceRoutes from "./admin/AdminTraceRoutes.js";
+import { conversationStatsRouter, agentConversationRouter, } from "./admin/AdminAgentConversationRoutes.js";
+import systemRoutes from "./admin/AdminSystemRoutes.js";
+import lmStudioRoutes from "./admin/AdminLmStudioRoutes.js";
+const router = express.Router();
+router.use("/requests", requestRoutes);
+router.use("/stats", statsRoutes);
+router.use("/conversations", conversationRoutes);
+router.use("/traces", traceRoutes);
+router.use("/agent-conversations", conversationStatsRouter);
+router.use("/agent-conversations", agentConversationRouter);
+router.use("/lm-studio", lmStudioRoutes);
+router.use(systemRoutes);
+router.use(contentRoutes);
+export default router;
+//# sourceMappingURL=AdminRoutes.js.map

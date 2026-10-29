@@ -2,7 +2,7 @@ import {
   DEFAULT_TOPOLOGY,
   DEFAULT_USERNAME,
 } from "@rodrigo-barraza/utilities-library/taxonomy";
-import { handleConversation } from "../routes/ChatRoutes.ts";
+import { handleConversation } from "../core/chat/ChatGeneration.ts";
 import { handleVoice } from "../routes/AudioRoutes.ts";
 import {
   GoogleGenAI,

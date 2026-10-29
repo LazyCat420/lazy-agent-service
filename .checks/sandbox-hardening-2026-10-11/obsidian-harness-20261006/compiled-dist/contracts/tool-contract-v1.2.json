@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ToolContractV1_2",
+  "version": "1.2.0",
+  "description": "Canonical Tool Contract v1.2 defining execution location, effect safety, and admission scopes.",
+  "definitions": {
+    "ToolDefinition": {
+      "type": "object",
+      "required": ["id", "version", "owner", "execution", "effect"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^(global|[a-z0-9_-]+)\\.[a-z0-9_.]+$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "owner": {
+          "type": "string",
+          "description": "Service or repository owning this tool definition."
+        },
+        "execution": {
+          "type": "string",
+          "enum": ["shared", "local"],
+          "description": "'shared' executes inside lazy-agent-service runtime; 'local' executes in caller application domain."
+        },
+        "effect": {
+          "type": "string",
+          "enum": ["read", "write", "destructive"]
+        },
+        "resource_type": {
+          "type": "string"
+        },
+        "required_scope": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required scopes (e.g. ['app_id', 'session_id']) that must accompany local tool invocations."
+        },
+        "requires_confirmation": {
+          "type": "boolean",
+          "default": false
+        },
+        "requires_user_scope": {
+          "type": "boolean",
+          "default": false
+        },
+        "supports_evidence": {
+          "type": "boolean",
+          "default": false
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100
+        },
+        "retryable": {
+          "type": "boolean",
+          "default": false
+        },
+        "legacy_aliases": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "input_schema": {
+          "type": "object"
+        },
+        "result_schema": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

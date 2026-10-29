@@ -10,7 +10,7 @@ const chatState = vi.hoisted(() => ({
   calls: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("../../../routes/ChatRoutes.js", () => ({
+vi.mock("../../../core/chat/ChatGeneration.js", () => ({
   handleConversation: async (
     params: Record<string, unknown>,
     emit: (event: SseEvent) => void,

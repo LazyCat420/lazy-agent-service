@@ -16,7 +16,7 @@ import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const handleAgent = vi.fn(async () => {});
-vi.mock("../../routes/ChatRoutes.ts", () => ({ handleAgent: (...args: unknown[]) => handleAgent(...(args as [])) }));
+vi.mock("../../core/chat/ChatGeneration.ts", () => ({ handleAgent: (...args: unknown[]) => handleAgent(...(args as [])) }));
 const dispatchTool = vi.fn(async () => ({ content: "{}" }));
 vi.mock("../ToolDispatch.js", () => ({ dispatchTool: (...args: unknown[]) => dispatchTool(...(args as [])) }));
 

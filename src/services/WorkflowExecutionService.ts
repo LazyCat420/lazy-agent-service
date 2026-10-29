@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { handleConversation, handleAgent } from "../routes/ChatRoutes.ts";
+import { handleConversation, handleAgent } from "../core/chat/ChatGeneration.ts";
 import { getProvider } from "../providers/index.ts";
 import { resolveMediaReference } from "../services/MediaResolutionService.ts";
 import EmbeddingService from "../services/EmbeddingService.ts";

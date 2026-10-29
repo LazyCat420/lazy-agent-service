@@ -1,0 +1,10 @@
+{
+  "catalogFormat": {
+    "inworld": "Inworld voice ({{count}}): {{voices}}.",
+    "openai": "OpenAI voice: {{voices}}.",
+    "google": "Google voice: {{voices}}.",
+    "elevenlabs": "ElevenLabs voice: {{voices}}."
+  },
+
+  "inworldTts2Steering": "inworld-tts-2 supports instruction tag — natural language in square bracket before target text. Emotion: [say excitedly], [sound sad], [sound concerned], [sound terrified]. Articulation: [say with force], [articulate clearly], [deliberate pauses]. Intonation: [falling pitch], [rising pitch]. Volume: [very quiet], [very loud]. Pitch: [low tone], [high pitch]. Range: [say playfully], [no pitch variation]. Speed: [very fast], [very slow]. Style: [whisper], [nasal quality], [sing joyfully]. Non-verbal (inline): [laugh], [sigh], [clear throat], [breathe], [cough], [yawn]. Combine: [say sadly with deliberate pauses in low voice and hushed style]. Place tag before target text. Capitalize for emphasis: 'NOT to do that.' Use contraction, filler (uh, um, well) for naturalness. Number in spoken form. No markdown, bullet, emoji — natural spoken sentence only."
+}

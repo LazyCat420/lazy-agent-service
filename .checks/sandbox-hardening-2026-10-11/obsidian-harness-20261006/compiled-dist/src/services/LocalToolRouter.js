@@ -1,0 +1,451 @@
+import { classifyToolResult } from "./ToolResult.js";
+import CONFIG from "../../config.js";
+import logger from "../utils/logger.js";
+import { callKey, guardedRun } from "./ToolCallGuard.js";
+import { newsSearch, newsProviderStatus } from "./NewsSearchService.js";
+import { CATEGORIES } from "./EditorialHeadlinesService.js";
+import { stripMcpPrefix } from "./McpPrefix.js";
+const cache = new Map();
+// Explicit reusable data reads only. Unknown tools, writes, composite tools,
+// account state and mutable collaboration state always execute afresh.
+export const REUSABLE_READ_TOOLS = new Set([
+    "get_market_data", "get_polygon_price_history", "get_finviz_fundamentals",
+    "get_sec_filings", "get_earnings_data", "get_finnhub_news", "get_options_flow",
+    "get_insider_trades", "get_institutional_holdings", "get_congress_trades",
+    "get_technical_indicators", "get_upcoming_events", "lazy_web_search", "scrape_url",
+]);
+/**
+ * Execute a python-bridge tool via trading-service's HTTP endpoint
+ * (POST /api/v1/agent-tools/execute). Returns {error, is_error} instead of
+ * throwing so MCP callers get a structured failure, not a dropped session.
+ */
+export const executeToolViaTradingService = async (toolName, toolArguments, context) => {
+    const reusable = REUSABLE_READ_TOOLS.has(toolName);
+    // The Python bridge repairs an absent ticker from caller context. Requests
+    // with identical raw arguments but different fallback tickers are not equal.
+    const fallbackTicker = typeof toolArguments.ticker === "string" && toolArguments.ticker.trim()
+        ? "" : context?.ticker || "";
+    const cacheKey = callKey(toolName, { arguments: toolArguments, fallbackTicker });
+    const readCache = () => {
+        const hit = cache.get(cacheKey);
+        return hit && hit.expiresAt > Date.now() ? hit.result : undefined;
+    };
+    const fresh = reusable ? readCache() : undefined;
+    if (fresh !== undefined) {
+        logger.info(JSON.stringify({ event: "cache_hit", toolName, args: toolArguments }));
+        return fresh;
+    }
+    // Coalesce identical in-flight calls, apply repeat-call friction, and cap
+    // per-tool concurrency. See ToolCallGuard for why each layer exists.
+    return guardedRun({
+        toolName,
+        key: cacheKey,
+        scope: { agentName: context?.agentName, cycleId: context?.cycleId },
+        cached: reusable ? readCache : undefined,
+        coalesce: reusable,
+        repeatGuard: reusable,
+        run: () => callTradingService(toolName, toolArguments, context, reusable ? cacheKey : undefined),
+    });
+};
+const callTradingService = async (toolName, toolArguments, context, cacheKey) => {
+    const url = `${CONFIG.TRADING_SERVICE_URL}/api/v1/agent-tools/execute`;
+    const timeoutMs = CONFIG.SLOW_TOOLS.has(toolName)
+        ? CONFIG.SLOW_TOOL_TIMEOUT_MS
+        : CONFIG.EXECUTION_TIMEOUT_MS;
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const apiResponse = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${CONFIG.TRADING_SERVICE_API_KEY || ""}`
+            },
+            body: JSON.stringify({
+                tool_name: toolName,
+                arguments: toolArguments,
+                agent_name: context?.agentName || "",
+                ticker: context?.ticker || "",
+                cycle_id: context?.cycleId || ""
+            }),
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (!apiResponse.ok) {
+            const errText = await apiResponse.text();
+            logger.error(`[LocalToolRouter] trading-service execute ${toolName} → ${apiResponse.status}: ${errText.slice(0, 300)}`);
+            return { error: `trading-service tool execution failed (${apiResponse.status}): ${errText.slice(0, 500)}`, is_error: true };
+        }
+        const result = await apiResponse.json();
+        // Never cache a failure: a cached error would be replayed to every repeat
+        // caller for the whole TTL, turning one transient blip into a minute of
+        // guaranteed failures.
+        if (cacheKey && classifyToolResult(result).success) {
+            cache.set(cacheKey, { result, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
+        }
+        return result;
+    }
+    catch (fetchError) {
+        const isAbort = fetchError?.name === "AbortError";
+        const message = isAbort
+            ? `bridge timeout after ${timeoutMs}ms`
+            : fetchError.message || String(fetchError);
+        logger.error(`[LocalToolRouter] trading-service execute ${toolName} unreachable: ${message}`);
+        return { error: `Failed to reach trading-service at ${url}: ${message}`, is_error: true };
+    }
+};
+/** Forward a tool call to the HTML-Notes internal dispatcher. */
+async function forwardToHtmlNotes(toolName, toolArguments) {
+    const htmlNotesUrl = CONFIG.HTML_NOTES_URL || "http://10.0.0.16:8035";
+    try {
+        const headers = { "Content-Type": "application/json" };
+        // Shared secret for HTML-Notes' /internal/execute auth; both services carry
+        // INTERNAL_EXECUTE_TOKEN in their .env. Omitted when unset (compat mode).
+        if (process.env.INTERNAL_EXECUTE_TOKEN) {
+            headers["x-internal-token"] = process.env.INTERNAL_EXECUTE_TOKEN;
+        }
+        const apiResponse = await fetch(`${htmlNotesUrl}/internal/execute`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ tool: toolName, args: toolArguments })
+        });
+        if (apiResponse.ok) {
+            return await apiResponse.json();
+        }
+        return { error: await apiResponse.text(), is_error: true };
+    }
+    catch (fetchError) {
+        return {
+            error: `Failed to connect to html-notes service at ${htmlNotesUrl}. Is the service down? Details: ${fetchError.message}`,
+            is_error: true
+        };
+    }
+}
+/**
+ * Route a local-catalog tool call to its executor and return the result.
+ * Never throws for widget/html-notes routing errors (returns {error} objects);
+ * the python bridge path can reject like before.
+ */
+/**
+ * Cannabis strain research tools, backed by treesearch-service.
+ *
+ * Every tool is a thin, bounded GET against an endpoint that already paginates and
+ * truncates, so a response cannot blow the agent's context. The one write —
+ * strain_import — kicks off a multi-minute scrape and returns a job_id immediately,
+ * because a tool call is aborted long before that job finishes; the agent polls
+ * strain_import_status.
+ *
+ * Never throws: a failure is returned as { error, is_error } so the agent can recover.
+ */
+async function routeStrainTool(tName, args) {
+    const baseUrl = CONFIG.TREESEARCH_SERVICE_URL;
+    const name = () => encodeURIComponent(String(args.strain_name ?? ""));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CONFIG.EXECUTION_TIMEOUT_MS);
+    try {
+        let response;
+        switch (tName) {
+            case "strain_search": {
+                const params = new URLSearchParams({
+                    search: String(args.query ?? ""),
+                    limit: String(args.limit ?? 20),
+                });
+                if (args.complete_only)
+                    params.set("complete_only", "true");
+                response = await fetch(`${baseUrl}/api/strains?${params}`, { signal: controller.signal });
+                break;
+            }
+            case "strain_detail": {
+                const params = new URLSearchParams({
+                    include_observations: String(args.include_observations ?? false),
+                });
+                response = await fetch(`${baseUrl}/api/strains/${name()}/detail?${params}`, { signal: controller.signal });
+                break;
+            }
+            case "strain_terpene_profile":
+                response = await fetch(`${baseUrl}/api/strains/${name()}/terpene-profile`, { signal: controller.signal });
+                break;
+            case "strain_forum_posts": {
+                const params = new URLSearchParams({ limit: String(args.limit ?? 25) });
+                if (args.source)
+                    params.set("source", String(args.source));
+                response = await fetch(`${baseUrl}/api/strains/${name()}/observations?${params}`, { signal: controller.signal });
+                break;
+            }
+            case "strain_images": {
+                const params = new URLSearchParams({ limit: String(args.limit ?? 20) });
+                response = await fetch(`${baseUrl}/api/strains/${name()}/images?${params}`, { signal: controller.signal });
+                break;
+            }
+            case "strain_neighbors": {
+                const params = new URLSearchParams({ k: String(args.k ?? 10) });
+                response = await fetch(`${baseUrl}/api/strains/${name()}/neighbors?${params}`, { signal: controller.signal });
+                break;
+            }
+            case "strain_import":
+                response = await fetch(`${baseUrl}/api/strains/import`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        query: String(args.strain_name ?? ""),
+                        force: Boolean(args.force ?? false),
+                        stream: false, // return a job_id; do not hold the tool call open for minutes
+                    }),
+                    signal: controller.signal,
+                });
+                break;
+            case "strain_import_status":
+                response = await fetch(`${baseUrl}/api/import-jobs/${encodeURIComponent(String(args.job_id ?? ""))}`, { signal: controller.signal });
+                break;
+            default:
+                return { error: `Unknown strain tool: ${tName}`, is_error: true };
+        }
+        const body = await response.text();
+        if (!response.ok) {
+            return { error: `treesearch-service ${response.status}: ${body.slice(0, 500)}`, is_error: true };
+        }
+        try {
+            return JSON.parse(body);
+        }
+        catch {
+            return { error: `treesearch-service returned non-JSON: ${body.slice(0, 200)}`, is_error: true };
+        }
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const timedOut = err instanceof Error && err.name === "AbortError";
+        logger.error(`[strain tools] ${tName} failed: ${message}`);
+        return {
+            error: timedOut
+                ? `treesearch-service timed out after ${CONFIG.EXECUTION_TIMEOUT_MS}ms`
+                : `treesearch-service unreachable at ${baseUrl}: ${message}`,
+            is_error: true,
+        };
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+export async function routeLocalTool(toolName, toolArguments, context = {}) {
+    // Accepts EITHER namespace — see `ACCEPTED_MCP_PREFIXES`. The hand-rolled
+    // single-prefix check this replaced is why the rename needed a helper: the
+    // same strip was open-coded in more than one file, so adding a spelling in
+    // one place left the others answering "Unknown tool" for it.
+    const tName = stripMcpPrefix(toolName);
+    const cycleId = context.cycleId || "";
+    // UNREACHABLE FROM THE AGENT PATH — kept only for direct REST callers.
+    //
+    // These twelve branches have had no schema behind them since c620151
+    // (2026-07-12) dropped the music_player entries from tool_schemas.json, so
+    // they are absent from `tools/list`, from `getMCPToolSchemas`, and therefore
+    // from every persona. music-player's own registration dropped them at the
+    // same time ("the previous registration listed nonexistent tools"), and
+    // nothing in that repo calls `/execute/music_player_*` either. Zero calls in
+    // tool_usage_stats, all time.
+    //
+    // Left in place rather than deleted because `POST /execute/:toolName` is a
+    // public route and this is the only thing standing between an outside caller
+    // and the trading-service bridge fall-through. Delete the branch and the
+    // catalog entry together, or not at all.
+    if (tName.startsWith("music_player_")) {
+        const musicApiUrl = "http://10.0.0.16:8002";
+        let musicApiResponse = null;
+        let result;
+        if (tName === "music_player_suggest_artists") {
+            result = { artists: toolArguments.artists || [] };
+        }
+        else if (tName === "music_player_add_node") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/artists/add-node`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: toolArguments.name, type: toolArguments.type })
+            });
+        }
+        else if (tName === "music_player_remove_node") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/graph/discovered/${encodeURIComponent(toolArguments.node_id)}`, { method: "DELETE" });
+        }
+        else if (tName === "music_player_add_edge") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/graph/edge`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ source: toolArguments.source, target: toolArguments.target, relationship: toolArguments.relationship || "related" })
+            });
+        }
+        else if (tName === "music_player_remove_edge") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/graph/edge?source=${encodeURIComponent(toolArguments.source)}&target=${encodeURIComponent(toolArguments.target)}`, { method: "DELETE" });
+        }
+        else if (tName === "music_player_override_node_type") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/graph/override-type`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ node_id: toolArguments.node_id, group_type: toolArguments.group_type })
+            });
+        }
+        else if (tName === "music_player_expand_artist") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/graph/expand/${encodeURIComponent(toolArguments.artist)}?count=${toolArguments.count || 8}`);
+        }
+        else if (tName === "music_player_expand_genre") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/graph/expand/genre/${encodeURIComponent(toolArguments.genre)}?count=${toolArguments.count || 8}`);
+        }
+        else if (tName === "music_player_get_graph_state") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/graph/discovered`);
+        }
+        else if (tName === "music_player_search_artists") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/artists`);
+        }
+        else if (tName === "music_player_get_artist_info") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/artist/info/${encodeURIComponent(toolArguments.name)}`);
+        }
+        else if (tName === "music_player_list_genres") {
+            musicApiResponse = await fetch(`${musicApiUrl}/api/genres`);
+        }
+        else {
+            result = { success: true };
+        }
+        if (musicApiResponse !== null) {
+            if (musicApiResponse.ok) {
+                result = await musicApiResponse.json();
+            }
+            else {
+                result = { error: await musicApiResponse.text() };
+            }
+        }
+        return result;
+    }
+    if (tName.startsWith("strain_")) {
+        return await routeStrainTool(tName, toolArguments);
+    }
+    if (tName === "create_widget" ||
+        tName === "update_widget" ||
+        tName === "validate_widget_html" ||
+        tName === "list_widget_types" ||
+        tName === "plan_widget") {
+        const { WidgetTemplateRegistry } = await import("./WidgetTemplateRegistry.js");
+        const { default: ToolContext } = await import("./ToolContext.js");
+        const { evaluateWidgetPlan, checkCreateAgainstPlan, CREATE_CONSTRAINTS } = await import("./WidgetPlanGate.js");
+        if (tName === "plan_widget") {
+            // A plan is a contract, not a checkbox: type + title + a real
+            // description, remembered so create_widget can be held to it.
+            const verdict = evaluateWidgetPlan(toolArguments);
+            if (verdict.ok === false) {
+                return {
+                    success: false,
+                    error: "PLAN_INCOMPLETE",
+                    missing: verdict.missing,
+                    message: verdict.message,
+                };
+            }
+            if (cycleId) {
+                ToolContext.set(cycleId, "widgetPlan", verdict.plan);
+                ToolContext.set(cycleId, "widgetPlanApproved", true);
+            }
+            return {
+                success: true,
+                plan: verdict.plan,
+                message: `Plan registered for a '${verdict.plan.widgetType}' widget "${verdict.plan.title}". ` +
+                    `Now call create_widget with widgetType='${verdict.plan.widgetType}' and the same title. ` +
+                    CREATE_CONSTRAINTS,
+            };
+        }
+        if (tName === "validate_widget_html") {
+            const htmlContent = (toolArguments.htmlContent || "");
+            const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
+            return {
+                valid: validation.valid,
+                errors: validation.errors
+            };
+        }
+        if (tName === "list_widget_types") {
+            return {
+                success: true,
+                types: WidgetTemplateRegistry.list()
+            };
+        }
+        // create_widget / update_widget
+        if (tName === "create_widget" && cycleId) {
+            // The plan gate is only enforceable when we have a session id to track
+            // the plan against (MCP CallTool and some agent contexts have none).
+            const plan = ToolContext.get(cycleId, "widgetPlan");
+            const check = checkCreateAgainstPlan(plan, toolArguments);
+            if (check.ok === false) {
+                return { success: false, error: check.error, message: check.message };
+            }
+        }
+        const htmlContent = (toolArguments.htmlContent || "");
+        if (tName === "create_widget" || (tName === "update_widget" && htmlContent)) {
+            const validation = WidgetTemplateRegistry.validateHTML(htmlContent);
+            if (!validation.valid) {
+                return {
+                    success: false,
+                    error: "VALIDATION_FAILED",
+                    message: `Widget HTML validation failed: ${validation.errors.join("; ")}`
+                };
+            }
+        }
+        return forwardToHtmlNotes(tName, toolArguments);
+    }
+    // Natively implemented here — not proxied anywhere. news is wanted by more
+    // than one consumer, so it lives in this service rather than being rebuilt
+    // per repo. See NewsSearchService for why Google News RSS and GDELT both
+    // failed the job.
+    if (tName === "news_search") {
+        const topic = String(toolArguments.topic ?? toolArguments.query ?? "").trim();
+        const limit = Number(toolArguments.limit ?? 6) || 6;
+        // An empty topic is VALID and means "top headlines" — it routes to each
+        // provider's top-headlines endpoint. Rejecting it forced callers to invent a
+        // query, and html-notes invented the literal string "top stories", which
+        // keyword-matched roundup pages that contain that phrase.
+        // Region, not just language. Every provider was being asked for English and
+        // no country, and English is not a region — a generic query came back
+        // dominated by Indian English-language outlets. Empty string = worldwide.
+        const country = String(toolArguments.country ?? toolArguments.region ?? "").trim().toLowerCase();
+        // A SECTION for the top-headlines path: world, business, technology…
+        // Without it every general ask was one undifferentiated call, so "world
+        // news" and "us news today" returned the same three stories as "top
+        // stories". Anything not a known section is ignored rather than passed on,
+        // so a model's invented category degrades to the front page.
+        const rawCategory = String(toolArguments.category ?? toolArguments.section ?? "")
+            .trim()
+            .toLowerCase();
+        const category = CATEGORIES.includes(rawCategory)
+            ? rawCategory
+            : "";
+        // Debug-only pins, deliberately absent from the tool schema so no model can
+        // reach them. They exist because the first run of the provider audit printed
+        // six identical "per provider" rows — it had no way to pin anything, and a
+        // comparison whose numbers cannot move is a statement about the probe.
+        const debug = {
+            source: String(toolArguments._source ?? "").trim().toLowerCase(),
+            provider: String(toolArguments._provider ?? "").trim().toLowerCase(),
+        };
+        const result = country
+            ? await newsSearch(topic, limit, country, category, debug)
+            : await newsSearch(topic, limit, undefined, category, debug);
+        return {
+            topic,
+            country: country || "(default)",
+            category: category || "(top)",
+            // Which mechanism actually answered — "editorial", "editorial:stale", or a
+            // keyed provider's name. Without it a caller cannot tell a front page from
+            // a recency feed, which is exactly how the wrong one went unnoticed.
+            source: result.source,
+            count: result.items.length,
+            // An empty list is a real answer ("nothing usable right now"), not an
+            // error — the caller has its own fallback and needs to tell the two apart.
+            items: result.items,
+            providers: newsProviderStatus(),
+        };
+    }
+    if (tName.startsWith("html_notes_") ||
+        tName.startsWith("canvas_")) {
+        if (tName === "canvas_modify_dom" && !toolArguments.canvas_html) {
+            return { success: true, message: "Handled natively by HTML-Notes client" };
+        }
+        return forwardToHtmlNotes(tName, toolArguments);
+    }
+    // Python-bridge tools always go over HTTP to trading-service. The old
+    // subprocess bridge (spawn execute_tool.py) could never run in the Node-only
+    // container and was removed; one uniform path for prod and local dev.
+    return executeToolViaTradingService(tName, toolArguments, context);
+}
+//# sourceMappingURL=LocalToolRouter.js.map

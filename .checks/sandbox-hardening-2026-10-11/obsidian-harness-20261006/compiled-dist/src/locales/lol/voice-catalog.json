@@ -1,0 +1,10 @@
+{
+  "catalogFormat": {
+    "inworld": "Inworld voices ({{count}}): {{voices}}.",
+    "openai": "OpenAI voices: {{voices}}.",
+    "google": "Google voices: {{voices}}.",
+    "elevenlabs": "ElevenLabs voices: {{voices}}."
+  },
+
+  "inworldTts2Steering": "this provider uses inworld-tts-2 w/ instruction tags — natural lang directions in square brackets placed b4 the text they apply 2. use tags 2 match delivery 2 content: Emotion: [say excitedly], [sound sad], [sound concerned], [sound terrified] Articulation: [say with force], [articulate clearly], [say with deliberate pauses] Intonation: [say with a falling pitch], [say with a rising pitch] Volume: [very quiet], [very loud] Pitch: [say in a low tone], [say in a high pitch] Range: [say playfully], [say with no pitch variation] Speed: [very fast], [very slow] Vocal style: [whisper in a hushed style], [give a nasal quality], [sing joyfully] Non-verbals (inline): [laugh], [sigh], [clear throat], [breathe], [cough], [yawn] 4 max control, combine: [say sadly with deliberate pauses in a low voice and hushed style]. place tag at start of text it applies 2. CAPITALIZE words 4 emphasis: 'I told you NOT to do that.' include filler words (uh, um, well) 4 naturalness. use contractions. write numbers in spoken form. never use md, bullets, emojis, or structured text — write everything as natural spoken sentences."
+}

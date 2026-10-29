@@ -22,7 +22,7 @@ const { handleSseRequest, handleJsonRequest } = vi.hoisted(() => ({
   }),
 }));
 vi.mock("../../utils/SseUtilities.ts", () => ({ handleSseRequest, handleJsonRequest }));
-vi.mock("../ChatRoutes.ts", () => ({ handleAgent: vi.fn(async () => {}) }));
+vi.mock("../../core/chat/ChatGeneration.ts", () => ({ handleAgent: vi.fn(async () => {}) }));
 
 import agentRouter from "../AgentRoutes.ts";
 

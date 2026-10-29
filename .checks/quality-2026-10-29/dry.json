@@ -1,0 +1,142 @@
+{
+  "generatedAt": "2026-10-29T22:00:05.164Z",
+  "minTokens": 60,
+  "logic": {
+    "name": "logic",
+    "percent": 2.9409315879550397,
+    "lines": 108095,
+    "duplicatedLines": 3179,
+    "clones": 205,
+    "top": [
+      {
+        "tokens": 362,
+        "lines": 50,
+        "a": "routes/admin/AdminStatsRoutes.ts:37",
+        "b": "routes/admin/AdminTraceRoutes.ts:47"
+      },
+      {
+        "tokens": 315,
+        "lines": 64,
+        "a": "providers/openai.ts:803",
+        "b": "providers/openai.ts:1168"
+      },
+      {
+        "tokens": 249,
+        "lines": 46,
+        "a": "core/loop/AgentRouteAdapter.ts:461",
+        "b": "core/loop/RunsAdapter.ts:317"
+      },
+      {
+        "tokens": 229,
+        "lines": 40,
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:1054",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:1196"
+      },
+      {
+        "tokens": 218,
+        "lines": 24,
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:983",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:751"
+      },
+      {
+        "tokens": 208,
+        "lines": 40,
+        "a": "providers/anthropic.ts:546",
+        "b": "providers/anthropic.ts:775"
+      },
+      {
+        "tokens": 208,
+        "lines": 52,
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:23",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:43"
+      },
+      {
+        "tokens": 201,
+        "lines": 40,
+        "a": "providers/openai.ts:764",
+        "b": "providers/openai.ts:1129"
+      },
+      {
+        "tokens": 200,
+        "lines": 42,
+        "a": "providers/openai.ts:826",
+        "b": "providers/openai.ts:1191"
+      },
+      {
+        "tokens": 198,
+        "lines": 37,
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:135",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:160"
+      }
+    ]
+  },
+  "all": {
+    "name": "all",
+    "percent": 3.2446217108165825,
+    "lines": 113326,
+    "duplicatedLines": 3677,
+    "clones": 231,
+    "top": [
+      {
+        "tokens": 362,
+        "lines": 50,
+        "a": "routes/admin/AdminStatsRoutes.ts:37",
+        "b": "routes/admin/AdminTraceRoutes.ts:47"
+      },
+      {
+        "tokens": 315,
+        "lines": 64,
+        "a": "providers/openai.ts:803",
+        "b": "providers/openai.ts:1168"
+      },
+      {
+        "tokens": 249,
+        "lines": 46,
+        "a": "core/loop/AgentRouteAdapter.ts:461",
+        "b": "core/loop/RunsAdapter.ts:317"
+      },
+      {
+        "tokens": 229,
+        "lines": 40,
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:1054",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:1196"
+      },
+      {
+        "tokens": 218,
+        "lines": 24,
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:983",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:751"
+      },
+      {
+        "tokens": 208,
+        "lines": 40,
+        "a": "providers/anthropic.ts:546",
+        "b": "providers/anthropic.ts:775"
+      },
+      {
+        "tokens": 208,
+        "lines": 52,
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:23",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:43"
+      },
+      {
+        "tokens": 201,
+        "lines": 40,
+        "a": "providers/openai.ts:764",
+        "b": "providers/openai.ts:1129"
+      },
+      {
+        "tokens": 200,
+        "lines": 42,
+        "a": "providers/openai.ts:826",
+        "b": "providers/openai.ts:1191"
+      },
+      {
+        "tokens": 198,
+        "lines": 37,
+        "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:135",
+        "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:160"
+      }
+    ]
+  }
+}

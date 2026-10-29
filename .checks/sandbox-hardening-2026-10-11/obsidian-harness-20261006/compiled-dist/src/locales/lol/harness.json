@@ -1,0 +1,79 @@
+{
+  "criticGate": {
+    "safetyReviewer": "ur a code safety reviewer. an AI agent wants 2 exec the following tool call.",
+    "reviewCriteria": "review 4 safety. look 4:\n- destructive cmds (rm -rf, DROP, DELETE, format, etc.)\n- data exfil (curl 2 external servers, unauth network access)\n- priv escalation (sudo, chmod 777, etc.)\n- infinite loops or resource exhaustion",
+    "responseFormat": "respond w/ exactly 1 word on 1st line: APPROVE or DENY\nif DENY, explain why on 2nd line."
+  },
+  "planningMode": {
+    "blocked": "ur in PLAN MODE. tool call(s) [{{blockedNames}}] were blocked — only exit_plan_mode is available. write ur complete plan as text output, then call exit_plan_mode 2 submit 4 user approval.",
+    "approvalResult": "user approved ur plan. u can now start coding. start w/ updating ur todo list if applicable.",
+    "rejectionStatus": "plan rejected — exec cancelled.",
+    "planningInstruction": "## ⚠️ PLAN MODE ACTIVE — TOOL ACCESS RESTRICTED\n\n**IMPORTANT**: tho the sys prompt above may describe various tools (create_team, execute_shell, read_file, etc.), ur in PLAN MODE & **CANNOT use any of them**.\n\nthe ONLY tools avail 2 u rn r:\n- **exit_plan_mode** — call when plan is complete 2 submit 4 user approval\n- **think** — use 4 internal reasoning\n\nany other tool calls WILL B BLOCKED. do not attempt 2 call create_team, execute_shell, read_file, write_file, or any other tool.\n\n**what 2 do:**\n1. analyze user's req\n2. design ur impl approach as text output\n3. call exit_plan_mode when ready — user will review & approve b4 u can exec\n\nkeep plan concise. 4 simple tasks, a brief summary is sufficient."
+  },
+  "reminderExtractor": {
+    "extractionPrompt": "ur analyzing a sys prompt 2 extract its most critical behavioral rules.\n\nextract exactly 8–12 of the most important constraints — rules the AI agent MUST follow thruout the entire session.\n\nfocus on:\n- hard prohibitions (never do X, do not Y)\n- mandatory behaviors (always do X, u must Y)\n- safety & security constraints\n- output format & code style reqs\n- identity & persona boundaries\n- tool usage rules & restrictions\n\nrules 4 ur output:\n- output ONLY a bullet-point list using `- ` prefix\n- ea bullet must b a single concise sentence (max 30 words)\n- no headers, no explanations, no numbering, no md formatting\n- prioritize constraints that would cause the most dmg if forgotten\n- ignore trivial or obvious rules (e.g. 'be helpful')\n\nsys prompt 2 analyze:\n<system_prompt>"
+  },
+  "visionFeed": {
+    "instruction": "\n\n## 🎥 LIVE VISION FEED ACTIVE\nur equipped w/ a live visual feed (webcam or screen stream). the last 3 frames r auto-captured & attached 2 the user's latest msg (oldest→newest).\nuse these imgs 2 observe the env, notice changes, animations, or user gestures, & refer 2 them naturally in ur convo.\n"
+  },
+  "exhaustionRecovery": {
+    "message": "u've reached max tool-call iterations 4 this turn. summarize progress so far, report any partial results, & clearly state what remains 2 b done."
+  },
+  "gotSynthesis": {
+    "instruction": "[GRAPH-OF-THOUGHTS SYNTHESIS PASS]\n\n{{branchCount}} parallel reasoning branches were gen'd & scored. ur task is 2 produce a single, optimal response that SYNTHESIZES the best aspects of all branches — combining the strongest tool calls, safest approaches, & most complete coverage into 1 unified action.\n\nRULES:\n1. do NOT simply repeat the highest-scoring branch. merge complementary strengths.\n2. if multiple branches propose diff tool calls that r COMPLEMENTARY (non-conflicting), include all.\n3. if branches disagree on approach, prefer the 1 w/ highest CORRECTNESS score, then RISK score.\n4. incorporate defensive measures (error handling, validation) from the THOROUGH branch even if using a MINIMAL branch's core approach.\n5. produce ur merged response w/ tool calls as if u r executing the task.\n\n── BRANCH OUTPUTS ──\n\n"
+  },
+  "planModeEntry": {
+    "message": "entered plan mode. u should now focus on exploring the codebase & designing an impl approach.\n\nin plan mode, u should:\n1. thoroughly explore the codebase 2 understand existing patterns\n2. ID similar features & arch approaches\n3. consider multiple approaches & their trade-offs\n4. design a concrete impl strategy\n5. when ready, call exit_plan_mode 2 present ur plan 4 approval\n\nremember: do NOT write or edit any files yet. this is a read-only exploration & planning phase."
+  },
+  "toolDiscoveryNudge": {
+    "autoEnabled": "ur search found {{count}} tool(s): {{toolNames}}. auto-enabled & avail now — call them directly.",
+    "enableRequired": "ur search found {{count}} tool(s) not yet enabled: {{toolNames}}. call enable_tools w/ these names now. TIP: next time, use discover_and_enable_tools instead — it searches AND enables in 1 step."
+  },
+  "toolRetryGuidance": {
+    "header": "[TOOL RETRY] {{count}} tool call(s) failed:",
+    "analyzeSteps": "b4 retrying, analyze:\n1. which specific arg(s) caused the failure?\n2. what value(s) should b corrected/adjusted?\n3. is there a prereq step needed b4 this tool call can succeed?\n\nretry w/ corrected args, or take a diff approach if the tool isn't appropriate 4 this task."
+  },
+  "outputTruncation": {
+    "continuationPrompt": "ur prev response was cut short b/c the output token limit was reached b4 u could finish. the truncated text has been preserved. pls continue exactly where u left off. do NOT repeat what u already said.",
+    "exhaustedRecovery": "the model's response was cut short b/c the **max_tokens** limit ({{configuredMaxTokens}}) was reached, & {{maxAttempts}} auto continuation attempt(s) also hit the limit. this typically happens w/ very large tool call sequences or extremely long responses. try increasing the **Max Tokens** setting in ur model cfg, or break the task into smaller steps.",
+    "providerError": "the model provider encountered an error on iteration {{iteration}}: `{{errorText}}`. the convo history up 2 this point has been preserved. u can retry ur req, or try a diff model/provider if this persists."
+  },
+  "contextWindow": {
+    "droppedMessages": "{{droppedCount}} earlier msgs were removed 2 fit the ctx window. the convo continues below."
+  },
+  "toolSetUpdated": {
+    "header": "[TOOL SET UPDATED] {{count}} new tool(s) have been dynamically enabled: {{toolNames}}",
+    "availableDocumentation": "the following tools r now available w/ full documentation:",
+    "usageGuidelines": "## tool usage guidelines"
+  },
+  "validationError": {
+    "header": "[VALIDATION ERROR] ur recent edit(s) introduced {{errorCount}} error(s):",
+    "analyzePrompt": "b4 fixing, ANALYZE what went wrong:\n1. what assumption in ur approach caused the failure?\n2. what is fundamentally diff about a correct solution?\n3. what specific change would avoid this class of error?\n\napply ur analysis & fix these issues b4 proceeding. do not move on 2 other tasks until validation passes."
+  },
+  "systemReminder": {
+    "header": "[SYS REMINDER — Iteration {{currentIteration}}]",
+    "preamble": "the following core behavioral constraints from ur sys instructions remain in effect:",
+    "footer": "continue 2 follow these constraints strictly thruout the remainder of this session."
+  },
+  "codexPlanningDetector": {
+    "continuePrompt": "pls proceed w/ the next step using the appropriate tools 2 implement ur plan. if u have fully completed the user's req, pls output a final msg stating that u r done w/o calling any tools."
+  },
+  "retryLabels": {
+    "attemptLabel": "(attempt {{attemptCount}})",
+    "errorLabel": "**Error:** {{errorMessage}}",
+    "originalArguments": "**Original args:**"
+  },
+  "errorAsContext": {
+    "wrapper": "⚠️ **Error:** {{errorDescription}}"
+  },
+  "treeOfThoughts": {
+    "proactiveBacktrack": "[PROACTIVE BACKTRACK — ALL {{branchCount}} BRANCHES SCORED BELOW THRESHOLD (best: {{bestScore}}/{{threshold}})]\n\nall candidate approaches scored poorly on the multi-criteria eval. the current trajectory appears unpromising.\n\nb4 retrying, reconsider the problem from a higher level:\n1. is the current approach fundamentally flawed?\n2. what alt strategy would b more robust?\n3. r there simpler, safer paths 2 the same goal?\n\ntake a DIFFERENT approach on the next attempt.",
+    "frontierFallback": "[FRONTIER FALLBACK — BRANCH {{branchIndex}} FAILED VALIDATION]\n\nthe prev approach produced {{errorCount}} validation error(s):\n\n{{errorBlock}}\n\nswitching 2 the next-best pre-scored alt approach. avoid the same mistakes — the prev branch's errors r listed above.",
+    "reflexion": "[REFLEXION — BRANCH {{branchIndex}} FAILED VALIDATION]\n\nthe prev approach produced {{errorCount}} validation error(s):\n\n{{errorBlock}}\n\nb4 retrying, ANALYZE what went wrong:\n1. what assumption in the prev approach caused the failure?\n2. what is fundamentally diff about a correct solution?\n3. what specific alt strategy would avoid this class of error?\n\napply ur analysis & take a DIFFERENT approach on the next attempt.",
+    "budgetExhausted": "[VALIDATION ERROR — BACKTRACK BUDGET EXHAUSTED]\n\n{{errorBlock}}\n\nmultiple approaches have failed. fix the remaining issues directly."
+  },
+  "graphOfThoughts": {
+    "proactiveBacktrack": "[PROACTIVE BACKTRACK — ALL BRANCHES SCORED BELOW THRESHOLD (best: {{bestScore}}/{{threshold}})]\n\nall candidate approaches scored poorly on the multi-criteria eval. the current trajectory appears unpromising.\n\nb4 retrying, reconsider the problem from a higher level:\n1. is the current approach fundamentally flawed?\n2. what alt strategy would b more robust?\n3. r there simpler, safer paths 2 the same goal?\n\ntake a DIFFERENT approach on the next attempt.",
+    "synthesizedValidationError": "[VALIDATION ERROR — SYNTHESIZED OUTPUT]\n\nthe merged approach produced {{errorCount}} validation error(s):\n\n{{errorBlock}}\n\nthe synthesized approach combined insights from {{branchCount}} branches but the merged tool calls still caused validation failures.\nfix the remaining issues directly — do NOT repeat the same tool calls."
+  }
+}

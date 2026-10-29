@@ -1,0 +1,151 @@
+{
+  "enter_plan_mode": {
+    "description": "Switch into planning mode. While in plan mode, you will not have access to any tools — you can only output text. Use this to produce a structured implementation plan before executing changes. Call exit_plan_mode when you are ready to resume tool execution. Use this when the task is complex and benefits from upfront planning.",
+    "parameters": {
+      "reason": "Why you are entering plan mode (shown to the user)."
+    }
+  },
+  "exit_plan_mode": {
+    "description": "Exit planning mode and resume normal tool execution. Call this after you have produced your plan and are ready to execute it with tools.",
+    "parameters": {
+      "summary": "Brief summary of the plan you are about to execute."
+    }
+  },
+  "enable_tools": {
+    "description": "Activate discovered tools so you can call them. Required after search_tools returns results with isEnabled: false. Accepts exact tool names (e.g. \"get_weather\") or domain prefixes (e.g. \"domain:Finance\", \"domainKey:health\") to enable an entire domain. Newly enabled tools become available on the NEXT iteration. Core cognitive tools (memory, tasks, planning) are always available.",
+    "parameters": {
+      "tools": "Tool names or domain prefixes to enable. Examples: [\"get_weather\", \"get_weather_forecast\"] or [\"domain:Weather & Environment\"]."
+    }
+  },
+  "disable_tools": {
+    "description": "Dynamically disable tools from this conversation to reduce token usage and tool interference. Accepts exact tool names or domain prefixes (e.g. \"domain:Finance\"). Core cognitive tools (memory, tasks, planning, orchestration) cannot be disabled.",
+    "parameters": {
+      "tools": "Tool names or domain prefixes to disable. Examples: [\"get_weather\"] or [\"domain:Weather & Environment\"]."
+    }
+  },
+  "discover_and_enable_tools": {
+    "description": "Search the FULL tool catalog ({{totalToolCount}} tools) AND automatically enable matches in one step. Combines search_tools and enable_tools — after calling this, discovered tools are immediately available on the next iteration without a separate enable_tools call. Use this when you know you want to use discovered tools right away. Covers all domains: {{domainListLowercase}}. Accepts the same parameters as search_tools (query, domain, limit).",
+    "parameters": {
+      "query": "Search keyword(s) to match against tool names and descriptions. Use capability-specific terms for best results. Examples: {{sampleKeywords}}.",
+      "domain": "Filter by tool domain. Known domains: {{domainListQuoted}}.",
+      "limit": "Maximum results to return (1–50). Default: 20."
+    }
+  },
+  "create_skill": {
+    "description": "Create a reusable workflow skill. Skills are stored prompt templates with variable interpolation ({{variable}}) that can be invoked by name. Use this to capture multi-step workflows (refactor→test→commit, analyze→report, etc.) as reusable atomic operations. Skills persist across sessions and can be shared across agents.",
+    "parameters": {
+      "name": "Unique skill name (e.g. 'refactor_and_test', 'code_review'). Used as the skill ID.",
+      "description": "What the skill does — shown when listing skills.",
+      "prompt": "The prompt template to execute. Use {{variable}} syntax for parameters.",
+      "steps": "Optional: ordered list of step descriptions for documentation.",
+      "tools": "Optional: specific tools to enable. If omitted, all tools are available.",
+      "maxIterations": "Optional: max agentic loop iterations for the skill run (1-100). Default: 25.",
+      "model": "Optional: model override for the skill run."
+    }
+  },
+  "execute_skill": {
+    "description": "Execute a previously created skill by its ID. The skill's prompt template is interpolated with the provided variables and executed as an inline agentic task. Use list_skills to see available skills.",
+    "parameters": {
+      "skillId": "The skill ID to execute (derived from the skill name).",
+      "variables": "Key-value pairs for {{variable}} interpolation in the skill's prompt template."
+    }
+  },
+  "list_skills": {
+    "description": "List all available skills. Skills are reusable workflow templates created with create_skill.",
+    "parameters": {
+      "project": "Optional: filter by project scope."
+    }
+  },
+  "delete_skill": {
+    "description": "Delete a skill by its ID.",
+    "parameters": {
+      "skillId": "The skill ID to delete."
+    }
+  },
+  "enter_worktree": {
+    "description": "Enter an isolated git worktree for the current conversation. Creates a new branch and redirects all file/git/shell tool calls to the worktree directory. Use this to try risky refactors, experimental changes, or speculative edits without affecting the main branch. Your full conversation context is preserved. Call exit_worktree to merge or discard when done.",
+    "parameters": {
+      "reason": "Why you're entering an isolated worktree (e.g. 'risky refactor', 'experimental approach')."
+    }
+  },
+  "exit_worktree": {
+    "description": "Exit the current isolated worktree and return to the main workspace. Choose to 'merge' changes back to the main branch or 'discard' them entirely. If merging, changes are committed and merged automatically.",
+    "parameters": {
+      "action": "'merge' to apply changes to main branch, 'discard' to throw them away.",
+      "commitMessage": "Commit message for the merge (used when action is 'merge'). Auto-generated if not provided."
+    }
+  },
+  "write_todo": {
+    "description": "Write or update a persistent TODO checklist for the current project. Each item has status: 'pending', 'in_progress', or 'completed'. Call with the full updated list — replaces the previous state.",
+    "parameters": {
+      "items": "Full list of todo items. Replaces the previous list entirely."
+    }
+  },
+  "summarize_conversation": {
+    "description": "Compress the current conversation into a stored summary for future context recovery. Use when the conversation is long. Not shown to the user — private working memory.",
+    "parameters": {
+      "summary": "Your compressed summary of the conversation so far. Include: key decisions made, files modified, current task state, and what remains to be done.",
+      "keyFiles": "Optional: list of key file paths relevant to the current work.",
+      "openQuestions": "Optional: unresolved questions or ambiguities."
+    }
+  },
+  "ask_user": {
+    "description": "Ask the user one or more questions and wait for their responses before continuing. Use this when you need clarification, a decision between options, or explicit confirmation before proceeding with a potentially impactful action. The agent loop pauses until the user responds. You can batch up to 4 related questions in a single call to reduce round-trips.",
+    "parameters": {
+      "context": "Optional: additional context shown below the questions.",
+      "questions": "Batch of questions to ask the user (up to 4). Each item is a question object."
+    }
+  },
+  "list_mcp_resources": {
+    "description": "List available resources from a connected MCP server.",
+    "parameters": {
+      "server_name": "The MCP server name to query. If omitted, queries all."
+    }
+  },
+  "read_mcp_resource": {
+    "description": "Read a specific resource from a connected MCP server by its URI.",
+    "parameters": {
+      "server_name": "The MCP server name that hosts the resource.",
+      "uri": "The resource URI to read."
+    }
+  },
+  "authenticate_mcp_server": {
+    "description": "Authenticate with a connected MCP server by providing credentials.",
+    "parameters": {
+      "server_name": "The MCP server name to authenticate with.",
+      "token": "Bearer token for HTTP MCP servers.",
+      "api_key": "API key value.",
+      "api_key_header": "Header name for the API key (default: 'X-API-Key').",
+      "env": "Additional environment variables to inject."
+    }
+  },
+  "set_timer": {
+    "description": "Set a short one-shot timer to pause, wait, or defer execution within this conversation. Use when you need to wait for an asynchronous process, poll a build or deployment, retry after a transient failure, or yield briefly before continuing. The timer fires the provided prompt back into this conversation after the specified duration. Duration must be between 30 and 599 seconds (under 10 minutes). For user-facing reminders, alarms, or scheduled events, use create_cron_job instead.",
+    "parameters": {
+      "prompt": "The instruction or context to inject back into this conversation when the timer fires.",
+      "durationSeconds": "Number of seconds to wait before firing (30–599). Must be under 10 minutes."
+    }
+  },
+  "list_timers": {
+    "description": "List all active one-shot agent timers in the current conversation. Shows short-duration waits (30–599 seconds) set by set_timer. To view user-facing scheduled reminders, alarms, and recurring events, use list_cron_jobs instead."
+  },
+  "cancel_timer": {
+    "description": "Cancel an active one-shot agent timer in the current conversation. To delete a scheduled cron job, reminder, or alarm, use delete_cron_job instead.",
+    "parameters": {
+      "timerId": "The unique ID of the timer to cancel."
+    }
+  },
+  "search_conversations": {
+    "description": "Search past agent conversations using a natural language query. Finds previous sessions by semantic similarity to the query text. Returns conversation titles, summaries, dates, and linked memory counts. Use this when the user references a past session, asks 'remember when we...', or when you need context from a previous coding session.",
+    "parameters": {
+      "query": "Natural language search query describing what you're looking for. Example: 'MCP connection debugging', 'the session where we fixed WebSocket drops'.",
+      "limit": "Maximum number of results to return. Default: 10."
+    }
+  },
+  "describe_tools": {
+    "description": "Fetch the full detailed JSON schemas (including parameter structures) for one or more tools. Call this tool when you need to know what arguments a specific tool expects before you invoke it.",
+    "parameters": {
+      "tool_names": "List of tool names to retrieve detailed schemas for."
+    }
+  }
+}

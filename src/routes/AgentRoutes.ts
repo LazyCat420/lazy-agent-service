@@ -2,7 +2,7 @@ import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import express, { Request, Response, NextFunction } from "express";
 import AgentSessionRegistry from "../services/AgentSessionRegistry.ts";
 import LiveFrameService from "../services/LiveFrameService.ts";
-import { handleAgent } from "./ChatRoutes.ts";
+import { handleAgent } from "../core/chat/ChatGeneration.ts";
 import { handleApprovalDecision } from "./ApprovalDecisionRoute.ts";
 import { handleQuestionAnswer } from "./QuestionAnswerHandler.ts";
 import { prepareTradingAgentRequest } from "../services/TradingAgentRequest.ts";

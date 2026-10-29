@@ -16,7 +16,7 @@ const chatState = vi.hoisted(() => ({
   reply: '{"topics": ["wood ash glaze"]}',
 }));
 
-vi.mock("../../../routes/ChatRoutes.js", () => ({
+vi.mock("../../../core/chat/ChatGeneration.js", () => ({
   handleConversation: async (
     params: Record<string, unknown>,
     emit: (event: SseEvent) => void,

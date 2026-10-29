@@ -1,7 +1,7 @@
 import logger from "../../logger.js";
 import { getInstancesByType } from "../../providers/instance-registry.js";
 import type { InstanceEntry } from "../../types/ProviderTypes.js";
-import { handleConversation } from "../../routes/ChatRoutes.js";
+import { handleConversation } from "../../core/chat/ChatGeneration.ts";
 import type { SseEvent } from "../../types/SseTypes.js";
 import {
   wallgardenJetsonGate,

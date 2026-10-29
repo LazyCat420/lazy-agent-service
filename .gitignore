@@ -50,3 +50,4 @@ data/run_store_durable.json
 # harness2 library + run records (bind-mounted on the NAS; local runs must not dirty a checkout)
 runtime-data/
 
+coverage/

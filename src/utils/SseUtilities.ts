@@ -1,4 +1,4 @@
-import { handleConversation } from "../routes/ChatRoutes.ts";
+import { handleConversation } from "../core/chat/ChatGeneration.ts";
 import { ProviderError } from "./errors.ts";
 import { createAbortController } from "./AbortController.ts";
 import logger from "./logger.ts";

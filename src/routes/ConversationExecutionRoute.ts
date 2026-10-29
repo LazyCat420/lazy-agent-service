@@ -1,6 +1,6 @@
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import express, { Request, Response, NextFunction } from "express";
-import { handleAgent } from "./ChatRoutes.ts";
+import { handleAgent } from "../core/chat/ChatGeneration.ts";
 import { handleApprovalDecision } from "./ApprovalDecisionRoute.ts";
 import { handleQuestionAnswer } from "./QuestionAnswerHandler.ts";
 import { handleSseRequest, handleJsonRequest } from "../utils/SseUtilities.ts";

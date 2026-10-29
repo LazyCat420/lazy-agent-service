@@ -1,0 +1,544 @@
+import express from "express";
+import cors from "cors";
+import http from "http";
+import { WebSocketServer } from "ws";
+import { errorHandler } from "./utils/errors.js";
+import { errorMessage } from "@rodrigo-barraza/utilities-library";
+import logger from "./utils/logger.js";
+import { listProviders } from "./providers/index.js";
+import { TYPES } from "./config.js";
+import { setupWebSocket } from "./websocket/index.js";
+import { authMiddleware } from "./middleware/AuthMiddleware.js";
+import { requestLoggerMiddleware } from "./middleware/RequestLoggerMiddleware.js";
+import { COLLECTIONS, CORS_MAX_AGE_SECONDS } from "./constants.js";
+import { LAZY_TOOL_BIND_PORT, MONGO_URI, MONGO_DB_NAME, TRADING_MONGO_DB, MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET_NAME, } from "../config.js";
+// Container-internal bind port; the NAS maps host 5591 → container 7778.
+// NOTE: LAZY_TOOL_SERVICE_PORT is the EXTERNAL port elsewhere in the ecosystem
+// (the vault .env sets it to 5591) — binding to it broke the compose mapping.
+// LAZY_TOOL_BIND_PORT is the dedicated override; see config.ts for the split.
+const PORT = LAZY_TOOL_BIND_PORT;
+import MongoWrapper from "./wrappers/MongoWrapper.js";
+import MinioWrapper from "./wrappers/MinioWrapper.js";
+import ChangeStreamService from "./services/ChangeStreamService.js";
+import MemoryConsolidationService from "./services/MemoryConsolidationService.js";
+import BackgroundHousekeepingService from "./services/BackgroundHousekeepingService.js";
+import { registerWithPrism } from "./services/PrismRegistrationService.js";
+import { installShutdownHandlers, registerCleanup, } from "./utils/CleanupRegistry.js";
+import McpAdapter from "./services/McpAdapter.js";
+const mcpAdapter = new McpAdapter();
+// Install process-level shutdown handlers (SIGTERM, SIGINT → runCleanupFunctions)
+installShutdownHandlers();
+// Routes
+import chatRouter from "./routes/ChatRoutes.js";
+import agentRouter from "./routes/AgentRoutes.js";
+import audioRouter from "./routes/AudioRoutes.js";
+import embedRouter from "./routes/EmbedRoutes.js";
+import configRouter, { localConfigRouter } from "./routes/ConfigRoutes.js";
+import conversationsRouter from "./routes/ConversationsRoutes.js";
+import filesRouter from "./routes/FilesRoutes.js";
+import memoryRouter from "./routes/MemoryRoutes.js";
+import MemoryService from "./services/MemoryService.js";
+import adminRouter from "./routes/AdminRoutes.js";
+import workflowsRouter from "./routes/WorkflowsRoutes.js";
+import mediaRouter from "./routes/MediaRoutes.js";
+import textRouter from "./routes/TextRoutes.js";
+import lmStudioRouter from "./routes/LmStudioRoutes.js";
+import ollamaRouter from "./routes/OllamaRoutes.js";
+import skillsRouter from "./routes/SkillsRoutes.js";
+import rulesRouter from "./routes/RulesRoutes.js";
+import agentMemoriesRouter from "./routes/AgentMemoriesRoutes.js";
+import favoritesRouter from "./routes/FavoritesRoutes.js";
+import conversationRouter from "./routes/ConversationExecutionRoute.js";
+import statsRouter from "./routes/StatsRoutes.js";
+import benchmarkRouter from "./routes/BenchmarkRoutes.js";
+import experimentRouter from "./routes/ExperimentRoutes.js";
+import synthesisRouter from "./routes/SynthesisRoutes.js";
+import vramBenchmarksRouter from "./routes/VramBenchmarksRoutes.js";
+import orchestratorRouter from "./routes/OrchestratorRoutes.js";
+import topologyRouter from "./routes/TopologyRoutes.js";
+import thoughtStructureRouter from "./routes/ThoughtStructureRoutes.js";
+import settingsRouter from "./routes/SettingsRoutes.js";
+import customAgentsRouter from "./routes/CustomAgentsRoutes.js";
+import workspacesRouter from "./routes/WorkspacesRoutes.js";
+import scheduledTasksRouter from "./routes/ScheduledTasksRoutes.js";
+import promptsRouter from "./routes/PromptsRoutes.js";
+import webhookRouter from "./routes/WebhookRoutes.js";
+import platformRouter from "./routes/PlatformRoutes.js";
+import executeRouter from "./routes/ExecuteRoutes.js";
+import runRouter from "./routes/RunRoutes.js";
+import { createObsidianCompletionRouter } from "./routes/ObsidianCompletionRoutes.js";
+import contractRouter from "./routes/ContractRoutes.js";
+import { ProfileRegistry } from "./services/ProfileRegistry.js";
+const app = express();
+const server = http.createServer(app);
+// Disable the default 5-minute request timeout for long-lived SSE connections.
+// Node.js 18+ defaults `requestTimeout` to 300,000ms which kills ANY response
+// cycle exceeding 5 minutes — including active SSE streams where data is flowing
+// continuously. SSE lifecycle is managed by AbortController + client disconnect,
+// so the server-level timeout is redundant and harmful for streaming workloads.
+server.requestTimeout = 0;
+// Middleware
+app.use(cors({
+    origin: true, // reflect request origin (equivalent to *)
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+        "Content-Type",
+        "x-project",
+        "x-username",
+        "x-workspace-id",
+        "x-workspace-root",
+        "x-api-secret",
+        "x-admin-secret",
+    ],
+    maxAge: CORS_MAX_AGE_SECONDS, // cache preflight for 24h — eliminates burst OPTIONS storms
+}));
+app.use(express.json({ limit: "50mb" }));
+app.use(requestLoggerMiddleware);
+// Endpoint registry (single source of truth for health check + startup logs)
+const ENDPOINTS = {
+    rest: [
+        "/config",
+        "/config-local",
+        "/chat",
+        "/agent",
+        "/text-to-audio",
+        "/audio-to-text",
+        "/embed",
+        "/conversations",
+        "/memory",
+        "/files",
+        "/workflows",
+        "/media",
+        "/text",
+        "/lm-studio",
+        "/ollama",
+        "/skills",
+        "/rules",
+        "/agent-memories",
+        "/mcp-servers",
+        "/favorites",
+        "/conversation",
+        "/stats",
+        "/benchmark",
+        "/synthesis",
+        "/vram-benchmarks",
+        "/orchestrator",
+        "/topologies",
+        "/thought-structures",
+        "/settings",
+        "/custom-agents",
+        "/workspaces",
+        "/scheduled-tasks",
+        "/prompts",
+        "/webhooks",
+        "/v1/runs",
+        "/obsidian-completions",
+    ],
+    websocket: ["/ws/chat", "/ws/text-to-audio"],
+    admin: ["/admin", "/admin/lm-studio"],
+};
+// Health check (public — no auth required)
+app.get("/", (_req, res) => {
+    res.json({
+        name: "Prism the AI Gateway",
+        version: "1.0.0",
+        providers: listProviders(),
+        endpoints: ENDPOINTS,
+    });
+});
+// Health check (public — standard path for Docker, load balancers, portal)
+app.get("/health", (_req, res) => {
+    res.json({ status: "ok" });
+});
+// Admin routes
+app.use("/admin", adminRouter);
+// Public routes (no auth required)
+app.use("/files", filesRouter);
+// Extract project / username / clientIp from headers for downstream tracking
+app.use(authMiddleware);
+// REST routes
+app.use("/config", configRouter);
+app.use("/config-local", localConfigRouter);
+app.use("/chat", chatRouter);
+app.use("/agent", agentRouter);
+app.use("/obsidian-completions", createObsidianCompletionRouter());
+app.use("/text-to-audio", audioRouter);
+app.use("/audio-to-text", audioRouter);
+app.use("/embed", embedRouter);
+app.use("/conversations", conversationsRouter);
+app.use("/memory", memoryRouter);
+app.use("/workflows", workflowsRouter);
+app.use("/media", mediaRouter);
+app.use("/text", textRouter);
+app.use("/lm-studio", lmStudioRouter);
+app.use("/ollama", ollamaRouter);
+app.use("/skills", skillsRouter);
+app.use("/rules", rulesRouter);
+app.use("/agent-memories", agentMemoriesRouter);
+app.use("/favorites", favoritesRouter);
+app.use("/conversation", conversationRouter);
+app.use("/stats", statsRouter);
+app.use("/benchmark", benchmarkRouter);
+app.use("/experiment", experimentRouter);
+app.use("/synthesis", synthesisRouter);
+app.use("/vram-benchmarks", vramBenchmarksRouter);
+app.use("/orchestrator", orchestratorRouter);
+app.use("/topologies", topologyRouter);
+app.use("/thought-structures", thoughtStructureRouter);
+app.use("/settings", settingsRouter);
+app.use("/custom-agents", customAgentsRouter);
+app.use("/workspaces", workspacesRouter);
+app.use("/scheduled-tasks", scheduledTasksRouter);
+app.use("/prompts", promptsRouter);
+app.use("/webhooks", webhookRouter);
+app.use("/execute", executeRouter);
+app.use("/platform", platformRouter);
+app.use("/v1/runs", runRouter);
+app.use("/v1/contracts", contractRouter);
+// Platform dashboard — cross-project tool telemetry. Lives here (not in
+// trading-client) because this service owns the tool registry; trading-client
+// scopes its own Tools tab to owner_app === "trading".
+app.use("/dashboard", express.static("public"));
+// Tool executor compatibility routes
+app.get("/mcp/sse", (req, res, next) => {
+    mcpAdapter.handleSse(req, res).catch(next);
+});
+app.post("/mcp/messages", (req, res, next) => {
+    mcpAdapter.handleMessage(req, res).catch(next);
+});
+import { PrismProxyService } from "./services/prism/PrismProxyService.js";
+app.use("/prism-proxy", async (req, res) => {
+    await PrismProxyService.handle(req, res);
+});
+// Prism→vLLM translation shim. ALL PROVIDER_VLLM_*_URL entries in the vault
+// point here (/vllm-shim/gold-spark, /vllm-shim/jetson, /vllm-shim/jetson-2)
+// so prism's Qwen-spelled thinking flag works on every model family and a
+// model swap on any box can never silently strand it again. Sits BELOW prism:
+// requests still enter prism at :7777 first, so prism's request
+// logging/attribution is unaffected. See VllmShimService for why.
+import { VllmShimService } from "./services/vllm/VllmShimService.js";
+app.use("/vllm-shim", async (req, res) => {
+    await VllmShimService.handle(req, res);
+});
+app.use("/charts", express.static("data/charts"));
+// Wallgarden LLM backend routes
+import wallgardenRouter from "./routes/WallgardenRoutes.js";
+app.use("/wallgarden", wallgardenRouter);
+// Error handler (must be last)
+app.use(errorHandler);
+// WebSocket server
+const wss = new WebSocketServer({ server });
+setupWebSocket(wss);
+// Start
+(async () => {
+    await MongoWrapper.createClient(MONGO_DB_NAME, MONGO_URI);
+    // The platform dashboard reads `tool_usage_stats` out of the TRADING
+    // database, which is a different database on the same server — and
+    // MongoManager keys its connections by NAME, so a database nobody registered
+    // is not "empty", it THROWS: `Database not connected: trading_bot`. Before
+    // this line the four /platform endpoints returned 500 on every call.
+    //
+    // Registered second on purpose: MongoManager takes the FIRST connection as
+    // the default for name-less getDb() calls, and that has to stay prism's.
+    // Failing to reach the trading DB is not fatal to this service — it is a
+    // dashboard, not the cycle — so the endpoints degrade to 503 instead of
+    // taking the process down at boot.
+    if (MONGO_URI) {
+        try {
+            await MongoWrapper.createClient(TRADING_MONGO_DB, MONGO_URI);
+        }
+        catch (e) {
+            logger.error(`[Platform] trading database ${TRADING_MONGO_DB} unavailable — ` +
+                `/platform endpoints will answer 503: ${e}`);
+        }
+    }
+    await MemoryService.ensureIndexes();
+    // ── Ensure collection indexes ──────────────────────────────────
+    // Critical for $lookup aggregation performance (conversations ↔ requests).
+    // Without these, $lookup does full collection scans per document.
+    try {
+        const db = MongoWrapper.getDb(MONGO_DB_NAME);
+        if (db) {
+            const indexDefinitions = [
+                // requests — primary lookup by requestId (admin detail view)
+                { collection: COLLECTIONS.REQUESTS, keys: { requestId: 1 }, options: { unique: true } },
+                // requests — used by $lookup from conversations and agent conversation joins
+                { collection: COLLECTIONS.REQUESTS, keys: { conversationId: 1 } },
+                { collection: COLLECTIONS.REQUESTS, keys: { traceId: 1 } },
+                { collection: COLLECTIONS.REQUESTS, keys: { timestamp: -1 } },
+                { collection: COLLECTIONS.REQUESTS, keys: { project: 1, timestamp: -1 } },
+                // requests — agent conversation joins (admin traces, conversation detail)
+                { collection: COLLECTIONS.REQUESTS, keys: { agentConversationId: 1 } },
+                // requests — parent agent conversation hierarchy traversal (7+ query sites use $in on this field)
+                { collection: COLLECTIONS.REQUESTS, keys: { parentAgentConversationId: 1 } },
+                // requests — per-user stats aggregation
+                { collection: COLLECTIONS.REQUESTS, keys: { username: 1, timestamp: -1 } },
+                // requests — tool stats aggregation (multikey on array field)
+                { collection: COLLECTIONS.REQUESTS, keys: { toolApiNames: 1 } },
+                // requests — model/provider breakdown aggregation
+                { collection: COLLECTIONS.REQUESTS, keys: { model: 1, provider: 1 } },
+                // requests — endpoint breakdown aggregation
+                { collection: COLLECTIONS.REQUESTS, keys: { endpoint: 1 } },
+                // requests — success/failure filtering with time range
+                { collection: COLLECTIONS.REQUESTS, keys: { success: 1, timestamp: -1 } },
+                // conversations — used by findOne lookups and list queries
+                { collection: COLLECTIONS.MODEL_CONVERSATIONS, keys: { id: 1 }, options: { unique: true } },
+                { collection: COLLECTIONS.MODEL_CONVERSATIONS, keys: { updatedAt: -1 } },
+                { collection: COLLECTIONS.MODEL_CONVERSATIONS, keys: { project: 1, username: 1, updatedAt: -1 } },
+                { collection: COLLECTIONS.MODEL_CONVERSATIONS, keys: { traceId: 1 } },
+                // conversations — admin workspace filter
+                { collection: COLLECTIONS.MODEL_CONVERSATIONS, keys: { workspaceRoot: 1 } },
+                // conversations — stale isGenerating cleanup + stats count
+                { collection: COLLECTIONS.MODEL_CONVERSATIONS, keys: { isGenerating: 1, updatedAt: -1 } },
+                // conversations — sub-agent parent linkage (cascading deletion)
+                { collection: COLLECTIONS.MODEL_CONVERSATIONS, keys: { parentConversationId: 1 } },
+                // agent_conversations — same indexes as conversations
+                { collection: COLLECTIONS.AGENT_CONVERSATIONS, keys: { id: 1 }, options: { unique: true } },
+                { collection: COLLECTIONS.AGENT_CONVERSATIONS, keys: { updatedAt: -1 } },
+                { collection: COLLECTIONS.AGENT_CONVERSATIONS, keys: { project: 1, username: 1, updatedAt: -1 } },
+                // agent_conversations — admin workspace filter
+                { collection: COLLECTIONS.AGENT_CONVERSATIONS, keys: { workspaceRoot: 1 } },
+                // agent_conversations — stale isGenerating cleanup + stats count
+                { collection: COLLECTIONS.AGENT_CONVERSATIONS, keys: { isGenerating: 1, updatedAt: -1 } },
+                // agent_conversations — sub-agent parent linkage (tree grouping in UI)
+                { collection: COLLECTIONS.AGENT_CONVERSATIONS, keys: { parentConversationId: 1 } },
+                // workflows — used by conversationIds lookup
+                { collection: COLLECTIONS.WORKFLOWS, keys: { id: 1 }, options: { unique: true } },
+                // benchmarks
+                { collection: COLLECTIONS.BENCHMARKS, keys: { id: 1 }, options: { unique: true } },
+                { collection: COLLECTIONS.BENCHMARKS, keys: { project: 1, updatedAt: -1 } },
+                { collection: COLLECTIONS.BENCHMARK_RUNS, keys: { id: 1 }, options: { unique: true } },
+                { collection: COLLECTIONS.BENCHMARK_RUNS, keys: { benchmarkId: 1, project: 1, startedAt: -1 } },
+                // synthesis
+                { collection: COLLECTIONS.SYNTHESIS, keys: { id: 1 }, options: { unique: true } },
+                { collection: COLLECTIONS.SYNTHESIS, keys: { project: 1, username: 1, updatedAt: -1 } },
+                { collection: COLLECTIONS.AGENT_SKILLS, keys: { project: 1, username: 1 } },
+                // agent_rules
+                { collection: COLLECTIONS.AGENT_RULES, keys: { project: 1, username: 1, agent: 1 } },
+                // mcp_servers
+                { collection: COLLECTIONS.MCP_SERVERS, keys: { project: 1, username: 1 } },
+                // mcp_servers — compound for enabled filter (5+ query sites)
+                { collection: COLLECTIONS.MCP_SERVERS, keys: { project: 1, username: 1, enabled: 1 } },
+                // workspaces
+                { collection: COLLECTIONS.WORKSPACES, keys: { project: 1, username: 1 } },
+                { collection: COLLECTIONS.WORKSPACES, keys: { id: 1 }, options: { unique: true } },
+                // prompts
+                { collection: COLLECTIONS.PROMPTS, keys: { project: 1, username: 1, updatedAt: -1 } },
+                { collection: COLLECTIONS.PROMPTS, keys: { id: 1 }, options: { unique: true } },
+                // webhook_subscriptions
+                { collection: COLLECTIONS.WEBHOOK_SUBSCRIPTIONS, keys: { id: 1 }, options: { unique: true } },
+                { collection: COLLECTIONS.WEBHOOK_SUBSCRIPTIONS, keys: { enabled: 1 } },
+                // somatic_state — unique per agent
+                { collection: COLLECTIONS.SOMATIC_STATE, keys: { agentId: 1 }, options: { unique: true } },
+                // workflow_memories — retrieval query index
+                { collection: COLLECTIONS.WORKFLOW_MEMORIES, keys: { agent: 1, project: 1, createdAt: -1 } },
+                // workflow_memories — uniqueness per agent conversation
+                { collection: COLLECTIONS.WORKFLOW_MEMORIES, keys: { conversationId: 1, agentConversationId: 1 }, options: { unique: true } },
+            ];
+            const indexResults = await Promise.allSettled(indexDefinitions.map((definition) => db
+                .collection(definition.collection)
+                .createIndex(definition.keys, definition.options ?? {})
+                .then(() => ({ collection: definition.collection, keys: definition.keys }))));
+            const failedIndexes = indexResults.filter((result) => result.status === "rejected");
+            if (failedIndexes.length > 0) {
+                for (const [indexPosition, failedResult] of failedIndexes.entries()) {
+                    const failedDefinition = indexDefinitions[indexResults.indexOf(failedResult)];
+                    logger.error(`Index creation failed for ${failedDefinition.collection} ` +
+                        `${JSON.stringify(failedDefinition.keys)}: ${failedResult.reason}`);
+                }
+                logger.warn(`${failedIndexes.length}/${indexDefinitions.length} indexes failed to create`);
+            }
+            const succeededCount = indexResults.length - failedIndexes.length;
+            logger.success(`Database indexes ensured (${succeededCount}/${indexDefinitions.length})`);
+        }
+    }
+    catch (error) {
+        logger.error(`Failed to ensure indexes: ${errorMessage(error)}`);
+    }
+    // Clear any stale isGenerating flags left over from a previous crash/restart
+    try {
+        const db = MongoWrapper.getDb(MONGO_DB_NAME);
+        if (db) {
+            const { modifiedCount } = await db
+                .collection(COLLECTIONS.MODEL_CONVERSATIONS)
+                .updateMany({ isGenerating: true }, { $set: { isGenerating: false } });
+            if (modifiedCount > 0) {
+                logger.info(`Cleared ${modifiedCount} stale isGenerating flag(s) in conversations`);
+            }
+            // Also clear in agent_conversations
+            const { modifiedCount: agentCleared } = await db
+                .collection(COLLECTIONS.AGENT_CONVERSATIONS)
+                .updateMany({ isGenerating: true }, { $set: { isGenerating: false } });
+            if (agentCleared > 0) {
+                logger.info(`Cleared ${agentCleared} stale isGenerating flag(s) in agent_conversations`);
+            }
+        }
+    }
+    catch (error) {
+        logger.error(`Failed to clear stale isGenerating flags: ${errorMessage(error)}`);
+    }
+    // Load custom agents from database into the persona registry
+    try {
+        const { default: AgentPersonaRegistryCustom } = await import("./services/AgentPersonaRegistry.js");
+        await AgentPersonaRegistryCustom.loadCustomAgents();
+    }
+    catch (error) {
+        logger.warn(`Custom agent loading failed: ${errorMessage(error)}`);
+    }
+    // Initialize Change Streams (requires replica set — graceful fallback)
+    await ChangeStreamService.init();
+    // ── Scheduled Memory Consolidation ─────────────────
+    // Runs every 24 hours, consolidates memories for all active projects and agents.
+    const { hours } = await import("@rodrigo-barraza/utilities-library");
+    const CONSOLIDATION_INTERVAL_MS = hours(24);
+    const consolidationInterval = setInterval(async () => {
+        try {
+            const db = MongoWrapper.getDb(MONGO_DB_NAME);
+            if (!db)
+                return;
+            // Find all distinct projects with at least some memories
+            const projects = await db
+                .collection(COLLECTIONS.MEMORIES)
+                .distinct("project");
+            // Process projects sequentially — each consolidation loads the full
+            // memory corpus with embeddings (~12KB/memory). Running them concurrently
+            // compounds heap usage and can cause OOM on large collections.
+            for (const project of projects) {
+                // Find all distinct agents within this project
+                const agents = await db
+                    .collection(COLLECTIONS.MEMORIES)
+                    .distinct("agent", { project });
+                if (!agents.length)
+                    continue;
+                for (const agent of agents) {
+                    const count = await db
+                        .collection(COLLECTIONS.MEMORIES)
+                        .countDocuments({ project, agent });
+                    if (count < 10)
+                        continue; // Skip agent/project combos with few memories
+                    logger.info(`[AutoDream] Scheduled consolidation for agent "${agent}", project "${project}" (${count} memories)`);
+                    try {
+                        await MemoryConsolidationService.consolidate({
+                            agent,
+                            project,
+                            username: "system",
+                            trigger: "scheduled",
+                        });
+                    }
+                    catch (error) {
+                        logger.error(`[AutoDream] Scheduled consolidation failed for "${agent}/${project}": ${errorMessage(error)}`);
+                    }
+                }
+            }
+        }
+        catch (error) {
+            logger.error(`[AutoDream] Scheduled consolidation sweep failed: ${errorMessage(error)}`);
+        }
+    }, CONSOLIDATION_INTERVAL_MS);
+    registerCleanup(async () => clearInterval(consolidationInterval));
+    logger.info(`[AutoDream] Scheduled consolidation every ${CONSOLIDATION_INTERVAL_MS / 3_600_000}h`);
+    // ── Scheduled Tasks Background Daemon ──────────────────
+    try {
+        const { default: ScheduledTaskService } = await import("./services/ScheduledTaskService.js");
+        await ScheduledTaskService.init();
+        registerCleanup(async () => ScheduledTaskService.destroy());
+    }
+    catch (error) {
+        logger.error("Failed to initialize Scheduled Tasks daemon: " + errorMessage(error));
+    }
+    // ── Conversation Timers Background Daemon ──────────────
+    try {
+        const { default: ConversationTimerService } = await import("./services/ConversationTimerService.js");
+        await ConversationTimerService.init();
+        registerCleanup(async () => ConversationTimerService.destroy());
+    }
+    catch (error) {
+        logger.error("Failed to initialize Conversation Timers daemon: " + errorMessage(error));
+    }
+    // ── Webhook Dispatcher ─────────────────────────────────────
+    try {
+        const { default: WebhookDispatcher } = await import("./services/WebhookDispatcher.js");
+        await WebhookDispatcher.init();
+        registerCleanup(async () => WebhookDispatcher.destroy());
+    }
+    catch (error) {
+        logger.error("Failed to initialize Webhook Dispatcher: " + errorMessage(error));
+    }
+    // ── Somatic State Service ──────────────────────────────────
+    try {
+        const { default: SomaticStateService } = await import("./services/somatic/SomaticStateService.js");
+        SomaticStateService.initialize();
+        registerCleanup(async () => SomaticStateService.persistAll());
+    }
+    catch (error) {
+        logger.error("Failed to initialize Somatic State Service: " + errorMessage(error));
+    }
+    // ── Background Housekeeping ────────────────────────────────
+    // Boot-time run: clean up orphans from previous crashes
+    BackgroundHousekeepingService.run({ trigger: "boot" }).catch((error) => logger.error(`[Housekeeping] Boot-time run failed: ${errorMessage(error)}`));
+    // Scheduled run: every 6h (independent of consolidation interval)
+    const HOUSEKEEPING_INTERVAL_MS = hours(6);
+    const housekeepingInterval = setInterval(() => {
+        BackgroundHousekeepingService.run({ trigger: "scheduled" }).catch((error) => logger.error(`[Housekeeping] Scheduled run failed: ${errorMessage(error)}`));
+    }, HOUSEKEEPING_INTERVAL_MS);
+    registerCleanup(async () => clearInterval(housekeepingInterval));
+    logger.info(`[Housekeeping] Scheduled cleanup every ${HOUSEKEEPING_INTERVAL_MS / 3_600_000}h`);
+    // ── vLLM Model Sync Background Daemon ──────────────────
+    try {
+        const { VllmModelSyncService } = await import("./services/VllmModelSyncService.js");
+        await VllmModelSyncService.init();
+        registerCleanup(async () => VllmModelSyncService.destroy());
+    }
+    catch (error) {
+        logger.error("Failed to initialize vLLM Model Sync daemon: " + errorMessage(error));
+    }
+    // Initialize MinIO if all secrets are configured
+    if (MINIO_ENDPOINT &&
+        MINIO_ACCESS_KEY &&
+        MINIO_SECRET_KEY &&
+        MINIO_BUCKET_NAME) {
+        await MinioWrapper.init(MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET_NAME);
+    }
+    else {
+        logger.info("MinIO not configured — files will be stored inline in MongoDB");
+    }
+    server.listen(PORT, async () => {
+        logger.success(`lazy-tool-service is running on port ${PORT}`);
+        logger.info("Available providers:", listProviders().join(", "));
+        // Modality colors matching Prism Client's MODALITY_COLORS
+        const MODALITY_COLORS = {
+            text: [99, 102, 241], // #6366f1 — indigo
+            image: [16, 185, 129], // #10b981 — emerald
+            audio: [245, 158, 11], // #f59e0b — amber
+            video: [244, 63, 94], // #f43f5e — rose
+            pdf: [100, 116, 139], // #64748b — slate
+            embedding: [6, 182, 212], // #06b6d4 — cyan
+        };
+        const coloredModalities = Object.values(TYPES)
+            .map((modality) => {
+            const [r, g, b] = MODALITY_COLORS[modality] || [255, 255, 255];
+            return `\x1b[38;2;${r};${g};${b}m${modality}\x1b[0m`;
+        })
+            .join(", ");
+        logger.info("Available modalities:", coloredModalities);
+        for (const endpoint of ENDPOINTS.rest) {
+            logger.info(`  REST  →  http://localhost:${PORT}${endpoint}`);
+        }
+        for (const endpoint of ENDPOINTS.websocket) {
+            logger.info(`  WS    →  ws://localhost:${PORT}${endpoint}`);
+        }
+        try {
+            await ProfileRegistry.loadProfilesFromDisk();
+        }
+        catch (err) {
+            logger.warn(`Failed eager profile loading at startup: ${err.message}`);
+        }
+        // Announce ourselves to Prism once we are actually accepting connections —
+        // Prism dials back into /mcp/sse, so registering before listen() would race.
+        // Owning this here (rather than in a consumer's boot) is what makes a
+        // redeploy self-healing: the SSE link dies with us and we are the process
+        // that comes back.
+        await registerWithPrism();
+    });
+})();
+//# sourceMappingURL=index.js.map

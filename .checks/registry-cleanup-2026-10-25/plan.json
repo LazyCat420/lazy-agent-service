@@ -1,0 +1,327 @@
+[
+ {
+  "_id": "6a73d71c6729baa25e6ed6ab",
+  "agentId": "CUSTOM_V3_BULL_DEFENSE",
+  "old": [
+   "mcp__lazy-tool-service__whiteboard_read"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__whiteboard_read"
+  ]
+ },
+ {
+  "_id": "6a6851cd9640a6278a5a4d05",
+  "agentId": "CUSTOM_V3_VALUATION_ANALYST",
+  "old": [
+   "mcp__lazy-tool-service__get_earnings_data",
+   "mcp__lazy-tool-service__get_finviz_fundamentals",
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__get_sec_filings",
+   "mcp__lazy-tool-service__screener_query",
+   "mcp__lazy-tool-service__whiteboard_annotate",
+   "mcp__lazy-tool-service__whiteboard_read"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__get_earnings_data",
+   "mcp__lazy-agent-service__get_finviz_fundamentals",
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__screener_query",
+   "mcp__lazy-agent-service__whiteboard_annotate",
+   "mcp__lazy-agent-service__whiteboard_read"
+  ]
+ },
+ {
+  "_id": "6a612ec21bf25b82b4282326",
+  "agentId": "CUSTOM_V3_DELTA_ANALYST",
+  "old": [
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__get_technical_indicators",
+   "mcp__lazy-tool-service__get_portfolio_state",
+   "mcp__lazy-tool-service__get_position_pnl"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__get_technical_indicators",
+   "mcp__lazy-agent-service__get_portfolio_state",
+   "mcp__lazy-agent-service__get_position_pnl"
+  ]
+ },
+ {
+  "_id": "6a5c51f6b57e379272486b9f",
+  "agentId": "CUSTOM_HTML_NOTES_CANVAS",
+  "old": [
+   "mcp__lazy-tool-service__html_notes_create_note",
+   "mcp__lazy-tool-service__html_notes_update_note",
+   "mcp__lazy-tool-service__html_notes_get_note",
+   "mcp__lazy-tool-service__html_notes_search_notes",
+   "mcp__lazy-tool-service__html_notes_link_notes",
+   "mcp__lazy-tool-service__canvas_read_dom",
+   "mcp__lazy-tool-service__canvas_add_widget",
+   "mcp__lazy-tool-service__canvas_modify_dom",
+   "mcp__lazy-tool-service__html_notes_youtube_search",
+   "mcp__lazy-tool-service__create_widget",
+   "mcp__lazy-tool-service__update_widget",
+   "mcp__lazy-tool-service__validate_widget_html",
+   "mcp__lazy-tool-service__list_widget_types",
+   "mcp__lazy-tool-service__plan_widget",
+   "mcp__lazy-tool-service__html_notes_web_search",
+   "mcp__lazy-tool-service__html_notes_read_page",
+   "mcp__lazy-tool-service__html_notes_stock_history",
+   "mcp__lazy-tool-service__html_notes_sports_scores",
+   "mcp__lazy-tool-service__html_notes_news",
+   "mcp__lazy-tool-service__html_notes_get_weather",
+   "mcp__lazy-tool-service__html_notes_stock_news"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__html_notes_create_note",
+   "mcp__lazy-agent-service__html_notes_update_note",
+   "mcp__lazy-agent-service__html_notes_get_note",
+   "mcp__lazy-agent-service__html_notes_search_notes",
+   "mcp__lazy-agent-service__html_notes_link_notes",
+   "mcp__lazy-agent-service__canvas_read_dom",
+   "mcp__lazy-agent-service__canvas_add_widget",
+   "mcp__lazy-agent-service__canvas_modify_dom",
+   "mcp__lazy-agent-service__html_notes_youtube_search",
+   "mcp__lazy-agent-service__create_widget",
+   "mcp__lazy-agent-service__update_widget",
+   "mcp__lazy-agent-service__validate_widget_html",
+   "mcp__lazy-agent-service__list_widget_types",
+   "mcp__lazy-agent-service__plan_widget",
+   "mcp__lazy-agent-service__html_notes_web_search",
+   "mcp__lazy-agent-service__html_notes_read_page",
+   "mcp__lazy-agent-service__html_notes_stock_history",
+   "mcp__lazy-agent-service__html_notes_sports_scores",
+   "mcp__lazy-agent-service__html_notes_news",
+   "mcp__lazy-agent-service__html_notes_get_weather",
+   "mcp__lazy-agent-service__html_notes_stock_news"
+  ]
+ },
+ {
+  "_id": "6a4c1f9628cda64c2df8d773",
+  "agentId": "CUSTOM_V3_BOARD_OF_DIRECTORS",
+  "old": [
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__get_parameters",
+   "mcp__lazy-tool-service__get_portfolio_state",
+   "mcp__lazy-tool-service__get_strategy_health",
+   "mcp__lazy-tool-service__propose_parameter_change",
+   "mcp__lazy-tool-service__whiteboard_annotate",
+   "mcp__lazy-tool-service__whiteboard_read",
+   "mcp__lazy-tool-service__whiteboard_summarize",
+   "mcp__lazy-tool-service__whiteboard_write"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__get_parameters",
+   "mcp__lazy-agent-service__get_portfolio_state",
+   "mcp__lazy-agent-service__get_strategy_health",
+   "mcp__lazy-agent-service__propose_parameter_change",
+   "mcp__lazy-agent-service__whiteboard_annotate",
+   "mcp__lazy-agent-service__whiteboard_read",
+   "mcp__lazy-agent-service__whiteboard_write"
+  ]
+ },
+ {
+  "_id": "6a4c1f2428cda64c2df8d764",
+  "agentId": "CUSTOM_V3_BEAR_AGENT",
+  "old": [
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__lazy_web_search"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__lazy_web_search"
+  ]
+ },
+ {
+  "_id": "6a4c1f2428cda64c2df8d763",
+  "agentId": "CUSTOM_V3_BULL_AGENT",
+  "old": [
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__lazy_web_search"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__lazy_web_search"
+  ]
+ },
+ {
+  "_id": "6a4b2a91f6bc8a7bc1ea57e4",
+  "agentId": "CUSTOM_V3_DEBATE_JUDGE",
+  "old": [
+   "mcp__lazy-tool-service__whiteboard_annotate",
+   "mcp__lazy-tool-service__whiteboard_read",
+   "mcp__lazy-tool-service__whiteboard_write"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__whiteboard_annotate",
+   "mcp__lazy-agent-service__whiteboard_read",
+   "mcp__lazy-agent-service__whiteboard_write"
+  ]
+ },
+ {
+  "_id": "6a4b2a91f6bc8a7bc1ea57e3",
+  "agentId": "CUSTOM_V3_DECISION_SYNTHESIZER",
+  "old": [
+   "mcp__lazy-tool-service__whiteboard_read"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__whiteboard_read"
+  ]
+ },
+ {
+  "_id": "6a4b2a91f6bc8a7bc1ea57e2",
+  "agentId": "CUSTOM_V3_PORTFOLIO_MANAGER",
+  "old": [
+   "mcp__lazy-tool-service__cancel_scheduled_research",
+   "mcp__lazy-tool-service__clear_watch",
+   "mcp__lazy-tool-service__get_finnhub_news",
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__get_parameters",
+   "mcp__lazy-tool-service__get_upcoming_events",
+   "mcp__lazy-tool-service__lazy_web_search",
+   "mcp__lazy-tool-service__list_scheduled_research",
+   "mcp__lazy-tool-service__list_watches",
+   "mcp__lazy-tool-service__propose_parameter_change",
+   "mcp__lazy-tool-service__request_research_now",
+   "mcp__lazy-tool-service__schedule_research",
+   "mcp__lazy-tool-service__watch_ticker"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__cancel_scheduled_research",
+   "mcp__lazy-agent-service__clear_watch",
+   "mcp__lazy-agent-service__get_finnhub_news",
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__get_parameters",
+   "mcp__lazy-agent-service__get_upcoming_events",
+   "mcp__lazy-agent-service__lazy_web_search",
+   "mcp__lazy-agent-service__list_scheduled_research",
+   "mcp__lazy-agent-service__list_watches",
+   "mcp__lazy-agent-service__propose_parameter_change",
+   "mcp__lazy-agent-service__request_research_now",
+   "mcp__lazy-agent-service__schedule_research",
+   "mcp__lazy-agent-service__watch_ticker"
+  ]
+ },
+ {
+  "_id": "6a4b2a91f6bc8a7bc1ea57e1",
+  "agentId": "CUSTOM_V3_REGIME_ENGINE",
+  "old": [
+   "mcp__lazy-tool-service__get_finnhub_news",
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__get_technical_indicators",
+   "mcp__lazy-tool-service__lazy_web_search"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__get_finnhub_news",
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__get_technical_indicators",
+   "mcp__lazy-agent-service__lazy_web_search"
+  ]
+ },
+ {
+  "_id": "6a4b2a91f6bc8a7bc1ea57e0",
+  "agentId": "CUSTOM_V3_QUANT_ANALYST",
+  "old": [
+   "mcp__lazy-tool-service__calculate_stop_loss",
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__get_polygon_price_history",
+   "mcp__lazy-tool-service__get_portfolio_covariance",
+   "mcp__lazy-tool-service__get_portfolio_state",
+   "mcp__lazy-tool-service__request_peer_analysis",
+   "mcp__lazy-tool-service__run_backtest",
+   "mcp__lazy-tool-service__run_equation",
+   "mcp__lazy-tool-service__save_equation",
+   "mcp__lazy-tool-service__search_equations",
+   "mcp__lazy-tool-service__whiteboard_annotate",
+   "mcp__lazy-tool-service__whiteboard_read"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__calculate_stop_loss",
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__get_polygon_price_history",
+   "mcp__lazy-agent-service__get_portfolio_covariance",
+   "mcp__lazy-agent-service__get_portfolio_state",
+   "mcp__lazy-agent-service__run_backtest",
+   "mcp__lazy-agent-service__run_equation",
+   "mcp__lazy-agent-service__save_equation",
+   "mcp__lazy-agent-service__search_equations",
+   "mcp__lazy-agent-service__whiteboard_annotate",
+   "mcp__lazy-agent-service__whiteboard_read"
+  ]
+ },
+ {
+  "_id": "6a4b2a91f6bc8a7bc1ea57df",
+  "agentId": "CUSTOM_V3_FUNDAMENTAL_ANALYST",
+  "old": [
+   "mcp__lazy-tool-service__get_earnings_data",
+   "mcp__lazy-tool-service__get_finnhub_news",
+   "mcp__lazy-tool-service__get_institutional_holdings",
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__get_sec_filings",
+   "mcp__lazy-tool-service__get_upcoming_events",
+   "mcp__lazy-tool-service__lazy_web_search",
+   "mcp__lazy-tool-service__list_scheduled_research",
+   "mcp__lazy-tool-service__request_peer_analysis",
+   "mcp__lazy-tool-service__request_research_now",
+   "mcp__lazy-tool-service__run_tool_chain",
+   "mcp__lazy-tool-service__schedule_research",
+   "mcp__lazy-tool-service__scrape_url",
+   "mcp__lazy-tool-service__screener_query",
+   "mcp__lazy-tool-service__whiteboard_annotate",
+   "mcp__lazy-tool-service__whiteboard_read",
+   "mcp__lazy-tool-service__whiteboard_write"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__get_earnings_data",
+   "mcp__lazy-agent-service__get_finnhub_news",
+   "mcp__lazy-agent-service__get_institutional_holdings",
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__get_upcoming_events",
+   "mcp__lazy-agent-service__lazy_web_search",
+   "mcp__lazy-agent-service__list_scheduled_research",
+   "mcp__lazy-agent-service__request_research_now",
+   "mcp__lazy-agent-service__run_tool_chain",
+   "mcp__lazy-agent-service__schedule_research",
+   "mcp__lazy-agent-service__scrape_url",
+   "mcp__lazy-agent-service__screener_query",
+   "mcp__lazy-agent-service__whiteboard_annotate",
+   "mcp__lazy-agent-service__whiteboard_read",
+   "mcp__lazy-agent-service__whiteboard_write"
+  ]
+ },
+ {
+  "_id": "6a4b2a90f6bc8a7bc1ea57de",
+  "agentId": "CUSTOM_V3_JUNIOR_ANALYST",
+  "old": [
+   "mcp__lazy-tool-service__get_finnhub_news",
+   "mcp__lazy-tool-service__get_institutional_holdings",
+   "mcp__lazy-tool-service__get_market_data",
+   "mcp__lazy-tool-service__get_reddit_trending_stocks",
+   "mcp__lazy-tool-service__get_upcoming_events",
+   "mcp__lazy-tool-service__lazy_web_search",
+   "mcp__lazy-tool-service__list_scheduled_research",
+   "mcp__lazy-tool-service__run_tool_chain",
+   "mcp__lazy-tool-service__schedule_research",
+   "mcp__lazy-tool-service__scrape_url",
+   "mcp__lazy-tool-service__screener_query",
+   "mcp__lazy-tool-service__whiteboard_read",
+   "mcp__lazy-tool-service__whiteboard_write"
+  ],
+  "new": [
+   "mcp__lazy-agent-service__get_finnhub_news",
+   "mcp__lazy-agent-service__get_institutional_holdings",
+   "mcp__lazy-agent-service__get_market_data",
+   "mcp__lazy-agent-service__get_reddit_trending_stocks",
+   "mcp__lazy-agent-service__get_upcoming_events",
+   "mcp__lazy-agent-service__lazy_web_search",
+   "mcp__lazy-agent-service__list_scheduled_research",
+   "mcp__lazy-agent-service__run_tool_chain",
+   "mcp__lazy-agent-service__schedule_research",
+   "mcp__lazy-agent-service__scrape_url",
+   "mcp__lazy-agent-service__screener_query",
+   "mcp__lazy-agent-service__whiteboard_read",
+   "mcp__lazy-agent-service__whiteboard_write"
+  ]
+ }
+]

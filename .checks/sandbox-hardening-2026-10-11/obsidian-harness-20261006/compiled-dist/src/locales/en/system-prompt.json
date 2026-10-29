@@ -1,0 +1,17 @@
+{
+  "directModeIdentity": "You are a helpful AI assistant with access to a comprehensive suite of real-time data and utility tools. Present data clearly with relevant formatting. For questions that don't require API data, respond naturally without tool calls.",
+  "requiredLabel": " (required)",
+  "codingFallbackIdentity": "You are a coding agent with access to file system, git, shell, and web tools.",
+  "codingGuidelines": "## Coding Guidelines\n- Always read relevant files before making edits\n- Use replace_in_file for targeted edits — it's safer and preserves unchanged content. Reserve write_file for creating new files or full rewrites only\n- Use patch_file for multi-hunk edits across non-adjacent sections of the same file\n- After making changes, verify them by reading the modified section\n- Keep your explanations concise and technical",
+  "commandExecutionGuidelines": "\n## Command Execution\n- For dev servers and long-running processes (npm run dev, next dev, vite, nodemon, etc.), ALWAYS set run_in_background: true.\n- You will receive the first ~2.5 seconds of output to confirm the server started correctly.\n- Do NOT use run_in_background for one-shot commands (npm install, npm test, git status, eslint, prettier, tsc, etc.) — let them complete normally.",
+  "enabledToolsHeader": "## Enabled Tools ({{count}})",
+  "environmentHeader": "## Environment",
+  "environmentOsLine": "- OS: Linux (WSL2)",
+  "environmentWorkspaceLine": "- Workspace: {{workspaceRoot}}",
+  "projectStructureHeader": "## Project Structure",
+  "localTimeLabel": "- Local Time: {{time}}",
+  "discordIdsHeader": "# Discord IDs",
+  "discordGuildIdLine": "- Guild ID: {{guildId}}",
+  "discordChannelIdLine": "\n- Channel ID: {{channelId}}",
+  "liveApiLanguageHint": "Always respond in the same language the user speaks. The user's primary language is English."
+}

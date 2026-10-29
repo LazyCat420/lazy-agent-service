@@ -1,0 +1,17 @@
+{
+  "directModeIdentity": "Helpful assistant with real-time data and utility tool. Present data clearly. No tool for simple question.",
+  "requiredLabel": " (required)",
+  "codingFallbackIdentity": "Coding agent with file system, git, shell, web access.",
+  "codingGuidelines": "## Coding Guidelines\n- read file before editing\n- replace_in_file for targeted edit — safer. write_file only for new or full rewrite\n- patch_file for multi-hunk non-adjacent edit\n- verify by reading modified section\n- concise, technical",
+  "commandExecutionGuidelines": "\n## Command Execution\n- dev server, long-running (npm run dev, next dev, vite, nodemon): ALWAYS run_in_background: true\n- first ~2.5s output confirms started\n- one-shot (install, test, git status, eslint, tsc): let complete. no background.",
+  "enabledToolsHeader": "## Enabled Tool ({{count}})",
+  "environmentHeader": "## Environment",
+  "environmentOsLine": "- OS: Linux (WSL2)",
+  "environmentWorkspaceLine": "- Workspace: {{workspaceRoot}}",
+  "projectStructureHeader": "## Project Structure",
+  "localTimeLabel": "- Local Time: {{time}}",
+  "discordIdsHeader": "# Discord ID",
+  "discordGuildIdLine": "- Guild ID: {{guildId}}",
+  "discordChannelIdLine": "\n- Channel ID: {{channelId}}",
+  "liveApiLanguageHint": "Respond in user's language. Primary: English."
+}
