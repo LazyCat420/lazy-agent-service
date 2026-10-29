@@ -9,38 +9,18 @@
 // ─────────────────────────────────────────────────────────────
 
 import { TOPOLOGIES } from "@rodrigo-barraza/utilities-library/taxonomy";
+import {
+  createDefinitionRegistry,
+  type DefinitionAlignmentEntry,
+  type DefinitionBase,
+  type DefinitionConfigOption,
+} from "./definitionRegistry.ts";
 
-export interface TopologyAlignmentEntry {
-  component: string;
-  status: "aligned" | "simplified" | "extended";
-  detail: string;
-}
+export type TopologyAlignmentEntry = DefinitionAlignmentEntry;
+export type TopologyConfigOption = DefinitionConfigOption;
+export type TopologyDefinition = DefinitionBase;
 
-export interface TopologyConfigOption {
-  name: string;
-  type: "number" | "string" | "boolean";
-  defaultValue: string;
-  description: string;
-}
-
-export interface TopologyDefinition {
-  id: string;
-  displayName: string;
-  abbreviation: string;
-  description: string;
-  paperTitle: string | null;
-  paperAuthors: string | null;
-  paperYear: number | null;
-  paperUrl: string | null;
-  implementationFile: string;
-  categoryLabel: string;
-  phases: string[];
-  configOptions: TopologyConfigOption[];
-  alignment: TopologyAlignmentEntry[];
-  flowDescription: string;
-}
-
-export const TOPOLOGY_DEFINITIONS: TopologyDefinition[] = [
+const topologyRegistry = createDefinitionRegistry<TopologyDefinition>([
   {
     id: TOPOLOGIES.SEQUENTIAL,
     displayName: "Sequential Pipeline",
@@ -316,8 +296,10 @@ export const TOPOLOGY_DEFINITIONS: TopologyDefinition[] = [
     ],
     flowDescription: "[UCB1 Select] → [B₁ B₂ B₃] → [Eval] → [Backprop] → [UCB1 Select] → …",
   },
-];
+]);
+
+export const TOPOLOGY_DEFINITIONS: TopologyDefinition[] = topologyRegistry.definitions;
 
 export function getTopologyById(topologyId: string): TopologyDefinition | undefined {
-  return TOPOLOGY_DEFINITIONS.find((definition) => definition.id === topologyId);
+  return topologyRegistry.getById(topologyId);
 }
