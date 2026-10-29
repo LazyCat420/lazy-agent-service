@@ -81,29 +81,63 @@
       "types": []
     },
     {
+      "file": "src/constants.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "HARNESS_IDS",
+          "line": 159,
+          "col": 14,
+          "pos": 5141
+        },
+        {
+          "name": "THOUGHT_STRUCTURES",
+          "line": 164,
+          "col": 10,
+          "pos": 5266
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
       "file": "src/platform/rules/RuleLoader.ts",
       "duplicates": [
         [
           {
             "name": "RuleLoader",
-            "line": 128,
+            "line": 84,
             "col": 14,
-            "pos": 3965
+            "pos": 2507
           },
           {
             "name": "default",
-            "line": 201,
+            "line": 157,
             "col": 16,
-            "pos": 5946
+            "pos": 4488
           }
         ]
       ],
       "exports": [
         {
           "name": "default",
-          "line": 201,
+          "line": 157,
           "col": 16,
-          "pos": 5946
+          "pos": 4488
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/somatic/SomaticStateService.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "STAT_NAMES",
+          "line": 947,
+          "col": 10,
+          "pos": 28335
         }
       ],
       "files": [],
@@ -131,19 +165,19 @@
           "name": "dispatchAgentRouteWithRollback",
           "line": 19,
           "col": 3,
-          "pos": 873
+          "pos": 888
         },
         {
           "name": "runCoreLoopForAgent",
           "line": 20,
           "col": 3,
-          "pos": 907
+          "pos": 922
         },
         {
           "name": "shouldUseCoreLoopForAgent",
           "line": 21,
           "col": 3,
-          "pos": 930
+          "pos": 945
         }
       ],
       "files": [],
@@ -541,26 +575,6 @@
       ]
     },
     {
-      "file": "src/constants.ts",
-      "duplicates": [],
-      "exports": [
-        {
-          "name": "HARNESS_IDS",
-          "line": 159,
-          "col": 14,
-          "pos": 5141
-        },
-        {
-          "name": "THOUGHT_STRUCTURES",
-          "line": 164,
-          "col": 10,
-          "pos": 5266
-        }
-      ],
-      "files": [],
-      "types": []
-    },
-    {
       "file": "src/utils/CleanupRegistry.ts",
       "duplicates": [],
       "exports": [
@@ -575,20 +589,6 @@
           "line": 12,
           "col": 3,
           "pos": 469
-        }
-      ],
-      "files": [],
-      "types": []
-    },
-    {
-      "file": "src/services/somatic/SomaticStateService.ts",
-      "duplicates": [],
-      "exports": [
-        {
-          "name": "STAT_NAMES",
-          "line": 903,
-          "col": 10,
-          "pos": 27411
         }
       ],
       "files": [],
@@ -629,6 +629,32 @@
           "line": 362,
           "col": 14,
           "pos": 13313
+        }
+      ],
+      "files": [],
+      "types": []
+    },
+    {
+      "file": "src/services/somatic/SomaticConstants.ts",
+      "duplicates": [],
+      "exports": [
+        {
+          "name": "EMOTION_COLORS",
+          "line": 107,
+          "col": 14,
+          "pos": 2477
+        },
+        {
+          "name": "EMOTION_BEHAVIOR_PROMPTS",
+          "line": 145,
+          "col": 14,
+          "pos": 3442
+        },
+        {
+          "name": "ALCOHOL_DESCRIPTIONS",
+          "line": 153,
+          "col": 14,
+          "pos": 3769
         }
       ],
       "files": [],
@@ -1325,32 +1351,6 @@
       ]
     },
     {
-      "file": "src/services/somatic/SomaticConstants.ts",
-      "duplicates": [],
-      "exports": [
-        {
-          "name": "EMOTION_COLORS",
-          "line": 107,
-          "col": 14,
-          "pos": 2477
-        },
-        {
-          "name": "EMOTION_BEHAVIOR_PROMPTS",
-          "line": 145,
-          "col": 14,
-          "pos": 3442
-        },
-        {
-          "name": "ALCOHOL_DESCRIPTIONS",
-          "line": 153,
-          "col": 14,
-          "pos": 3769
-        }
-      ],
-      "files": [],
-      "types": []
-    },
-    {
       "file": "src/contracts/RuntimeWire.ts",
       "duplicates": [],
       "exports": [],
@@ -1667,6 +1667,46 @@
       ]
     },
     {
+      "file": "src/services/orchestrator/TopologyRegistry.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "TopologyAlignmentEntry",
+          "line": 19,
+          "col": 13,
+          "pos": 771
+        },
+        {
+          "name": "TopologyConfigOption",
+          "line": 20,
+          "col": 13,
+          "pos": 834
+        }
+      ]
+    },
+    {
+      "file": "src/services/harnesses/strategies/ThoughtStructureRegistry.ts",
+      "duplicates": [],
+      "exports": [],
+      "files": [],
+      "types": [
+        {
+          "name": "ThoughtStructureAlignmentEntry",
+          "line": 9,
+          "col": 13,
+          "pos": 270
+        },
+        {
+          "name": "ThoughtStructureConfigOption",
+          "line": 10,
+          "col": 13,
+          "pos": 341
+        }
+      ]
+    },
+    {
       "file": "src/services/orchestrator/TopologyRouter.ts",
       "duplicates": [],
       "exports": [],
@@ -1820,15 +1860,15 @@
         [
           {
             "name": "SkillRegistry",
-            "line": 84,
+            "line": 44,
             "col": 14,
-            "pos": 2472
+            "pos": 1209
           },
           {
             "name": "default",
-            "line": 159,
+            "line": 119,
             "col": 16,
-            "pos": 4685
+            "pos": 3466
           }
         ]
       ],

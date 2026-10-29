@@ -1,42 +1,18 @@
 {
-  "generatedAt": "2026-10-29T23:43:44.069Z",
+  "generatedAt": "2026-10-29T23:53:12.905Z",
   "minTokens": 60,
   "logic": {
     "name": "logic",
-    "percent": 2.611620513293093,
-    "lines": 108515,
-    "duplicatedLines": 2834,
-    "clones": 191,
+    "percent": 2.3175438435657907,
+    "lines": 109081,
+    "duplicatedLines": 2528,
+    "clones": 180,
     "top": [
-      {
-        "tokens": 315,
-        "lines": 64,
-        "a": "providers/openai.ts:803",
-        "b": "providers/openai.ts:1168"
-      },
       {
         "tokens": 249,
         "lines": 46,
         "a": "core/loop/AgentRouteAdapter.ts:461",
         "b": "core/loop/RunsAdapter.ts:317"
-      },
-      {
-        "tokens": 208,
-        "lines": 40,
-        "a": "providers/anthropic.ts:546",
-        "b": "providers/anthropic.ts:775"
-      },
-      {
-        "tokens": 201,
-        "lines": 40,
-        "a": "providers/openai.ts:764",
-        "b": "providers/openai.ts:1129"
-      },
-      {
-        "tokens": 200,
-        "lines": 42,
-        "a": "providers/openai.ts:826",
-        "b": "providers/openai.ts:1191"
       },
       {
         "tokens": 190,
@@ -67,45 +43,45 @@
         "lines": 29,
         "a": "providers/llama-cpp.ts:397",
         "b": "providers/lm-studio.ts:1556"
+      },
+      {
+        "tokens": 140,
+        "lines": 27,
+        "a": "routes/WorkspacesRoutes.ts:387",
+        "b": "routes/WorkspacesRoutes.ts:463"
+      },
+      {
+        "tokens": 140,
+        "lines": 20,
+        "a": "routes/admin/AdminConversationRoutes.ts:393",
+        "b": "routes/admin/AdminConversationRoutes.ts:447"
+      },
+      {
+        "tokens": 138,
+        "lines": 18,
+        "a": "services/harnesses/ReActHarness.ts:370",
+        "b": "services/harnesses/VisionLanguageHarness.ts:200"
+      },
+      {
+        "tokens": 135,
+        "lines": 26,
+        "a": "routes/WorkflowsRoutes.ts:89",
+        "b": "routes/WorkflowsRoutes.ts:170"
       }
     ]
   },
   "all": {
     "name": "all",
-    "percent": 2.929256520936448,
-    "lines": 113749,
-    "duplicatedLines": 3332,
-    "clones": 217,
+    "percent": 2.647071687879981,
+    "lines": 114315,
+    "duplicatedLines": 3026,
+    "clones": 206,
     "top": [
-      {
-        "tokens": 315,
-        "lines": 64,
-        "a": "providers/openai.ts:803",
-        "b": "providers/openai.ts:1168"
-      },
       {
         "tokens": 249,
         "lines": 46,
         "a": "core/loop/AgentRouteAdapter.ts:461",
         "b": "core/loop/RunsAdapter.ts:317"
-      },
-      {
-        "tokens": 208,
-        "lines": 40,
-        "a": "providers/anthropic.ts:546",
-        "b": "providers/anthropic.ts:775"
-      },
-      {
-        "tokens": 201,
-        "lines": 40,
-        "a": "providers/openai.ts:764",
-        "b": "providers/openai.ts:1129"
-      },
-      {
-        "tokens": 200,
-        "lines": 42,
-        "a": "providers/openai.ts:826",
-        "b": "providers/openai.ts:1191"
       },
       {
         "tokens": 190,
@@ -136,6 +112,30 @@
         "lines": 37,
         "a": "services/harnesses/strategies/GraphOfThoughtsStrategy.ts:24",
         "b": "services/harnesses/strategies/TreeOfThoughtsStrategy.ts:47"
+      },
+      {
+        "tokens": 145,
+        "lines": 26,
+        "a": "config/models.ts:809",
+        "b": "config/models.ts:854"
+      },
+      {
+        "tokens": 145,
+        "lines": 26,
+        "a": "config/models.ts:809",
+        "b": "config/models.ts:895"
+      },
+      {
+        "tokens": 145,
+        "lines": 26,
+        "a": "config/models.ts:809",
+        "b": "config/models.ts:974"
+      },
+      {
+        "tokens": 145,
+        "lines": 26,
+        "a": "config/models.ts:809",
+        "b": "config/models.ts:1012"
       }
     ]
   }

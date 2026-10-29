@@ -1332,82 +1332,6 @@
     },
     {
       "firstFile": {
-        "end": 585,
-        "endLoc": {
-          "column": 12,
-          "line": 585,
-          "position": 17911
-        },
-        "name": "providers/anthropic.ts",
-        "start": 546,
-        "startLoc": {
-          "column": 17,
-          "line": 546,
-          "position": 16532
-        }
-      },
-      "format": "typescript",
-      "fragment": "    const payload: Record<string, unknown> = {\n      cache_control: { type: \"ephemeral\" },\n      system: prepared.systemMessage,\n      model,\n      messages: prepared.messages,\n      max_tokens: options.maxTokens || DEFAULT_MAX_OUTPUT_TOKENS,\n      temperature:\n        options.temperature !== undefined\n          ? Math.min(options.temperature, 1)\n          : undefined,\n      top_p:\n        options.temperature === undefined && options.topP !== undefined\n          ? options.topP\n          : undefined,\n      top_k: options.topK !== undefined ? options.topK : undefined,\n      stop_sequences:\n        options.stopSequences !== undefined ? options.stopSequences : undefined,\n      ...(options.serviceTier && {\n        service_tier:\n          options.serviceTier === \"standard\"\n            ? \"standard_only\"\n            : options.serviceTier,\n      }),\n      ...(options.responseFormat === \"json_object\" && {\n        output_config: {\n          format: {\n            type: \"json_schema\" as const,\n            schema: { type: \"object\", additionalProperties: false },\n          },\n        },\n      }),\n    };\n\n    // Opus 4.7+ lock sampling parameters — API rejects non-default values\n    const modelDefinition = getModelByName(model);\n    const hasLockedSampling =\n      (modelDefinition as Record<string, unknown> | null)?.lockedSampling ===\n      true;\n    if (hasLockedSampling) {\n      delete payload.temperature;",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 40,
-      "secondFile": {
-        "end": 816,
-        "endLoc": {
-          "column": 14,
-          "line": 816,
-          "position": 26194
-        },
-        "name": "providers/anthropic.ts",
-        "start": 775,
-        "startLoc": {
-          "column": 25,
-          "line": 775,
-          "position": 24715
-        }
-      },
-      "tokens": 208
-    },
-    {
-      "firstFile": {
-        "end": 625,
-        "endLoc": {
-          "column": 51,
-          "line": 625,
-          "position": 19350
-        },
-        "name": "providers/anthropic.ts",
-        "start": 613,
-        "startLoc": {
-          "column": 20,
-          "line": 613,
-          "position": 18836
-        }
-      },
-      "format": "typescript",
-      "fragment": "      delete payload.top_k;\n    } else if (\n      options.thinkingEnabled !== false &&\n      (options.thinkingEnabled === true ||\n        options.thinkingBudget ||\n        options.reasoningEffort)\n    ) {\n      // Legacy models (Opus 4.x, Sonnet 4.x): manual extended thinking with budget_tokens\n      const budget = options.thinkingBudget\n        ? parseInt(String(options.thinkingBudget))\n        : (options.reasoningEffort\n            ? EFFORT_BUDGET_MAP[options.reasoningEffort]\n            : undefined) || EFFORT_BUDGET_MAP.high;",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 13,
-      "secondFile": {
-        "end": 856,
-        "endLoc": {
-          "column": 53,
-          "line": 856,
-          "position": 27776
-        },
-        "name": "providers/anthropic.ts",
-        "start": 844,
-        "startLoc": {
-          "column": 28,
-          "line": 844,
-          "position": 27238
-        }
-      },
-      "tokens": 66
-    },
-    {
-      "firstFile": {
         "end": 49,
         "endLoc": {
           "column": 18,
@@ -1940,345 +1864,41 @@
     },
     {
       "firstFile": {
-        "end": 803,
+        "end": 835,
         "endLoc": {
-          "column": 48,
-          "line": 803,
-          "position": 23431
+          "column": 41,
+          "line": 835,
+          "position": 24766
         },
         "name": "providers/openai.ts",
-        "start": 764,
+        "start": 827,
         "startLoc": {
-          "column": 23,
-          "line": 764,
-          "position": 22281
+          "column": 2,
+          "line": 827,
+          "position": 24327
         }
       },
       "format": "typescript",
-      "fragment": "    } = { model, input };\n\n    // Reasoning\n    const reasoning: Reasoning = {};\n    if (options.reasoningEffort) {\n      reasoning.effort = options.reasoningEffort as ReasoningEffort;\n    }\n    if (options.reasoningSummary) {\n      reasoning.summary = options.reasoningSummary as\n        | \"auto\"\n        | \"concise\"\n        | \"detailed\";\n    } else if (reasoning.effort) {\n      reasoning.summary = \"auto\";\n    }\n    if (Object.keys(reasoning).length > 0) {\n      payload.reasoning = reasoning;\n    }\n\n    // Text / verbosity\n    const text: OpenAI.Responses.ResponseTextConfig = {};\n    if (options.verbosity) {\n      text.format = { type: \"text\" };\n      text.verbosity = options.verbosity as \"low\" | \"medium\" | \"high\";\n    }\n\n    if (options.maxTokens) payload.max_output_tokens = options.maxTokens;\n\n    // Seed for reproducibility\n    if (options.seed !== undefined) {\n      payload.seed =\n        typeof options.seed === \"number\"\n          ? options.seed\n          : parseInt(String(options.seed), 10);\n    }\n\n    // Service tier: auto / default / priority\n    if (options.serviceTier) {\n      payload.service_tier =\n        options.serviceTier as OpenAI.Responses.ResponseCreateParamsNonStreaming[\"service_tier\"];",
+      "fragment": "  if (options.temperature !== undefined)\n    payload.temperature = options.temperature;\n  if (options.topP !== undefined) payload.top_p = options.topP;\n  if (options.frequencyPenalty !== undefined)\n    payload.frequency_penalty = options.frequencyPenalty;\n  if (options.presencePenalty !== undefined)\n    payload.presence_penalty = options.presencePenalty;\n  if (options.stopSequences !== undefined)\n    payload.stop = options.stopSequences;",
       "isNew": false,
       "kind": "exact",
-      "lines": 40,
+      "lines": 9,
       "secondFile": {
-        "end": 1168,
+        "end": 919,
         "endLoc": {
-          "column": 48,
-          "line": 1168,
-          "position": 35575
+          "column": 41,
+          "line": 919,
+          "position": 27520
         },
         "name": "providers/openai.ts",
-        "start": 1129,
+        "start": 911,
         "startLoc": {
-          "column": 37,
-          "line": 1129,
-          "position": 34425
-        }
-      },
-      "tokens": 201
-    },
-    {
-      "firstFile": {
-        "end": 866,
-        "endLoc": {
-          "column": 16,
-          "line": 866,
-          "position": 25551
-        },
-        "name": "providers/openai.ts",
-        "start": 803,
-        "startLoc": {
-          "column": 80,
-          "line": 803,
-          "position": 23463
-        }
-      },
-      "format": "typescript",
-      "fragment": "        options.serviceTier as OpenAI.Responses.ResponseCreateParamsNonStreaming[\"service_tier\"];\n    }\n\n    // Response format (JSON mode) — maps to text.format for Responses API\n    if (options.responseFormat === \"json_object\") {\n      text.format = { type: \"json_object\" };\n    } else if (\n      options.responseFormat === \"json_schema\" &&\n      options.responseSchema\n    ) {\n      text.format = {\n        type: \"json_schema\",\n        json_schema: options.responseSchema,\n      } as unknown as OpenAI.Responses.ResponseFormatTextJSONSchemaConfig;\n    }\n    if (Object.keys(text).length > 0) {\n      payload.text = text;\n    }\n\n    // Temperature/topP only work with reasoning.effort=none\n    if (options.reasoningEffort === \"none\") {\n      if (options.temperature !== undefined)\n        payload.temperature = options.temperature;\n      if (options.topP !== undefined) payload.top_p = options.topP;\n      if (options.frequencyPenalty !== undefined)\n        payload.frequency_penalty = options.frequencyPenalty;\n      if (options.presencePenalty !== undefined)\n        payload.presence_penalty = options.presencePenalty;\n      if (options.stopSequences !== undefined)\n        payload.stop = options.stopSequences;\n    }\n\n    // Web search tool\n    if (options.webSearch) {\n      payload.tools = [{ type: \"web_search\" } as OpenAI.Responses.Tool];\n    }\n\n    // Custom function calling tools\n    const customTools = convertToolsToResponsesAPI(\n      options.tools as ToolSchema[] | null | undefined,\n    );\n    if (customTools) {\n      payload.tools = [\n        ...((payload.tools as OpenAI.Responses.Tool[]) || []),\n        ...customTools,\n      ];\n    }\n\n    // Parallel tool calls — defaults to true; set false for sequential FC\n    if (options.parallelToolCalls === false) {\n      payload.parallel_tool_calls = false;\n    }\n\n    // Response persistence — defaults to true; set false for privacy\n    if (options.store === false) {\n      payload.store = false;\n    }\n\n    // Log probabilities — top N candidate tokens per step\n    if (options.topLogprobs && options.topLogprobs > 0) {\n      payload.top_logprobs = options.topLogprobs;\n    }\n\n    logger.info(",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 64,
-      "secondFile": {
-        "end": 1231,
-        "endLoc": {
-          "column": 16,
-          "line": 1231,
-          "position": 37692
-        },
-        "name": "providers/openai.ts",
-        "start": 1168,
-        "startLoc": {
-          "column": 77,
-          "line": 1168,
-          "position": 35604
-        }
-      },
-      "tokens": 315
-    },
-    {
-      "firstFile": {
-        "end": 832,
-        "endLoc": {
-          "column": 44,
-          "line": 832,
-          "position": 24599
-        },
-        "name": "providers/openai.ts",
-        "start": 823,
-        "startLoc": {
-          "column": 44,
-          "line": 823,
-          "position": 24121
-        }
-      },
-      "format": "typescript",
-      "fragment": "    if (options.reasoningEffort === \"none\") {\n      if (options.temperature !== undefined)\n        payload.temperature = options.temperature;\n      if (options.topP !== undefined) payload.top_p = options.topP;\n      if (options.frequencyPenalty !== undefined)\n        payload.frequency_penalty = options.frequencyPenalty;\n      if (options.presencePenalty !== undefined)\n        payload.presence_penalty = options.presencePenalty;\n      if (options.stopSequences !== undefined)\n        payload.stop = options.stopSequences;",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 10,
-      "secondFile": {
-        "end": 976,
-        "endLoc": {
-          "column": 31,
-          "line": 976,
-          "position": 29416
-        },
-        "name": "providers/openai.ts",
-        "start": 966,
-        "startLoc": {
-          "column": 11,
-          "line": 966,
-          "position": 28928
+          "column": 2,
+          "line": 911,
+          "position": 27081
         }
       },
       "tokens": 80
-    },
-    {
-      "firstFile": {
-        "end": 867,
-        "endLoc": {
-          "column": 56,
-          "line": 867,
-          "position": 25608
-        },
-        "name": "providers/openai.ts",
-        "start": 826,
-        "startLoc": {
-          "column": 18,
-          "line": 826,
-          "position": 24237
-        }
-      },
-      "format": "typescript",
-      "fragment": "      if (options.topP !== undefined) payload.top_p = options.topP;\n      if (options.frequencyPenalty !== undefined)\n        payload.frequency_penalty = options.frequencyPenalty;\n      if (options.presencePenalty !== undefined)\n        payload.presence_penalty = options.presencePenalty;\n      if (options.stopSequences !== undefined)\n        payload.stop = options.stopSequences;\n    }\n\n    // Web search tool\n    if (options.webSearch) {\n      payload.tools = [{ type: \"web_search\" } as OpenAI.Responses.Tool];\n    }\n\n    // Custom function calling tools\n    const customTools = convertToolsToResponsesAPI(\n      options.tools as ToolSchema[] | null | undefined,\n    );\n    if (customTools) {\n      payload.tools = [\n        ...((payload.tools as OpenAI.Responses.Tool[]) || []),\n        ...customTools,\n      ];\n    }\n\n    // Parallel tool calls — defaults to true; set false for sequential FC\n    if (options.parallelToolCalls === false) {\n      payload.parallel_tool_calls = false;\n    }\n\n    // Response persistence — defaults to true; set false for privacy\n    if (options.store === false) {\n      payload.store = false;\n    }\n\n    // Log probabilities — top N candidate tokens per step\n    if (options.topLogprobs && options.topLogprobs > 0) {\n      payload.top_logprobs = options.topLogprobs;\n    }\n\n    logger.info(\n      `[OpenAI/Responses] Sending non-stream payload: ${JSON.stringify(payload)}`,",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 42,
-      "secondFile": {
-        "end": 1232,
-        "endLoc": {
-          "column": 52,
-          "line": 1232,
-          "position": 37745
-        },
-        "name": "providers/openai.ts",
-        "start": 1191,
-        "startLoc": {
-          "column": 18,
-          "line": 1191,
-          "position": 36378
-        }
-      },
-      "tokens": 200
-    },
-    {
-      "firstFile": {
-        "end": 956,
-        "endLoc": {
-          "column": 31,
-          "line": 956,
-          "position": 28536
-        },
-        "name": "providers/openai.ts",
-        "start": 943,
-        "startLoc": {
-          "column": 36,
-          "line": 943,
-          "position": 28089
-        }
-      },
-      "format": "typescript",
-      "fragment": "  async _generateTextChatCompletions(\n    messages: OpenAIMessage[],\n    model: string,\n    options: ProviderOptions,\n  ) {\n    const modelDefinition = getModelByName(model);\n    const isReasoning =\n      (modelDefinition &&\n        \"thinking\" in modelDefinition &&\n        (modelDefinition as { thinking?: boolean }).thinking === true) ||\n      model.includes(\"o1\") ||\n      model.includes(\"o3\");\n    const prepared = prepareOpenAIMessages(messages);\n    const payload: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 14,
-      "secondFile": {
-        "end": 1432,
-        "endLoc": {
-          "column": 31,
-          "line": 1432,
-          "position": 45584
-        },
-        "name": "providers/openai.ts",
-        "start": 1419,
-        "startLoc": {
-          "column": 31,
-          "line": 1419,
-          "position": 45137
-        }
-      },
-      "tokens": 80
-    },
-    {
-      "firstFile": {
-        "end": 976,
-        "endLoc": {
-          "column": 47,
-          "line": 976,
-          "position": 29432
-        },
-        "name": "providers/openai.ts",
-        "start": 964,
-        "startLoc": {
-          "column": 87,
-          "line": 964,
-          "position": 28887
-        }
-      },
-      "format": "typescript",
-      "fragment": "          options.reasoningEffort as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming[\"reasoning_effort\"];\n      }\n    } else {\n      if (options.temperature !== undefined)\n        payload.temperature = options.temperature;\n      if (options.topP !== undefined) payload.top_p = options.topP;\n      if (options.frequencyPenalty !== undefined)\n        payload.frequency_penalty = options.frequencyPenalty;\n      if (options.presencePenalty !== undefined)\n        payload.presence_penalty = options.presencePenalty;\n      if (options.stopSequences !== undefined)\n        payload.stop =\n          options.stopSequences as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming[\"stop\"];",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 13,
-      "secondFile": {
-        "end": 1454,
-        "endLoc": {
-          "column": 47,
-          "line": 1454,
-          "position": 46541
-        },
-        "name": "providers/openai.ts",
-        "start": 1442,
-        "startLoc": {
-          "column": 84,
-          "line": 1442,
-          "position": 45996
-        }
-      },
-      "tokens": 92
-    },
-    {
-      "firstFile": {
-        "end": 991,
-        "endLoc": {
-          "column": 43,
-          "line": 991,
-          "position": 29929
-        },
-        "name": "providers/openai.ts",
-        "start": 976,
-        "startLoc": {
-          "column": 85,
-          "line": 976,
-          "position": 29470
-        }
-      },
-      "format": "typescript",
-      "fragment": "          options.stopSequences as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming[\"stop\"];\n      if (options.maxTokens) payload.max_completion_tokens = options.maxTokens;\n    }\n\n    // Seed for reproducibility\n    if (options.seed !== undefined) {\n      payload.seed =\n        typeof options.seed === \"number\"\n          ? options.seed\n          : parseInt(String(options.seed), 10);\n    }\n\n    // Service tier: auto / default / priority\n    if (options.serviceTier) {\n      payload.service_tier =\n        options.serviceTier as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming[\"service_tier\"];",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 16,
-      "secondFile": {
-        "end": 1469,
-        "endLoc": {
-          "column": 43,
-          "line": 1469,
-          "position": 47035
-        },
-        "name": "providers/openai.ts",
-        "start": 1454,
-        "startLoc": {
-          "column": 82,
-          "line": 1454,
-          "position": 46576
-        }
-      },
-      "tokens": 75
-    },
-    {
-      "firstFile": {
-        "end": 1015,
-        "endLoc": {
-          "column": 5,
-          "line": 1015,
-          "position": 30750
-        },
-        "name": "providers/openai.ts",
-        "start": 991,
-        "startLoc": {
-          "column": 81,
-          "line": 991,
-          "position": 29967
-        }
-      },
-      "format": "typescript",
-      "fragment": "        options.serviceTier as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming[\"service_tier\"];\n    }\n\n    // Response format (JSON mode)\n    if (options.responseFormat === \"json_object\") {\n      payload.response_format = { type: \"json_object\" };\n    }\n\n    if (options.webSearch) {\n      payload.tools = [\n        { type: \"web_search\" } as unknown as OpenAI.Chat.ChatCompletionTool,\n      ];\n    }\n\n    // Custom function calling tools — truncate to 128 max for Chat Completions API\n    const customTools = convertToolsToOpenAI(\n      options.tools as ToolSchema[] | null | undefined,\n    ) as OpenAI.Chat.ChatCompletionTool[] | null;\n    if (customTools) {\n      const allTools = [\n        ...((payload.tools as OpenAI.Chat.ChatCompletionTool[]) || []),\n        ...customTools,\n      ];\n      payload.tools = truncateToolsForChatCompletions(allTools);\n    }",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 25,
-      "secondFile": {
-        "end": 1493,
-        "endLoc": {
-          "column": 5,
-          "line": 1493,
-          "position": 47853
-        },
-        "name": "providers/openai.ts",
-        "start": 1469,
-        "startLoc": {
-          "column": 78,
-          "line": 1469,
-          "position": 47070
-        }
-      },
-      "tokens": 127
-    },
-    {
-      "firstFile": {
-        "end": 1075,
-        "endLoc": {
-          "column": 65,
-          "line": 1075,
-          "position": 32820
-        },
-        "name": "providers/openai.ts",
-        "start": 1051,
-        "startLoc": {
-          "column": 19,
-          "line": 1051,
-          "position": 31934
-        }
-      },
-      "format": "typescript",
-      "fragment": "      return result;\n    } catch (error: unknown) {\n      const errorObject = asErrorRecord(error);\n      // Retry once after stripping unsupported parameters (e.g. gpt-5-nano rejects temperature)\n      if (\n        errorObject.status === 400 &&\n        errorObject.message?.includes(\"Unsupported\")\n      ) {\n        const unsupportedParams = [\n          \"temperature\",\n          \"top_p\",\n          \"frequency_penalty\",\n          \"presence_penalty\",\n          \"max_completion_tokens\",\n        ];\n        let stripped = false;\n        const payloadRecord = payload as unknown as Record<string, unknown>;\n        for (const param of unsupportedParams) {\n          if (\n            errorObject.message?.includes(`'${param}'`) &&\n            payloadRecord[param] !== undefined\n          ) {\n            logger.provider(\n              \"OpenAI\",\n              `Stripping unsupported param '${param}' for ${model} and retrying`,",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 25,
-      "secondFile": {
-        "end": 1529,
-        "endLoc": {
-          "column": 65,
-          "line": 1529,
-          "position": 49194
-        },
-        "name": "providers/openai.ts",
-        "start": 1505,
-        "startLoc": {
-          "column": 68,
-          "line": 1505,
-          "position": 48308
-        }
-      },
-      "tokens": 109
     },
     {
       "firstFile": {
@@ -5702,44 +5322,6 @@
     },
     {
       "firstFile": {
-        "end": 543,
-        "endLoc": {
-          "column": 20,
-          "line": 543,
-          "position": 19237
-        },
-        "name": "services/MemoryConsolidationService.ts",
-        "start": 531,
-        "startLoc": {
-          "column": 6,
-          "line": 531,
-          "position": 18796
-        }
-      },
-      "format": "typescript",
-      "fragment": "      for (let i = 0; i < batches.length; i++) {\n        const batchActions = await processBatch(batches[i], i, batches.length, {\n          provider,\n          consolidationProvider,\n          consolidationModel,\n          agent: agentId,\n          project: project || null,\n          username: username || \"system\",\n          trigger: trigger || \"manual\",\n          endpoint,\n          traceId,\n          agentConversationId,\n          broadcast,",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 13,
-      "secondFile": {
-        "end": 606,
-        "endLoc": {
-          "column": 20,
-          "line": 606,
-          "position": 21593
-        },
-        "name": "services/MemoryConsolidationService.ts",
-        "start": 594,
-        "startLoc": {
-          "column": 6,
-          "line": 594,
-          "position": 21152
-        }
-      },
-      "tokens": 71
-    },
-    {
-      "firstFile": {
         "end": 231,
         "endLoc": {
           "column": 6,
@@ -6102,18 +5684,18 @@
       "kind": "exact",
       "lines": 8,
       "secondFile": {
-        "end": 91,
+        "end": 133,
         "endLoc": {
-          "column": 83,
-          "line": 91,
-          "position": 3523
+          "column": 79,
+          "line": 133,
+          "position": 5166
         },
         "name": "services/VllmModelSyncService.ts",
-        "start": 86,
+        "start": 127,
         "startLoc": {
-          "column": 62,
-          "line": 86,
-          "position": 3306
+          "column": 61,
+          "line": 127,
+          "position": 4957
         }
       },
       "tokens": 63
@@ -8248,32 +7830,32 @@
     }
   ],
   "statistics": {
-    "detectionDate": "2026-10-29T23:43:44.029Z",
+    "detectionDate": "2026-10-29T23:53:12.870Z",
     "formats": {
       "typescript": {
-        "clones": 217,
-        "duplicatedLines": 3332,
-        "duplicatedTokens": 19180,
-        "lines": 113749,
+        "clones": 206,
+        "duplicatedLines": 3026,
+        "duplicatedTokens": 17636,
+        "lines": 114315,
         "newClones": 0,
         "newDuplicatedLines": 0,
-        "percentage": 2.929256520936448,
-        "percentageTokens": 3.2481058360908928,
+        "percentage": 2.647071687879981,
+        "percentageTokens": 2.974190850096464,
         "sources": 382,
-        "tokens": 590498
+        "tokens": 592968
       }
     },
     "total": {
-      "clones": 217,
-      "duplicatedLines": 3332,
-      "duplicatedTokens": 19180,
-      "lines": 113749,
+      "clones": 206,
+      "duplicatedLines": 3026,
+      "duplicatedTokens": 17636,
+      "lines": 114315,
       "newClones": 0,
       "newDuplicatedLines": 0,
-      "percentage": 2.929256520936448,
-      "percentageTokens": 3.2481058360908928,
+      "percentage": 2.647071687879981,
+      "percentageTokens": 2.974190850096464,
       "sources": 382,
-      "tokens": 590498
+      "tokens": 592968
     }
   }
 }

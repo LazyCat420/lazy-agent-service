@@ -1,8 +1,8 @@
-# Dead-code report (2026-10-29T22:19:41.055Z)
+# Dead-code report (2026-10-29T23:46:41.314Z)
 
 - unused files: **6**
 - unused exports: **58**
-- unused types: **161**
+- unused types: **165**
 - duplicate exports: **5**
 
 ## unused files
@@ -17,7 +17,10 @@
 ## unused exports
 
 - executeToolSingle (src/services/harnesses/lifecycle/ToolExecutor.ts)
+- HARNESS_IDS (src/constants.ts)
+- THOUGHT_STRUCTURES (src/constants.ts)
 - default (src/platform/rules/RuleLoader.ts)
+- STAT_NAMES (src/services/somatic/SomaticStateService.ts)
 - shouldSkipLearningForProject (src/services/harnesses/lifecycle/Finalizer.ts)
 - dispatchAgentRouteWithRollback (src/routes/AgentRoutes.ts)
 - runCoreLoopForAgent (src/routes/AgentRoutes.ts)
@@ -49,15 +52,15 @@
 - DEFAULT_USERNAME (src/services/ToolTaxonomyConstants.ts)
 - DEFAULT_PROJECT (src/services/ToolTaxonomyConstants.ts)
 - isCoreDomain (src/services/ToolTaxonomyConstants.ts)
-- HARNESS_IDS (src/constants.ts)
-- THOUGHT_STRUCTURES (src/constants.ts)
 - runCleanupFunctions (src/utils/CleanupRegistry.ts)
 - cleanupCount (src/utils/CleanupRegistry.ts)
-- STAT_NAMES (src/services/somatic/SomaticStateService.ts)
 - getGlobalToolOrchestratorService (src/types/GlobalToolOrchestratorRegistry.ts)
 - PostCustomToolSchema (src/types/schemas.ts)
 - PutCustomToolSchema (src/types/schemas.ts)
 - GetAgentConversationsQuerySchema (src/types/schemas.ts)
+- EMOTION_COLORS (src/services/somatic/SomaticConstants.ts)
+- EMOTION_BEHAVIOR_PROMPTS (src/services/somatic/SomaticConstants.ts)
+- ALCOHOL_DESCRIPTIONS (src/services/somatic/SomaticConstants.ts)
 - ToolSchemaSchema (src/types/index.ts)
 - ChatMessageContentSchema (src/types/index.ts)
 - ChatMessageSchema (src/types/index.ts)
@@ -71,9 +74,6 @@
 - isMcpOAuthConfigured (src/services/mcp/McpSecretBox.ts)
 - resetSecretBoxKey (src/services/mcp/McpSecretBox.ts)
 - COMPARATORS (src/types/benchmark.ts)
-- EMOTION_COLORS (src/services/somatic/SomaticConstants.ts)
-- EMOTION_BEHAVIOR_PROMPTS (src/services/somatic/SomaticConstants.ts)
-- ALCOHOL_DESCRIPTIONS (src/services/somatic/SomaticConstants.ts)
 
 ## unused types
 

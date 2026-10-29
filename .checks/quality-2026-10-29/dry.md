@@ -1,23 +1,23 @@
-# Duplication report (2026-10-29T23:43:44.069Z)
+# Duplication report (2026-10-29T23:53:12.905Z)
 
 jscpd, min-tokens 60
 
 | scan | duplicated % | duplicated lines | total lines | clones |
 |---|---|---|---|---|
-| logic | 2.611620513293093% | 2834 | 108515 | 191 |
-| all | 2.929256520936448% | 3332 | 113749 | 217 |
+| logic | 2.3175438435657907% | 2528 | 109081 | 180 |
+| all | 2.647071687879981% | 3026 | 114315 | 206 |
 
 ## Top logic clones
 
 | tokens | lines | first | second |
 |---|---|---|---|
-| 315 | 64 | providers/openai.ts:803 | providers/openai.ts:1168 |
 | 249 | 46 | core/loop/AgentRouteAdapter.ts:461 | core/loop/RunsAdapter.ts:317 |
-| 208 | 40 | providers/anthropic.ts:546 | providers/anthropic.ts:775 |
-| 201 | 40 | providers/openai.ts:764 | providers/openai.ts:1129 |
-| 200 | 42 | providers/openai.ts:826 | providers/openai.ts:1191 |
 | 190 | 35 | routes/TextRoutes.ts:54 | routes/admin/AdminContentRoutes.ts:397 |
 | 172 | 25 | routes/admin/AdminStatsRoutes.ts:31 | routes/admin/AdminTraceRoutes.ts:34 |
 | 161 | 21 | providers/lm-studio.ts:303 | utils/openai-compat.ts:1107 |
 | 161 | 37 | services/harnesses/strategies/GraphOfThoughtsStrategy.ts:24 | services/harnesses/strategies/TreeOfThoughtsStrategy.ts:47 |
 | 144 | 29 | providers/llama-cpp.ts:397 | providers/lm-studio.ts:1556 |
+| 140 | 27 | routes/WorkspacesRoutes.ts:387 | routes/WorkspacesRoutes.ts:463 |
+| 140 | 20 | routes/admin/AdminConversationRoutes.ts:393 | routes/admin/AdminConversationRoutes.ts:447 |
+| 138 | 18 | services/harnesses/ReActHarness.ts:370 | services/harnesses/VisionLanguageHarness.ts:200 |
+| 135 | 26 | routes/WorkflowsRoutes.ts:89 | routes/WorkflowsRoutes.ts:170 |

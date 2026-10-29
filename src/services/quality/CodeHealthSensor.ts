@@ -106,83 +106,120 @@ const NOT_METHOD_PREFIX: Record<string, true> = {
   instanceof: true,
 };
 
+interface LexCursor {
+  i: number;
+  line: number;
+}
+
+const IDENT_START = /[A-Za-z_$]/;
+const IDENT_PART = /[A-Za-z0-9_$]/;
+const NUMBER_START = /[0-9]/;
+const NUMBER_PART = /[0-9a-fA-FxX._]/;
+const TWO_CHAR_OPS: Record<string, true> = {
+  "&&": true,
+  "||": true,
+  "??": true,
+  "=>": true,
+  "?.": true,
+};
+const OPERATOR_CHARS = "+-*/%=<>!&|^~?:";
+const PUNCT_CHARS = "{}()[];,.";
+
+function skipLineComment(source: string, cursor: LexCursor): void {
+  while (cursor.i < source.length && source[cursor.i] !== "\n") cursor.i++;
+}
+
+function skipBlockComment(source: string, cursor: LexCursor): void {
+  cursor.i += 2;
+  while (cursor.i < source.length && !(source[cursor.i] === "*" && source[cursor.i + 1] === "/")) {
+    if (source[cursor.i] === "\n") cursor.line++;
+    cursor.i++;
+  }
+  cursor.i += 2;
+}
+
+function skipQuoted(source: string, cursor: LexCursor, quote: string): void {
+  cursor.i++;
+  while (cursor.i < source.length && source[cursor.i] !== quote) {
+    if (source[cursor.i] === "\\") cursor.i++;
+    else if (source[cursor.i] === "\n") cursor.line++;
+    cursor.i++;
+  }
+  cursor.i++;
+}
+
+function readIdentifier(source: string, cursor: LexCursor): string {
+  const start = cursor.i;
+  while (cursor.i < source.length && IDENT_PART.test(source[cursor.i])) cursor.i++;
+  return source.slice(start, cursor.i);
+}
+
+function readNumber(source: string, cursor: LexCursor): void {
+  while (cursor.i < source.length && NUMBER_PART.test(source[cursor.i])) cursor.i++;
+}
+
 /** Strip comments and string/template literals while keeping line numbers. */
 function lex(source: string): Token[] {
   const tokens: Token[] = [];
-  let line = 1;
-  let i = 0;
-  const push = (text: string, kind: TokenKind) => tokens.push({ text, kind, line });
+  const cursor: LexCursor = { i: 0, line: 1 };
 
-  while (i < source.length) {
-    const ch = source[i];
+  while (cursor.i < source.length) {
+    const ch = source[cursor.i];
+    const line = cursor.line;
 
     if (ch === "\n") {
-      line++;
-      i++;
+      cursor.line++;
+      cursor.i++;
       continue;
     }
 
-    if (ch === "/" && source[i + 1] === "/") {
-      while (i < source.length && source[i] !== "\n") i++;
+    if (ch === "/" && source[cursor.i + 1] === "/") {
+      skipLineComment(source, cursor);
       continue;
     }
 
-    if (ch === "/" && source[i + 1] === "*") {
-      i += 2;
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
-        if (source[i] === "\n") line++;
-        i++;
-      }
-      i += 2;
+    if (ch === "/" && source[cursor.i + 1] === "*") {
+      skipBlockComment(source, cursor);
       continue;
     }
 
     if (ch === '"' || ch === "'" || ch === "`") {
-      const quote = ch;
-      i++;
-      while (i < source.length && source[i] !== quote) {
-        if (source[i] === "\\") i++;
-        else if (source[i] === "\n") line++;
-        i++;
-      }
-      i++;
-      push("STR", "punct");
+      skipQuoted(source, cursor, ch);
+      tokens.push({ text: "STR", kind: "punct", line });
       continue;
     }
 
-    if (/[A-Za-z_$]/.test(ch)) {
-      let text = "";
-      while (i < source.length && /[A-Za-z0-9_$]/.test(source[i])) text += source[i++];
-      push(text, "id");
+    if (IDENT_START.test(ch)) {
+      tokens.push({ text: readIdentifier(source, cursor), kind: "id", line });
       continue;
     }
 
-    if (/[0-9]/.test(ch)) {
-      while (i < source.length && /[0-9a-fA-FxX._]/.test(source[i])) i++;
-      push("NUM", "num");
+    if (NUMBER_START.test(ch)) {
+      readNumber(source, cursor);
+      tokens.push({ text: "NUM", kind: "num", line });
       continue;
     }
 
-    const two = source.slice(i, i + 2);
-    if (two === "&&" || two === "||" || two === "??" || two === "=>" || two === "?.") {
-      push(two, "op");
-      i += 2;
+    const two = source.slice(cursor.i, cursor.i + 2);
+    if (TWO_CHAR_OPS[two]) {
+      tokens.push({ text: two, kind: "op", line });
+      cursor.i += 2;
       continue;
     }
 
-    if ("+-*/%=<>!&|^~?:".includes(ch)) {
-      push(ch, "op");
-      i++;
+    if (OPERATOR_CHARS.includes(ch)) {
+      tokens.push({ text: ch, kind: "op", line });
+      cursor.i++;
       continue;
     }
 
-    if ("{}()[];,.".includes(ch)) {
-      push(ch, "punct");
-      i++;
+    if (PUNCT_CHARS.includes(ch)) {
+      tokens.push({ text: ch, kind: "punct", line });
+      cursor.i++;
       continue;
     }
 
-    i++;
+    cursor.i++;
   }
 
   return tokens;

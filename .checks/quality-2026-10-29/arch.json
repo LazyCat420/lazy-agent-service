@@ -6996,7 +6996,8 @@
         }
       ],
       "dependents": [
-        "src/providers/instance-registry.ts"
+        "src/providers/instance-registry.ts",
+        "src/providers/__tests__/StreamCharacterization.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -9300,7 +9301,8 @@
         }
       ],
       "dependents": [
-        "src/providers/index.ts"
+        "src/providers/index.ts",
+        "src/providers/__tests__/StreamCharacterization.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -9895,7 +9897,8 @@
       ],
       "dependents": [
         "src/providers/index.ts",
-        "src/websocket/index.ts"
+        "src/websocket/index.ts",
+        "src/providers/__tests__/StreamCharacterization.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -10467,7 +10470,9 @@
         }
       ],
       "dependents": [
-        "src/providers/index.ts"
+        "src/providers/index.ts",
+        "src/providers/__tests__/OpenAIReasoningPolicy.test.ts",
+        "src/providers/__tests__/StreamCharacterization.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -53546,6 +53551,107 @@
       "valid": true
     },
     {
+      "source": "src/providers/__tests__/OpenAIReasoningPolicy.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../openai.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/providers/openai.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/providers/__tests__/StreamCharacterization.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../anthropic.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/providers/anthropic.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../google.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/providers/google.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../llama-cpp.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/providers/llama-cpp.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../openai.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/providers/openai.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/providers/__tests__/VllmPriorityHeader.test.ts",
       "dependencies": [
         {
@@ -71465,8 +71571,8 @@
     "info": 0,
     "ignore": 0,
     "advisedExitCode": 0,
-    "totalCruised": 567,
-    "totalDependenciesCruised": 2544,
+    "totalCruised": 569,
+    "totalDependenciesCruised": 2549,
     "optionsUsed": {
       "baseDir": "/home/lazycat/github/projects/sun/agents/lazy-agent-service",
       "combinedDependencies": false,
