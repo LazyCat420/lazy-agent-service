@@ -25,6 +25,152 @@ import {
 
 const DEFAULT_COLLECTION = COLLECTIONS.MODEL_CONVERSATIONS;
 
+/** $set fields for an append: only the metadata the caller actually supplied. */
+function buildAppendSetFields(
+  conversationMeta: ConversationMeta | null,
+  traceId: string | null,
+  now: string,
+): Record<string, unknown> {
+  const setFields: Record<string, unknown> = { updatedAt: now };
+  if (traceId) setFields.traceId = traceId;
+  if (!conversationMeta) return setFields;
+
+  if (conversationMeta.title !== undefined) {
+    setFields.title = conversationMeta.title;
+  }
+  if (conversationMeta.systemPrompt !== undefined) {
+    setFields.systemPrompt = conversationMeta.systemPrompt;
+  }
+  if (conversationMeta.settings !== undefined) {
+    setFields.settings = {
+      ...conversationMeta.settings,
+      systemPrompt: conversationMeta.systemPrompt || "",
+    };
+  }
+  if (conversationMeta.parentAgentConversationId) {
+    setFields.parentAgentConversationId = conversationMeta.parentAgentConversationId;
+  }
+  if (conversationMeta.parentConversationId) {
+    setFields.parentConversationId = conversationMeta.parentConversationId;
+  }
+  if (conversationMeta.workspaceRoot) {
+    setFields.workspaceRoot = conversationMeta.workspaceRoot;
+  }
+  return setFields;
+}
+
+/** Defaults a conversation is created with, resolved once from optional metadata. */
+interface AppendMetaDefaults {
+  title: string;
+  systemPrompt: string;
+  settings: ConversationSettings;
+  parentAgentConversationId: string | null;
+  parentConversationId: string | null;
+  workspaceRoot: string | null;
+  agent: string | null;
+  synthetic: boolean;
+}
+
+function resolveAppendContentDefaults(
+  conversationMeta: ConversationMeta | null,
+): Pick<AppendMetaDefaults, "title" | "systemPrompt" | "settings" | "synthetic"> {
+  const settings = conversationMeta?.settings || {};
+  const systemPrompt = conversationMeta?.systemPrompt || "";
+  return {
+    title: conversationMeta?.title || DEFAULT_CONVERSATION_TITLE,
+    systemPrompt,
+    settings,
+    synthetic: Boolean(conversationMeta?.synthetic),
+  };
+}
+
+function resolveAppendLineage(
+  conversationMeta: ConversationMeta | null,
+): Pick<AppendMetaDefaults, "parentAgentConversationId" | "parentConversationId" | "workspaceRoot" | "agent"> {
+  return {
+    parentAgentConversationId: conversationMeta?.parentAgentConversationId || null,
+    parentConversationId: conversationMeta?.parentConversationId || null,
+    workspaceRoot: conversationMeta?.workspaceRoot || null,
+    agent: conversationMeta?.agent || null,
+  };
+}
+
+function resolveAppendMetaDefaults(
+  conversationMeta: ConversationMeta | null,
+): AppendMetaDefaults {
+  return {
+    ...resolveAppendContentDefaults(conversationMeta),
+    ...resolveAppendLineage(conversationMeta),
+  };
+}
+
+/** $setOnInsert defaults for an auto-created conversation, minus every key already in $set. */
+function buildAppendSetOnInsert(
+  defaults: AppendMetaDefaults,
+  traceId: string | null,
+  now: string,
+  setFields: Record<string, unknown>,
+): Record<string, unknown> {
+  const { title, systemPrompt, settings, parentAgentConversationId, parentConversationId } = defaults;
+
+  const setOnInsert: Record<string, unknown> = {
+    title,
+    systemPrompt,
+    settings: {
+      ...settings,
+      systemPrompt,
+    },
+    modalities: computeModalities([]),
+    providers: extractProviders([], settings),
+    totalCost: 0,
+    isGenerating: true,
+    ...(defaults.synthetic && { synthetic: true }),
+    ...(traceId && { traceId }),
+    ...(parentAgentConversationId && { parentAgentConversationId }),
+    ...(parentConversationId && { parentConversationId }),
+    ...(defaults.workspaceRoot && { workspaceRoot: defaults.workspaceRoot }),
+    ...(defaults.agent && { agent: defaults.agent }),
+    createdAt: now,
+  };
+
+  // MongoDB forbids the same field path in both $set and $setOnInsert.
+  for (const key of Object.keys(setFields)) {
+    delete setOnInsert[key];
+  }
+  return setOnInsert;
+}
+
+/** Assistant model names across live messages, falling back to the configured model. */
+function collectModelNames(
+  messages: unknown,
+  settings: ConversationSettings | undefined,
+): string[] {
+  const modelNames = new Set<string>();
+  for (const message of (messages as ChatMessage[]) || []) {
+    if (message.deleted) continue;
+    if (message.role === "assistant" && message.model) {
+      modelNames.add(message.model as string);
+    }
+  }
+  if (modelNames.size === 0 && settings?.model) {
+    modelNames.add(settings.model as string);
+  }
+  return Array.from(modelNames);
+}
+
+/** Title to adopt from the first user message, or null when the title is already meaningful. */
+function deriveTitleFromMessages(
+  messages: unknown,
+  currentTitle: unknown,
+): string | null {
+  if (currentTitle && currentTitle !== DEFAULT_CONVERSATION_TITLE) return null;
+  const firstUserMessage = (messages as ChatMessage[] | undefined)?.find(
+    (message) => message.role === "user",
+  );
+  if (!firstUserMessage?.content) return null;
+  return firstUserMessage.content.slice(0, 100).trim() || null;
+}
+
 /**
  * ConversationService — shared logic for managing conversations in MongoDB.
  * Used by both the conversations REST API and generation routes.
@@ -55,71 +201,15 @@ const ConversationService: ConversationServiceInterface = {
 
     const now = new Date().toISOString();
 
-    // Build $set fields for metadata
-    const setFields: Record<string, unknown> = { updatedAt: now };
-    if (traceId) setFields.traceId = traceId;
-
-    if (conversationMeta) {
-      if (conversationMeta.title !== undefined) {
-        setFields.title = conversationMeta.title;
-      }
-      if (conversationMeta.systemPrompt !== undefined) {
-        setFields.systemPrompt = conversationMeta.systemPrompt;
-      }
-      if (conversationMeta.settings !== undefined) {
-        setFields.settings = {
-          ...conversationMeta.settings,
-          systemPrompt: conversationMeta.systemPrompt || "",
-        };
-      }
-      if (conversationMeta.parentAgentConversationId) {
-        setFields.parentAgentConversationId = conversationMeta.parentAgentConversationId;
-      }
-      if (conversationMeta.parentConversationId) {
-        setFields.parentConversationId = conversationMeta.parentConversationId;
-      }
-      if (conversationMeta.workspaceRoot) {
-        setFields.workspaceRoot = conversationMeta.workspaceRoot;
-      }
-    }
-
-    // Build $setOnInsert for auto-creation of new conversations
-    const metaSettings = conversationMeta?.settings || {};
-    const metaSysPrompt = conversationMeta?.systemPrompt || "";
-    const parentId = conversationMeta?.parentAgentConversationId || null;
-    const parentConversationId = conversationMeta?.parentConversationId || null;
-
-    const setOnInsertBase: Record<string, unknown> = {
-      title: conversationMeta?.title || DEFAULT_CONVERSATION_TITLE,
-      systemPrompt: metaSysPrompt,
-      settings: {
-        ...metaSettings,
-        systemPrompt: metaSysPrompt,
-      },
-      modalities: computeModalities([]),
-      providers: extractProviders([], metaSettings as ConversationSettings),
-      totalCost: 0,
-      isGenerating: true,
-      ...(conversationMeta?.synthetic && { synthetic: true }),
-      ...(traceId && { traceId }),
-      ...(parentId && { parentAgentConversationId: parentId }),
-      ...(parentConversationId && { parentConversationId }),
-      ...(conversationMeta?.workspaceRoot && {
-        workspaceRoot: conversationMeta.workspaceRoot,
-      }),
-      ...(conversationMeta?.agent && {
-        agent: conversationMeta.agent,
-      }),
-      createdAt: now,
-    };
-
-    // MongoDB forbids the same field path in both $set and $setOnInsert —
-    // strip any keys already present in $set to prevent MongoServerError:
-    // "Updating the path 'X' would create a conflict at 'X'"
-    const setOnInsert = { ...setOnInsertBase };
-    for (const key of Object.keys(setFields)) {
-      delete setOnInsert[key];
-    }
+    // Build $set fields for metadata, then $setOnInsert for auto-creation
+    // (stripped of any key already in $set — MongoDB forbids the same path in both).
+    const setFields = buildAppendSetFields(conversationMeta, traceId, now);
+    const setOnInsert = buildAppendSetOnInsert(
+      resolveAppendMetaDefaults(conversationMeta),
+      traceId,
+      now,
+      setFields,
+    );
 
     // 1. Atomic upsert: push messages + set metadata in a single operation
     await dbCollection.updateOne(
@@ -144,17 +234,6 @@ const ConversationService: ConversationServiceInterface = {
     }
 
     // 3. Recompute derived fields and persist
-    const modelNamesSet = new Set<string>();
-    for (const model of (conversation.messages as ChatMessage[]) || []) {
-      if (model.deleted) continue;
-      if (model.role === "assistant" && model.model) {
-        modelNamesSet.add(model.model as string);
-      }
-    }
-    if (modelNamesSet.size === 0 && conversation.settings?.model) {
-      modelNamesSet.add(conversation.settings.model as string);
-    }
-
     const derived: Record<string, unknown> = {
       modalities: computeModalities(conversation.messages as ChatMessage[]),
       providers: extractProviders(
@@ -162,24 +241,20 @@ const ConversationService: ConversationServiceInterface = {
         conversation.settings as ConversationSettings,
       ),
       totalCost: computeTotalCost(conversation.messages as ChatMessage[]),
-      modelNames: Array.from(modelNamesSet),
+      modelNames: collectModelNames(
+        conversation.messages,
+        conversation.settings as ConversationSettings | undefined,
+      ),
     };
 
-    // Auto-derive a descriptive title from the first user message if the current title is missing or is 'New Conversation'
-    if (
-      !conversation.title ||
-      conversation.title === DEFAULT_CONVERSATION_TITLE
-    ) {
-      const firstUserMessage = (conversation.messages as ChatMessage[])?.find(
-        (chatMessage) => chatMessage.role === "user",
-      );
-      if (firstUserMessage?.content) {
-        const titleSnippet = firstUserMessage.content.slice(0, 100).trim();
-        if (titleSnippet) {
-          derived.title = titleSnippet;
-          conversation.title = titleSnippet; // Update local memory representation
-        }
-      }
+    // Auto-derive a descriptive title from the first user message
+    const derivedTitle = deriveTitleFromMessages(
+      conversation.messages,
+      conversation.title,
+    );
+    if (derivedTitle) {
+      derived.title = derivedTitle;
+      conversation.title = derivedTitle; // Update local memory representation
     }
 
     await dbCollection.updateOne(
