@@ -15,7 +15,7 @@ const qualityRules = {
   files: ["src/**/*.ts"],
   ignores: ["src/**/__tests__/**"],
   rules: {
-    complexity: ["warn", 30],
+    complexity: ["warn", 20],
     "max-depth": ["warn", 5],
     "max-params": ["warn", 6],
     "max-lines-per-function": ["warn", { max: 150, skipBlankLines: true, skipComments: true }],

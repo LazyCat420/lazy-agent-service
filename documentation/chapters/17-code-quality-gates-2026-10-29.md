@@ -58,7 +58,7 @@ unit-testable.
 ## What landed
 
 **Tooling (Phase 0).** `scripts/quality/{crap,dry,arch,deadcode,prompt-budget}.mjs`,
-`.dependency-cruiser.cjs`, `knip.json`, ESLint ratchet (`complexity` warn 30,
+`.dependency-cruiser.cjs`, `knip.json`, ESLint ratchet (`complexity` warn **20** after the decomposition batch,
 `max-depth` 5, `max-params` 6, `max-lines-per-function` 150), npm scripts
 `coverage`, `quality:crap|dry|arch|deadcode|prompt`, `quality`, `verify`.
 
@@ -117,7 +117,7 @@ scanner, so the quality gate lives in CI instead of a second local hook.
 
 | gate | threshold | blocks? |
 |---|---|---|
-| `npm run lint` | complexity warn 30, depth 5, params 6, function lines 150 | warnings only |
+| `npm run lint` | complexity warn **20**, depth 5, params 6, function lines 150 | warnings only (97 complexity warnings today) |
 | `npm run quality:crap` | 0 functions over cx 30; at most 360 functions over CRAP 60 (ratchet, lower as coverage rises) | yes |
 | `npm run quality:dry` | logic duplication ≤ 8 % (declarative tables excluded) | yes |
 | `npm run quality:arch` | 0 dependency errors | yes |
