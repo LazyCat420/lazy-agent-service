@@ -5,6 +5,40 @@ type: record
 updated: 2026-10-30
 ---
 
+# HANDOFF — `scrape_url` scheme normalization + actionable retry message (2026-10-30, `cc3308a`)
+
+Root cause of the October `scrape_url` failures (68 rows, all `v3_fundamental_analyst`,
+41.7 % of 1,042 calls failed overall): models pass search results the way the page
+shows them — `domain.tld/path` with no scheme — and the handler required
+`/^https?:\/\//i`, so the call died before any scrape. The error text
+("Try again later or use another source") then pushed the model to retry the same
+bad URL or abandon the source.
+
+- `src/utils/ScrapeUrl.ts` (`normalizeScrapeUrl`): full `http(s)` URLs untouched;
+  `//host` → `https://host`; bare `domain.tld[:port][/path]` → `https://…`;
+  relative paths and bare words returned unchanged so the guard still rejects them.
+  Dependency-free on purpose: `LocalToolRouter` needs it before the SSRF guard,
+  deny-list and budget checks, and importing `WebExtractService` there would pull
+  the provider registry into every router consumer (it broke a router test suite).
+- `routeScrapeUrlTool` normalizes once and passes the normalized URL to
+  `scrapeTargetGuard`, `unscrapableDomainOf`, `chargeScrape` and the extractor.
+- `ToolOrchestratorService.webExtractFailure` replaces both generic failure
+  strings: a malformed argument now says "Call scrape_url again with the full URL
+  including https:// (copy it from the search results)", other failures say
+  "Try another URL or source", and every failure echoes `(url: …)` so the
+  telemetry row keeps the value that failed instead of only its hash.
+- `tool_schemas/shared/web.json` (+ regenerated `tool_schemas.json`) states the
+  requirement on the `url` parameter. No `pattern` was added: bare domains are now
+  accepted, so `^https?://` would reject valid input at the client.
+
+**Verified:** `npm run verify` exit 0 — 239 files / 3,315 tests, 0 lint errors,
+dry 2.26 %, arch 0 errors, prompt budget PASS. Live on `cc3308a`
+(synology 2026-10-30T22:20:05Z): `/health` ok; `POST /execute/scrape_url
+{"url":"/investors/earnings"}` → `success:false` with the retry guidance and
+`(url: /investors/earnings)`; `{"url":"example.com"}` → scraped as
+`https://example.com` (thin-content error, i.e. the request reached the scraper);
+deployed `tool_schemas.json` carries the new description.
+
 # HANDOFF — CRAP cleanup: 353 → 3 hot functions (2026-10-30)
 
 The CRAP debt left by the 2026-10-29 entry was paid down with coverage, not
