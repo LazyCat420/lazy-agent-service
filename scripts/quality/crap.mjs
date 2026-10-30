@@ -30,7 +30,7 @@ const MAX_CX = Number(opt("max-cx", "30"));
 const MAX_CRAP = Number(opt("max-crap", "60"));
 // Ratchet: the number of functions over MAX_CRAP may not grow. Lower this
 // ceiling as coverage rises; per-function CRAP is still listed in the report.
-const MAX_CRAP_COUNT = Number(opt("max-crap-count", "360"));
+const MAX_CRAP_COUNT = Number(opt("max-crap-count", "180"));
 const MAX_CX_COUNT = Number(opt("max-cx-count", "0"));
 const TOP = Number(opt("top", "25"));
 

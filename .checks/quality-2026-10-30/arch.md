@@ -1,11 +1,11 @@
-# Architecture report (2026-10-30T01:26:30.576Z)
+# Architecture report (2026-10-30T07:46:39.091Z)
 
-Modules: 570 · dependencies: 2541
+Modules: 590 · dependencies: 2569
 
 ## error (0)
 
 
-## warn (137)
+## warn (138)
 
 - **no-circular**: src/core/loop/SpillBuffer.ts → src/core/loop/types.ts
 - **no-circular**: src/providers/anthropic.ts → src/types/ProviderTypes.ts
