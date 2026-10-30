@@ -35,19 +35,19 @@ rules were not enforced.
 | dead code (knip) | `node scripts/quality/deadcode.mjs` | 230 findings (6 unused files, 58 unused exports, 161 unused types, 5 duplicate exports) |
 | tests | `vitest run` | 180 files / 1,930 tests |
 
-## Current (`a7d21db`, after this pass)
+## Current (`18df632`, after this pass)
 
 | metric | value |
 |---|---|
-| production functions | 4,840 measured |
-| McCabe > 30 | **8** (AudioRoutes handler 50, ScheduledTaskService.tick 33, llama-cpp.getServerProps 32, AdminConversationRoutes 31, ConversationService.appendMessages 35, EmbeddingService.generate 32, PlatformRoutes 36, EmbedRoutes 31) |
-| CRAP > 60 | **360** (from 374) |
-| coverage | statements **47.33 %** (15,921/33,638), branches 42.07 %, functions 55.76 %, lines 47.65 % |
-| duplication (logic) | **2.32 %** (2,528/109,081 lines, 180 clones); all 2.65 % |
-| architecture | **0 errors**, 136 warnings (569 modules) — the three `services-no-routes` errors are gone |
-| dead code | 234 findings (report-only) |
-| tests | **189 files / 1,974 tests**, ~16 s |
-| `npm run verify` | ~34 s on `main` |
+| production functions | 4,889 measured |
+| McCabe > 30 | **0** (was 19; the last 8 were decomposed: AudioRoutes 50, PlatformRoutes 36, ConversationService.appendMessages 35, ScheduledTaskService.tick 33, llama-cpp.getServerProps 32, EmbeddingService.generate 32, AdminConversationRoutes 31, EmbedRoutes 31) |
+| CRAP > 60 | **353** (from 374); ratchet ceiling 360 |
+| coverage | statements **47.85 %** (16,087/33,613), branches 42.94 %, functions 56.14 %, lines 48.20 % |
+| duplication (logic) | **2.26 %** (2,476/109,545 lines, 177 clones); all 2.59 % |
+| architecture | **0 errors**, 137 warnings (570 modules) — the three `services-no-routes` errors are gone |
+| dead code | 228 findings (0 unused files, 58 unused exports, 165 unused types, 5 duplicate exports) |
+| tests | **193 files / 2,000 tests**, ~16 s |
+| `npm run verify` | ~35 s on `main` |
 
 The provider work alone removed 11 functions over complexity 30
 (anthropic/openai/google stream reducers, `MemoryConsolidationService.consolidate`,
@@ -96,6 +96,18 @@ payload builders and per-event stream reducers.
   (`canvas_add_widget` is 6,862) — reported, not gated, because rewriting tool
   contracts is a product decision.
 
+**Applied methodology (research → code).** Four practices were adopted from the
+literature and made mechanical rather than advisory:
+- *Spec-driven development*: gates are executable and evidence-backed; a claim
+  of "done" must be reproducible by a command, not a narrative.
+- *Context engineering / progressive disclosure*: tool descriptions are paid on
+  every turn, so the compact level is measured and capped (`prompt-budget.mjs`).
+- *Agentic-harness engineering*: sensors must be deterministic and cheap —
+  `code_health` runs in-process over submitted content, no shell/FS/network.
+- *LLM-as-judge guardrails*: the judge must not be the author; `CriticGate`
+  selects a different model of the same provider and reports
+  `judgeIndependent` in every result.
+
 **CI (Phase 3).** `.github/workflows/quality.yml` runs `npm run verify` on
 push/PR and a nightly `npm run quality` (coverage CRAP + dead code) with report
 artifacts. The repo's `.git/hooks/pre-push` is owned by the workspace secret
@@ -106,7 +118,7 @@ scanner, so the quality gate lives in CI instead of a second local hook.
 | gate | threshold | blocks? |
 |---|---|---|
 | `npm run lint` | complexity warn 30, depth 5, params 6, function lines 150 | warnings only |
-| `npm run quality:crap` | cx > 30 or CRAP > 60 per function | yes |
+| `npm run quality:crap` | 0 functions over cx 30; at most 360 functions over CRAP 60 (ratchet, lower as coverage rises) | yes |
 | `npm run quality:dry` | logic duplication ≤ 8 % (declarative tables excluded) | yes |
 | `npm run quality:arch` | 0 dependency errors | yes |
 | `npm run quality:prompt` | compact ≤ 50 % of full, full ≤ 15,000 tokens | yes |
@@ -118,8 +130,11 @@ does not run `prettier --check`: the repo has never been Prettier-formatted
 
 ## Remaining (ratchet plan)
 
-1. The 8 functions still over 30 and 360 over CRAP 60 — decompose in batches,
-   then tighten the ESLint `complexity` rule from warn to **error at 20**.
+1. **0 functions over McCabe 30** now, but 353 are over CRAP 60 because their
+   coverage is 0–20 %. The lever is tests, not more decomposition: add
+   coverage where CRAP is high, then lower the `--max-crap-count` ceiling
+   (360 → 300 → …) and tighten the ESLint `complexity` rule from warn to
+   **error at 20**.
 2. 136 `no-circular` warnings: fix the real cycles, then make the rule an
    error; barrel-only cycles get an allowlist.
 3. 234 knip findings: delete unused exports/types in a dedicated batch and add

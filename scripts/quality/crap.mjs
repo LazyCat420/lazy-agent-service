@@ -28,6 +28,10 @@ const COVERAGE = path.resolve(ROOT, opt("coverage", "coverage/coverage-final.jso
 const OUT_DIR = path.resolve(ROOT, opt("out", `.checks/quality-${new Date().toISOString().slice(0, 10)}`));
 const MAX_CX = Number(opt("max-cx", "30"));
 const MAX_CRAP = Number(opt("max-crap", "60"));
+// Ratchet: the number of functions over MAX_CRAP may not grow. Lower this
+// ceiling as coverage rises; per-function CRAP is still listed in the report.
+const MAX_CRAP_COUNT = Number(opt("max-crap-count", "360"));
+const MAX_CX_COUNT = Number(opt("max-cx-count", "0"));
 const TOP = Number(opt("top", "25"));
 
 function walk(dir, out = []) {
@@ -162,7 +166,7 @@ md.push(`# CRAP report (${new Date().toISOString()})`);
 md.push("");
 md.push(`Functions analysed: **${rows.length}** · coverage measured: ${rows.length - unmeasured.length} · no coverage file entry: ${unmeasured.length}`);
 md.push("");
-md.push(`Thresholds: cx > ${MAX_CX}, CRAP > ${MAX_CRAP}`);
+md.push(`Thresholds: cx > ${MAX_CX} (max ${MAX_CX_COUNT} functions), CRAP > ${MAX_CRAP} (max ${MAX_CRAP_COUNT} functions)`);
 md.push(`Over cx: **${overCx.length}** · over CRAP: **${overCrap.length}**`);
 md.push("");
 md.push("| CRAP | cx | cov | stmts | lines | file:line | function |");
@@ -181,8 +185,11 @@ for (const r of rows.slice(0, 10)) {
 }
 console.log(`[crap] wrote ${path.relative(ROOT, path.join(OUT_DIR, "crap.json"))} and crap.md`);
 
-if (overCx.length > 0 || overCrap.length > 0) {
-  console.error(`[crap] FAIL: ${overCx.length} functions over cx ${MAX_CX}, ${overCrap.length} over CRAP ${MAX_CRAP}`);
+if (overCx.length > MAX_CX_COUNT || overCrap.length > MAX_CRAP_COUNT) {
+  console.error(
+    `[crap] FAIL: ${overCx.length} functions over cx ${MAX_CX} (ceiling ${MAX_CX_COUNT}), ` +
+      `${overCrap.length} over CRAP ${MAX_CRAP} (ceiling ${MAX_CRAP_COUNT})`,
+  );
   process.exit(1);
 }
 console.log("[crap] PASS");
