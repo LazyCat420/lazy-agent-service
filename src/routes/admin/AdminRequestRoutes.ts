@@ -8,6 +8,7 @@ import logger from "../../utils/logger.ts";
 import { getErrorMessage } from "../../utils/ErrorHelpers.ts";
 import {
   applyDateRangeFilter,
+  parseCsvFilter,
   parsePaginationParams,
 } from "../../utils/QueryBuilders.ts";
 import requireDb from "../../middleware/RequireDbMiddleware.ts";
@@ -72,26 +73,25 @@ router.get(
         ];
       }
 
-      const applyCommaSeparatedFilter = (key: string, value: unknown) => {
-        if (!value) return;
-        const values = String(value).split(",").filter(Boolean);
-        if (values.length === 1) filter[key] = values[0];
-        else if (values.length > 1) filter[key] = { $in: values };
-      };
+      const providerFilter = parseCsvFilter(provider);
+      if (providerFilter !== undefined) filter.provider = providerFilter;
 
-      applyCommaSeparatedFilter("provider", provider);
-      applyCommaSeparatedFilter("endpoint", endpoint);
-      applyCommaSeparatedFilter("operation", operation);
-      applyCommaSeparatedFilter("agent", agent);
+      const endpointFilter = parseCsvFilter(endpoint);
+      if (endpointFilter !== undefined) filter.endpoint = endpointFilter;
 
-      if (success !== undefined) {
-        const successValues = String(success).split(",").filter(Boolean);
-        if (successValues.length === 1)
-          filter.success = successValues[0] === "true";
-        else if (successValues.length > 1)
-          filter.success = {
-            $in: successValues.map((value: string) => value === "true"),
-          };
+      const operationFilter = parseCsvFilter(operation);
+      if (operationFilter !== undefined) filter.operation = operationFilter;
+
+      const agentFilter = parseCsvFilter(agent);
+      if (agentFilter !== undefined) filter.agent = agentFilter;
+
+      const successFilter = parseCsvFilter(success);
+      if (typeof successFilter === "string") {
+        filter.success = successFilter === "true";
+      } else if (successFilter !== undefined) {
+        filter.success = {
+          $in: successFilter.$in.map((value) => value === "true"),
+        };
       }
 
       applyDateRangeFilter(filter, from as string, to as string);

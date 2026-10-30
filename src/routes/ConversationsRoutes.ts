@@ -2,7 +2,7 @@ import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import { errorMessage } from "@rodrigo-barraza/utilities-library";
 import { DEFAULT_USERNAME } from "@rodrigo-barraza/utilities-library/taxonomy";
 import express, { Request, Response, NextFunction } from "express";
-import { ObjectId, type Document } from "mongodb";
+import { ObjectId, type Db, type Document } from "mongodb";
 import requireDb from "../middleware/RequireDbMiddleware.ts";
 import ConversationService, {
   buildConversationPatchFields,
@@ -64,6 +64,316 @@ interface WorkflowDocument {
   updatedAt: Date;
 }
 
+type UsernameFilter = string | { $in: string[] };
+
+/**
+ * List filter shared by both collections. Conversations created under
+ * DEFAULT_USERNAME ("anonymous") are included as a fallback — handles the
+ * migration scenario where conversations were created before the x-username
+ * header was introduced.
+ */
+function buildConversationListFilter(
+  username: string,
+  project: string,
+  taskId: string | null | undefined,
+  cursor: string | null | undefined,
+): { filter: Record<string, unknown>; usernameFilter: UsernameFilter } {
+  const usernameFilter: UsernameFilter =
+    username !== DEFAULT_USERNAME
+      ? { $in: [username, DEFAULT_USERNAME] }
+      : username;
+
+  const filter: Record<string, unknown> = {};
+  if (taskId) {
+    filter.taskId = taskId;
+  } else {
+    filter.project = project;
+    filter.username = usernameFilter;
+  }
+  if (cursor) {
+    filter.updatedAt = { $lt: cursor };
+  }
+
+  return { filter, usernameFilter };
+}
+
+function fetchModelConversations(
+  db: Db,
+  filter: Record<string, unknown>,
+  limit: number,
+): Promise<Document[]> {
+  return db
+    .collection<ConversationDocument>(COLLECTIONS.MODEL_CONVERSATIONS)
+    .find(filter)
+    .project<Omit<ConversationDocument, "messages">>(
+      CONVERSATION_LIST_PROJECTION,
+    )
+    .sort({ updatedAt: -1 })
+    .limit(limit + 1)
+    .toArray();
+}
+
+/**
+ * Agent conversations, plus — when filtering by agent — every descendant
+ * sub-agent conversation spawned by the matched orchestrator conversations.
+ * These may have a different `agent` persona but belong to the same tree.
+ */
+async function fetchAgentConversations(
+  db: Db,
+  filter: Record<string, unknown>,
+  limit: number,
+  agent: string | null | undefined,
+  cursor: string | null | undefined,
+): Promise<Document[]> {
+  const agentFilter = { ...filter };
+  if (agent) {
+    agentFilter.agent = agent;
+  }
+  const directMatches = await db
+    .collection(COLLECTIONS.AGENT_CONVERSATIONS)
+    .find(agentFilter)
+    .project(CONVERSATION_LIST_PROJECTION)
+    .sort({ updatedAt: -1 })
+    .limit(limit + 1)
+    .toArray();
+
+  if (agent && directMatches.length > 0) {
+    const directMatchIds = directMatches
+      .map((document) => (document as Record<string, unknown>).id as string)
+      .filter(Boolean);
+
+    // Iteratively walk the parentConversationId chain to find all
+    // descendant sub-agent conversations (multi-level nesting).
+    const allDiscoveredIds = new Set(directMatchIds);
+    let frontier = directMatchIds;
+    const maxDepthIterations = 5;
+
+    for (let depth = 0; depth < maxDepthIterations && frontier.length > 0; depth++) {
+      const childConversations = await db
+        .collection(COLLECTIONS.AGENT_CONVERSATIONS)
+        .find({
+          parentConversationId: { $in: frontier },
+          project: filter.project,
+          username: filter.username,
+          ...(cursor ? { updatedAt: filter.updatedAt } : {}),
+        })
+        .project(CONVERSATION_LIST_PROJECTION)
+        .sort({ updatedAt: -1 })
+        .toArray();
+
+      const newFrontier: string[] = [];
+      for (const childConversation of childConversations) {
+        const childRecord = childConversation as Record<string, unknown>;
+        const childId = childRecord.id as string;
+        if (childId && !allDiscoveredIds.has(childId)) {
+          allDiscoveredIds.add(childId);
+          directMatches.push(childConversation);
+          newFrontier.push(childId);
+        }
+      }
+      frontier = newFrontier;
+    }
+  }
+
+  return directMatches;
+}
+
+/**
+ * Enrich conversations with authoritative totalCost from request logs.
+ * The document-level totalCost (from message estimatedCost sums) can be
+ * stale or incomplete — the requests collection is the source of truth.
+ * Background operations (memory extraction, embedding, consolidation)
+ * log costs to the requests collection but never update the conversation
+ * document, causing the sidebar cost badge to show stale values.
+ */
+async function queryAndEnrichConversationsWithRequestCosts(
+  db: Db,
+  conversations: Document[],
+  isAgentType: boolean,
+  project: string,
+  usernameFilter: UsernameFilter,
+): Promise<void> {
+  if (conversations.length === 0) return;
+  const conversationIds = conversations
+    .map((conversation) => (conversation as Record<string, unknown>).id as string)
+    .filter(Boolean);
+  if (conversationIds.length === 0) return;
+
+  try {
+    const matchCondition = isAgentType
+      ? {
+          $or: [
+            { agentConversationId: { $in: conversationIds } },
+            { conversationId: { $in: conversationIds } },
+            { parentAgentConversationId: { $in: conversationIds } },
+          ],
+        }
+      : { conversationId: { $in: conversationIds } };
+
+    const groupId = isAgentType
+      ? {
+          $cond: [
+            {
+              $and: [
+                { $ne: ["$parentAgentConversationId", null] },
+                { $in: ["$parentAgentConversationId", conversationIds] },
+              ],
+            },
+            "$parentAgentConversationId",
+            { $ifNull: ["$conversationId", "$agentConversationId"] },
+          ],
+        }
+      : "$conversationId";
+
+    const costAggregation = await db
+      .collection(COLLECTIONS.REQUESTS)
+      .aggregate<{
+        _id: string;
+        totalCost: number;
+        requestErrorCount: number;
+      }>([
+        {
+          $match: {
+            ...matchCondition,
+            project,
+            username: usernameFilter,
+          },
+        },
+        {
+          $group: {
+            _id: groupId,
+            totalCost: COST_SUM_EXPR,
+            requestErrorCount: {
+              $sum: { $cond: [{ $eq: ["$success", false] }, 1, 0] },
+            },
+          },
+        },
+      ])
+      .toArray();
+
+    enrichConversationsWithRequestCosts(
+      conversations as ConversationDocument[],
+      costAggregation,
+    );
+  } catch (costError: unknown) {
+    logger.warn(
+      `Failed to enrich ${isAgentType ? "agent conversation" : "conversation"} costs: ${errorMessage(costError)}`,
+    );
+  }
+}
+
+/**
+ * Enrich conversations with `hasSubAgents` by cross-referencing
+ * child conversations that point back via `parentConversationId`.
+ * The stored flag may be missing on conversations created before the flag
+ * was introduced or when the write failed silently at spawn time.
+ */
+async function enrichConversationsWithSubAgentFlag(
+  db: Db,
+  conversations: Document[],
+  project: string,
+  usernameFilter: UsernameFilter,
+): Promise<void> {
+  if (conversations.length === 0) return;
+  const conversationIds = conversations
+    .map((conversation) => (conversation as Record<string, unknown>).id as string)
+    .filter(Boolean);
+  if (conversationIds.length === 0) return;
+
+  try {
+    const parentFieldQuery = {
+      parentConversationId: { $in: conversationIds },
+      project,
+      username: usernameFilter,
+    };
+    const [agentParents, modelParents] = await Promise.all([
+      db
+        .collection(COLLECTIONS.AGENT_CONVERSATIONS)
+        .find(parentFieldQuery)
+        .project({ parentConversationId: 1 })
+        .toArray(),
+      db
+        .collection(COLLECTIONS.MODEL_CONVERSATIONS)
+        .find(parentFieldQuery)
+        .project({ parentConversationId: 1 })
+        .toArray(),
+    ]);
+
+    const parentIdSet = new Set<string>();
+    for (const childDocument of [...agentParents, ...modelParents]) {
+      const documentRecord = childDocument as Record<string, unknown>;
+      const linkId = documentRecord.parentConversationId as string | null;
+      if (linkId) parentIdSet.add(linkId);
+    }
+
+    if (parentIdSet.size > 0) {
+      for (const conversation of conversations) {
+        const conversationRecord = conversation as Record<string, unknown>;
+        if (parentIdSet.has(conversationRecord.id as string)) {
+          conversationRecord.hasSubAgents = true;
+        }
+      }
+    }
+  } catch (enrichmentError: unknown) {
+    logger.warn(
+      `Failed to enrich conversations with hasSubAgents flag: ${errorMessage(enrichmentError)}`,
+    );
+  }
+}
+
+/**
+ * Derive hasSubAgents from the stored subAgents array (primary source of
+ * truth, written by BaseAgenticHarness.finalize) and strip the heavy array
+ * from the list response. The cross-reference enrichment above acts as a
+ * secondary fallback for conversations that predate the subAgents array.
+ */
+function deriveAndStripSubAgentsArray(conversations: Document[]): void {
+  for (const conversation of conversations) {
+    const record = conversation as Record<string, unknown>;
+    const storedSubAgents = record.subAgents as unknown[] | undefined;
+    if (
+      storedSubAgents &&
+      Array.isArray(storedSubAgents) &&
+      storedSubAgents.length > 0
+    ) {
+      record.hasSubAgents = true;
+    }
+    delete record.subAgents;
+  }
+}
+
+/** Merge both collections, sort by updatedAt descending, and page the result. */
+function mergeAndPaginateConversations(
+  modelConversations: Document[],
+  agentConversations: Document[],
+  limit: number,
+) {
+  const merged = [
+    ...modelConversations.map((conversation) => ({
+      ...conversation,
+      type: "direct" as const,
+    })),
+    ...agentConversations.map((conversation) => ({
+      ...conversation,
+      type: "agent" as const,
+    })),
+  ] as (Document & { type: string })[];
+
+  merged.sort(
+    (firstConversation, secondConversation) =>
+      new Date(secondConversation.updatedAt as string).getTime() -
+      new Date(firstConversation.updatedAt as string).getTime(),
+  );
+
+  const hasMore = merged.length > limit;
+  const items = hasMore ? merged.slice(0, limit) : merged;
+  const nextCursor = hasMore
+    ? (items[items.length - 1].updatedAt as string)
+    : null;
+
+  return { items, nextCursor, hasMore };
+}
+
 /**
  * GET /conversations
  * List both direct conversations and agent conversations, merged and sorted by updatedAt.
@@ -83,294 +393,70 @@ router.get(
       const { limit, cursor, agent, type = "all", taskId, project: queryProject } = parsed.data;
       const project = queryProject || req.project || "any";
 
-      // Include conversations created under DEFAULT_USERNAME ("anonymous")
-      // as a fallback — handles the migration scenario where conversations
-      // were created before the x-username header was introduced.
-      const usernameFilter =
-        username !== DEFAULT_USERNAME
-          ? { $in: [username, DEFAULT_USERNAME] }
-          : username;
-
-      const filter: Record<string, unknown> = {};
-      if (taskId) {
-        filter.taskId = taskId;
-      } else {
-        filter.project = project;
-        filter.username = usernameFilter;
-      }
-      if (cursor) {
-        filter.updatedAt = { $lt: cursor };
-      }
+      const { filter, usernameFilter } = buildConversationListFilter(
+        username,
+        project,
+        taskId,
+        cursor,
+      );
 
       let modelConversations: Document[] = [];
       let agentConversations: Document[] = [];
 
-      const fetchModelConversations = () =>
-        db
-          .collection<ConversationDocument>(COLLECTIONS.MODEL_CONVERSATIONS)
-          .find(filter)
-          .project<Omit<ConversationDocument, "messages">>(
-            CONVERSATION_LIST_PROJECTION,
-          )
-          .sort({ updatedAt: -1 })
-          .limit(limit + 1)
-          .toArray();
-
-      const fetchAgentConversations = async () => {
-        const agentFilter = { ...filter };
-        if (agent) {
-          agentFilter.agent = agent;
-        }
-        const directMatches = await db
-          .collection(COLLECTIONS.AGENT_CONVERSATIONS)
-          .find(agentFilter)
-          .project(CONVERSATION_LIST_PROJECTION)
-          .sort({ updatedAt: -1 })
-          .limit(limit + 1)
-          .toArray();
-
-        // When filtering by agent, also discover sub-agent conversations
-        // spawned by the matched orchestrator conversations — these may
-        // have a different `agent` persona but belong to the same tree.
-        if (agent && directMatches.length > 0) {
-          const directMatchIds = directMatches
-            .map((document) => (document as Record<string, unknown>).id as string)
-            .filter(Boolean);
-
-          // Iteratively walk the parentConversationId chain to find all
-          // descendant sub-agent conversations (multi-level nesting).
-          const allDiscoveredIds = new Set(directMatchIds);
-          let frontier = directMatchIds;
-          const maxDepthIterations = 5;
-
-          for (let depth = 0; depth < maxDepthIterations && frontier.length > 0; depth++) {
-            const childConversations = await db
-              .collection(COLLECTIONS.AGENT_CONVERSATIONS)
-              .find({
-                parentConversationId: { $in: frontier },
-                project: filter.project,
-                username: filter.username,
-                ...(cursor ? { updatedAt: filter.updatedAt } : {}),
-              })
-              .project(CONVERSATION_LIST_PROJECTION)
-              .sort({ updatedAt: -1 })
-              .toArray();
-
-            const newFrontier: string[] = [];
-            for (const childConversation of childConversations) {
-              const childRecord = childConversation as Record<string, unknown>;
-              const childId = childRecord.id as string;
-              if (childId && !allDiscoveredIds.has(childId)) {
-                allDiscoveredIds.add(childId);
-                directMatches.push(childConversation);
-                newFrontier.push(childId);
-              }
-            }
-            frontier = newFrontier;
-          }
-        }
-
-        return directMatches;
-      };
-
       if (type === "all") {
-        const [fetchedModelConversations, fetchedAgentConversations] =
-          await Promise.all([
-            fetchModelConversations(),
-            fetchAgentConversations(),
-          ]);
-        modelConversations = fetchedModelConversations;
-        agentConversations = fetchedAgentConversations;
+        [modelConversations, agentConversations] = await Promise.all([
+          fetchModelConversations(db, filter, limit),
+          fetchAgentConversations(db, filter, limit, agent, cursor),
+        ]);
       } else if (type === "direct") {
-        modelConversations = await fetchModelConversations();
+        modelConversations = await fetchModelConversations(db, filter, limit);
       } else if (type === "agent") {
-        agentConversations = await fetchAgentConversations();
+        agentConversations = await fetchAgentConversations(
+          db,
+          filter,
+          limit,
+          agent,
+          cursor,
+        );
       }
 
-      // Enrich conversations with authoritative totalCost from request logs.
-      // The document-level totalCost (from message estimatedCost sums) can be
-      // stale or incomplete — the requests collection is the source of truth.
-      // Background operations (memory extraction, embedding, consolidation)
-      // log costs to the requests collection but never update the conversation
-      // document, causing the sidebar cost badge to show stale values.
-      const queryAndEnrichConversationsWithRequestCosts = async (
-        conversations: Document[],
-        isAgentType: boolean,
-      ) => {
-        if (conversations.length === 0) return;
-        const conversationIds = conversations
-          .map((conversation) => (conversation as Record<string, unknown>).id as string)
-          .filter(Boolean);
-        if (conversationIds.length === 0) return;
-
-        try {
-          const matchCondition = isAgentType
-            ? {
-                $or: [
-                  { agentConversationId: { $in: conversationIds } },
-                  { conversationId: { $in: conversationIds } },
-                  { parentAgentConversationId: { $in: conversationIds } },
-                ],
-              }
-            : { conversationId: { $in: conversationIds } };
-
-          const groupId = isAgentType
-            ? {
-                $cond: [
-                  {
-                    $and: [
-                      { $ne: ["$parentAgentConversationId", null] },
-                      { $in: ["$parentAgentConversationId", conversationIds] },
-                    ],
-                  },
-                  "$parentAgentConversationId",
-                  { $ifNull: ["$conversationId", "$agentConversationId"] },
-                ],
-              }
-            : "$conversationId";
-
-          const costAggregation = await db
-            .collection(COLLECTIONS.REQUESTS)
-            .aggregate<{
-              _id: string;
-              totalCost: number;
-              requestErrorCount: number;
-            }>([
-              {
-                $match: {
-                  ...matchCondition,
-                  project,
-                  username: usernameFilter,
-                },
-              },
-              {
-                $group: {
-                  _id: groupId,
-                  totalCost: COST_SUM_EXPR,
-                  requestErrorCount: {
-                    $sum: { $cond: [{ $eq: ["$success", false] }, 1, 0] },
-                  },
-                },
-              },
-            ])
-            .toArray();
-
-          enrichConversationsWithRequestCosts(
-            conversations as ConversationDocument[],
-            costAggregation,
-          );
-        } catch (costError: unknown) {
-          logger.warn(
-            `Failed to enrich ${isAgentType ? "agent conversation" : "conversation"} costs: ${errorMessage(costError)}`,
-          );
-        }
-      };
-
-      // Enrich conversations with `hasSubAgents` by cross-referencing
-      // child conversations that point back via `parentConversationId`.
-      // The stored flag may be missing on conversations created before the flag
-      // was introduced or when the write failed silently at spawn time.
-      const enrichConversationsWithSubAgentFlag = async (
-        conversations: Document[],
-      ) => {
-        if (conversations.length === 0) return;
-        const conversationIds = conversations
-          .map((conversation) => (conversation as Record<string, unknown>).id as string)
-          .filter(Boolean);
-        if (conversationIds.length === 0) return;
-
-        try {
-          const parentFieldQuery = {
-            parentConversationId: { $in: conversationIds },
-            project,
-            username: usernameFilter,
-          };
-          const [agentParents, modelParents] = await Promise.all([
-            db
-              .collection(COLLECTIONS.AGENT_CONVERSATIONS)
-              .find(parentFieldQuery)
-              .project({ parentConversationId: 1 })
-              .toArray(),
-            db
-              .collection(COLLECTIONS.MODEL_CONVERSATIONS)
-              .find(parentFieldQuery)
-              .project({ parentConversationId: 1 })
-              .toArray(),
-          ]);
-
-          const parentIdSet = new Set<string>();
-          for (const childDocument of [...agentParents, ...modelParents]) {
-            const documentRecord = childDocument as Record<string, unknown>;
-            const linkId = documentRecord.parentConversationId as string | null;
-            if (linkId) parentIdSet.add(linkId);
-          }
-
-          if (parentIdSet.size > 0) {
-            for (const conversation of conversations) {
-              const conversationRecord = conversation as Record<string, unknown>;
-              if (parentIdSet.has(conversationRecord.id as string)) {
-                conversationRecord.hasSubAgents = true;
-              }
-            }
-          }
-        } catch (enrichmentError: unknown) {
-          logger.warn(
-            `Failed to enrich conversations with hasSubAgents flag: ${errorMessage(enrichmentError)}`,
-          );
-        }
-      };
-
       await Promise.all([
-        queryAndEnrichConversationsWithRequestCosts(modelConversations, false),
-        queryAndEnrichConversationsWithRequestCosts(agentConversations, true),
-        enrichConversationsWithSubAgentFlag(modelConversations),
-        enrichConversationsWithSubAgentFlag(agentConversations),
+        queryAndEnrichConversationsWithRequestCosts(
+          db,
+          modelConversations,
+          false,
+          project,
+          usernameFilter,
+        ),
+        queryAndEnrichConversationsWithRequestCosts(
+          db,
+          agentConversations,
+          true,
+          project,
+          usernameFilter,
+        ),
+        enrichConversationsWithSubAgentFlag(
+          db,
+          modelConversations,
+          project,
+          usernameFilter,
+        ),
+        enrichConversationsWithSubAgentFlag(
+          db,
+          agentConversations,
+          project,
+          usernameFilter,
+        ),
       ]);
 
-      // Derive hasSubAgents from the stored subAgents array (primary source
-      // of truth, written by BaseAgenticHarness.finalize) and strip the
-      // heavy array from the list response. The cross-reference enrichment
-      // above acts as a secondary fallback for conversations that predate the
-      // subAgents array or where finalize didn't run.
-      const deriveAndStripSubAgentsArray = (conversations: Document[]) => {
-        for (const conversation of conversations) {
-          const record = conversation as Record<string, unknown>;
-          const storedSubAgents = record.subAgents as unknown[] | undefined;
-          if (
-            storedSubAgents &&
-            Array.isArray(storedSubAgents) &&
-            storedSubAgents.length > 0
-          ) {
-            record.hasSubAgents = true;
-          }
-          delete record.subAgents;
-        }
-      };
       deriveAndStripSubAgentsArray(modelConversations);
       deriveAndStripSubAgentsArray(agentConversations);
 
-      // Merge and sort in memory by updatedAt descending
-      const merged = [
-        ...modelConversations.map((conversation) => ({
-          ...conversation,
-          type: "direct" as const,
-        })),
-        ...agentConversations.map((conversation) => ({
-          ...conversation,
-          type: "agent" as const,
-        })),
-      ] as (Document & { type: string })[];
-      merged.sort(
-        (firstConversation, secondConversation) =>
-          new Date(secondConversation.updatedAt as string).getTime() -
-          new Date(firstConversation.updatedAt as string).getTime(),
+      const { items, nextCursor, hasMore } = mergeAndPaginateConversations(
+        modelConversations,
+        agentConversations,
+        limit,
       );
-
-      const hasMore = merged.length > limit;
-      const items = hasMore ? merged.slice(0, limit) : merged;
-      const nextCursor = hasMore
-        ? (items[items.length - 1].updatedAt as string)
-        : null;
 
       res.json({ items, nextCursor, hasMore });
     } catch (error: unknown) {
