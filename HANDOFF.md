@@ -2,7 +2,65 @@
 part: Consumer apps
 status: shipped
 type: record
-updated: 2026-10-28
+updated: 2026-10-29
+---
+
+# HANDOFF — measured quality gates + model-agnostic harness (2026-10-29)
+
+First real measurement of this repo's code quality. The 2026-10-28 entry below
+claimed "0 functions over McCabe 30"; the first CRAP run contradicted it
+(19 over 30, max 91). Both are now true: **0 over 30**, measured.
+
+| metric | before (`266a0ef`) | after (`57572df`) |
+|---|---|---|
+| functions measured | 4,715 | 4,889 |
+| McCabe > 30 | 19 (max 91) | **0** |
+| CRAP > 60 | 374 | **353** (ratchet ceiling 360) |
+| coverage | stmts 44.77 / br 39.71 / fn 53.70 / lines 44.96 | **47.85 / 42.94 / 56.14 / 48.20** |
+| duplication (logic) | 2.94 % (205 clones) | **2.26 %** (177 clones) |
+| architecture | 3 `services-no-routes` errors, 109 cycles | **0 errors**, 137 warn (barrel cycles) |
+| dead code (knip) | 230 findings | 228 (0 unused files, 58 exports, 165 types, 5 dup) |
+| tests | 180 files / 1,930 | **193 files / 2,000** |
+| `npm run verify` | — | ~35 s |
+
+**Landed:** `scripts/quality/{crap,dry,arch,deadcode,prompt-budget}.mjs`,
+dependency-cruiser + knip configs, ESLint complexity ratchet, `npm run verify`,
+`.github/workflows/quality.yml` (push/PR gate + nightly full report). Chat
+generation moved to `src/core/chat/ChatGeneration.ts`, removing all three
+`services-no-routes` violations. Deduped admin query filters, definition
+registries, ToT/GoT plumbing, frontmatter parsing, somatic keyword effects.
+Provider payload builders + per-event stream reducers (anthropic/openai/google,
+MemoryConsolidation, RequestLogger, VllmModelSync). Routes: shared
+`parseCsvFilter`, definition router factory, handler decompositions
+(Audio/Platform/Conversations/Media/AdminConversation/Embed). Services:
+`ConversationService.appendMessages`, `ScheduledTaskService.tick`,
+`llama-cpp.getServerProps`, `EmbeddingService.generate`.
+
+**Model-agnostic harness:** catalog `ttsSteering` replaces
+`model.startsWith("inworld-tts-2")`; openai reasoning reads catalog `thinking`
+(unknown model → reasoning-safe path); `getModelProfile` is catalog-first
+(limits, `thinkingLevels`, `thinking`) with name patterns only as fallback.
+`code_health` tool (deterministic, in-process, no FS/shell/network) lets an
+agent measure the files it wrote before claiming done. `CriticGate` picks a
+different model of the same provider and reports `judgeIndependent`.
+Prompt budget gate: full tool catalog 12,888 tok vs compact 2,918 tok (22.6 %);
+10 descriptions over 600 chars (`canvas_add_widget` 6,862) reported, not gated.
+
+**Verified:** `npm run verify` exit 0; `quality:crap` 0 over cx 30 / 353 over
+CRAP 60 (ceiling 360); `quality:deadcode` 228; `quality:prompt` PASS. Deleted 5
+files with no importers (`db.ts`, `SkillService.ts`, `RepositoryMapService.ts`,
+`memory/index.ts`, `somatic/index.ts`) after a repo-wide grep; 2,000/2,000 tests
+still green. Reports: `.checks/quality-2026-10-30/`.
+
+**Deployed:** `main@57572df` → synology NAS, build 96 s, `/health` returns
+`{"status":"ok"}`. Live eval re-run on the deployed build follows below once it
+finishes.
+
+**Next session:** raise coverage where CRAP is high, then lower
+`--max-crap-count` (360 → 300 → …) and tighten ESLint `complexity` to error 20;
+fix real `no-circular` cycles; decide the 228 knip exports/types against
+`CONTRACT_OWNERSHIP.md`; add per-directory coverage floors.
+
 ---
 
 # HANDOFF — Phase 8 `/lego` CRAP Decomposition (2026-10-28)
