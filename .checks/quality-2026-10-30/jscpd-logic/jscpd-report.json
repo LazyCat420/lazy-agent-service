@@ -3176,18 +3176,18 @@
       "kind": "exact",
       "lines": 13,
       "secondFile": {
-        "end": 1375,
+        "end": 1376,
         "endLoc": {
           "column": 27,
-          "line": 1375,
-          "position": 43901
+          "line": 1376,
+          "position": 44113
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 1363,
+        "start": 1364,
         "startLoc": {
           "column": 23,
-          "line": 1363,
-          "position": 43551
+          "line": 1364,
+          "position": 43763
         }
       },
       "tokens": 82
@@ -4088,18 +4088,18 @@
       "kind": "exact",
       "lines": 8,
       "secondFile": {
-        "end": 1358,
+        "end": 1359,
         "endLoc": {
           "column": 53,
-          "line": 1358,
-          "position": 43323
+          "line": 1359,
+          "position": 43535
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 1351,
+        "start": 1352,
         "startLoc": {
           "column": 25,
-          "line": 1351,
-          "position": 42930
+          "line": 1352,
+          "position": 43142
         }
       },
       "tokens": 69
@@ -4240,18 +4240,18 @@
       "kind": "exact",
       "lines": 14,
       "secondFile": {
-        "end": 1381,
+        "end": 1382,
         "endLoc": {
           "column": 51,
-          "line": 1381,
-          "position": 44067
+          "line": 1382,
+          "position": 44279
         },
         "name": "routes/admin/AdminStatsRoutes.ts",
-        "start": 1368,
+        "start": 1369,
         "startLoc": {
           "column": 55,
-          "line": 1368,
-          "position": 43769
+          "line": 1369,
+          "position": 43981
         }
       },
       "tokens": 69
@@ -6728,16 +6728,16 @@
     }
   ],
   "statistics": {
-    "detectionDate": "2026-10-30T07:46:34.796Z",
+    "detectionDate": "2026-10-30T11:14:48.868Z",
     "formats": {
       "typescript": {
         "clones": 177,
         "duplicatedLines": 2476,
         "duplicatedTokens": 14707,
-        "lines": 109545,
+        "lines": 109546,
         "newClones": 0,
         "newDuplicatedLines": 0,
-        "percentage": 2.2602583413209185,
+        "percentage": 2.2602377083599583,
         "percentageTokens": 2.577719821293049,
         "sources": 360,
         "tokens": 570543
@@ -6747,10 +6747,10 @@
       "clones": 177,
       "duplicatedLines": 2476,
       "duplicatedTokens": 14707,
-      "lines": 109545,
+      "lines": 109546,
       "newClones": 0,
       "newDuplicatedLines": 0,
-      "percentage": 2.2602583413209185,
+      "percentage": 2.2602377083599583,
       "percentageTokens": 2.577719821293049,
       "sources": 360,
       "tokens": 570543

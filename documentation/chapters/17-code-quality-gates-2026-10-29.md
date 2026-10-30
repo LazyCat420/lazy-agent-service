@@ -118,7 +118,7 @@ scanner, so the quality gate lives in CI instead of a second local hook.
 | gate | threshold | blocks? |
 |---|---|---|
 | `npm run lint` | complexity warn **20**, depth 5, params 6, function lines 150 | warnings only (97 complexity warnings today) |
-| `npm run quality:crap` | 0 functions over cx 30; at most 360 functions over CRAP 60 (ratchet, lower as coverage rises) | yes |
+| `npm run quality:crap` | 0 functions over cx 30; at most **3** functions over CRAP 60 (ratchet; the `src/index.ts` bootstrap only) | yes |
 | `npm run quality:dry` | logic duplication ≤ 8 % (declarative tables excluded) | yes |
 | `npm run quality:arch` | 0 dependency errors | yes |
 | `npm run quality:prompt` | compact ≤ 50 % of full, full ≤ 15,000 tokens | yes |
@@ -130,11 +130,13 @@ does not run `prettier --check`: the repo has never been Prettier-formatted
 
 ## Remaining (ratchet plan)
 
-1. **0 functions over McCabe 30** now, but 353 are over CRAP 60 because their
-   coverage is 0–20 %. The lever is tests, not more decomposition: add
-   coverage where CRAP is high, then lower the `--max-crap-count` ceiling
-   (360 → 300 → …) and tighten the ESLint `complexity` rule from warn to
-   **error at 20**.
+1. **0 functions over McCabe 30; 3 over CRAP 60** (down from 353). Two
+   coverage waves (353 → 176 → 3) took statements from 47.85 % to 81.71 % and
+   functions from 56.14 % to 81.85 %; the ceiling is now 3. The three left are
+   the `src/index.ts` bootstrap (boot IIFE, 24 h interval, `listen` callback),
+   covered only by the live deploy. Next: extract them into an injectable
+   `bootstrap()` so the gate can be 0, then tighten the ESLint
+   `complexity` rule from warn to **error at 20** (97 functions sit at 21–30).
 2. 136 `no-circular` warnings: fix the real cycles, then make the rule an
    error; barrel-only cycles get an allowlist.
 3. 234 knip findings: delete unused exports/types in a dedicated batch and add

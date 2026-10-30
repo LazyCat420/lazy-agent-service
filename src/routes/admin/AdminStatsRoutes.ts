@@ -840,21 +840,22 @@ router.get(
         granularity: requestedGranularity,
       } = req.query;
 
+      // One clock reading for both ends: reading Date.now() twice made a
+      // `hours=24` span a few milliseconds longer than a day, which pushed it
+      // into the 3-day granularity tier (15min instead of 5min).
+      const nowMs = Date.now();
       let sinceDate: Date;
       let untilDate: Date | undefined;
       if (typeof from === "string") {
         sinceDate = new Date(from);
       } else {
-        sinceDate = new Date(
-          Date.now() - hoursToMs(parseInt(hours as string, 10)),
-        );
+        sinceDate = new Date(nowMs - hoursToMs(parseInt(hours as string, 10)));
       }
       if (typeof to === "string") {
         untilDate = new Date(to);
       }
 
-      const spanMs =
-        (untilDate ? untilDate.getTime() : Date.now()) - sinceDate.getTime();
+      const spanMs = (untilDate ? untilDate.getTime() : nowMs) - sinceDate.getTime();
 
       // ── Granularity tier definitions (ordered finest → coarsest) ──
       const TIER_KEYS = [

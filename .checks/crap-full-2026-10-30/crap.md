@@ -1,34 +1,34 @@
-# CRAP report (2026-10-30T07:48:26.489Z)
+# CRAP report (2026-10-30T11:11:13.603Z)
 
 Functions analysed: **4889** · coverage measured: 4889 · no coverage file entry: 0
 
 Thresholds: cx > 30 (max 9999 functions), CRAP > 60 (max 9999 functions)
-Over cx: **0** · over CRAP: **176**
+Over cx: **0** · over CRAP: **3**
 
 | CRAP | cx | cov | stmts | lines | file:line | function |
 |---|---|---|---|---|---|---|
-| 812 | 28 | 0 | 0/81 | 128 | src/routes/LmStudioRoutes.ts:111 | anonymous |
-| 702 | 26 | 0 | 0/45 | 94 | src/services/LocalToolRouter.ts:226 | routeStrainTool |
-| 702 | 26 | 0 | 0/78 | 193 | src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts:580 | runTreeOfThoughts |
-| 650 | 25 | 0 | 0/44 | 85 | src/services/MemoryService.ts:245 | store |
-| 650 | 25 | 0 | 0/56 | 196 | src/services/orchestrator/routers/HierarchicalAggregationRouter.ts:114 | execute |
-| 600 | 24 | 0 | 0/19 | 42 | src/routes/PlatformRoutes.ts:212 | combineUsageDocs |
-| 600 | 24 | 0 | 0/69 | 204 | src/services/harnesses/strategies/GraphOfThoughtsStrategy.ts:402 | runGraphOfThoughts |
-| 600 | 24 | 0 | 0/76 | 231 | src/services/orchestrator/routers/PeerToPeerRouter.ts:118 | execute |
-| 552 | 23 | 0 | 0/49 | 123 | src/routes/OrchestratorRoutes.ts:37 | anonymous |
-| 552 | 23 | 0 | 0/49 | 134 | src/services/conversation/ConversationService.ts:323 | getConversationStats |
 | 506 | 22 | 0 | 0/143 | 431 | src/index.ts:294 | anonymous |
-| 506 | 22 | 0 | 0/63 | 135 | src/services/harnesses/VisionLanguageHarness.ts:487 | run |
-| 506 | 22 | 0 | 0/56 | 154 | src/services/harnesses/lifecycle/PlanModeController.ts:280 | runPlanningPhase |
-| 462 | 21 | 0 | 0/47 | 129 | src/routes/admin/AdminAgentConversationRoutes.ts:24 | anonymous |
-| 462 | 21 | 0 | 0/81 | 206 | src/services/orchestrator/routers/CriticLoopRouter.ts:551 | executeJuryMode |
-| 420 | 20 | 0 | 0/12 | 96 | src/services/RequestLogger.ts:701 | logBackgroundLlmCall |
-| 420 | 20 | 0 | 0/33 | 117 | src/services/harnesses/lifecycle/SystemReminderExtractor.ts:44 | extractReminderViaLLM |
-| 420 | 20 | 0 | 0/23 | 30 | src/services/local-provider/index.ts:288 | _matchesFilter |
-| 420 | 20 | 0 | 0/32 | 47 | src/services/local-provider/normalizers.ts:21 | normalizeLmStudioModel |
-| 420 | 20 | 0 | 0/72 | 257 | src/services/orchestrator/routers/TournamentRouter.ts:163 | execute |
-| 380 | 19 | 0 | 0/29 | 135 | src/services/ConversationTimerService.ts:405 | executeAgenticLoop |
-| 342 | 18 | 0 | 0/36 | 69 | src/services/BackgroundHousekeepingService.ts:173 | pruneMinioOrphans |
-| 342 | 18 | 0 | 0/25 | 50 | src/services/local-provider/hfMetadata.ts:62 | enrichWithHuggingFace |
-| 342 | 18 | 0 | 0/42 | 136 | src/services/orchestrator/routers/MCTSRouter.ts:578 | execute |
-| 334.5 | 27 | 0.25 | 6/24 | 112 | src/services/AgentPersonaRegistry.ts:60 | registerCustom |
+| 72 | 8 | 0 | 0/19 | 49 | src/index.ts:492 | anonymous |
+| 72 | 8 | 0 | 0/32 | 65 | src/index.ts:659 | anonymous |
+| 57.5 | 10 | 0.22 | 9/41 | 140 | src/services/harnesses/BaseAgenticHarness.ts:176 | checkAndApplyToolSetChanges |
+| 57.3 | 8 | 0.083 | 1/12 | 17 | src/utils/SseUtilities.ts:250 | anonymous |
+| 56 | 7 | 0 | 0/14 | 64 | src/core/chat/ChatGeneration.ts:1194 | executeAuthorizedChatToolCall |
+| 56 | 7 | 0 | 0/22 | 30 | src/core/loop/RunawayStreamWatch.ts:152 | checkUniqueWindowRatio |
+| 56 | 7 | 0 | 0/18 | 52 | src/providers/anthropic.ts:138 | convertDataUrlToAnthropicBlock |
+| 56 | 7 | 0 | 0/9 | 16 | src/providers/anthropic.ts:191 | buildAnthropicMediaMessage |
+| 56 | 7 | 0 | 0/6 | 17 | src/providers/anthropic.ts:234 | buildAssistantThinkingOnlyMessage |
+| 56 | 7 | 0 | 0/18 | 63 | src/providers/lm-studio.ts:1545 | lmStudioCaptionImage |
+| 56 | 7 | 0 | 0/7 | 36 | src/providers/ollama.ts:365 | mapOllamaModelEntry |
+| 56 | 7 | 0 | 0/16 | 48 | src/providers/vllm.ts:256 | vllmCaptionImage |
+| 56 | 7 | 0 | 0/10 | 21 | src/routes/AgentMemoriesRoutes.ts:65 | anonymous |
+| 56 | 7 | 0 | 0/13 | 26 | src/routes/SettingsRoutes.ts:35 | anonymous |
+| 56 | 7 | 0 | 0/13 | 30 | src/routes/admin/AdminConversationRoutes.ts:676 | anonymous |
+| 56 | 7 | 0 | 0/13 | 23 | src/services/GlobalCapabilityExecutor.ts:559 | executeGroup |
+| 56 | 7 | 0 | 0/10 | 25 | src/services/ScheduledTaskService.ts:590 | listTasks |
+| 56 | 7 | 0 | 0/3 | 10 | src/services/harnesses/BaseAgenticHarness.ts:221 | anonymous |
+| 56 | 7 | 0 | 0/13 | 61 | src/services/local-provider/index.ts:463 | anonymous |
+| 56 | 7 | 0 | 0/9 | 18 | src/services/orchestrator/SubAgentFallback.ts:3 | getSubAgentFallback |
+| 56 | 7 | 0 | 0/12 | 20 | src/services/personas/utils.ts:46 | extractDomainKeywords |
+| 56 | 7 | 0 | 0/39 | 125 | src/utils/media.ts:167 | compressGifWithFfmpeg |
+| 56 | 7 | 0 | 0/25 | 67 | src/utils/media.ts:297 | compressWithSharp |
+| 55.9 | 9 | 0.167 | 3/18 | 29 | src/providers/anthropic.ts:100 | enforceImageSizeLimits |

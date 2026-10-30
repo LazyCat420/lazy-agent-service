@@ -2,8 +2,40 @@
 part: Consumer apps
 status: shipped
 type: record
-updated: 2026-10-29
+updated: 2026-10-30
 ---
+
+# HANDOFF — CRAP cleanup: 353 → 3 hot functions (2026-10-30)
+
+The CRAP debt left by the 2026-10-29 entry was paid down with coverage, not
+refactoring. Two waves of test-only slices (21 + 17 new test files, 1,306 tests)
+covered every function that was over CRAP 60 with zero coverage.
+
+| metric | 2026-10-29 (`57572df`) | 2026-10-30 (`HEAD`) |
+|---|---|---|
+| CRAP > 60 | 353 (ceiling 360) | **3** (ceiling 3) |
+| McCabe > 30 | 0 | **0** |
+| coverage stmts / br / fn / lines | 47.85 / 42.94 / 56.14 / 48.20 | **81.71 / 73.91 / 81.85 / 82.79** |
+| tests | 193 files / 2,000 | **239 files / 3,306** |
+| duplication (logic) | 2.26 % | 2.26 % (unchanged) |
+
+The 3 remaining are the process bootstrap in `src/index.ts`: the boot IIFE
+(cx 22), the 24-hour consolidation `setInterval` callback and the
+`server.listen` callback. They only run in the deployed process, so they are
+covered by the live deploy + `/health` check rather than by a unit test;
+extracting them into an injectable `bootstrap()` is the next step if the gate
+should reach 0.
+
+**Real bug found by the new tests:** `GET /admin/stats/timeline?hours=24`
+read `Date.now()` twice, so the span was a few milliseconds over a day and
+fell into the 3-day tier — it returned 15-minute buckets instead of 5-minute
+ones. Fixed in `AdminStatsRoutes.ts` by taking one clock reading; the new
+`AdminStatsCoverage.test.ts` pins it (it was intermittently green before,
+depending on whether both readings landed in the same millisecond).
+
+**Verified:** `npm run verify` exit 0 (3,306 tests, 0 lint errors);
+`npm run quality:crap` PASS with `--max-crap-count 3`; arch 0 errors;
+dry 2.26 %.
 
 # HANDOFF — measured quality gates + model-agnostic harness (2026-10-29)
 

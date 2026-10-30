@@ -159,6 +159,7 @@
         "src/routes/ScheduledTasksRoutes.ts",
         "src/services/WorkflowAssembler.ts",
         "src/websocket/index.ts",
+        "src/providers/__tests__/ProvidersCoverage2.test.ts",
         "src/routes/__tests__/AskUserApprovalBudgetRoutes.test.ts",
         "src/routes/__tests__/ConversationBudgetPause.test.ts",
         "src/services/__tests__/ToolOrchestratorClientSchemas.test.ts",
@@ -288,6 +289,8 @@
         "src/services/McpAdapter.ts",
         "src/services/WebhookDispatcher.ts",
         "src/websocket/index.ts",
+        "src/routes/__tests__/AdminCoverage2.test.ts",
+        "src/services/__tests__/LocalProviderCoverage2.test.ts",
         "src/services/harnesses/__tests__/messageArrayConstruction.test.ts"
       ],
       "orphan": false,
@@ -452,6 +455,7 @@
         "src/routes/__tests__/Harness2Routes.test.ts",
         "src/routes/__tests__/NativePrismExitRoutes.test.ts",
         "src/routes/__tests__/ObsidianCompletionRoutes.test.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts",
         "src/services/PromotionController.ts",
         "src/services/__tests__/DelegateTool.test.ts",
         "src/services/__tests__/McpStdioGuard.test.ts",
@@ -542,7 +546,8 @@
         "src/services/harness2/__tests__/Harness2.test.ts",
         "src/services/harness2/__tests__/Harness2Library.test.ts",
         "src/services/harness2/__tests__/Harness2Selection.test.ts",
-        "src/services/harnesses/__tests__/HarnessBattle.test.ts"
+        "src/services/harnesses/__tests__/HarnessBattle.test.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -859,6 +864,7 @@
         "src/services/__tests__/LocalToolVerification.test.ts",
         "src/services/__tests__/McpGaps.test.ts",
         "src/services/__tests__/McpStdioGuard.test.ts",
+        "src/services/__tests__/MiscPlatformCoverage2.test.ts",
         "src/services/__tests__/ObsidianCompletionJobs.test.ts"
       ],
       "orphan": false,
@@ -1321,7 +1327,8 @@
       "dependents": [
         "src/utils/logger.ts",
         "src/middleware/AuthMiddleware.ts",
-        "src/middleware/RequestLoggerMiddleware.ts"
+        "src/middleware/RequestLoggerMiddleware.ts",
+        "src/middleware/__tests__/RequestLoggerMiddlewareCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -3074,7 +3081,8 @@
         "src/services/harnesses/BaseAgenticHarness.ts",
         "src/services/harnesses/lifecycle/PostExecutionEmitter.ts",
         "src/routes/WebhookRoutes.ts",
-        "src/services/WebhookDispatcher.ts"
+        "src/services/WebhookDispatcher.ts",
+        "src/services/__tests__/MiscPlatformCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -3333,6 +3341,7 @@
         "src/routes/AudioRoutes.ts",
         "src/services/WorkflowExecutionService.ts",
         "src/routes/__tests__/AudioRoutesCoverage.test.ts",
+        "src/services/__tests__/NewsEmbeddingCoverage2.test.ts",
         "src/services/__tests__/WorkflowExecutionCoverage.test.ts"
       ],
       "orphan": false,
@@ -4081,6 +4090,7 @@
         "src/services/harnesses/strategies/shared.ts",
         "src/routes/AudioRoutes.ts",
         "src/websocket/index.ts",
+        "src/services/__tests__/MiscServicesCoverage2.test.ts",
         "src/services/__tests__/RequestLoggerPrismParity.test.ts"
       ],
       "orphan": false,
@@ -4252,7 +4262,8 @@
         "src/services/__tests__/CompactionPair.test.ts",
         "src/services/compact/__tests__/RecencyProtection.test.ts",
         "src/services/harnesses/__tests__/microCompactionGating.test.ts",
-        "src/utils/__tests__/ToolResultBounding.test.ts"
+        "src/utils/__tests__/ToolResultBounding.test.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -4687,6 +4698,7 @@
       ],
       "dependents": [
         "src/services/conversation/index.ts",
+        "src/services/__tests__/ConversationCoverage2.test.ts",
         "src/services/conversation/__tests__/ResumeMessages.test.ts"
       ],
       "orphan": false,
@@ -4958,7 +4970,8 @@
       ],
       "dependents": [
         "src/services/conversation/index.ts",
-        "src/services/conversation/ConversationService.ts"
+        "src/services/conversation/ConversationService.ts",
+        "src/services/__tests__/ConversationCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -5066,7 +5079,8 @@
         "src/routes/FilesRoutes.ts",
         "src/routes/WorkflowsRoutes.ts",
         "src/services/WorkflowExecutionService.ts",
-        "src/websocket/index.ts"
+        "src/websocket/index.ts",
+        "src/services/__tests__/MiscPlatformCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -6107,6 +6121,7 @@
         "src/services/WebExtractService.ts",
         "src/services/compact/CompactionService.ts",
         "src/core/loop/__tests__/CoreLoopV2Upgrades.test.ts",
+        "src/services/__tests__/AgenticPlatformCoverage2.test.ts",
         "src/services/__tests__/CompactionPair.test.ts",
         "src/services/__tests__/DynamicModelResolver.aux.test.ts"
       ],
@@ -6710,11 +6725,14 @@
         "src/services/orchestrator/InstanceLoadBalancer.ts",
         "src/services/orchestrator/InstanceResolver.ts",
         "src/services/local-provider/index.ts",
+        "src/core/loop/__tests__/AgentRouteAdapterCoverage2.test.ts",
         "src/core/loop/__tests__/CoreLoop.stress.test.ts",
         "src/core/loop/__tests__/fakes.ts",
         "src/core/loop/__tests__/CoreLoop.test.ts",
         "src/core/loop/__tests__/RunsAdapter.test.ts",
-        "src/services/wallgarden/WallgardenService.ts"
+        "src/services/wallgarden/WallgardenService.ts",
+        "src/providers/__tests__/ProvidersCoverage2.test.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -7024,6 +7042,7 @@
       "dependents": [
         "src/providers/instance-registry.ts",
         "src/providers/__tests__/LlamaCppServerProps.test.ts",
+        "src/providers/__tests__/ProvidersCoverage2.test.ts",
         "src/providers/__tests__/StreamCharacterization.test.ts"
       ],
       "orphan": false,
@@ -7308,7 +7327,8 @@
         "src/utils/__tests__/MalformedToolCallArgs.test.ts",
         "src/utils/__tests__/ReasoningRoundTrip.test.ts",
         "src/utils/__tests__/StreamRetryTiming.test.ts",
-        "src/utils/__tests__/ToolCallMarkupRecovery.test.ts"
+        "src/utils/__tests__/ToolCallMarkupRecovery.test.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -7423,7 +7443,8 @@
         "src/utils/openai-compat.ts",
         "src/providers/anthropic.ts",
         "src/providers/openai.ts",
-        "src/services/MediaResolutionService.ts"
+        "src/services/MediaResolutionService.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -7467,7 +7488,8 @@
         "src/services/BackgroundHousekeepingService.ts",
         "src/services/McpAdapter.ts",
         "src/routes/__tests__/PlatformRoutesTradingDb.test.ts",
-        "src/services/__tests__/WebExtractService.test.ts"
+        "src/services/__tests__/WebExtractService.test.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -8076,7 +8098,8 @@
       "dependents": [
         "src/providers/lm-studio.ts",
         "src/services/local-provider/vramEstimation.ts",
-        "src/routes/admin/AdminLmStudioRoutes.ts"
+        "src/routes/admin/AdminLmStudioRoutes.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -9332,6 +9355,7 @@
       ],
       "dependents": [
         "src/providers/index.ts",
+        "src/providers/__tests__/ProvidersCoverage2.test.ts",
         "src/providers/__tests__/StreamCharacterization.test.ts"
       ],
       "orphan": false,
@@ -9605,7 +9629,8 @@
         }
       ],
       "dependents": [
-        "src/providers/index.ts"
+        "src/providers/index.ts",
+        "src/providers/__tests__/ProvidersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -10141,7 +10166,8 @@
       ],
       "dependents": [
         "src/providers/index.ts",
-        "src/providers/__tests__/InworldTtsSteering.test.ts"
+        "src/providers/__tests__/InworldTtsSteering.test.ts",
+        "src/providers/__tests__/ProvidersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -11284,6 +11310,7 @@
         "src/platform/__tests__/LoopResilience.test.ts",
         "src/platform/__tests__/PlanSummaryCompaction.test.ts",
         "src/routes/__tests__/DurableApprovals.test.ts",
+        "src/services/__tests__/AgenticPlatformCoverage2.test.ts",
         "src/services/__tests__/ScheduledTaskModelSync.test.ts"
       ],
       "orphan": false,
@@ -11572,6 +11599,7 @@
       ],
       "dependents": [
         "src/services/AgenticLoopService.ts",
+        "src/core/loop/__tests__/AgentRouteAdapterCoverage2.test.ts",
         "src/core/loop/__tests__/CoreLoopV2Upgrades.test.ts",
         "src/routes/AgentRoutes.ts"
       ],
@@ -12617,7 +12645,8 @@
         "src/routes/CustomAgentsRoutes.ts",
         "src/services/ClientPersonaSync.ts",
         "src/websocket/index.ts",
-        "src/services/__tests__/ClientPersonaSync.test.ts"
+        "src/services/__tests__/ClientPersonaSync.test.ts",
+        "src/services/__tests__/MiscServicesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -14226,7 +14255,8 @@
         }
       ],
       "dependents": [
-        "src/services/personas/index.ts"
+        "src/services/personas/index.ts",
+        "src/services/__tests__/MiscPlatformCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -15084,6 +15114,7 @@
         "src/services/TradingToolStacks.ts",
         "src/services/__tests__/BridgeCacheAuditCharacterization.test.ts",
         "src/services/__tests__/CodeHealthRoute.test.ts",
+        "src/services/__tests__/LocalToolRouterCoverage2.test.ts",
         "src/services/__tests__/UnscrapableDomains.test.ts",
         "src/services/__tests__/WebSearchRoute.test.ts",
         "src/services/__tests__/WriteTimeoutAudit.test.ts"
@@ -15319,6 +15350,7 @@
         "src/index.ts",
         "src/routes/McpOAuthRoutes.ts",
         "src/routes/McpServersRoutes.ts",
+        "src/services/__tests__/AgenticPlatformCoverage2.test.ts",
         "src/services/__tests__/McpGaps.test.ts",
         "src/services/__tests__/McpServersPort.test.ts",
         "src/services/__tests__/McpStdioGuard.test.ts"
@@ -15630,6 +15662,7 @@
       ],
       "dependents": [
         "src/services/LocalToolRouter.ts",
+        "src/services/__tests__/NewsEmbeddingCoverage2.test.ts",
         "src/services/__tests__/NewsSearchTop.test.ts"
       ],
       "orphan": false,
@@ -15811,7 +15844,8 @@
         "src/services/harnesses/lifecycle/Finalizer.ts",
         "src/services/harnesses/lifecycle/ToolRetryInterceptor.ts",
         "src/platform/__tests__/HarnessTracePropagation.test.ts",
-        "src/platform/__tests__/PlatformArchitecture.test.ts"
+        "src/platform/__tests__/PlatformArchitecture.test.ts",
+        "src/platform/trace/__tests__/HarnessInstrumenterCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -17341,7 +17375,8 @@
         "src/services/harnesses/lifecycle/ToolExecutor.ts",
         "src/platform/__tests__/HarnessTracePropagation.test.ts",
         "src/platform/__tests__/PlatformArchitecture.test.ts",
-        "src/platform/__tests__/ToolExecutionErrorResultSpan.test.ts"
+        "src/platform/__tests__/ToolExecutionErrorResultSpan.test.ts",
+        "src/platform/trace/__tests__/HarnessInstrumenterCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -17437,7 +17472,8 @@
         "src/services/orchestrator/InstanceResolver.ts",
         "src/services/compact/CompactionService.ts",
         "src/services/MemoryExtractor.ts",
-        "src/services/MemoryConsolidationService.ts"
+        "src/services/MemoryConsolidationService.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -17745,7 +17781,8 @@
         "src/services/orchestrator/routers/PeerToPeerRouter.ts",
         "src/services/orchestrator/routers/SequentialRouter.ts",
         "src/services/orchestrator/routers/TournamentRouter.ts",
-        "src/services/orchestrator/SubAgentTelemetryEmitter.ts"
+        "src/services/orchestrator/SubAgentTelemetryEmitter.ts",
+        "src/services/__tests__/OrchestratorHelpersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -19755,6 +19792,7 @@
         "src/services/RunExecutionEngine.ts",
         "src/core/loop/__tests__/CoreLoopV2Upgrades.test.ts",
         "src/services/__tests__/EvalChaosCapabilities.test.ts",
+        "src/services/__tests__/MiscPlatformCoverage2.test.ts",
         "src/services/__tests__/ReadPageHonesty.test.ts",
         "src/services/__tests__/ToolFailureAsResult.test.ts"
       ],
@@ -20184,6 +20222,7 @@
       "dependents": [
         "src/services/ToolOrchestratorService.ts",
         "src/services/GlobalCapabilityExecutor.ts",
+        "src/services/__tests__/MiscServicesCoverage2.test.ts",
         "src/services/__tests__/UnscrapableDomains.test.ts",
         "src/services/__tests__/WebExtractService.test.ts"
       ],
@@ -20654,7 +20693,8 @@
       ],
       "dependents": [
         "src/services/OrchestratorService.ts",
-        "src/services/orchestrator/InstanceResolver.ts"
+        "src/services/orchestrator/InstanceResolver.ts",
+        "src/services/__tests__/OrchestratorHelpersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -20785,7 +20825,8 @@
         }
       ],
       "dependents": [
-        "src/services/OrchestratorService.ts"
+        "src/services/OrchestratorService.ts",
+        "src/services/__tests__/OrchestratorRoutersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -21168,7 +21209,8 @@
         }
       ],
       "dependents": [
-        "src/services/OrchestratorService.ts"
+        "src/services/OrchestratorService.ts",
+        "src/services/__tests__/OrchestratorRoutersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -21333,7 +21375,8 @@
         }
       ],
       "dependents": [
-        "src/services/OrchestratorService.ts"
+        "src/services/OrchestratorService.ts",
+        "src/services/__tests__/OrchestratorRoutersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -21413,7 +21456,8 @@
         }
       ],
       "dependents": [
-        "src/services/OrchestratorService.ts"
+        "src/services/OrchestratorService.ts",
+        "src/services/__tests__/OrchestratorRoutersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -21578,7 +21622,8 @@
         }
       ],
       "dependents": [
-        "src/services/OrchestratorService.ts"
+        "src/services/OrchestratorService.ts",
+        "src/services/__tests__/OrchestratorRoutersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -21728,7 +21773,8 @@
         }
       ],
       "dependents": [
-        "src/services/OrchestratorService.ts"
+        "src/services/OrchestratorService.ts",
+        "src/services/__tests__/OrchestratorRoutersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -21878,7 +21924,8 @@
         }
       ],
       "dependents": [
-        "src/services/OrchestratorService.ts"
+        "src/services/OrchestratorService.ts",
+        "src/services/__tests__/OrchestratorRoutersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -22043,7 +22090,8 @@
         }
       ],
       "dependents": [
-        "src/services/OrchestratorService.ts"
+        "src/services/OrchestratorService.ts",
+        "src/services/__tests__/OrchestratorRoutersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -22105,7 +22153,8 @@
         }
       ],
       "dependents": [
-        "src/services/OrchestratorService.ts"
+        "src/services/OrchestratorService.ts",
+        "src/services/__tests__/OrchestratorHelpersCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -22315,6 +22364,7 @@
         "src/services/ToolOrchestratorService.ts",
         "src/index.ts",
         "src/routes/ExecuteRoutes.ts",
+        "src/services/__tests__/PrismProxyCoverage2.test.ts",
         "src/services/prism/__tests__/PrismProxySessions.test.ts"
       ],
       "orphan": false,
@@ -22560,6 +22610,7 @@
         "src/services/McpAdapter.ts",
         "src/services/vllm/VllmShimService.ts",
         "src/services/TradingToolStream.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts",
         "src/services/__tests__/McpAuditCharacterization.test.ts",
         "src/services/__tests__/NativeTradingBoundary.test.ts",
         "src/services/__tests__/ProbeFault.test.ts",
@@ -23109,6 +23160,7 @@
         "src/routes/__tests__/ConversationBudgetPause.test.ts",
         "src/routes/__tests__/DurableApprovals.test.ts",
         "src/services/__tests__/BaseAgenticHarnessCoverage.test.ts",
+        "src/services/__tests__/HarnessLoopCoverage2.test.ts",
         "src/services/__tests__/SoftDeadline.test.ts",
         "src/services/compact/__tests__/VerbatimOriginals.test.ts",
         "src/services/harnesses/__tests__/CodeInterpreter.test.ts",
@@ -23329,6 +23381,7 @@
       "dependents": [
         "src/services/AgenticLoopService.ts",
         "src/services/harnesses/BaseAgenticHarness.ts",
+        "src/services/__tests__/AgenticPlatformCoverage2.test.ts",
         "src/services/__tests__/CognitiveToolsAlwaysAvailable.test.ts",
         "src/services/__tests__/OwnServiceGrant.test.ts",
         "src/services/__tests__/ReasoningEffortPassthrough.test.ts"
@@ -23359,6 +23412,7 @@
         "src/services/harnesses/lifecycle/PlanModeController.ts",
         "src/routes/__tests__/AskUserApprovalBudgetRoutes.test.ts",
         "src/routes/__tests__/DurableApprovals.test.ts",
+        "src/services/__tests__/HarnessLifecycleCoverage2.test.ts",
         "src/services/harnesses/__tests__/ToolExecutorAuthorization.test.ts"
       ],
       "orphan": false,
@@ -25741,7 +25795,8 @@
         "src/services/harnesses/lifecycle/ContextPressureManager.ts",
         "src/services/compact/__tests__/RecencyProtection.test.ts",
         "src/services/compact/__tests__/VerbatimOriginals.test.ts",
-        "src/services/harnesses/__tests__/microCompactionGating.test.ts"
+        "src/services/harnesses/__tests__/microCompactionGating.test.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -26029,7 +26084,8 @@
       ],
       "dependents": [
         "src/core/chat/ChatGeneration.ts",
-        "src/services/harnesses/BaseAgenticHarness.ts"
+        "src/services/harnesses/BaseAgenticHarness.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -27819,7 +27875,8 @@
         "src/services/harnesses/ReActHarness.ts",
         "src/services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
         "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "src/services/harnesses/VisionLanguageHarness.ts"
+        "src/services/harnesses/VisionLanguageHarness.ts",
+        "src/services/__tests__/HarnessLifecycleCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -28634,7 +28691,8 @@
       ],
       "dependents": [
         "src/services/compact/CompactionService.ts",
-        "src/services/harnesses/lifecycle/HookInitializer.ts"
+        "src/services/harnesses/lifecycle/HookInitializer.ts",
+        "src/services/__tests__/MemoryCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -29298,7 +29356,8 @@
         }
       ],
       "dependents": [
-        "src/services/MemoryConsolidationService.ts"
+        "src/services/MemoryConsolidationService.ts",
+        "src/services/__tests__/MiscPlatformCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -29393,7 +29452,8 @@
         "src/services/memory/ConsolidationPrompts.ts",
         "src/services/memory/ClusterDetection.ts",
         "src/services/memory/ConsolidationTracker.ts",
-        "src/services/memory/ConversationalMemoryPartitioner.ts"
+        "src/services/memory/ConversationalMemoryPartitioner.ts",
+        "src/services/__tests__/MiscPlatformCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -29778,7 +29838,8 @@
         "src/services/system-prompt/SkillMemoryScorer.ts",
         "src/index.ts",
         "src/routes/AgentMemoriesRoutes.ts",
-        "src/routes/MemoryRoutes.ts"
+        "src/routes/MemoryRoutes.ts",
+        "src/services/__tests__/MemoryCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -30000,7 +30061,8 @@
         "src/routes/EmbedRoutes.ts",
         "src/routes/OpenAIEmbeddingsRoutes.ts",
         "src/routes/SkillsRoutes.ts",
-        "src/services/WorkflowExecutionService.ts"
+        "src/services/WorkflowExecutionService.ts",
+        "src/services/__tests__/NewsEmbeddingCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -31593,6 +31655,7 @@
       "dependents": [
         "src/services/harnesses/lifecycle/HookInitializer.ts",
         "src/routes/ConfigRoutes.ts",
+        "src/services/__tests__/SystemPromptCoverage2.test.ts",
         "src/services/harnesses/__tests__/messageArrayConstruction.test.ts",
         "src/services/system-prompt/__tests__/CurrentDate.test.ts",
         "src/services/system-prompt/__tests__/localeAssembly.test.ts",
@@ -31887,7 +31950,8 @@
       "dependents": [
         "src/services/system-prompt/index.ts",
         "src/index.ts",
-        "src/platform/__tests__/SomaticKeywordEffects.test.ts"
+        "src/platform/__tests__/SomaticKeywordEffects.test.ts",
+        "src/services/__tests__/SomaticCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -31942,7 +32006,8 @@
       ],
       "dependents": [
         "src/services/somatic/SomaticStateService.ts",
-        "src/services/somatic/EmotionalStateEngine.ts"
+        "src/services/somatic/EmotionalStateEngine.ts",
+        "src/services/__tests__/SomaticCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -32100,6 +32165,7 @@
       "dependents": [
         "src/services/harnesses/lifecycle/HookInitializer.ts",
         "src/services/system-prompt/index.ts",
+        "src/services/__tests__/NewsEmbeddingCoverage2.test.ts",
         "src/services/system-prompt/__tests__/tradingLearnedState.test.ts"
       ],
       "orphan": false,
@@ -32212,7 +32278,8 @@
         }
       ],
       "dependents": [
-        "src/services/system-prompt/index.ts"
+        "src/services/system-prompt/index.ts",
+        "src/services/__tests__/SystemPromptCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -32224,6 +32291,7 @@
         "src/services/system-prompt/index.ts",
         "src/services/system-prompt/DirectoryTreeFormatter.ts",
         "src/services/system-prompt/SkillMemoryScorer.ts",
+        "src/services/__tests__/SystemPromptCoverage2.test.ts",
         "src/services/system-prompt/__tests__/CurrentDate.test.ts",
         "src/services/system-prompt/__tests__/localeAssembly.test.ts",
         "src/services/system-prompt/__tests__/tradingLearnedState.test.ts"
@@ -32390,6 +32458,7 @@
       ],
       "dependents": [
         "src/services/system-prompt/index.ts",
+        "src/services/__tests__/SystemPromptCoverage2.test.ts",
         "src/services/system-prompt/__tests__/tradingLearnedState.test.ts"
       ],
       "orphan": false,
@@ -32521,6 +32590,7 @@
       ],
       "dependents": [
         "src/services/harnesses/lifecycle/HookInitializer.ts",
+        "src/services/__tests__/HarnessLifecycleCoverage2.test.ts",
         "src/services/harnesses/lifecycle/__tests__/IndependentJudge.test.ts"
       ],
       "orphan": false,
@@ -32644,7 +32714,8 @@
         "src/services/harnesses/ReActHarness.ts",
         "src/services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
         "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "src/services/harnesses/VisionLanguageHarness.ts"
+        "src/services/harnesses/VisionLanguageHarness.ts",
+        "src/services/__tests__/HarnessLifecycleCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -32813,7 +32884,8 @@
         "src/services/harnesses/ReActHarness.ts",
         "src/services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
         "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "src/services/harnesses/VisionLanguageHarness.ts"
+        "src/services/harnesses/VisionLanguageHarness.ts",
+        "src/services/__tests__/HarnessLifecycleCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -34656,6 +34728,7 @@
       "dependents": [
         "src/services/harnesses/HarnessRegistry.ts",
         "src/services/__tests__/BaseAgenticHarnessCoverage.test.ts",
+        "src/services/__tests__/HarnessLoopCoverage2.test.ts",
         "src/services/__tests__/SoftDeadline.test.ts",
         "src/services/harnesses/__tests__/EmptyOutputRetry.test.ts",
         "src/services/harnesses/__tests__/HarnessBattle.test.ts"
@@ -35169,6 +35242,7 @@
         "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
         "src/services/harnesses/VisionLanguageHarness.ts",
         "src/routes/__tests__/DurableApprovals.test.ts",
+        "src/services/__tests__/HarnessLifecycleCoverage2.test.ts",
         "src/services/harnesses/__tests__/SystemPathAuthorization.test.ts"
       ],
       "orphan": false,
@@ -35334,7 +35408,8 @@
       "dependents": [
         "src/services/harnesses/ReActHarness.ts",
         "src/services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts"
+        "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
+        "src/services/__tests__/HarnessLifecycleCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -35430,7 +35505,8 @@
         }
       ],
       "dependents": [
-        "src/services/harnesses/lifecycle/SystemReminderInjector.ts"
+        "src/services/harnesses/lifecycle/SystemReminderInjector.ts",
+        "src/services/__tests__/HarnessLifecycleCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -35512,7 +35588,8 @@
         "src/services/harnesses/ReActHarness.ts",
         "src/services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
         "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "src/services/harnesses/VisionLanguageHarness.ts"
+        "src/services/harnesses/VisionLanguageHarness.ts",
+        "src/services/__tests__/HarnessLifecycleCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -36984,7 +37061,8 @@
         }
       ],
       "dependents": [
-        "src/services/harnesses/ReActHarness.ts"
+        "src/services/harnesses/ReActHarness.ts",
+        "src/services/__tests__/HarnessStrategiesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -37252,7 +37330,8 @@
       ],
       "dependents": [
         "src/services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
-        "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts"
+        "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
+        "src/services/__tests__/HarnessStrategiesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -38419,7 +38498,8 @@
         }
       ],
       "dependents": [
-        "src/services/harnesses/ReActHarness.ts"
+        "src/services/harnesses/ReActHarness.ts",
+        "src/services/__tests__/HarnessStrategiesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -39375,7 +39455,8 @@
         }
       ],
       "dependents": [
-        "src/services/harnesses/HarnessRegistry.ts"
+        "src/services/harnesses/HarnessRegistry.ts",
+        "src/services/__tests__/HarnessLoopCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -39586,7 +39667,8 @@
         "src/routes/ConfigRoutes.ts",
         "src/routes/Harness2Routes.ts",
         "src/routes/LmStudioRoutes.ts",
-        "src/routes/__tests__/Harness2Routes.test.ts"
+        "src/routes/__tests__/Harness2Routes.test.ts",
+        "src/services/__tests__/LocalProviderCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -39647,7 +39729,8 @@
         }
       ],
       "dependents": [
-        "src/services/local-provider/index.ts"
+        "src/services/local-provider/index.ts",
+        "src/services/__tests__/LocalProviderCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -39669,7 +39752,8 @@
         "src/services/local-provider/index.ts",
         "src/services/local-provider/hfMetadata.ts",
         "src/services/local-provider/normalizers.ts",
-        "src/services/local-provider/vramEstimation.ts"
+        "src/services/local-provider/vramEstimation.ts",
+        "src/services/__tests__/LocalProviderCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -39764,7 +39848,8 @@
         }
       ],
       "dependents": [
-        "src/services/local-provider/index.ts"
+        "src/services/local-provider/index.ts",
+        "src/services/__tests__/LocalProviderCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -39808,7 +39893,8 @@
         }
       ],
       "dependents": [
-        "src/services/local-provider/normalizers.ts"
+        "src/services/local-provider/normalizers.ts",
+        "src/services/__tests__/LocalProviderCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -39869,7 +39955,8 @@
         }
       ],
       "dependents": [
-        "src/services/local-provider/index.ts"
+        "src/services/local-provider/index.ts",
+        "src/services/__tests__/LocalProviderCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -39983,7 +40070,8 @@
       ],
       "dependents": [
         "src/core/chat/ChatGeneration.ts",
-        "src/services/WorkflowExecutionService.ts"
+        "src/services/WorkflowExecutionService.ts",
+        "src/services/__tests__/NewsEmbeddingCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -40239,7 +40327,8 @@
       "dependencies": [],
       "dependents": [
         "src/types/index.ts",
-        "src/utils/SseUtilities.ts"
+        "src/utils/SseUtilities.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -40274,11 +40363,13 @@
         "src/services/ScheduledTaskService.ts",
         "src/services/wallgarden/WallgardenService.ts",
         "src/services/WorkflowExecutionService.ts",
+        "src/services/__tests__/WallgardenCoverage2.test.ts",
         "src/services/wallgarden/__tests__/JetsonGate.test.ts",
         "src/services/wallgarden/__tests__/JetsonPin.test.ts",
         "src/services/wallgarden/__tests__/TopicOutcomes.test.ts",
         "src/services/wallgarden/__tests__/TopicRoles.test.ts",
-        "src/services/wallgarden/__tests__/WallgardenNoPrismOut.test.ts"
+        "src/services/wallgarden/__tests__/WallgardenNoPrismOut.test.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -40306,6 +40397,67 @@
             "import"
           ],
           "resolved": "src/core/chat/ChatGeneration.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/core/loop/__tests__/AgentRouteAdapterCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../../../types/ProviderTypes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/types/ProviderTypes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../AgentRouteAdapter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/core/loop/AgentRouteAdapter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../AgentRouteAdapter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/core/loop/AgentRouteAdapter.ts",
           "coreModule": false,
           "followable": true,
           "couldNotResolve": false,
@@ -42387,7 +42539,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/middleware/__tests__/RequestLoggerMiddlewareCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -42645,7 +42798,8 @@
         }
       ],
       "dependents": [
-        "src/routes/AdminRoutes.ts"
+        "src/routes/AdminRoutes.ts",
+        "src/routes/__tests__/AdminCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -42837,7 +42991,8 @@
         }
       ],
       "dependents": [
-        "src/routes/AdminRoutes.ts"
+        "src/routes/AdminRoutes.ts",
+        "src/routes/__tests__/AdminCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -43018,7 +43173,8 @@
       ],
       "dependents": [
         "src/routes/AdminRoutes.ts",
-        "src/routes/__tests__/AdminConversationList.test.ts"
+        "src/routes/__tests__/AdminConversationList.test.ts",
+        "src/routes/__tests__/AdminCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -43317,7 +43473,8 @@
       "dependents": [
         "src/index.ts",
         "src/routes/admin/AdminConversationRoutes.ts",
-        "src/routes/admin/AdminSystemRoutes.ts"
+        "src/routes/admin/AdminSystemRoutes.ts",
+        "src/services/__tests__/MiscServicesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -43448,7 +43605,8 @@
         }
       ],
       "dependents": [
-        "src/routes/AdminRoutes.ts"
+        "src/routes/AdminRoutes.ts",
+        "src/routes/__tests__/AdminCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -43543,7 +43701,8 @@
         }
       ],
       "dependents": [
-        "src/routes/AdminRoutes.ts"
+        "src/routes/AdminRoutes.ts",
+        "src/routes/__tests__/AdminCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -43819,7 +43978,8 @@
         }
       ],
       "dependents": [
-        "src/routes/AdminRoutes.ts"
+        "src/routes/AdminRoutes.ts",
+        "src/routes/__tests__/AdminCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -43992,7 +44152,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -44379,7 +44540,8 @@
         "src/routes/ChatRoutes.ts",
         "src/routes/ConversationExecutionRoute.ts",
         "src/routes/LmStudioRoutes.ts",
-        "src/platform/__tests__/HarnessTracePropagation.test.ts"
+        "src/platform/__tests__/HarnessTracePropagation.test.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -45471,7 +45633,8 @@
       "dependents": [
         "src/index.ts",
         "src/routes/__tests__/AskUserApprovalBudgetRoutes.test.ts",
-        "src/routes/__tests__/DurableApprovals.test.ts"
+        "src/routes/__tests__/DurableApprovals.test.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -45921,7 +46084,8 @@
       ],
       "dependents": [
         "src/index.ts",
-        "src/routes/ConversationsRoutes.ts"
+        "src/routes/ConversationsRoutes.ts",
+        "src/services/__tests__/ConversationTimerCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -46189,6 +46353,7 @@
         "src/index.ts",
         "src/services/ConversationTimerService.ts",
         "src/routes/ScheduledTasksRoutes.ts",
+        "src/services/__tests__/MiscPlatformCoverage2.test.ts",
         "src/services/__tests__/ScheduledTaskDue.test.ts",
         "src/services/__tests__/ScheduledTaskModelSync.test.ts"
       ],
@@ -46199,7 +46364,8 @@
       "source": "src/utils/RecurrenceMatcher.ts",
       "dependencies": [],
       "dependents": [
-        "src/services/ScheduledTaskService.ts"
+        "src/services/ScheduledTaskService.ts",
+        "src/utils/__tests__/UtilsCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -46409,7 +46575,8 @@
       ],
       "dependents": [
         "src/index.ts",
-        "src/routes/__tests__/NativePrismExitRoutes.test.ts"
+        "src/routes/__tests__/NativePrismExitRoutes.test.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -46770,7 +46937,8 @@
       ],
       "dependents": [
         "src/index.ts",
-        "src/routes/__tests__/ExecuteApiKey.test.ts"
+        "src/routes/__tests__/ExecuteApiKey.test.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -46814,7 +46982,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -46887,7 +47056,8 @@
       ],
       "dependents": [
         "src/routes/ExperimentRoutes.ts",
-        "src/services/AttributionAnalyzer.ts"
+        "src/services/AttributionAnalyzer.ts",
+        "src/services/__tests__/MiscServicesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -47809,7 +47979,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -48186,7 +48357,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -48609,7 +48781,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -48756,7 +48929,8 @@
       ],
       "dependents": [
         "src/index.ts",
-        "src/routes/__tests__/PlatformRoutesTradingDb.test.ts"
+        "src/routes/__tests__/PlatformRoutesTradingDb.test.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -48946,7 +49120,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -49261,7 +49436,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -49502,7 +49678,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -49753,7 +49930,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -50030,7 +50208,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -50103,6 +50282,7 @@
       "dependents": [
         "src/routes/WallgardenRoutes.ts",
         "src/services/wallgarden/WallgardenService.ts",
+        "src/services/__tests__/WallgardenCoverage2.test.ts",
         "src/services/wallgarden/__tests__/JetsonGate.test.ts"
       ],
       "orphan": false,
@@ -50218,6 +50398,7 @@
       ],
       "dependents": [
         "src/routes/WallgardenRoutes.ts",
+        "src/services/__tests__/WallgardenCoverage2.test.ts",
         "src/services/wallgarden/__tests__/JetsonGate.test.ts",
         "src/services/wallgarden/__tests__/JetsonPin.test.ts",
         "src/services/wallgarden/__tests__/TopicOutcomes.test.ts",
@@ -50353,7 +50534,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/routes/__tests__/RoutesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -51075,7 +51257,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/services/__tests__/MiscServicesCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -51527,6 +51710,7 @@
         "src/services/__tests__/ProbeFault.test.ts",
         "src/services/__tests__/TradingToolTransport.test.ts",
         "src/services/__tests__/VllmShimConcurrency.test.ts",
+        "src/services/__tests__/VllmShimCoverage2.test.ts",
         "src/services/__tests__/VllmShimRewriteMessages.test.ts",
         "src/services/__tests__/VllmShimService.test.ts",
         "src/services/__tests__/VllmShimToolParser.test.ts"
@@ -51864,7 +52048,8 @@
         }
       ],
       "dependents": [
-        "src/index.ts"
+        "src/index.ts",
+        "src/services/__tests__/MiscPlatformCoverage2.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -52287,6 +52472,48 @@
         "src/index.ts",
         "src/websocket/__tests__/WebsocketCoverage.test.ts"
       ],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/middleware/__tests__/RequestLoggerMiddlewareCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../../utils/RequestContext.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/RequestContext.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../RequestLoggerMiddleware.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/middleware/RequestLoggerMiddleware.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
       "orphan": false,
       "valid": true
     },
@@ -53560,6 +53787,48 @@
       "valid": true
     },
     {
+      "source": "src/platform/trace/__tests__/HarnessInstrumenterCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../HarnessInstrumenter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/platform/trace/HarnessInstrumenter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../Span.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/platform/trace/Span.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/providers/__tests__/CutStream.test.ts",
       "dependencies": [
         {
@@ -53877,6 +54146,117 @@
       "valid": true
     },
     {
+      "source": "src/providers/__tests__/ProvidersCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../../config.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/config.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../../types/ProviderTypes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/types/ProviderTypes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../anthropic.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/providers/anthropic.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../elevenlabs.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/providers/elevenlabs.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../inworld.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/providers/inworld.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../llama-cpp.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/providers/llama-cpp.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/providers/__tests__/StreamCharacterization.test.ts",
       "dependencies": [
         {
@@ -54101,6 +54481,169 @@
             "import"
           ],
           "resolved": "src/routes/admin/AdminConversationRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": false,
+          "rules": [
+            {
+              "severity": "warn",
+              "name": "routes-no-routes"
+            }
+          ]
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/routes/__tests__/AdminCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../../constants.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/constants.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../admin/AdminAgentConversationRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/admin/AdminAgentConversationRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": false,
+          "rules": [
+            {
+              "severity": "warn",
+              "name": "routes-no-routes"
+            }
+          ]
+        },
+        {
+          "dynamic": false,
+          "module": "../admin/AdminContentRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/admin/AdminContentRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": false,
+          "rules": [
+            {
+              "severity": "warn",
+              "name": "routes-no-routes"
+            }
+          ]
+        },
+        {
+          "dynamic": false,
+          "module": "../admin/AdminConversationRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/admin/AdminConversationRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": false,
+          "rules": [
+            {
+              "severity": "warn",
+              "name": "routes-no-routes"
+            }
+          ]
+        },
+        {
+          "dynamic": false,
+          "module": "../admin/AdminLmStudioRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/admin/AdminLmStudioRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": false,
+          "rules": [
+            {
+              "severity": "warn",
+              "name": "routes-no-routes"
+            }
+          ]
+        },
+        {
+          "dynamic": false,
+          "module": "../admin/AdminRequestRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/admin/AdminRequestRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": false,
+          "rules": [
+            {
+              "severity": "warn",
+              "name": "routes-no-routes"
+            }
+          ]
+        },
+        {
+          "dynamic": false,
+          "module": "../admin/AdminSystemRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/admin/AdminSystemRoutes.ts",
           "coreModule": false,
           "followable": true,
           "couldNotResolve": false,
@@ -55793,6 +56336,305 @@
       "valid": true
     },
     {
+      "source": "src/routes/__tests__/RoutesCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../../services/TradingToolContext.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/TradingToolContext.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../AgentMemoriesRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/AgentMemoriesRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ConversationExecutionRoute.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/ConversationExecutionRoute.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../CustomAgentsRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/CustomAgentsRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ExecuteRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/ExecuteRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ExperimentRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/ExperimentRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../LmStudioRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/LmStudioRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../MediaRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/MediaRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../OrchestratorRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/OrchestratorRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../PlatformRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/PlatformRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../RulesRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/RulesRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ScheduledTasksRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/ScheduledTasksRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../SkillsRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/SkillsRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../TextRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/TextRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../VramBenchmarksRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/VramBenchmarksRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../WebhookRoutes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/routes/WebhookRoutes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "fs",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "core",
+            "type-only",
+            "import"
+          ],
+          "protocol": "node:",
+          "resolved": "fs",
+          "coreModule": true,
+          "followable": false,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/routes/__tests__/WorkflowsCoverage.test.ts",
       "dependencies": [
         {
@@ -55899,6 +56741,82 @@
             "import"
           ],
           "resolved": "src/services/AgentSessionRegistry.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/AgenticPlatformCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../AgenticLoopService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/AgenticLoopService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../AgenticToolResolver.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/AgenticToolResolver.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../DynamicModelResolver.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/DynamicModelResolver.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../MCPClientService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/MCPClientService.ts",
           "coreModule": false,
           "followable": true,
           "couldNotResolve": false,
@@ -56258,6 +57176,73 @@
       "valid": true
     },
     {
+      "source": "src/services/__tests__/ConversationCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../conversation/ConversationService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/conversation/ConversationService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../conversation/utils.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/conversation/utils.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/ConversationTimerCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../ConversationTimerService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/ConversationTimerService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/services/__tests__/DelegateTool.test.ts",
       "dependencies": [
         {
@@ -56507,6 +57492,285 @@
       "valid": true
     },
     {
+      "source": "src/services/__tests__/HarnessLifecycleCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../ApprovalRegistry.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/ApprovalRegistry.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/lifecycle/ContextPressureManager.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/lifecycle/ContextPressureManager.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/lifecycle/CriticGate.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/lifecycle/CriticGate.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/lifecycle/OutputTruncationRecovery.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/lifecycle/OutputTruncationRecovery.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/lifecycle/PlanModeController.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/lifecycle/PlanModeController.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/lifecycle/PostExecutionEmitter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/lifecycle/PostExecutionEmitter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/lifecycle/SystemReminderExtractor.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/lifecycle/SystemReminderExtractor.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/lifecycle/SystemReminderInjector.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/lifecycle/SystemReminderInjector.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/lifecycle/ToolDiscoveryNudge.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/lifecycle/ToolDiscoveryNudge.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/HarnessLoopCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../AgenticLoopState.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/AgenticLoopState.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/ReActHarness.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/ReActHarness.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/VisionLanguageHarness.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/VisionLanguageHarness.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/HarnessStrategiesCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../harnesses/strategies/GraphOfThoughtsStrategy.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/strategies/shared.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/strategies/shared.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../harnesses/strategies/TreeOfThoughtsStrategy.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/services/__tests__/HarnessUpgrades.test.ts",
       "dependencies": [
         {
@@ -56618,6 +57882,134 @@
       "valid": true
     },
     {
+      "source": "src/services/__tests__/LocalProviderCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../../constants.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/constants.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../local-provider/detectCapabilities.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/local-provider/detectCapabilities.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../local-provider/hfMetadata.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/local-provider/hfMetadata.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../local-provider/index.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/local-provider/index.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../local-provider/normalizers.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/local-provider/normalizers.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../local-provider/types.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/services/local-provider/types.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../local-provider/vramEstimation.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/local-provider/vramEstimation.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/services/__tests__/LocalToolAdvertising.test.ts",
       "dependencies": [
         {
@@ -56648,6 +58040,31 @@
             "import"
           ],
           "resolved": "src/services/RunExecutionEngine.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/LocalToolRouterCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../LocalToolRouter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/LocalToolRouter.ts",
           "coreModule": false,
           "followable": true,
           "couldNotResolve": false,
@@ -57441,6 +58858,321 @@
       "valid": true
     },
     {
+      "source": "src/services/__tests__/MemoryCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../MemoryExtractor.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/MemoryExtractor.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../MemoryService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/MemoryService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/MiscPlatformCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../FileService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/FileService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../GlobalCapabilityExecutor.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/GlobalCapabilityExecutor.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../memory/BatchBuilder.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/memory/BatchBuilder.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../memory/types.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/services/memory/types.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../personas/LuposPersona.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/personas/LuposPersona.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ScheduledTaskService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/ScheduledTaskService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../WebhookDispatcher.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/WebhookDispatcher.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../WebhookEventBus.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/WebhookEventBus.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "crypto",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "core",
+            "import"
+          ],
+          "protocol": "node:",
+          "resolved": "crypto",
+          "coreModule": true,
+          "followable": false,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/MiscServicesCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../AgentPersonaRegistry.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/AgentPersonaRegistry.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../BackgroundHousekeepingService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/BackgroundHousekeepingService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ChangeStreamService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/ChangeStreamService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ExperimentService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/ExperimentService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../RequestLogger.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/RequestLogger.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../WebExtractService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/WebExtractService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/services/__tests__/ModelVisibleToolResult.test.ts",
       "dependencies": [
         {
@@ -57583,6 +59315,100 @@
           ],
           "protocol": "node:",
           "resolved": "http",
+          "coreModule": true,
+          "followable": false,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/NewsEmbeddingCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../EmbeddingService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/EmbeddingService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../MediaResolutionService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/MediaResolutionService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../NewsSearchService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/NewsSearchService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../WorkflowMemoryService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/WorkflowMemoryService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "stream",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "core",
+            "import"
+          ],
+          "protocol": "node:",
+          "resolved": "stream",
           "coreModule": true,
           "followable": false,
           "couldNotResolve": false,
@@ -57743,6 +59569,209 @@
       "valid": true
     },
     {
+      "source": "src/services/__tests__/OrchestratorHelpersCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../orchestrator/InstanceLoadBalancer.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/InstanceLoadBalancer.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../orchestrator/SubAgentResultBuilder.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/SubAgentResultBuilder.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../orchestrator/SubAgentTelemetryEmitter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/SubAgentTelemetryEmitter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/OrchestratorRoutersCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../orchestrator/routers/CriticLoopRouter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/routers/CriticLoopRouter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../orchestrator/routers/DivideAndConquerRouter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/routers/DivideAndConquerRouter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../orchestrator/routers/HierarchicalAggregationRouter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/routers/HierarchicalAggregationRouter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../orchestrator/routers/HierarchicalRouter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/routers/HierarchicalRouter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../orchestrator/routers/MCTSRouter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/routers/MCTSRouter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../orchestrator/routers/PeerToPeerRouter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/routers/PeerToPeerRouter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../orchestrator/routers/SequentialRouter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/routers/SequentialRouter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../orchestrator/routers/TournamentRouter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/orchestrator/routers/TournamentRouter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/services/__tests__/OwnServiceGrant.test.ts",
       "dependencies": [
         {
@@ -57836,6 +59865,31 @@
           "resolved": "net",
           "coreModule": true,
           "followable": false,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/PrismProxyCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../prism/PrismProxyService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/prism/PrismProxyService.ts",
+          "coreModule": false,
+          "followable": true,
           "couldNotResolve": false,
           "matchesDoNotFollow": false,
           "circular": false,
@@ -58642,6 +60696,49 @@
       "valid": true
     },
     {
+      "source": "src/services/__tests__/SomaticCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../somatic/SomaticConstants.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/services/somatic/SomaticConstants.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../somatic/SomaticStateService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/somatic/SomaticStateService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/services/__tests__/SubagentRegistry.test.ts",
       "dependencies": [
         {
@@ -58710,6 +60807,83 @@
           "resolved": "path",
           "coreModule": true,
           "followable": false,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/SystemPromptCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../system-prompt/DirectoryTreeFormatter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/system-prompt/DirectoryTreeFormatter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../system-prompt/index.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/system-prompt/index.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../system-prompt/SkillMemoryScorer.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/system-prompt/SkillMemoryScorer.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../system-prompt/types.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/services/system-prompt/types.ts",
+          "coreModule": false,
+          "followable": true,
           "couldNotResolve": false,
           "matchesDoNotFollow": false,
           "circular": false,
@@ -59627,6 +61801,31 @@
       "valid": true
     },
     {
+      "source": "src/services/__tests__/VllmShimCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../vllm/VllmShimService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/vllm/VllmShimService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
       "source": "src/services/__tests__/VllmShimRewriteMessages.test.ts",
       "dependencies": [
         {
@@ -59707,6 +61906,66 @@
             "import"
           ],
           "resolved": "src/services/vllm/VllmShimService.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/__tests__/WallgardenCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../../types/SseTypes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/types/SseTypes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../wallgarden/JetsonGate.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/wallgarden/JetsonGate.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../wallgarden/WallgardenService.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/wallgarden/WallgardenService.ts",
           "coreModule": false,
           "followable": true,
           "couldNotResolve": false,
@@ -63478,6 +65737,258 @@
           "resolved": "src/utils/UrlSafety.ts",
           "coreModule": false,
           "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        }
+      ],
+      "dependents": [],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/utils/__tests__/UtilsCoverage2.test.ts",
+      "dependencies": [
+        {
+          "dynamic": false,
+          "module": "../../types/admin.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/types/admin.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../../types/ProviderTypes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/types/ProviderTypes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../../types/schemas.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/types/schemas.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../../types/SseTypes.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/types/SseTypes.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ContextWindowManager.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/ContextWindowManager.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../gguf-arch.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/gguf-arch.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../media.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/media.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ModelResolution.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/ModelResolution.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../openai-compat.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/openai-compat.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../RecurrenceMatcher.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/RecurrenceMatcher.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../SseUtilities.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/SseUtilities.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../StreamChunkDispatcher.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/StreamChunkDispatcher.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "fs/promises",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "core",
+            "import"
+          ],
+          "protocol": "node:",
+          "resolved": "fs/promises",
+          "coreModule": true,
+          "followable": false,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "path",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "core",
+            "import"
+          ],
+          "protocol": "node:",
+          "resolved": "path",
+          "coreModule": true,
+          "followable": false,
           "couldNotResolve": false,
           "matchesDoNotFollow": false,
           "circular": false,
@@ -71887,6 +74398,90 @@
       },
       {
         "type": "dependency",
+        "from": "src/routes/__tests__/AdminCoverage2.test.ts",
+        "to": "src/routes/admin/AdminAgentConversationRoutes.ts",
+        "unresolvedTo": "../admin/AdminAgentConversationRoutes.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ],
+        "rule": {
+          "severity": "warn",
+          "name": "routes-no-routes"
+        }
+      },
+      {
+        "type": "dependency",
+        "from": "src/routes/__tests__/AdminCoverage2.test.ts",
+        "to": "src/routes/admin/AdminContentRoutes.ts",
+        "unresolvedTo": "../admin/AdminContentRoutes.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ],
+        "rule": {
+          "severity": "warn",
+          "name": "routes-no-routes"
+        }
+      },
+      {
+        "type": "dependency",
+        "from": "src/routes/__tests__/AdminCoverage2.test.ts",
+        "to": "src/routes/admin/AdminConversationRoutes.ts",
+        "unresolvedTo": "../admin/AdminConversationRoutes.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ],
+        "rule": {
+          "severity": "warn",
+          "name": "routes-no-routes"
+        }
+      },
+      {
+        "type": "dependency",
+        "from": "src/routes/__tests__/AdminCoverage2.test.ts",
+        "to": "src/routes/admin/AdminLmStudioRoutes.ts",
+        "unresolvedTo": "../admin/AdminLmStudioRoutes.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ],
+        "rule": {
+          "severity": "warn",
+          "name": "routes-no-routes"
+        }
+      },
+      {
+        "type": "dependency",
+        "from": "src/routes/__tests__/AdminCoverage2.test.ts",
+        "to": "src/routes/admin/AdminRequestRoutes.ts",
+        "unresolvedTo": "../admin/AdminRequestRoutes.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ],
+        "rule": {
+          "severity": "warn",
+          "name": "routes-no-routes"
+        }
+      },
+      {
+        "type": "dependency",
+        "from": "src/routes/__tests__/AdminCoverage2.test.ts",
+        "to": "src/routes/admin/AdminSystemRoutes.ts",
+        "unresolvedTo": "../admin/AdminSystemRoutes.ts",
+        "dependencyTypes": [
+          "local",
+          "import"
+        ],
+        "rule": {
+          "severity": "warn",
+          "name": "routes-no-routes"
+        }
+      },
+      {
+        "type": "dependency",
         "from": "src/routes/__tests__/AdminStatsCoverage.test.ts",
         "to": "src/routes/admin/AdminStatsRoutes.ts",
         "unresolvedTo": "../admin/AdminStatsRoutes.ts",
@@ -72141,12 +74736,12 @@
       }
     ],
     "error": 0,
-    "warn": 138,
+    "warn": 144,
     "info": 0,
     "ignore": 0,
     "advisedExitCode": 0,
-    "totalCruised": 590,
-    "totalDependenciesCruised": 2569,
+    "totalCruised": 616,
+    "totalDependenciesCruised": 2694,
     "optionsUsed": {
       "baseDir": "/home/lazycat/github/projects/sun/agents/lazy-agent-service",
       "combinedDependencies": false,
