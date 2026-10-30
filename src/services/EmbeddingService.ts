@@ -72,6 +72,210 @@ interface EmbeddingOptions {
   agentConversationId?: string | null;
 }
 
+type EmbeddingResult = { embedding: number[]; dimensions: number };
+
+/** Input shape recorded in the request log. */
+interface EmbeddingInputProfile {
+  contentType: "text" | "multimodal" | "any";
+  inputCharacters: number;
+}
+
+interface EmbeddingLogContext {
+  requestId: string;
+  options: EmbeddingOptions;
+  providerName: string;
+  resolvedModel: string;
+  taskType: string | undefined;
+  success: boolean;
+  errorMessage: string | null;
+  result: EmbeddingResult | undefined;
+  totalSec: number;
+  approxInputTokens: number;
+  estimatedCost: number | null;
+  inputProfile: EmbeddingInputProfile;
+  content: EmbeddingContent;
+}
+
+/** Which modalities the embedded input carried, for the request log. */
+function computeEmbeddingModalities(
+  content: EmbeddingContent,
+): Record<string, boolean> {
+  const modalities: Record<string, boolean> = { embeddingOut: true };
+  if (typeof content === "string") {
+    modalities.textIn = true;
+    return modalities;
+  }
+  if (!Array.isArray(content)) return modalities;
+
+  for (const part of content) {
+    if (typeof part === "string") {
+      modalities.textIn = true;
+      continue;
+    }
+    if (part.text) modalities.textIn = true;
+    const mime = part.inlineData?.mimeType || "";
+    if (mime.startsWith("image/")) modalities.imageIn = true;
+    else if (mime.startsWith("audio/")) modalities.audioIn = true;
+    else if (mime.startsWith("video/")) modalities.videoIn = true;
+    else if (mime === "application/pdf") modalities.docIn = true;
+  }
+  return modalities;
+}
+
+function describeEmbeddingInput(content: EmbeddingContent): EmbeddingInputProfile {
+  if (typeof content === "string") {
+    return { contentType: "text", inputCharacters: content.length };
+  }
+  if (Array.isArray(content)) {
+    return { contentType: "multimodal", inputCharacters: 0 };
+  }
+  return { contentType: "any", inputCharacters: 0 };
+}
+
+function estimateEmbeddingCost(
+  resolvedModel: string,
+  content: EmbeddingContent,
+): { approxInputTokens: number; estimatedCost: number | null } {
+  const pricing = getPricing(TYPES.TEXT, TYPES.EMBEDDING)[resolvedModel];
+  const approxInputTokens =
+    typeof content === "string" ? estimateTokens(content) : 100;
+  const estimatedCost = pricing?.inputPerMillion
+    ? (approxInputTokens / 1_000_000) * pricing.inputPerMillion
+    : null;
+  return { approxInputTokens, estimatedCost };
+}
+
+/** Provider call, with the provider-options surface built from the request. */
+async function runEmbeddingRequest(
+  providerName: string,
+  content: EmbeddingContent,
+  resolvedModel: string,
+  options: EmbeddingOptions,
+  taskType: string | undefined,
+): Promise<EmbeddingResult> {
+  const provider = getProvider(providerName);
+  if (!provider.generateEmbedding) {
+    throw new ProviderError(
+      providerName,
+      `Provider "${providerName}" does not support embeddings`,
+      400,
+    );
+  }
+
+  const providerOptions: Record<string, unknown> = {};
+  if (taskType) providerOptions.taskType = taskType;
+  if (options.dimensions !== undefined) {
+    providerOptions.dimensions = options.dimensions;
+  }
+
+  const result = await provider.generateEmbedding(
+    content,
+    resolvedModel,
+    providerOptions,
+  );
+  result.dimensions = result.embedding.length;
+  return result;
+}
+
+/** Caller identity with the two project fallbacks the log destinations expect. */
+interface EmbeddingLogIdentity {
+  projectLabel: string;
+  project: string | null;
+  username: string;
+  clientIp: string | null;
+  endpoint: string | null;
+  agent: string | null;
+  traceId: string | null;
+  conversationId: string | null;
+  agentConversationId: string | null;
+  source: string;
+}
+
+function resolveLogIdentity(options: EmbeddingOptions): EmbeddingLogIdentity {
+  return {
+    projectLabel: options.project || "",
+    project: options.project || null,
+    username: options.username || "system",
+    clientIp: options.clientIp || null,
+    endpoint: options.endpoint || null,
+    agent: options.agent || null,
+    traceId: options.traceId || null,
+    conversationId: options.conversationId || null,
+    agentConversationId: options.agentConversationId || null,
+    source: options.source || "any",
+  };
+}
+
+/** Human log line plus the structured request-log row for one embedding call. */
+function logEmbeddingRequest(context: EmbeddingLogContext): void {
+  const {
+    requestId,
+    options,
+    providerName,
+    resolvedModel,
+    taskType,
+    success,
+    errorMessage,
+    result,
+    totalSec,
+    approxInputTokens,
+    estimatedCost,
+    inputProfile,
+  } = context;
+  const { contentType, inputCharacters } = inputProfile;
+  const identity = resolveLogIdentity(options);
+
+  logger.request(
+    identity.projectLabel,
+    identity.username,
+    identity.clientIp,
+    `[embed] ${providerName} model=${resolvedModel} source=${identity.source} — ` +
+      (success
+        ? `dims: ${result?.dimensions}, total: ${totalSec.toFixed(2)}s`
+        : `FAILED: ${errorMessage}`) +
+      formatCostTag(estimatedCost),
+  );
+
+  RequestLogger.log({
+    requestId,
+    endpoint: identity.endpoint,
+    operation: `${identity.source}:embed`,
+    project: identity.project,
+    username: identity.username,
+    clientIp: identity.clientIp,
+    agent: identity.agent,
+    provider: providerName,
+    model: resolvedModel,
+    traceId: identity.traceId,
+    conversationId: identity.conversationId,
+    agentConversationId: identity.agentConversationId,
+    success,
+    errorMessage,
+    estimatedCost,
+    inputTokens: approxInputTokens,
+    outputTokens: 0, // Embeddings produce vectors, not output tokens
+    tokensPerSec: calculateTokensPerSec(approxInputTokens, totalSec),
+    inputCharacters,
+    totalTime: roundMilliseconds(totalSec),
+    modalities: computeEmbeddingModalities(context.content),
+    requestPayload: {
+      source: identity.source,
+      contentType,
+      ...(taskType ? { taskType } : {}),
+      ...(options.dimensions ? { dimensions: options.dimensions } : {}),
+      ...(contentType === "text"
+        ? { text: typeof context.content === "string" ? context.content : "" }
+        : {}),
+    },
+    responsePayload: success
+      ? {
+          dimensions: result?.dimensions || null,
+          embeddingPreview: result?.embedding?.slice(0, 5) || null,
+        }
+      : { error: errorMessage },
+  });
+}
+
 const EmbeddingService = {
   async generate(content: EmbeddingContent, options: EmbeddingOptions = {}) {
     const requestId = crypto.randomUUID();
@@ -79,118 +283,41 @@ const EmbeddingService = {
     // Resolve defaults from settings when no explicit provider/model given
     const target = await resolveTarget(options);
     const { taskType, providerName, resolvedModel } = target;
-    let result: { embedding: number[]; dimensions: number } | undefined =
-      undefined;
+    let result: EmbeddingResult | undefined = undefined;
     let success = true;
     let errorMessage: string | null = null;
     try {
-      const provider = getProvider(providerName);
-      if (!provider.generateEmbedding) {
-        throw new ProviderError(
-          providerName,
-          `Provider "${providerName}" does not support embeddings`,
-          400,
-        );
-      }
-      const providerOptions: Record<string, unknown> = {};
-      if (taskType) providerOptions.taskType = taskType;
-      if (options.dimensions !== undefined) providerOptions.dimensions = options.dimensions;
-      result = await provider.generateEmbedding(
+      result = await runEmbeddingRequest(
+        providerName,
         content,
         resolvedModel,
-        providerOptions,
+        options,
+        taskType,
       );
-      result.dimensions = result.embedding.length;
     } catch (error: unknown) {
       success = false;
       errorMessage = getErrorMessage(error);
       throw error;
     } finally {
       const totalSec = (performance.now() - requestStart) / 1000;
-      // Cost estimation
-      const pricing = getPricing(TYPES.TEXT, TYPES.EMBEDDING)[resolvedModel];
-      const approxInputTokens =
-        typeof content === "string" ? estimateTokens(content) : 100;
-      let estimatedCost: number | null = null;
-      if (pricing?.inputPerMillion) {
-        estimatedCost =
-          (approxInputTokens / 1_000_000) * pricing.inputPerMillion;
-      }
-      const source = options.source || "any";
-      // Determine input content type for payload logging
-      const contentType =
-        typeof content === "string"
-          ? "text"
-          : Array.isArray(content)
-            ? "multimodal"
-            : "any";
-      const inputCharacters = typeof content === "string" ? content.length : 0;
-      logger.request(
-        options.project || "",
-        options.username || "system",
-        options.clientIp || null,
-        `[embed] ${providerName} model=${resolvedModel} source=${source} — ` +
-          (success
-            ? `dims: ${result?.dimensions}, total: ${totalSec.toFixed(2)}s`
-            : `FAILED: ${errorMessage}`) +
-          formatCostTag(estimatedCost),
+      const { approxInputTokens, estimatedCost } = estimateEmbeddingCost(
+        resolvedModel,
+        content,
       );
-      RequestLogger.log({
+      logEmbeddingRequest({
         requestId,
-        endpoint: options.endpoint || null,
-        operation: `${source}:embed`,
-        project: options.project || null,
-        username: options.username || "system",
-        clientIp: options.clientIp || null,
-        agent: options.agent || null,
-        provider: providerName,
-        model: resolvedModel,
-        traceId: options.traceId || null,
-        conversationId: options.conversationId || null,
-        agentConversationId: options.agentConversationId || null,
+        options,
+        providerName,
+        resolvedModel,
+        taskType,
         success,
         errorMessage,
+        result,
+        totalSec,
+        approxInputTokens,
         estimatedCost,
-        inputTokens: approxInputTokens,
-        outputTokens: 0, // Embeddings produce vectors, not output tokens
-        tokensPerSec: calculateTokensPerSec(approxInputTokens, totalSec),
-        inputCharacters,
-        totalTime: roundMilliseconds(totalSec),
-        modalities: (() => {
-          const modalities: Record<string, boolean> = { embeddingOut: true };
-          if (typeof content === "string") {
-            modalities.textIn = true;
-          } else if (Array.isArray(content)) {
-            for (const part of content) {
-              if (typeof part === "string") {
-                modalities.textIn = true;
-              } else {
-                if (part.text) modalities.textIn = true;
-                const mime = part.inlineData?.mimeType || "";
-                if (mime.startsWith("image/")) modalities.imageIn = true;
-                else if (mime.startsWith("audio/")) modalities.audioIn = true;
-                else if (mime.startsWith("video/")) modalities.videoIn = true;
-                else if (mime === "application/pdf") modalities.docIn = true;
-              }
-            }
-          }
-          return modalities;
-        })(),
-        requestPayload: {
-          source,
-          contentType,
-          ...(taskType ? { taskType } : {}),
-          ...(options.dimensions ? { dimensions: options.dimensions } : {}),
-          ...(contentType === "text"
-            ? { text: typeof content === "string" ? content : "" }
-            : {}),
-        },
-        responsePayload: success
-          ? {
-              dimensions: result?.dimensions || null,
-              embeddingPreview: result?.embedding?.slice(0, 5) || null,
-            }
-          : { error: errorMessage },
+        inputProfile: describeEmbeddingInput(content),
+        content,
       });
     }
     if (!result) {

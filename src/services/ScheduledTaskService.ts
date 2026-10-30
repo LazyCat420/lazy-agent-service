@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import type { Db } from "mongodb";
 import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { MONGO_DB_NAME } from "../../config.ts";
 import { COLLECTIONS } from "../constants.ts";
@@ -92,6 +93,133 @@ export function matchCron(
   );
 }
 
+// ─── Due-check & claim helpers ─────────────────────────────────────────────────
+
+/** Minute-resolution key ("YYYY-MM-DDTHH:mm") used to mark a task as already run. */
+function buildMinuteKey(now: Date): string {
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const date = String(now.getDate()).padStart(2, "0");
+  const hour = String(now.getHours()).padStart(2, "0");
+  const minute = String(now.getMinutes()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${date}T${hour}:${minute}`;
+}
+
+/** True when the current clock time matches an "HH:MM" schedule time. */
+function matchesTimeOfDay(scheduleTime: string, now: Date): boolean {
+  const [hour, minute] = scheduleTime.split(":").map(Number);
+  return now.getHours() === hour && now.getMinutes() === minute;
+}
+
+function isWeeklyDue(task: ScheduledTask, now: Date): boolean {
+  if (task.scheduleDay == null || !task.scheduleTime) return false;
+  return now.getDay() === task.scheduleDay && matchesTimeOfDay(task.scheduleTime, now);
+}
+
+function isOnceDue(task: ScheduledTask, now: Date): boolean {
+  if (!task.scheduleTime || !task.scheduleDate) return false;
+  const [year, month, day] = task.scheduleDate.split("-").map(Number);
+  return (
+    now.getFullYear() === year &&
+    now.getMonth() + 1 === month &&
+    now.getDate() === day &&
+    matchesTimeOfDay(task.scheduleTime, now)
+  );
+}
+
+function isCustomDue(task: ScheduledTask, now: Date): boolean {
+  if (!task.recurrenceRule || !task.scheduleTime) return false;
+  if (!matchesTimeOfDay(task.scheduleTime, now)) return false;
+  const startDate = task.recurrenceRule.startDate
+    ? new Date(task.recurrenceRule.startDate)
+    : new Date(task.createdAt);
+  return matchRecurrenceRule(task.recurrenceRule, startDate, now);
+}
+
+/** Whether the task's schedule fires at this instant (exported for tests). */
+export function isTaskDue(task: ScheduledTask, now: Date): boolean {
+  switch (task.scheduleType) {
+    case "cron":
+      return Boolean(task.cronExpression) && matchCron(task.cronExpression as string, now);
+    case "hourly":
+      // Default to run at minute 0 of every hour
+      return now.getMinutes() === 0;
+    case "daily":
+      return task.scheduleTime ? matchesTimeOfDay(task.scheduleTime, now) : false;
+    case "weekly":
+      return isWeeklyDue(task, now);
+    case "once":
+      return isOnceDue(task, now);
+    case "custom":
+      return isCustomDue(task, now);
+    default:
+      return false;
+  }
+}
+
+/** $set payload that stamps the run minute, disabling one-shot schedules. */
+function buildClaimFields(task: ScheduledTask, minuteKey: string): Record<string, unknown> {
+  const updateFields: Record<string, unknown> = {
+    lastRunMinute: minuteKey,
+    updatedAt: new Date().toISOString(),
+  };
+  if (task.scheduleType === "once") {
+    updateFields.enabled = false;
+  }
+  return updateFields;
+}
+
+type TaskExecutor = (
+  task: ScheduledTask,
+  payload?: Record<string, unknown>,
+  options?: { username?: string },
+) => Promise<unknown>;
+
+/**
+ * Atomically claims this task for this minute — prevents double execution in
+ * multi-instance clusters: only the first updater gets a non-null result.
+ */
+async function claimTask(db: Db, task: ScheduledTask, minuteKey: string): Promise<boolean> {
+  const claimResult = await db
+    .collection(COLLECTIONS.SCHEDULED_TASKS)
+    .findOneAndUpdate(
+      { id: task.id, lastRunMinute: { $ne: minuteKey } },
+      { $set: buildClaimFields(task, minuteKey) },
+    );
+
+  if (!claimResult) {
+    logger.info(
+      `[ScheduledTasks] Task "${task.name}" already claimed by another instance.`,
+    );
+    return false;
+  }
+  return true;
+}
+
+/** Runs one task when due, after claiming it; execution itself stays in the background. */
+async function runTaskIfDue(
+  db: Db,
+  task: ScheduledTask,
+  now: Date,
+  minuteKey: string,
+  executeTask: TaskExecutor,
+): Promise<void> {
+  if (!isTaskDue(task, now)) return;
+
+  logger.info(
+    `[ScheduledTasks] Task "${task.name}" (${task.id}) is due to run.`,
+  );
+
+  if (!(await claimTask(db, task, minuteKey))) return;
+
+  executeTask(task, undefined, {
+    username: task.username || "system",
+  }).catch((error: unknown) =>
+    logger.error(
+      `[ScheduledTasks] Execution failed for task "${task.name}": ${getErrorMessage(error)}`,
+    ),
+  );
+}
+
 // ─── Scheduler Daemon & CRUD Logic ─────────────────────────────────────────────
 
 let tickingInterval: ReturnType<typeof setInterval> | null = null;
@@ -149,11 +277,7 @@ const ScheduledTaskService = {
     if (!db) return;
 
     const now = new Date();
-    const currentMin = now.getMinutes();
-    const currentHour = now.getHours();
-    const currentDay = now.getDay(); // 0 = Sunday, 6 = Saturday
-
-    const minuteKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}T${String(currentHour).padStart(2, "0")}:${String(currentMin).padStart(2, "0")}`;
+    const minuteKey = buildMinuteKey(now);
 
     // Fetch enabled tasks that have not run yet in this exact minute
     const tasks = (await db
@@ -164,94 +288,14 @@ const ScheduledTaskService = {
     if (tasks.length === 0) return;
 
     for (const task of tasks) {
-      let isDue = false;
-
       try {
-        if (task.scheduleType === "cron" && task.cronExpression) {
-          isDue = matchCron(task.cronExpression, now);
-        } else if (task.scheduleType === "hourly") {
-          // Default to run at minute 0 of every hour
-          isDue = currentMin === 0;
-        } else if (task.scheduleType === "daily" && task.scheduleTime) {
-          const [sh, sm] = task.scheduleTime.split(":").map(Number);
-          isDue = currentHour === sh && currentMin === sm;
-        } else if (
-          task.scheduleType === "weekly" &&
-          task.scheduleTime &&
-          task.scheduleDay != null
-        ) {
-          const [sh, sm] = task.scheduleTime.split(":").map(Number);
-          isDue =
-            currentDay === task.scheduleDay &&
-            currentHour === sh &&
-            currentMin === sm;
-        } else if (
-          task.scheduleType === "once" &&
-          task.scheduleTime &&
-          task.scheduleDate
-        ) {
-          const [sh, sm] = task.scheduleTime.split(":").map(Number);
-          const [yr, mn, dy] = task.scheduleDate.split("-").map(Number);
-          isDue =
-            now.getFullYear() === yr &&
-            now.getMonth() + 1 === mn &&
-            now.getDate() === dy &&
-            currentHour === sh &&
-            currentMin === sm;
-        } else if (
-          task.scheduleType === "custom" &&
-          task.recurrenceRule &&
-          task.scheduleTime
-        ) {
-          const [sh, sm] = task.scheduleTime.split(":").map(Number);
-          const isTimeMatch = currentHour === sh && currentMin === sm;
-          if (isTimeMatch) {
-            const startDate = task.recurrenceRule.startDate
-              ? new Date(task.recurrenceRule.startDate)
-              : new Date(task.createdAt);
-            isDue = matchRecurrenceRule(task.recurrenceRule, startDate, now);
-          }
-        }
-
-        if (isDue) {
-          logger.info(
-            `[ScheduledTasks] Task "${task.name}" (${task.id}) is due to run.`,
-          );
-
-          const updateFields: Record<string, unknown> = {
-            lastRunMinute: minuteKey,
-            updatedAt: new Date().toISOString(),
-          };
-          if (task.scheduleType === "once") {
-            updateFields.enabled = false;
-          }
-
-          // Atomically claim this task for this minute — prevents double execution
-          // in multi-instance cluster setups. Only the first instance to update
-          // will get a non-null result; subsequent instances skip.
-          const claimResult = await db
-            .collection(COLLECTIONS.SCHEDULED_TASKS)
-            .findOneAndUpdate(
-              { id: task.id, lastRunMinute: { $ne: minuteKey } },
-              { $set: updateFields },
-            );
-
-          if (!claimResult) {
-            logger.info(
-              `[ScheduledTasks] Task "${task.name}" already claimed by another instance.`,
-            );
-            continue;
-          }
-
-          // Trigger execution in the background asynchronously
-          this.executeTask(task, undefined, {
-            username: task.username || "system",
-          }).catch((error: unknown) =>
-            logger.error(
-              `[ScheduledTasks] Execution failed for task "${task.name}": ${getErrorMessage(error)}`,
-            ),
-          );
-        }
+        await runTaskIfDue(
+          db,
+          task,
+          now,
+          minuteKey,
+          this.executeTask.bind(this),
+        );
       } catch (error: unknown) {
         logger.error(
           `[ScheduledTasks] Failed to parse/check task "${task.name}": ${getErrorMessage(error)}`,

@@ -2,7 +2,7 @@ import { AGENT_IDS } from "@rodrigo-barraza/utilities-library/taxonomy";
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import type { Document } from "mongodb";
+import type { Db, Document } from "mongodb";
 import { COLLECTIONS, SSE_KEEPALIVE_INTERVAL_MS } from "../../constants.ts";
 import ChangeStreamService from "../../services/ChangeStreamService.ts";
 import BenchmarkService from "../../services/BenchmarkService.ts";
@@ -31,311 +31,428 @@ const {
 
 router.use(requireDb);
 
+// ─── GET /conversations helpers ───────────────────────────────
+
+type ConversationQuery = Request["query"];
+
+const CONVERSATION_LIST_PROJECTION = {
+  ...CONVERSATION_LIST_BASE_PROJECTION,
+  messageCount: { $size: { $ifNull: ["$messages", []] } },
+  totalCost: { $ifNull: ["$totalCost", 0] },
+};
+
+interface ConversationListScope {
+  shouldFetchDirectConversations: boolean;
+  shouldFetchAgentConversations: boolean;
+  agentFilter: Record<string, unknown>;
+  sortKey: string;
+  sortDirection: 1 | -1;
+}
+
+interface ConversationPage {
+  directConversations: Document[];
+  agentConversations: Document[];
+}
+
+interface ConversationTotals {
+  direct: number;
+  agent: number;
+}
+
+interface RequestMetrics {
+  inputTokens: number;
+  outputTokens: number;
+  totalLatency: number;
+  avgTokensPerSec: number | null;
+  aggregatedCost: number;
+  models: unknown[];
+  toolDisplayNames: unknown[];
+  toolApiNames: unknown[];
+}
+
+/** Search clauses: title/project/username, plus conversation ids when the term looks like an IP/trace. */
+async function buildSearchClauses(
+  search: unknown,
+  db: Db,
+): Promise<Record<string, unknown>[]> {
+  const regex = { $regex: search, $options: "i" };
+  const orClauses: Record<string, unknown>[] = [
+    { title: regex },
+    { project: regex },
+    { username: regex },
+  ];
+
+  const searchString = typeof search === "string" ? search.trim() : "";
+  if (/^[\d.:a-f]+$/i.test(searchString)) {
+    const matchingConversationIds = await db
+      .collection(REQUESTS_COLLECTION)
+      .distinct("conversationId", { clientIp: regex });
+    if (matchingConversationIds.length > 0) {
+      orClauses.push({ id: { $in: matchingConversationIds } });
+    }
+  }
+  return orClauses;
+}
+
+async function buildConversationListFilter(
+  query: ConversationQuery,
+  db: Db,
+): Promise<Record<string, unknown>> {
+  const { trace, project, username, workspace, search, provider, model, from, to } = query;
+  const filter: Record<string, unknown> = {};
+  if (trace) filter.traceId = trace;
+  if (project) filter.project = project;
+  if (username) filter.username = username;
+  if (workspace) filter.workspaceRoot = workspace;
+  if (search) filter.$or = await buildSearchClauses(search, db);
+  if (provider) filter.providers = provider;
+  if (model) filter["messages.model"] = model;
+
+  applyDateRangeFilter(
+    filter,
+    typeof from === "string" ? from : undefined,
+    typeof to === "string" ? to : undefined,
+    "updatedAt",
+  );
+  return filter;
+}
+
+/** Which collections this request reads, the agent filter, and the sort key. */
+export function resolveListScope(
+  query: ConversationQuery,
+  filter: Record<string, unknown>,
+  sortDirection: 1 | -1,
+): ConversationListScope {
+  const { agent, type, sort } = query;
+  const isDirectOnly = type === "direct" || agent === AGENT_IDS.NONE;
+  const isAgentOnly =
+    agent && agent !== AGENT_IDS.NONE && agent !== AGENT_IDS.ALL;
+
+  const agentFilter = { ...filter };
+  if (isAgentOnly) {
+    agentFilter.agent = agent;
+  }
+
+  return {
+    shouldFetchDirectConversations: !isAgentOnly,
+    shouldFetchAgentConversations: !isDirectOnly,
+    agentFilter,
+    sortKey: typeof sort === "string" ? sort : "updatedAt",
+    sortDirection,
+  };
+}
+
+async function fetchConversationPage(
+  db: Db,
+  filter: Record<string, unknown>,
+  scope: ConversationListScope,
+  skip: number,
+  limit: number,
+): Promise<ConversationPage> {
+  let directConversations: Document[] = [];
+  let agentConversations: Document[] = [];
+  const queryPromises: Promise<void>[] = [];
+
+  if (scope.shouldFetchDirectConversations) {
+    queryPromises.push(
+      db
+        .collection(CONVERSATIONS_COLLECTION)
+        .find(filter)
+        .project(CONVERSATION_LIST_PROJECTION)
+        .sort({ [scope.sortKey]: scope.sortDirection })
+        .limit(skip + limit)
+        .toArray()
+        .then((result) => {
+          directConversations = result;
+        }),
+    );
+  }
+
+  if (scope.shouldFetchAgentConversations) {
+    queryPromises.push(
+      db
+        .collection(COLLECTIONS.AGENT_CONVERSATIONS)
+        .find(scope.agentFilter)
+        .project(CONVERSATION_LIST_PROJECTION)
+        .sort({ [scope.sortKey]: scope.sortDirection })
+        .limit(skip + limit)
+        .toArray()
+        .then((result) => {
+          agentConversations = result;
+        }),
+    );
+  }
+
+  await Promise.all(queryPromises);
+  return { directConversations, agentConversations };
+}
+
+async function countConversationTotals(
+  db: Db,
+  filter: Record<string, unknown>,
+  scope: ConversationListScope,
+): Promise<ConversationTotals> {
+  let direct = 0;
+  let agent = 0;
+  const countPromises: Promise<void>[] = [];
+
+  if (scope.shouldFetchDirectConversations) {
+    countPromises.push(
+      db
+        .collection(CONVERSATIONS_COLLECTION)
+        .countDocuments(filter)
+        .then((result) => {
+          direct = result;
+        }),
+    );
+  }
+
+  if (scope.shouldFetchAgentConversations) {
+    countPromises.push(
+      db
+        .collection(COLLECTIONS.AGENT_CONVERSATIONS)
+        .countDocuments(scope.agentFilter)
+        .then((result) => {
+          agent = result;
+        }),
+    );
+  }
+
+  await Promise.all(countPromises);
+  return { direct, agent };
+}
+
+export function mergeConversationLists(
+  page: ConversationPage,
+  scope: ConversationListScope,
+): Array<Record<string, unknown>> {
+  const getSortValue = (item: Record<string, unknown>): string => {
+    const value = item[scope.sortKey];
+    return value !== undefined ? String(value) : "";
+  };
+
+  return [
+    ...page.directConversations.map((item) => ({ ...item, type: "direct" as const })),
+    ...page.agentConversations.map((session) => ({ ...session, type: "agent" as const })),
+  ].sort((firstItem, secondItem) => {
+    const valueA = getSortValue(firstItem as Record<string, unknown>);
+    const valueB = getSortValue(secondItem as Record<string, unknown>);
+    if (valueA < valueB) return -scope.sortDirection;
+    if (valueA > valueB) return scope.sortDirection;
+    return 0;
+  });
+}
+
+function collectAgentConversationIds(
+  documents: Array<Record<string, unknown>>,
+): string[] {
+  return documents
+    .filter((document) => document.type === "agent")
+    .map((document) => {
+      const id = document.id;
+      return typeof id === "string" ? id : "";
+    })
+    .filter(Boolean);
+}
+
+async function fetchConversationRequests(
+  db: Db,
+  documentIds: unknown[],
+  agentConversationIds: string[],
+): Promise<Document[]> {
+  return db
+    .collection(REQUESTS_COLLECTION)
+    .find({
+      $or: [
+        { conversationId: { $in: documentIds } },
+        { agentConversationId: { $in: agentConversationIds } },
+        { parentAgentConversationId: { $in: agentConversationIds } },
+      ],
+    })
+    .project({
+      conversationId: 1,
+      agentConversationId: 1,
+      parentAgentConversationId: 1,
+      inputTokens: 1,
+      outputTokens: 1,
+      model: 1,
+      tokensPerSec: 1,
+      totalTime: 1,
+      toolDisplayNames: 1,
+      toolApiNames: 1,
+      estimatedCost: 1,
+    })
+    .toArray();
+}
+
+/** Which conversation a request row belongs to (parent agent > agent > direct). */
+function resolveRequestTargetId(
+  requestItem: Document,
+  agentConversationIds: Set<string>,
+): string {
+  if (
+    requestItem.parentAgentConversationId &&
+    agentConversationIds.has(requestItem.parentAgentConversationId)
+  ) {
+    return requestItem.parentAgentConversationId;
+  }
+  if (
+    requestItem.agentConversationId &&
+    agentConversationIds.has(requestItem.agentConversationId)
+  ) {
+    return requestItem.agentConversationId;
+  }
+  if (requestItem.conversationId) {
+    return requestItem.conversationId;
+  }
+  return "";
+}
+
+function buildRequestLogMap(
+  requests: Document[],
+  agentConversationIds: string[],
+): Map<string, Document[]> {
+  const requestLogMap = new Map<string, Document[]>();
+  const agentIdSet = new Set(agentConversationIds);
+
+  for (const requestItem of requests) {
+    const targetId = resolveRequestTargetId(requestItem, agentIdSet);
+    if (!targetId) continue;
+    const bucket = requestLogMap.get(targetId);
+    if (bucket) {
+      bucket.push(requestItem);
+    } else {
+      requestLogMap.set(targetId, [requestItem]);
+    }
+  }
+  return requestLogMap;
+}
+
+function collectDistinctScalarValues(
+  requests: Document[],
+  field: string,
+): unknown[] {
+  return Array.from(new Set(requests.map((requestItem) => requestItem[field]).filter(Boolean)));
+}
+
+function collectDistinctListValues(
+  requests: Document[],
+  field: string,
+): unknown[] {
+  return Array.from(
+    new Set(
+      requests
+        .flatMap((requestItem) =>
+          Array.isArray(requestItem[field]) ? requestItem[field] : [],
+        )
+        .filter(Boolean),
+    ),
+  );
+}
+
+function aggregateRequestMetrics(requests: Document[]): RequestMetrics {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalLatency = 0;
+  let tokensPerSecondSum = 0;
+  let tokensPerSecondCount = 0;
+  let aggregatedCost = 0;
+
+  for (const requestItem of requests) {
+    inputTokens += requestItem.inputTokens || 0;
+    outputTokens += requestItem.outputTokens || 0;
+    totalLatency += requestItem.totalTime || 0;
+    aggregatedCost += requestItem.estimatedCost || 0;
+    if (requestItem.tokensPerSec && requestItem.tokensPerSec > 0) {
+      tokensPerSecondSum += requestItem.tokensPerSec;
+      tokensPerSecondCount++;
+    }
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalLatency,
+    aggregatedCost,
+    avgTokensPerSec:
+      tokensPerSecondCount > 0
+        ? tokensPerSecondSum / tokensPerSecondCount
+        : null,
+    models: collectDistinctScalarValues(requests, "model"),
+    toolDisplayNames: collectDistinctListValues(requests, "toolDisplayNames"),
+    toolApiNames: collectDistinctListValues(requests, "toolApiNames"),
+  };
+}
+
+export function enrichConversationDocument(
+  document: Record<string, unknown>,
+  requestLogMap: Map<string, Document[]>,
+): Record<string, unknown> {
+  const documentId = typeof document.id === "string" ? document.id : "";
+  const associatedRequests = requestLogMap.get(documentId) || [];
+  const metrics = aggregateRequestMetrics(associatedRequests);
+
+  // Apply cost overlay for agent conversations
+  const originalCost = (document.totalCost as number) || 0;
+  const totalCost =
+    document.type === "agent" && metrics.aggregatedCost > 0
+      ? Math.max(originalCost, metrics.aggregatedCost)
+      : originalCost;
+
+  return {
+    ...document,
+    totalCost,
+    requestCount: associatedRequests.length,
+    inputTokens: metrics.inputTokens,
+    outputTokens: metrics.outputTokens,
+    models: metrics.models,
+    toolDisplayNames: metrics.toolDisplayNames,
+    toolApiNames: metrics.toolApiNames,
+    avgTokensPerSec: metrics.avgTokensPerSec,
+    totalLatency: metrics.totalLatency,
+  };
+}
+
 // ─── GET /conversations — cross-project conversation list ─
 router.get(
   "/",
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const {
-        project,
-        username,
-        search,
-        provider,
-        model,
-        trace,
-        from,
-        to,
-        sort = "updatedAt",
-        agent,
-        type,
-        workspace,
-      } = req.query;
-
       const { skip, limit, sortDirection } = parsePaginationParams(req.query);
+      const filter = await buildConversationListFilter(req.query, req.db);
+      const scope = resolveListScope(req.query, filter, sortDirection);
 
-      const filter: Record<string, unknown> = {};
-      if (trace) filter.traceId = trace;
-      if (project) filter.project = project;
-      if (username) filter.username = username;
-      if (workspace) filter.workspaceRoot = workspace;
+      const page = await fetchConversationPage(
+        req.db,
+        filter,
+        scope,
+        skip,
+        limit,
+      );
+      const totals = await countConversationTotals(req.db, filter, scope);
 
-      if (search) {
-        const regex = { $regex: search, $options: "i" };
-        const orClauses: Record<string, unknown>[] = [
-          { title: regex },
-          { project: regex },
-          { username: regex },
-        ];
-
-        const searchString = typeof search === "string" ? search.trim() : "";
-        if (/^[\d.:a-f]+$/i.test(searchString)) {
-          const matchingConversationIds = await req.db
-            .collection(REQUESTS_COLLECTION)
-            .distinct("conversationId", { clientIp: regex });
-          if (matchingConversationIds.length > 0) {
-            orClauses.push({ id: { $in: matchingConversationIds } });
-          }
-        }
-        filter.$or = orClauses;
-      }
-
-      if (provider) filter.providers = provider;
-      if (model) filter["messages.model"] = model;
-
-      const fromString = typeof from === "string" ? from : undefined;
-      const toString = typeof to === "string" ? to : undefined;
-      applyDateRangeFilter(filter, fromString, toString, "updatedAt");
-
-      const sortDirectionValue = sortDirection;
-
-      const isDirectOnly = type === "direct" || agent === AGENT_IDS.NONE;
-      const isAgentOnly =
-        agent && agent !== AGENT_IDS.NONE && agent !== AGENT_IDS.ALL;
-
-      const shouldFetchDirectConversations = !isAgentOnly;
-      const shouldFetchAgentConversations = !isDirectOnly;
-
-      const agentFilter = { ...filter };
-      if (isAgentOnly) {
-        agentFilter.agent = agent;
-      }
-
-      let directConversations: Document[] = [];
-      let agentConversations: Document[] = [];
-
-      const queryPromises: Promise<void>[] = [];
-
-      const sortKey = typeof sort === "string" ? sort : "updatedAt";
-
-      if (shouldFetchDirectConversations) {
-        queryPromises.push(
-          req.db
-            .collection(CONVERSATIONS_COLLECTION)
-            .find(filter)
-            .project({
-              ...CONVERSATION_LIST_BASE_PROJECTION,
-              messageCount: { $size: { $ifNull: ["$messages", []] } },
-              totalCost: { $ifNull: ["$totalCost", 0] },
-            })
-            .sort({ [sortKey]: sortDirectionValue })
-            .limit(skip + limit)
-            .toArray()
-            .then((result) => {
-              directConversations = result;
-            }),
-        );
-      }
-
-      if (shouldFetchAgentConversations) {
-        queryPromises.push(
-          req.db
-            .collection(COLLECTIONS.AGENT_CONVERSATIONS)
-            .find(agentFilter)
-            .project({
-              ...CONVERSATION_LIST_BASE_PROJECTION,
-              messageCount: { $size: { $ifNull: ["$messages", []] } },
-              totalCost: { $ifNull: ["$totalCost", 0] },
-            })
-            .sort({ [sortKey]: sortDirectionValue })
-            .limit(skip + limit)
-            .toArray()
-            .then((result) => {
-              agentConversations = result;
-            }),
-        );
-      }
-
-      await Promise.all(queryPromises);
-
-      let totalDirectConversations = 0;
-      let totalAgentConversations = 0;
-      const countPromises: Promise<void>[] = [];
-
-      if (shouldFetchDirectConversations) {
-        countPromises.push(
-          req.db
-            .collection(CONVERSATIONS_COLLECTION)
-            .countDocuments(filter)
-            .then((result) => {
-              totalDirectConversations = result;
-            }),
-        );
-      }
-
-      if (shouldFetchAgentConversations) {
-        countPromises.push(
-          req.db
-            .collection(COLLECTIONS.AGENT_CONVERSATIONS)
-            .countDocuments(agentFilter)
-            .then((result) => {
-              totalAgentConversations = result;
-            }),
-        );
-      }
-
-      await Promise.all(countPromises);
-
-      const getSortValue = (item: Record<string, unknown>): string => {
-        const value = item[sortKey];
-        return value !== undefined ? String(value) : "";
-      };
-
-      const merged = [
-        ...directConversations.map((item) => ({ ...item, type: "direct" as const })),
-        ...agentConversations.map((session) => ({ ...session, type: "agent" as const })),
-      ].sort((firstItem, secondItem) => {
-        const valueA = getSortValue(firstItem as Record<string, unknown>);
-        const valueB = getSortValue(secondItem as Record<string, unknown>);
-        if (valueA < valueB) return -sortDirectionValue;
-        if (valueA > valueB) return sortDirectionValue;
-        return 0;
-      });
-
+      const merged = mergeConversationLists(page, scope);
       const paginatedDocuments = merged.slice(skip, skip + limit);
 
       const paginatedDocumentIds = paginatedDocuments.map(
         (document) => (document as Document).id,
       );
-      const agentConversationIds = paginatedDocuments
-        .filter((document) => document.type === "agent")
-        .map((document) => {
-          const id = (document as Record<string, unknown>).id;
-          return typeof id === "string" ? id : "";
-        })
-        .filter(Boolean);
+      const agentConversationIds = collectAgentConversationIds(paginatedDocuments);
 
-      const requests = await req.db
-        .collection(REQUESTS_COLLECTION)
-        .find({
-          $or: [
-            { conversationId: { $in: paginatedDocumentIds } },
-            { agentConversationId: { $in: agentConversationIds } },
-            { parentAgentConversationId: { $in: agentConversationIds } },
-          ],
-        })
-        .project({
-          conversationId: 1,
-          agentConversationId: 1,
-          parentAgentConversationId: 1,
-          inputTokens: 1,
-          outputTokens: 1,
-          model: 1,
-          tokensPerSec: 1,
-          totalTime: 1,
-          toolDisplayNames: 1,
-          toolApiNames: 1,
-          estimatedCost: 1,
-        })
-        .toArray();
+      const requests = await fetchConversationRequests(
+        req.db,
+        paginatedDocumentIds,
+        agentConversationIds,
+      );
+      const requestLogMap = buildRequestLogMap(requests, agentConversationIds);
 
-      const requestLogMap = new Map<string, Document[]>();
-      for (const requestItem of requests) {
-        let targetId = "";
-        if (
-          requestItem.parentAgentConversationId &&
-          agentConversationIds.includes(requestItem.parentAgentConversationId)
-        ) {
-          targetId = requestItem.parentAgentConversationId;
-        } else if (
-          requestItem.agentConversationId &&
-          agentConversationIds.includes(requestItem.agentConversationId)
-        ) {
-          targetId = requestItem.agentConversationId;
-        } else if (requestItem.conversationId) {
-          targetId = requestItem.conversationId;
-        }
-
-        if (targetId) {
-          if (!requestLogMap.has(targetId)) {
-            requestLogMap.set(targetId, []);
-          }
-          requestLogMap.get(targetId)!.push(requestItem);
-        }
-      }
-
-      const enrichedDocuments = paginatedDocuments.map(
-        (document: Record<string, unknown>) => {
-          const documentId = typeof document.id === "string" ? document.id : "";
-          const associatedRequests =
-            requestLogMap.get(documentId) || ([] as Document[]);
-          const models = Array.from(
-            new Set(
-              associatedRequests
-                .map((requestItem: Document) => requestItem.model)
-                .filter(Boolean),
-            ),
-          );
-          const toolDisplayNames = Array.from(
-            new Set(
-              associatedRequests
-                .flatMap(
-                  (requestItem: Document) =>
-                    (Array.isArray(requestItem.toolDisplayNames)
-                      ? requestItem.toolDisplayNames
-                      : []) || [],
-                )
-                .filter(Boolean),
-            ),
-          );
-          const toolApiNames = Array.from(
-            new Set(
-              associatedRequests
-                .flatMap(
-                  (requestItem: Document) =>
-                    (Array.isArray(requestItem.toolApiNames)
-                      ? requestItem.toolApiNames
-                      : []) || [],
-                )
-                .filter(Boolean),
-            ),
-          );
-
-          let inputTokens = 0;
-          let outputTokens = 0;
-          let totalLatency = 0;
-          let tokensPerSecondSum = 0;
-          let tokensPerSecondCount = 0;
-          let aggregatedCost = 0;
-
-          for (const requestItem of associatedRequests) {
-            inputTokens += requestItem.inputTokens || 0;
-            outputTokens += requestItem.outputTokens || 0;
-            totalLatency += requestItem.totalTime || 0;
-            aggregatedCost += requestItem.estimatedCost || 0;
-            if (requestItem.tokensPerSec && requestItem.tokensPerSec > 0) {
-              tokensPerSecondSum += requestItem.tokensPerSec;
-              tokensPerSecondCount++;
-            }
-          }
-
-          // Apply cost overlay for agent conversations
-          const originalCost = (document.totalCost as number) || 0;
-          const totalCost =
-            document.type === "agent" && aggregatedCost > 0
-              ? Math.max(originalCost, aggregatedCost)
-              : originalCost;
-
-          return {
-            ...document,
-            totalCost,
-            requestCount: associatedRequests.length,
-            inputTokens,
-            outputTokens,
-            models,
-            toolDisplayNames,
-            toolApiNames,
-            avgTokensPerSec:
-              tokensPerSecondCount > 0
-                ? tokensPerSecondSum / tokensPerSecondCount
-                : null,
-            totalLatency,
-          };
-        },
+      const enrichedDocuments = paginatedDocuments.map((document) =>
+        enrichConversationDocument(document, requestLogMap),
       );
 
       res.json({
         data: enrichedDocuments,
-        total: totalDirectConversations + totalAgentConversations,
+        total: totals.direct + totals.agent,
         page: parsePaginationParams(req.query).page,
         limit,
       });

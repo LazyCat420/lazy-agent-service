@@ -174,6 +174,122 @@ export interface LlamaCppServerProps {
   } | null;
 }
 
+// ── Server Props Normalizers ────────────────────────────────
+
+type LlamaCppGenerationSettings = NonNullable<
+  LlamaCppPropsResponse["default_generation_settings"]
+>;
+
+type NormalizedGenerationSettings = LlamaCppServerProps["defaultGenerationSettings"];
+type NormalizedSlots = LlamaCppServerProps["slots"];
+type NormalizedHealth = LlamaCppServerProps["health"];
+
+/** GET a JSON body, or null when the endpoint answers with an error status. */
+async function fetchJsonOrNull<T>(url: string): Promise<T | null> {
+  const response = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!response.ok) return null;
+  return response.json() as Promise<T>;
+}
+
+function normalizeGenerationParams(
+  params: LlamaCppGenerationSettings["params"] | undefined,
+): Omit<NonNullable<NormalizedGenerationSettings>, "contextLength" | "cacheTypeK" | "cacheTypeV"> {
+  const supplied = params || {};
+  return {
+    temperature: supplied.temperature ?? 0.8,
+    topK: supplied.top_k ?? 40,
+    topP: supplied.top_p ?? 0.95,
+    minP: supplied.min_p ?? 0.05,
+    repeatPenalty: supplied.repeat_penalty ?? 1.0,
+    presencePenalty: supplied.presence_penalty ?? 0.0,
+    frequencyPenalty: supplied.frequency_penalty ?? 0.0,
+    seed: supplied.seed ?? -1,
+    maxTokens: supplied.n_predict ?? -1,
+    samplers: supplied.samplers || [],
+  };
+}
+
+function normalizeGenerationSettings(
+  propsData: LlamaCppPropsResponse | null,
+): NormalizedGenerationSettings {
+  const generationSettings = propsData?.default_generation_settings;
+  if (!generationSettings) return null;
+  return {
+    contextLength: generationSettings.n_ctx || 0,
+    ...normalizeGenerationParams(generationSettings.params),
+    cacheTypeK: generationSettings.cache_type_k || null,
+    cacheTypeV: generationSettings.cache_type_v || null,
+  };
+}
+
+function normalizeSlots(slotsData: LlamaCppSlotEntry[] | null): NormalizedSlots {
+  if (!Array.isArray(slotsData)) return [];
+  return slotsData.map((slot) => ({
+    id: slot.id,
+    state: slot.is_processing ? "processing" : "idle",
+    model: slot.model || null,
+    contextLength: slot.n_ctx || 0,
+    tokensUsed: slot.n_past || 0,
+    tokensPredicted: slot.tokens_predicted || 0,
+    cacheTokens: slot.cache_tokens || 0,
+    isProcessing: slot.is_processing || false,
+  }));
+}
+
+function normalizeHealth(healthData: HealthResponse | null): NormalizedHealth {
+  if (!healthData) return null;
+  return {
+    status: healthData.status || "unknown",
+    slotsIdle: healthData.slots_idle ?? null,
+    slotsProcessing: healthData.slots_processing ?? null,
+  };
+}
+
+function buildModelIdentity(
+  propsData: LlamaCppPropsResponse | null,
+): Pick<LlamaCppServerProps, "modelPath" | "modelAlias" | "chatTemplate"> {
+  return {
+    modelPath: propsData?.model_path || null,
+    modelAlias: propsData?.model_alias || null,
+    chatTemplate: propsData?.chat_template || null,
+  };
+}
+
+function buildServerModalities(
+  propsData: LlamaCppPropsResponse | null,
+): Pick<LlamaCppServerProps, "modalities"> {
+  const modalities = propsData?.modalities;
+  return {
+    modalities: modalities
+      ? {
+          vision: modalities.vision ?? false,
+          audio: modalities.audio ?? false,
+        }
+      : null,
+  };
+}
+
+function buildServerProps(
+  propsData: LlamaCppPropsResponse | null,
+  defaultGenerationSettings: NormalizedGenerationSettings,
+  slots: NormalizedSlots,
+  health: NormalizedHealth,
+): LlamaCppServerProps {
+  return {
+    totalSlots: propsData?.total_slots ?? slots.length,
+    ...buildModelIdentity(propsData),
+    ...buildServerModalities(propsData),
+    endpointSlots: propsData?.endpoint_slots ?? false,
+    endpointMetrics: propsData?.endpoint_metrics ?? false,
+    defaultGenerationSettings,
+    slots,
+    health,
+  };
+}
+
 // ── Provider ─────────────────────────────────────────────────
 export function createLlamaCppProvider(
   baseUrl: string,
@@ -570,29 +686,11 @@ export function createLlamaCppProvider(
       const baseUrl = getBaseUrl();
       logger.provider("llama.cpp", "getServerProps");
 
-      // Fetch /props and /slots in parallel with independent timeouts
+      // Fetch /props, /slots and /health in parallel with independent timeouts
       const [propsResult, slotsResult, healthResult] = await Promise.allSettled([
-        fetch(`${baseUrl}/props`, {
-          method: "GET",
-          signal: AbortSignal.timeout(3000),
-        }).then((response) => {
-          if (!response.ok) return null;
-          return response.json() as Promise<LlamaCppPropsResponse>;
-        }),
-        fetch(`${baseUrl}/slots`, {
-          method: "GET",
-          signal: AbortSignal.timeout(3000),
-        }).then((response) => {
-          if (!response.ok) return null;
-          return response.json() as Promise<LlamaCppSlotEntry[]>;
-        }),
-        fetch(`${baseUrl}/health`, {
-          method: "GET",
-          signal: AbortSignal.timeout(3000),
-        }).then((response) => {
-          if (!response.ok) return null;
-          return response.json() as Promise<HealthResponse>;
-        }),
+        fetchJsonOrNull<LlamaCppPropsResponse>(`${baseUrl}/props`),
+        fetchJsonOrNull<LlamaCppSlotEntry[]>(`${baseUrl}/slots`),
+        fetchJsonOrNull<HealthResponse>(`${baseUrl}/health`),
       ]);
 
       const propsData =
@@ -602,68 +700,12 @@ export function createLlamaCppProvider(
       const healthData =
         healthResult.status === "fulfilled" ? healthResult.value : null;
 
-      // Normalize /props response
-      const generationSettings = propsData?.default_generation_settings;
-      const generationParameters = generationSettings?.params;
-
-      const normalizedSettings = generationSettings
-        ? {
-            contextLength: generationSettings.n_ctx || 0,
-            temperature: generationParameters?.temperature ?? 0.8,
-            topK: generationParameters?.top_k ?? 40,
-            topP: generationParameters?.top_p ?? 0.95,
-            minP: generationParameters?.min_p ?? 0.05,
-            repeatPenalty: generationParameters?.repeat_penalty ?? 1.0,
-            presencePenalty: generationParameters?.presence_penalty ?? 0.0,
-            frequencyPenalty: generationParameters?.frequency_penalty ?? 0.0,
-            seed: generationParameters?.seed ?? -1,
-            maxTokens: generationParameters?.n_predict ?? -1,
-            samplers: generationParameters?.samplers || [],
-            cacheTypeK: generationSettings.cache_type_k || null,
-            cacheTypeV: generationSettings.cache_type_v || null,
-          }
-        : null;
-
-      // Normalize /slots response
-      const normalizedSlots = Array.isArray(slotsData)
-        ? slotsData.map((slot: LlamaCppSlotEntry) => ({
-            id: slot.id,
-            state: slot.is_processing ? "processing" : "idle",
-            model: slot.model || null,
-            contextLength: slot.n_ctx || 0,
-            tokensUsed: slot.n_past || 0,
-            tokensPredicted: slot.tokens_predicted || 0,
-            cacheTokens: slot.cache_tokens || 0,
-            isProcessing: slot.is_processing || false,
-          }))
-        : [];
-
-      // Normalize /health response
-      const normalizedHealth = healthData
-        ? {
-            status: healthData.status || "unknown",
-            slotsIdle: healthData.slots_idle ?? null,
-            slotsProcessing: healthData.slots_processing ?? null,
-          }
-        : null;
-
-      return {
-        totalSlots: propsData?.total_slots ?? normalizedSlots.length,
-        modelPath: propsData?.model_path || null,
-        modelAlias: propsData?.model_alias || null,
-        chatTemplate: propsData?.chat_template || null,
-        modalities: propsData?.modalities
-          ? {
-              vision: propsData.modalities.vision ?? false,
-              audio: propsData.modalities.audio ?? false,
-            }
-          : null,
-        endpointSlots: propsData?.endpoint_slots ?? false,
-        endpointMetrics: propsData?.endpoint_metrics ?? false,
-        defaultGenerationSettings: normalizedSettings,
-        slots: normalizedSlots,
-        health: normalizedHealth,
-      };
+      return buildServerProps(
+        propsData,
+        normalizeGenerationSettings(propsData),
+        normalizeSlots(slotsData),
+        normalizeHealth(healthData),
+      );
     },
   };
 }
