@@ -5,6 +5,7 @@ import * as fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ToolOrchestratorService from "../ToolOrchestratorService.ts";
 import * as WebExtractModule from "../WebExtractService.ts";
+import { normalizeScrapeUrl } from "../../utils/ScrapeUrl.ts";
 import {
   bucketCharLimit,
   truncateAndStore,
@@ -229,7 +230,63 @@ describe("WEB_CACHE_EXEMPT_HOSTS", () => {
   });
 });
 
+describe("normalizeScrapeUrl", () => {
+  it("keeps a full http(s) URL untouched", () => {
+    expect(normalizeScrapeUrl("https://example.com/a?b=1")).toBe("https://example.com/a?b=1");
+    expect(normalizeScrapeUrl("HTTP://Example.com")).toBe("HTTP://Example.com");
+  });
+
+  it("upgrades a bare host, with or without a path or port", () => {
+    expect(normalizeScrapeUrl("finviz.com/quote.ashx?t=BWFG")).toBe("https://finviz.com/quote.ashx?t=BWFG");
+    expect(normalizeScrapeUrl("www.sec.gov/Archives/edgar/data/1")).toBe("https://www.sec.gov/Archives/edgar/data/1");
+    expect(normalizeScrapeUrl("blog.test:8443/post")).toBe("https://blog.test:8443/post");
+    expect(normalizeScrapeUrl("example.com")).toBe("https://example.com");
+  });
+
+  it("turns a protocol-relative URL into https", () => {
+    expect(normalizeScrapeUrl("//cdn.example.com/a.png")).toBe("https://cdn.example.com/a.png");
+  });
+
+  it("leaves a relative path or a bare word alone so the caller can reject it", () => {
+    expect(normalizeScrapeUrl("/investors/earnings")).toBe("/investors/earnings");
+    expect(normalizeScrapeUrl("localhost")).toBe("localhost");
+    expect(normalizeScrapeUrl("")).toBe("");
+    expect(normalizeScrapeUrl(undefined)).toBe("");
+    expect(normalizeScrapeUrl("  https://example.com/x  ")).toBe("https://example.com/x");
+  });
+});
+
 describe("scrape_url handler", () => {
+  it("upgrades a bare domain to https before extracting", async () => {
+    const h = harness([{ body: JSON.stringify({ success: true, content: "page text", engine_used: "http" }) }]);
+    const result = await webExtract("example.com/article", 15_000, h.deps);
+    expect(result).toMatchObject({ status: "ok", url: "https://example.com/article", content: "page text" });
+    expect(h.calls[0].body).toEqual({ url: "https://example.com/article", engine: "auto" });
+  });
+
+  it("rejects a relative path with the actionable full-URL message", async () => {
+    const h = harness([]);
+    const result = await webExtract("/investors/earnings", 15_000, h.deps);
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("https://");
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it("tells the model to retry with a full URL when the argument is malformed", async () => {
+    const out = await ToolOrchestratorService.executeWebExtract({ url: "/investors/earnings" });
+    expect(out.success).toBe(false);
+    expect(out.error).toContain("Call scrape_url again with the full URL including https://");
+    expect(out.error).toContain("(url: /investors/earnings)");
+  });
+
+  it("normalizes a bare domain through the handler", async () => {
+    const plainSpy = vi.spyOn(WebExtractModule, "webExtract").mockResolvedValue({ status: "ok", url: "https://sec.gov/a", content: "filing", truncated: false, cached: false });
+    const out = await ToolOrchestratorService.executeWebExtract({ url: "sec.gov/a" });
+    expect(plainSpy).toHaveBeenCalledWith("https://sec.gov/a", undefined);
+    expect(out).toMatchObject({ url: "https://sec.gov/a", success: true });
+    plainSpy.mockRestore();
+  });
+
   it("reports a failed extract with a prompt as success:false, not an empty answer (audit D7)", async () => {
     const out = await (ToolOrchestratorService as any).executeWebExtract({ url: "https://127.0.0.1/x", prompt: "what?" });
     expect(out.success).toBe(false);

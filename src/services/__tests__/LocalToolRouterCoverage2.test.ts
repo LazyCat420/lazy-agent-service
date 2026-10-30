@@ -467,6 +467,13 @@ describe("routeLocalTool — scrape_url and remote MCP", () => {
     expect(fakes.executeWebExtract).toHaveBeenCalledWith({});
   });
 
+  it("normalizes a bare domain before the guards and the extractor", async () => {
+    await routeLocalTool("scrape_url", { url: "blog.test/post" });
+    expect(fakes.scrapeTargetGuard).toHaveBeenCalledWith("https://blog.test/post", expect.anything());
+    expect(fakes.chargeScrape).toHaveBeenCalledWith("https://blog.test/post", expect.anything());
+    expect(fakes.executeWebExtract).toHaveBeenCalledWith({ url: "https://blog.test/post" });
+  });
+
   it("delegates a connected remote MCP tool", async () => {
     fakes.parseMCPToolName.mockReturnValue({ serverName: "obsidian", toolName: "search" });
     fakes.isConnected.mockReturnValue(true);

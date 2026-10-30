@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-30T11:14:51.432Z",
+  "generatedAt": "2026-10-30T22:18:50.895Z",
   "maxCompactRatio": 0.5,
   "maxDescriptionChars": 600,
   "maxFullTokens": 15000,
@@ -21,7 +21,7 @@
     {
       "scope": "trading",
       "tools": 41,
-      "full": 5431,
+      "full": 5468,
       "summary": 1183,
       "compact": 1527
     },
@@ -35,7 +35,7 @@
     {
       "scope": "ALL",
       "tools": 77,
-      "full": 12888,
+      "full": 12926,
       "summary": 2256,
       "compact": 2918
     }

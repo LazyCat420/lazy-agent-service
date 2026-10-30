@@ -11754,6 +11754,23 @@
         },
         {
           "dynamic": false,
+          "module": "../utils/ScrapeUrl.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/ScrapeUrl.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
           "module": "../utils/VoiceCatalog.ts",
           "moduleSystem": "es6",
           "exoticallyRequired": false,
@@ -12423,6 +12440,18 @@
         "src/services/__tests__/ProbeFault.test.ts",
         "src/services/__tests__/TradingToolTransport.test.ts",
         "src/services/__tests__/VllmShimService.test.ts"
+      ],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/utils/ScrapeUrl.ts",
+      "dependencies": [],
+      "dependents": [
+        "src/services/ToolOrchestratorService.ts",
+        "src/services/LocalToolRouter.ts",
+        "src/services/WebExtractService.ts",
+        "src/services/__tests__/WebExtractService.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -14857,6 +14886,23 @@
             "import"
           ],
           "resolved": "src/utils/logger.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../utils/ScrapeUrl.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/ScrapeUrl.ts",
           "coreModule": false,
           "followable": true,
           "couldNotResolve": false,
@@ -20035,6 +20081,23 @@
             "import"
           ],
           "resolved": "src/utils/ModelResolution.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../utils/ScrapeUrl.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/ScrapeUrl.ts",
           "coreModule": false,
           "followable": true,
           "couldNotResolve": false,
@@ -61983,6 +62046,23 @@
       "dependencies": [
         {
           "dynamic": false,
+          "module": "../../utils/ScrapeUrl.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/utils/ScrapeUrl.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
           "module": "../ToolOrchestratorService.ts",
           "moduleSystem": "es6",
           "exoticallyRequired": false,
@@ -74740,8 +74820,8 @@
     "info": 0,
     "ignore": 0,
     "advisedExitCode": 0,
-    "totalCruised": 616,
-    "totalDependenciesCruised": 2694,
+    "totalCruised": 617,
+    "totalDependenciesCruised": 2698,
     "optionsUsed": {
       "baseDir": "/home/lazycat/github/projects/sun/agents/lazy-agent-service",
       "combinedDependencies": false,

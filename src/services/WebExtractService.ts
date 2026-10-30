@@ -39,6 +39,7 @@ import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { assertPublicUrl, isPrivateAddress } from "../utils/UrlSafety.ts";
+import { normalizeScrapeUrl } from "../utils/ScrapeUrl.ts";
 import { UNSCRAPABLE_CODE, unscrapableDomainOf } from "./UnscrapableDomains.ts";
 import SettingsService from "./SettingsService.ts";
 import { getProvider } from "../providers/index.ts";
@@ -238,9 +239,16 @@ async function scrapeViaScraperService(url: string, deps: WebExtractDeps): Promi
  * storeDir; the footer names it so the agent can read the omitted middle.
  */
 export async function webExtract(url: string, charLimit = DEFAULT_CHAR_LIMIT, deps: WebExtractDeps = defaultDeps): Promise<WebExtractResult> {
-  const cleanUrl = String(url ?? "").trim();
+  const cleanUrl = normalizeScrapeUrl(url);
   if (!/^https?:\/\//i.test(cleanUrl)) {
-    return { status: "error", url: cleanUrl, content: "", truncated: false, cached: false, error: "url is required and must start with http(s)://" };
+    return {
+      status: "error",
+      url: cleanUrl,
+      content: "",
+      truncated: false,
+      cached: false,
+      error: "url is required and must be a full URL starting with http(s):// (e.g. https://example.com/article); copy it from the search results",
+    };
   }
   // Before the SSRF guard's DNS lookup and any fetch: these publishers fail
   // every scrape (see UnscrapableDomains), so asking costs a 20 s browser

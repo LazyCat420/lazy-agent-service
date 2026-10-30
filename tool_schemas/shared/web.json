@@ -7,7 +7,7 @@
       "properties": {
         "url": {
           "type": "string",
-          "description": "The URL to scrape."
+          "description": "The full URL to read, including https:// — copy it from a search result. A bare domain (example.com/article) is accepted and upgraded to https; a relative path is not."
         },
         "char_limit": {
           "type": "number",

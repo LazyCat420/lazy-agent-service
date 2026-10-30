@@ -1352,18 +1352,18 @@
       "kind": "exact",
       "lines": 10,
       "secondFile": {
-        "end": 2289,
+        "end": 2305,
         "endLoc": {
           "column": 20,
-          "line": 2289,
-          "position": 86585
+          "line": 2305,
+          "position": 87315
         },
         "name": "services/ToolOrchestratorService.ts",
-        "start": 2280,
+        "start": 2296,
         "startLoc": {
           "column": 6,
-          "line": 2280,
-          "position": 86263
+          "line": 2296,
+          "position": 86993
         }
       },
       "tokens": 73
@@ -5588,18 +5588,18 @@
     },
     {
       "firstFile": {
-        "end": 396,
+        "end": 397,
         "endLoc": {
           "column": 55,
-          "line": 396,
-          "position": 15162
+          "line": 397,
+          "position": 15222
         },
         "name": "services/ToolOrchestratorService.ts",
-        "start": 389,
+        "start": 390,
         "startLoc": {
           "column": 4,
-          "line": 389,
-          "position": 14789
+          "line": 390,
+          "position": 14849
         }
       },
       "format": "typescript",
@@ -5608,36 +5608,36 @@
       "kind": "exact",
       "lines": 8,
       "secondFile": {
-        "end": 1267,
+        "end": 1288,
         "endLoc": {
           "column": 55,
-          "line": 1267,
-          "position": 46526
+          "line": 1288,
+          "position": 47450
         },
         "name": "services/ToolOrchestratorService.ts",
-        "start": 1260,
+        "start": 1281,
         "startLoc": {
           "column": 4,
-          "line": 1260,
-          "position": 46153
+          "line": 1281,
+          "position": 47077
         }
       },
       "tokens": 64
     },
     {
       "firstFile": {
-        "end": 636,
+        "end": 657,
         "endLoc": {
           "column": 7,
-          "line": 636,
-          "position": 23029
+          "line": 657,
+          "position": 23953
         },
         "name": "services/ToolOrchestratorService.ts",
-        "start": 620,
+        "start": 641,
         "startLoc": {
           "column": 45,
-          "line": 620,
-          "position": 22593
+          "line": 641,
+          "position": 23517
         }
       },
       "format": "typescript",
@@ -5646,36 +5646,36 @@
       "kind": "exact",
       "lines": 17,
       "secondFile": {
-        "end": 2225,
+        "end": 2241,
         "endLoc": {
           "column": 9,
-          "line": 2225,
-          "position": 84183
+          "line": 2241,
+          "position": 84913
         },
         "name": "services/ToolOrchestratorService.ts",
-        "start": 2210,
+        "start": 2226,
         "startLoc": {
           "column": 69,
-          "line": 2210,
-          "position": 83779
+          "line": 2226,
+          "position": 84509
         }
       },
       "tokens": 85
     },
     {
       "firstFile": {
-        "end": 755,
+        "end": 776,
         "endLoc": {
           "column": 1,
-          "line": 755,
-          "position": 27695
+          "line": 776,
+          "position": 28619
         },
         "name": "services/ToolOrchestratorService.ts",
-        "start": 731,
+        "start": 752,
         "startLoc": {
           "column": 34,
-          "line": 731,
-          "position": 26996
+          "line": 752,
+          "position": 27920
         }
       },
       "format": "typescript",
@@ -5684,36 +5684,36 @@
       "kind": "exact",
       "lines": 25,
       "secondFile": {
-        "end": 793,
+        "end": 814,
         "endLoc": {
           "column": 1,
-          "line": 793,
-          "position": 28803
+          "line": 814,
+          "position": 29727
         },
         "name": "services/ToolOrchestratorService.ts",
-        "start": 768,
+        "start": 789,
         "startLoc": {
           "column": 32,
-          "line": 768,
-          "position": 28036
+          "line": 789,
+          "position": 28960
         }
       },
       "tokens": 134
     },
     {
       "firstFile": {
-        "end": 1861,
+        "end": 1882,
         "endLoc": {
           "column": 81,
-          "line": 1861,
-          "position": 69583
+          "line": 1882,
+          "position": 70507
         },
         "name": "services/ToolOrchestratorService.ts",
-        "start": 1855,
+        "start": 1876,
         "startLoc": {
           "column": 8,
-          "line": 1855,
-          "position": 69260
+          "line": 1876,
+          "position": 70184
         }
       },
       "format": "typescript",
@@ -5722,18 +5722,18 @@
       "kind": "exact",
       "lines": 7,
       "secondFile": {
-        "end": 1933,
+        "end": 1949,
         "endLoc": {
           "column": 77,
-          "line": 1933,
-          "position": 72615
+          "line": 1949,
+          "position": 73345
         },
         "name": "services/ToolOrchestratorService.ts",
-        "start": 1927,
+        "start": 1943,
         "startLoc": {
           "column": 4,
-          "line": 1927,
-          "position": 72316
+          "line": 1943,
+          "position": 73046
         }
       },
       "tokens": 62
@@ -7716,32 +7716,32 @@
     }
   ],
   "statistics": {
-    "detectionDate": "2026-10-30T11:14:49.129Z",
+    "detectionDate": "2026-10-30T22:18:48.704Z",
     "formats": {
       "typescript": {
         "clones": 203,
         "duplicatedLines": 2974,
         "duplicatedTokens": 17354,
-        "lines": 114780,
+        "lines": 114836,
         "newClones": 0,
         "newDuplicatedLines": 0,
-        "percentage": 2.591043735842481,
-        "percentageTokens": 2.918821639713735,
-        "sources": 380,
-        "tokens": 594555
+        "percentage": 2.5897802082970496,
+        "percentageTokens": 2.9179873050569594,
+        "sources": 381,
+        "tokens": 594725
       }
     },
     "total": {
       "clones": 203,
       "duplicatedLines": 2974,
       "duplicatedTokens": 17354,
-      "lines": 114780,
+      "lines": 114836,
       "newClones": 0,
       "newDuplicatedLines": 0,
-      "percentage": 2.591043735842481,
-      "percentageTokens": 2.918821639713735,
-      "sources": 380,
-      "tokens": 594555
+      "percentage": 2.5897802082970496,
+      "percentageTokens": 2.9179873050569594,
+      "sources": 381,
+      "tokens": 594725
     }
   }
 }

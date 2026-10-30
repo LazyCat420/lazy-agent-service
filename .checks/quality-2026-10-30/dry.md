@@ -1,11 +1,11 @@
-# Duplication report (2026-10-30T11:14:49.168Z)
+# Duplication report (2026-10-30T22:18:48.743Z)
 
 jscpd, min-tokens 60
 
 | scan | duplicated % | duplicated lines | total lines | clones |
 |---|---|---|---|---|
-| logic | 2.2602377083599583% | 2476 | 109546 | 177 |
-| all | 2.591043735842481% | 2974 | 114780 | 203 |
+| logic | 2.259082863451397% | 2476 | 109602 | 177 |
+| all | 2.5897802082970496% | 2974 | 114836 | 203 |
 
 ## Top logic clones
 

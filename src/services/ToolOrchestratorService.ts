@@ -8,6 +8,7 @@ import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 import { ORCHESTRATOR_ONLY_TOOLS } from "./OrchestratorPrompt.ts";
 import { filterResultsByDomain, webSearch, withSiteSearch } from "./WebSearchService.ts";
 import { webExtract, webExtractAnswered } from "./WebExtractService.ts";
+import { normalizeScrapeUrl } from "../utils/ScrapeUrl.ts";
 import { unscrapableDomainOf, unscrapableRefusal } from "./UnscrapableDomains.ts";
 import { compactFinnhubNews } from "./FinnhubNewsProjection.ts";
 import { createAbortController } from "../utils/AbortController.ts";
@@ -479,6 +480,26 @@ async function prefetchAllLocaleSchemas() {
 
 /** The default-locale fetch in flight, so ensureSchemas() can wait for it instead of reading an empty catalog. */
 let schemaFetchInFlight: Promise<void> | null = null;
+/**
+ * Failure text for `scrape_url`. A malformed argument gets an actionable
+ * retry hint: the old "Try again later or use another source" told the model
+ * to either give up or repeat the same bad URL (68 calls in October 2026 came
+ * back with a URL missing its scheme). The URL is echoed so the telemetry
+ * row keeps the value that failed, not just its hash.
+ */
+function webExtractFailure(url: string, error: string): Record<string, unknown> {
+  const malformed = /url is required/i.test(error) || /must start with http/i.test(error);
+  const guidance = malformed
+    ? "Call scrape_url again with the full URL including https:// (copy it from the search results)."
+    : "Try another URL or source.";
+  return {
+    url,
+    content: "",
+    success: false,
+    error: `Extraction did not run: ${error}. ${guidance}${url ? ` (url: ${url})` : ""}`,
+  };
+}
+
 function startSchemaFetch(): Promise<void> {
   if (!schemaFetchInFlight) {
     const fetching: Promise<void> = fetchSchemas().finally(() => {
@@ -1876,9 +1897,9 @@ export default class ToolOrchestratorService {
    * full-text file and how to read it.
    */
   static async executeWebExtract(args: Record<string, unknown> = {}) {
-    const url = typeof args.url === "string" ? args.url.trim() : "";
+    const url = normalizeScrapeUrl(typeof args.url === "string" ? args.url : "");
     if (!url) {
-      return { error: "'url' is required and must be a non-empty string" };
+      return webExtractFailure("", "'url' is required and must be a non-empty string");
     }
     // A publisher that fails every scrape gets its own refusal, not the
     // generic "Try again later" below, which invited the retries.
@@ -1891,7 +1912,7 @@ export default class ToolOrchestratorService {
     if (prompt) {
       const answered = await webExtractAnswered(url, prompt, charLimit);
       if (answered.error) {
-        return { url, content: "", success: false, error: `Extraction did not run: ${answered.error}. Try again later or use another source.` };
+        return webExtractFailure(url, answered.error);
       }
       if (answered.content && answered.answer === answered.content) {
         // Graceful degradation (no Q&A model): deterministic extract only.
@@ -1917,12 +1938,7 @@ export default class ToolOrchestratorService {
     }
     const extracted = await webExtract(url, charLimit);
     if (extracted.status !== "ok") {
-      return {
-        url,
-        content: "",
-        success: false,
-        error: `Extraction did not run: ${extracted.error || "no detail"}. Try again later or use another source.`,
-      };
+      return webExtractFailure(url, extracted.error || "no detail");
     }
     return {
       url,

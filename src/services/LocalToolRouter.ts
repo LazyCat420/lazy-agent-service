@@ -16,6 +16,7 @@ import {
   scrapeTargetGuard,
   unscrapableDomainOf,
 } from "./UnscrapableDomains.ts";
+import { normalizeScrapeUrl } from "../utils/ScrapeUrl.ts";
 
 /**
  * LocalToolRouter — single source of truth for executing this service's
@@ -401,8 +402,12 @@ async function routeScrapeUrlTool(
   toolArguments: Record<string, unknown>,
   context: LocalToolContext,
 ): Promise<unknown> {
-  const url = typeof toolArguments.url === "string" ? toolArguments.url : "";
-  if (url.trim()) {
+  const rawUrl = typeof toolArguments.url === "string" ? toolArguments.url : "";
+  // Models write search results as `domain.tld/path`; normalize before the
+  // deny-list, budget and SSRF checks so they judge the URL that will be
+  // fetched, not the raw text (which used to be rejected outright).
+  const url = normalizeScrapeUrl(rawUrl);
+  if (url) {
     const targetRefusal = scrapeTargetGuard(url, context);
     if (targetRefusal) return targetRefusal;
     if (!unscrapableDomainOf(url)) {
@@ -410,8 +415,12 @@ async function routeScrapeUrlTool(
       if (refusal) return refusal;
     }
   }
+  const normalized = url && url !== rawUrl ? { ...toolArguments, url } : toolArguments;
+  // Dynamic import required: ToolOrchestratorService imports routeLocalTool back
+  // from this module, so a static import here would make the cycle load-order
+  // dependent (one side must resolve the other lazily).
   const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
-  return ToolOrchestratorService.executeWebExtract(toolArguments);
+  return ToolOrchestratorService.executeWebExtract(normalized);
 }
 
 async function routeWebSearchTool(
