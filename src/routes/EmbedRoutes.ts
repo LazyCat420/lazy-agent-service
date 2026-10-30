@@ -6,6 +6,93 @@ import EmbeddingCorpusService from "../services/EmbeddingCorpusService.ts";
 
 const router = express.Router();
 
+/** POST /embed body. Unknown extras pass through untouched. */
+interface EmbedRequestBody {
+  provider?: string;
+  model?: string;
+  text?: string;
+  texts?: string[];
+  images?: string[];
+  audio?: string;
+  video?: string;
+  pdf?: string;
+  taskType?: string;
+  input_type?: string;
+  dimensions?: number;
+  traceId?: string | null;
+  [key: string]: unknown;
+}
+
+/** Split a base64 data URL into payload + mime type; else keep the data and use the fallback mime. */
+export function parseDataUrl(
+  data: string,
+  fallbackMime: string,
+): { data: string; mimeType: string } {
+  if (typeof data === "string" && data.includes(";base64,")) {
+    const segments = data.split(";base64,");
+    return {
+      data: segments[1],
+      mimeType: segments[0].replace("data:", ""),
+    };
+  }
+  return { data, mimeType: fallbackMime };
+}
+
+function buildInlinePart(
+  data: string,
+  fallbackMime: string,
+): Record<string, unknown> {
+  return { inlineData: parseDataUrl(data, fallbackMime) };
+}
+
+/** True when the body carries at least one content input (text, images, audio, video, pdf). */
+export function hasContentInput(body: EmbedRequestBody): boolean {
+  const { text, images, audio, video, pdf } = body;
+  return Boolean(
+    text || (images && images.length > 0) || audio || video || pdf,
+  );
+}
+
+/** Text-only vs multimodal content, preserving input order for images and media. */
+export function buildEmbeddingContent(
+  body: EmbedRequestBody,
+): string | Record<string, unknown>[] {
+  const { text, images, audio, video, pdf } = body;
+  const hasImages = images && images.length > 0;
+  const isMultimodal =
+    hasImages || Boolean(audio) || Boolean(video) || Boolean(pdf);
+
+  if (!isMultimodal && text) return text as string;
+
+  const parts: Record<string, unknown>[] = [];
+  if (text) parts.push({ text });
+  if (hasImages) {
+    for (const image of images) {
+      parts.push(buildInlinePart(image, "image/jpeg"));
+    }
+  }
+  if (audio) parts.push(buildInlinePart(audio, "audio/mpeg"));
+  if (video) parts.push(buildInlinePart(video, "video/mp4"));
+  if (pdf) parts.push(buildInlinePart(pdf, "application/pdf"));
+  return parts;
+}
+
+/** EmbeddingService options shared by the single-input and batch branches. */
+function buildEmbedOptions(req: Request, body: EmbedRequestBody) {
+  return {
+    provider: body.provider,
+    model: body.model,
+    taskType: body.taskType || body.input_type,
+    dimensions: body.dimensions,
+    project: req.project,
+    username: req.username,
+    clientIp: req.clientIp,
+    source: "api",
+    endpoint: "/embed",
+    traceId: body.traceId || null,
+  };
+}
+
 /**
  * POST /embed
  * Body: {
@@ -26,44 +113,20 @@ router.post(
   "/",
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const {
-        provider: pName,
-        model,
-        text,
-        images,
-        audio,
-        video,
-        pdf,
-        taskType,
-        dimensions,
-        traceId,
-      } = req.body;
+      const body: EmbedRequestBody = req.body;
+      const options = buildEmbedOptions(req, body);
 
       // Text batch: one vector per input, in input order, same space as `text`.
-      if (req.body.texts !== undefined) {
-        if (text || images || audio || video || pdf) {
+      if (body.texts !== undefined) {
+        if (body.text || body.images || body.audio || body.video || body.pdf) {
           throw new ProviderError("server", "Send either texts or a single content input, not both", 400);
         }
-        const result = await EmbeddingService.generateMany(req.body.texts, {
-          provider: pName,
-          model,
-          taskType: taskType || req.body.input_type,
-          dimensions,
-          project: req.project,
-          username: req.username,
-          clientIp: req.clientIp,
-          source: "api",
-          endpoint: "/embed",
-          traceId: traceId || null,
-        });
-        res.json(result);
+        res.json(await EmbeddingService.generateMany(body.texts, options));
         return;
       }
 
       // At least one content input is required
-      const hasContent =
-        text || (images && images.length > 0) || audio || video || pdf;
-      if (!hasContent) {
+      if (!hasContentInput(body)) {
         throw new ProviderError(
           "server",
           "At least one content input is required (text, images, audio, video, or pdf)",
@@ -71,70 +134,7 @@ router.post(
         );
       }
 
-      // Build content for provider — text-only vs multimodal
-      let content: string | Record<string, unknown>[];
-      const isMultimodal =
-        (images && images.length > 0) || audio || video || pdf;
-
-      if (!isMultimodal && text) {
-        content = text;
-      } else {
-        const parts: Record<string, unknown>[] = [];
-
-        if (text) {
-          parts.push({ text });
-        }
-
-        const parseDataUrl = (data: string, fallbackMime: string) => {
-          if (typeof data === "string" && data.includes(";base64,")) {
-            const segments = data.split(";base64,");
-            return {
-              data: segments[1],
-              mimeType: segments[0].replace("data:", ""),
-            };
-          }
-          return { data, mimeType: fallbackMime };
-        };
-
-        if (images && images.length > 0) {
-          for (const image of images) {
-            const { data, mimeType } = parseDataUrl(image, "image/jpeg");
-            parts.push({ inlineData: { data, mimeType } });
-          }
-        }
-
-        if (audio) {
-          const { data, mimeType } = parseDataUrl(audio, "audio/mpeg");
-          parts.push({ inlineData: { data, mimeType } });
-        }
-
-        if (video) {
-          const { data, mimeType } = parseDataUrl(video, "video/mp4");
-          parts.push({ inlineData: { data, mimeType } });
-        }
-
-        if (pdf) {
-          const { data, mimeType } = parseDataUrl(pdf, "application/pdf");
-          parts.push({ inlineData: { data, mimeType } });
-        }
-
-        content = parts;
-      }
-
-      const result = await EmbeddingService.generate(content, {
-        provider: pName,
-        model,
-        taskType: taskType || req.body.input_type,
-        dimensions,
-        project: req.project,
-        username: req.username,
-        clientIp: req.clientIp,
-        source: "api",
-        endpoint: "/embed",
-        traceId: traceId || null,
-      });
-
-      res.json(result);
+      res.json(await EmbeddingService.generate(buildEmbeddingContent(body), options));
     } catch (error: unknown) {
       next(error);
     }
