@@ -1,8 +1,30 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["boot.ts", "src/index.ts", "scripts/**/*.{ts,mjs}", "scripts/quality/*.mjs"],
-  "project": ["src/**/*.ts", "config.ts", "boot.ts"],
-  "ignore": ["**/__tests__/**", "**/*.test.ts", "dist/**", "packages/**", "vendor/**", ".worktrees/**"],
+  "entry": [
+    "boot.ts",
+    "src/index.ts",
+    "src/telemetry/otel.ts",
+    "scripts/**/*.{ts,mjs}",
+    "scripts/quality/*.mjs"
+  ],
+  "project": [
+    "src/**/*.ts",
+    "config.ts",
+    "boot.ts"
+  ],
+  "ignore": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "dist/**",
+    "packages/**",
+    "vendor/**",
+    ".worktrees/**"
+  ],
   "ignoreExportsUsedInFile": true,
-  "include": ["files", "exports", "types", "duplicates"]
+  "include": [
+    "files",
+    "exports",
+    "types",
+    "duplicates"
+  ]
 }
