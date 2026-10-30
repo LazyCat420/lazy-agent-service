@@ -141,6 +141,20 @@ does not run `prettier --check`: the repo has never been Prettier-formatted
    a `CONTRACT_OWNERSHIP.md` owner list before enforcing.
 4. Coverage: no per-directory floor yet; add one after the CRAP batch.
 
+## Live verification (2026-10-30, deployed `57572df`)
+
+`scripts/eval/run-basic-eval.mjs`, 8 questions × 2 profiles (`trading`,
+`html-notes`), GLM-5.3 judge, concurrency 1, against `http://10.0.0.16:5591`.
+
+| profile | grades | wall s before → after | tool calls | tokens |
+|---|---|---|---|---|
+| trading | 7 PASS / 1 WEAK → same | 810 → 578 (−29 %) | 21 → 22 | 68,433 → 75,736 |
+| html-notes | 7 PASS / 1 WEAK → same | 877 → 566 (−36 %) | 12 → 13 | 46,865 → 48,404 |
+| total | 14 PASS / 2 WEAK → same | **1,688 → 1,144 (−32 %)** | 33 → 35 | 115,298 → 124,140 (+7.7 %) |
+
+LIKELY, not proven: one sample per question, uncontrolled backend load; the
+grades and tool counts show no behavioural regression.
+
 ## Verify it yourself
 
 ```bash
@@ -150,4 +164,5 @@ npm run quality:crap           # coverage + CRAP report
 node scripts/quality/prompt-budget.mjs
 ```
 
-Reports: `.checks/quality-2026-10-29/{crap,dry,arch,deadcode,prompt-budget}.{json,md}`.
+Reports: `.checks/quality-2026-10-30/{crap,dry,arch,deadcode,prompt-budget}.{json,md}`;
+live eval: `.checks/eval-baseline-2026-10-29/` and `.checks/eval-after-2026-10-29/`.

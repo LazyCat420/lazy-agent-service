@@ -53,8 +53,18 @@ files with no importers (`db.ts`, `SkillService.ts`, `RepositoryMapService.ts`,
 still green. Reports: `.checks/quality-2026-10-30/`.
 
 **Deployed:** `main@57572df` → synology NAS, build 96 s, `/health` returns
-`{"status":"ok"}`. Live eval re-run on the deployed build follows below once it
-finishes.
+`{"status":"ok"}`. Live eval re-run on the deployed build (same script, same 8
+questions × 2 profiles, GLM judge, concurrency 1):
+
+| profile | grades | wall s before → after | tool calls | tokens |
+|---|---|---|---|---|
+| trading | 7 PASS / 1 WEAK → same | 810 → 578 (−29 %) | 21 → 22 | 68,433 → 75,736 |
+| html-notes | 7 PASS / 1 WEAK → same | 877 → 566 (−36 %) | 12 → 13 | 46,865 → 48,404 |
+| total | 14 PASS / 2 WEAK → same | **1,688 → 1,144 (−32 %)** | 33 → 35 | 115,298 → 124,140 (+7.7 %) |
+
+LIKELY, not proven: 16 live runs with one sample per question, so wall-time
+variance and backend load are uncontrolled; grades and tool counts show no
+regression, and tokens rose slightly with the extra tool calls.
 
 **Next session:** raise coverage where CRAP is high, then lower
 `--max-crap-count` (360 → 300 → …) and tighten ESLint `complexity` to error 20;
