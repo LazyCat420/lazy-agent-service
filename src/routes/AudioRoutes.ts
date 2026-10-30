@@ -18,6 +18,7 @@ import RequestLogger from "../services/RequestLogger.ts";
 import { FILE_CATEGORIES } from "../constants.ts";
 
 import type { ChatMessage } from "../types/admin.ts";
+import type { TranscriptionResult } from "../types/provider.ts";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -375,6 +376,216 @@ router.post(
   }),
 );
 // ─── audio transcription (speech-to-text) ───────────────────
+interface TranscriptionBody {
+  provider?: string;
+  audio?: string;
+  model?: string;
+  language?: string;
+  prompt?: string;
+  conversationId?: string;
+  conversationMeta?: ConversationMeta;
+  traceId?: string;
+  skipConversation?: boolean;
+}
+
+interface TranscriptionContext {
+  conversationId: string | null;
+  conversationMeta: ConversationMeta | null;
+  traceId: string | null;
+}
+
+/**
+ * Auto-generate conversationId when caller omits it (mirrors chat route).
+ * TraceId is generated client-side and passed on every request; it is
+ * injected into conversationMeta for storage.
+ */
+function resolveTranscriptionContext(
+  body: TranscriptionBody,
+): TranscriptionContext {
+  const { skipConversation } = body;
+  let conversationId = skipConversation
+    ? null
+    : body.conversationId || null;
+  let conversationMeta: ConversationMeta | null = skipConversation
+    ? null
+    : body.conversationMeta || null;
+  if (!skipConversation && !conversationId) {
+    conversationId = crypto.randomUUID();
+    conversationMeta = conversationMeta || { title: "Audio Transcription" };
+  }
+  const traceId = body.traceId || null;
+  if (traceId && conversationMeta) {
+    conversationMeta.traceId = traceId;
+  } else if (traceId) {
+    conversationMeta = { traceId };
+  }
+  return { conversationId, conversationMeta, traceId };
+}
+
+/** Mark conversation as generating (creates a stub doc via upsert). */
+function markTranscriptionGenerating(
+  conversationId: string,
+  project: string,
+  username: string,
+  conversationMeta: ConversationMeta | null,
+): void {
+  ConversationService.setGenerating(
+    conversationId,
+    project,
+    username,
+    true,
+    {
+      title:
+        typeof conversationMeta?.title === "string"
+          ? conversationMeta.title
+          : undefined,
+    },
+  ).catch((error: unknown) =>
+    logger.error(`Failed to set isGenerating: ${getErrorMessage(error)}`),
+  );
+}
+
+function clearTranscriptionGenerating(
+  conversationId: string,
+  project: string,
+  username: string,
+): void {
+  ConversationService.setGenerating(
+    conversationId,
+    project,
+    username,
+    false,
+  ).catch((error: unknown) =>
+    logger.error(
+      `Failed to clear isGenerating on error: ${getErrorMessage(error)}`,
+    ),
+  );
+}
+
+/** Accept either a data URL or raw base64 audio. */
+function parseAudioPayload(audio: string): {
+  audioBuffer: Buffer;
+  mimeType: string;
+} {
+  let mimeType = "audio/mpeg";
+  const dataUrlMatch = audio.match(/^data:([^;]+);base64,(.+)$/);
+  if (dataUrlMatch) {
+    mimeType = dataUrlMatch[1];
+    return { audioBuffer: Buffer.from(dataUrlMatch[2], "base64"), mimeType };
+  }
+  return { audioBuffer: Buffer.from(audio, "base64"), mimeType };
+}
+
+function buildTranscribeOptions(
+  language: string | undefined,
+  prompt: string | undefined,
+): Record<string, string> {
+  const transcribeOptions: Record<string, string> = {};
+  if (language) transcribeOptions.language = language;
+  if (prompt) transcribeOptions.prompt = prompt;
+  return transcribeOptions;
+}
+
+/** Model-specific pricing when known, else the audio→text pricing table. */
+function estimateTranscriptionCost(
+  model: string | undefined,
+  usage: TranscriptionResult["usage"],
+): number | null {
+  const modelDefinition = (model
+    ? getModelByName(model)
+    : null) as Record<string, unknown> | null;
+  const pricing =
+    modelDefinition?.pricing ||
+    (model ? getPricing(TYPES.AUDIO, TYPES.TEXT)[model] : undefined) ||
+    null;
+  return calculateAudioCost(usage, pricing as Record<string, number> | null);
+}
+
+/** Upload the source audio and append the transcription turn to the conversation. */
+async function persistTranscriptionConversation({
+  conversationId,
+  audio,
+  project,
+  username,
+  providerName,
+  model,
+  transcriptionPrompt,
+  result,
+  estimatedCost,
+  totalSec,
+  conversationMeta,
+}: {
+  conversationId: string;
+  audio: string;
+  project: string | undefined;
+  username: string | undefined;
+  providerName: string;
+  model: string | undefined;
+  transcriptionPrompt: string | undefined;
+  result: TranscriptionResult;
+  estimatedCost: number | null;
+  totalSec: number;
+  conversationMeta: ConversationMeta | null;
+}): Promise<void> {
+  // Upload audio to MinIO for storage
+  let audioRef = audio;
+  try {
+    const { ref } = await FileService.uploadFile(
+      audio,
+      FILE_CATEGORIES.UPLOADS,
+      project,
+      username,
+    );
+    audioRef = ref;
+  } catch (error: unknown) {
+    logger.error(`Failed to upload STT audio: ${errorMessage(error)}`);
+  }
+  const messagesToAppend: ChatMessage[] = [
+    {
+      role: "user",
+      content: transcriptionPrompt || "Transcribe this audio",
+      images: [audioRef],
+      timestamp: new Date().toISOString(),
+    },
+    {
+      role: "assistant",
+      content: result.text || "",
+      model: model || undefined,
+      provider: providerName,
+      timestamp: new Date().toISOString(),
+      totalTime: roundMilliseconds(totalSec),
+      estimatedCost: estimatedCost ?? undefined,
+      usage: result.usage || undefined,
+    },
+  ];
+  const meta = conversationMeta
+    ? {
+        ...conversationMeta,
+        settings: { provider: providerName, model },
+      }
+    : undefined;
+  ConversationService.appendMessages(
+    conversationId,
+    project || "any",
+    username || "any",
+    messagesToAppend,
+    meta,
+  )
+    .then(() =>
+      ConversationService.setGenerating(
+        conversationId,
+        project || "any",
+        username || "any",
+        false,
+      ),
+    )
+    .catch((error: unknown) =>
+      logger.error(
+        `Failed to append messages to conversation ${conversationId}: ${getErrorMessage(error)}`,
+      ),
+    );
+}
+
 /**
  * POST /audio-to-text
  * Body: { provider, audio (base64 string or data URL), model?, language?, prompt? }
@@ -385,37 +596,19 @@ router.post(
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const requestId = crypto.randomUUID();
     const requestStart = performance.now();
+    const body = req.body as TranscriptionBody;
     const {
       provider: providerName,
       audio,
       model,
       language,
       prompt: transcriptionPrompt,
-      conversationId: incomingConversationId,
-      conversationMeta: incomingConversationMeta,
-      traceId: incomingTraceId,
-      skipConversation,
-    } = req.body;
-    // Auto-generate conversationId when caller omits it (mirrors chat route)
-    let conversationId = skipConversation
-      ? null
-      : incomingConversationId || null;
-    let conversationMeta: ConversationMeta | null = skipConversation
-      ? null
-      : incomingConversationMeta || null;
-    if (!skipConversation && !conversationId) {
-      conversationId = crypto.randomUUID();
-      conversationMeta = conversationMeta || { title: "Audio Transcription" };
-    }
-    // ── Trace: passthrough ────────────────────────────────────
-    // TraceId is generated client-side and passed on every request.
-    const traceId = incomingTraceId || null;
-    // Inject traceId into conversationMeta for storage
-    if (traceId && conversationMeta) {
-      conversationMeta.traceId = traceId;
-    } else if (traceId) {
-      conversationMeta = { traceId };
-    }
+    } = body;
+    const { conversationId, conversationMeta, traceId } =
+      resolveTranscriptionContext(body);
+    const projectAny = req.project || "any";
+    const usernameAny = req.username || "any";
+
     try {
       if (!providerName) {
         throw new ProviderError(
@@ -430,19 +623,11 @@ router.post(
       // Mark conversation as generating (creates a stub doc via upsert)
       // so the frontend can fetch the conversation by ID immediately.
       if (conversationId) {
-        ConversationService.setGenerating(
+        markTranscriptionGenerating(
           conversationId,
-          req.project || "any",
-          req.username || "any",
-          true,
-          {
-            title:
-              typeof conversationMeta?.title === "string"
-                ? conversationMeta.title
-                : undefined,
-          },
-        ).catch((error: unknown) =>
-          logger.error(`Failed to set isGenerating: ${getErrorMessage(error)}`),
+          projectAny,
+          usernameAny,
+          conversationMeta,
         );
       }
       const provider = getProvider(providerName);
@@ -454,18 +639,11 @@ router.post(
         );
       }
       // Parse audio — accept either data URL or raw base64
-      let audioBuffer: Buffer;
-      let mimeType = "audio/mpeg";
-      const dataUrlMatch = audio.match(/^data:([^;]+);base64,(.+)$/);
-      if (dataUrlMatch) {
-        mimeType = dataUrlMatch[1];
-        audioBuffer = Buffer.from(dataUrlMatch[2], "base64");
-      } else {
-        audioBuffer = Buffer.from(audio, "base64");
-      }
-      const transcribeOptions: Record<string, string> = {};
-      if (language) transcribeOptions.language = language;
-      if (transcriptionPrompt) transcribeOptions.prompt = transcriptionPrompt;
+      const { audioBuffer, mimeType } = parseAudioPayload(audio);
+      const transcribeOptions = buildTranscribeOptions(
+        language,
+        transcriptionPrompt,
+      );
       const result = await provider.transcribeAudio(
         audioBuffer,
         mimeType,
@@ -474,23 +652,12 @@ router.post(
       );
       const totalSec = (performance.now() - requestStart) / 1000;
       // ── Cost estimation ─────────────────────────────────────────
-      const modelDefinition = getModelByName(model) as Record<
-        string,
-        unknown
-      > | null;
-      const pricing =
-        modelDefinition?.pricing ||
-        getPricing(TYPES.AUDIO, TYPES.TEXT)[model] ||
-        null;
-      const estimatedCost = calculateAudioCost(
-        result.usage,
-        pricing as Record<string, number> | null,
-      );
+      const estimatedCost = estimateTranscriptionCost(model, result.usage);
       // ── Logging ────────────────────────────────────────────────
       const costString = formatCostTag(estimatedCost);
       logger.request(
-        req.project || "any",
-        req.username || "any",
+        projectAny,
+        usernameAny,
         req.clientIp || null,
         `[audio/transcribe] ${providerName} model=${model || "default"} — ` +
           `total: ${totalSec.toFixed(2)}s${costString}`,
@@ -513,63 +680,19 @@ router.post(
       });
       // ── Conversation persistence ────────────────────────────────
       if (conversationId) {
-        // Upload audio to MinIO for storage
-        let audioRef = audio;
-        try {
-          const { ref } = await FileService.uploadFile(
-            audio,
-            FILE_CATEGORIES.UPLOADS,
-            req.project,
-            req.username,
-          );
-          audioRef = ref;
-        } catch (error: unknown) {
-          logger.error(`Failed to upload STT audio: ${errorMessage(error)}`);
-        }
-        const messagesToAppend: ChatMessage[] = [
-          {
-            role: "user",
-            content: transcriptionPrompt || "Transcribe this audio",
-            images: [audioRef],
-            timestamp: new Date().toISOString(),
-          },
-          {
-            role: "assistant",
-            content: result.text || "",
-            model: model || undefined,
-            provider: providerName,
-            timestamp: new Date().toISOString(),
-            totalTime: roundMilliseconds(totalSec),
-            estimatedCost: estimatedCost ?? undefined,
-            usage: result.usage || undefined,
-          },
-        ];
-        const meta = conversationMeta
-          ? {
-              ...conversationMeta,
-              settings: { provider: providerName, model },
-            }
-          : undefined;
-        ConversationService.appendMessages(
+        await persistTranscriptionConversation({
           conversationId,
-          req.project || "any",
-          req.username || "any",
-          messagesToAppend,
-          meta,
-        )
-          .then(() =>
-            ConversationService.setGenerating(
-              conversationId!,
-              req.project || "any",
-              req.username || "any",
-              false,
-            ),
-          )
-          .catch((error: unknown) =>
-            logger.error(
-              `Failed to append messages to conversation ${conversationId}: ${getErrorMessage(error)}`,
-            ),
-          );
+          audio,
+          project: req.project,
+          username: req.username,
+          providerName,
+          model,
+          transcriptionPrompt,
+          result,
+          estimatedCost,
+          totalSec,
+          conversationMeta,
+        });
       }
       res.json({
         text: result.text,
@@ -581,16 +704,7 @@ router.post(
     } catch (error: unknown) {
       // Clear isGenerating flag on error
       if (conversationId) {
-        ConversationService.setGenerating(
-          conversationId,
-          req.project || "any",
-          req.username || "any",
-          false,
-        ).catch((error: unknown) =>
-          logger.error(
-            `Failed to clear isGenerating on error: ${getErrorMessage(error)}`,
-          ),
-        );
+        clearTranscriptionGenerating(conversationId, projectAny, usernameAny);
       }
       const totalSec = (performance.now() - requestStart) / 1000;
       RequestLogger.log({

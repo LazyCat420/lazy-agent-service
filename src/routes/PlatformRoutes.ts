@@ -123,6 +123,209 @@ router.get(
   }),
 );
 
+interface ToolUsageRow {
+  tool_name: string;
+  canonical_name: string;
+  total_calls: number;
+  success_count: number;
+  failure_count: number;
+  avg_ms: number;
+  last_called: string | null;
+  last_error: string | null;
+  sources: string[];
+}
+
+interface ToolUsageAggregateDoc {
+  _id: string;
+  total_calls?: number;
+  success_count?: number;
+  failure_count?: number;
+  avg_ms?: number;
+  last_called?: string | Date | null;
+  last_error?: string | null;
+  sources?: string[];
+}
+
+interface EnrichedToolRow extends ToolUsageRow {
+  owner_app: string;
+  domain: string;
+  tier: string;
+  permission: string;
+  description: string;
+  in_registry: boolean;
+  success_rate: number;
+  avg_latency_ms: number;
+}
+
+interface OwnerSummary {
+  total_calls: number;
+  failures: number;
+  tools: number;
+}
+
+/** Registry lookup keyed by canonical tool name. */
+function buildSchemaMap(schemas: ToolSchema[]): Map<string, ToolSchema> {
+  const schemaMap = new Map<string, ToolSchema>();
+  for (const s of schemas) {
+    schemaMap.set(canonicalName(s.name), s);
+  }
+  return schemaMap;
+}
+
+/** Window + service match shared by the usage aggregation. */
+function buildToolUsageMatch(
+  hours: number,
+  serviceFilter: string | undefined,
+): Record<string, unknown> {
+  const since = new Date(Date.now() - hours * 3600 * 1000);
+  const match: Record<string, unknown> = {
+    called_at: { $gte: since },
+    service_source: { $ne: "probe" },
+  };
+  if (serviceFilter) {
+    match.service_source = serviceFilter;
+  }
+  return match;
+}
+
+function buildToolUsagePipeline(
+  match: Record<string, unknown>,
+): Record<string, unknown>[] {
+  return [
+    { $match: match },
+    {
+      $group: {
+        _id: "$tool_name",
+        total_calls: { $sum: 1 },
+        success_count: { $sum: { $cond: ["$success", 1, 0] } },
+        failure_count: { $sum: { $cond: ["$success", 0, 1] } },
+        avg_ms: { $avg: "$execution_ms" },
+        last_called: { $max: "$called_at" },
+        last_error: { $last: "$error_message" },
+        sources: { $addToSet: "$service_source" },
+      },
+    },
+  ];
+}
+
+/** Fold prefixed/unprefixed spellings of a tool into one canonical row. */
+function combineUsageDocs(
+  docs: ToolUsageAggregateDoc[],
+): Map<string, ToolUsageRow> {
+  const combined = new Map<string, ToolUsageRow>();
+
+  for (const d of docs) {
+    const cName = canonicalName(d._id);
+    const existing = combined.get(cName);
+    if (!existing) {
+      combined.set(cName, {
+        tool_name: cName,
+        canonical_name: cName,
+        total_calls: Number(d.total_calls || 0),
+        success_count: Number(d.success_count || 0),
+        failure_count: Number(d.failure_count || 0),
+        avg_ms: Number(d.avg_ms || 0),
+        last_called: d.last_called ? new Date(d.last_called).toISOString() : null,
+        last_error: d.last_error || null,
+        sources: (d.sources || []).filter(Boolean),
+      });
+    } else {
+      const newTotal = existing.total_calls + Number(d.total_calls || 0);
+      const weightedMs =
+        newTotal > 0
+          ? (existing.avg_ms * existing.total_calls + Number(d.avg_ms || 0) * Number(d.total_calls || 0)) / newTotal
+          : 0;
+      existing.total_calls = newTotal;
+      existing.success_count += Number(d.success_count || 0);
+      existing.failure_count += Number(d.failure_count || 0);
+      existing.avg_ms = weightedMs;
+      if (d.last_called && (!existing.last_called || new Date(d.last_called) > new Date(existing.last_called))) {
+        existing.last_called = new Date(d.last_called).toISOString();
+        existing.last_error = d.last_error || existing.last_error;
+      }
+      for (const s of d.sources || []) {
+        if (s && !existing.sources.includes(s)) existing.sources.push(s);
+      }
+    }
+  }
+
+  return combined;
+}
+
+/** Registered tools with no usage still appear, with zeroed counters. */
+function seedRegistryTools(
+  combined: Map<string, ToolUsageRow>,
+  schemaMap: Map<string, ToolSchema>,
+): void {
+  for (const [cName, schema] of schemaMap.entries()) {
+    if (!combined.has(cName)) {
+      combined.set(cName, {
+        tool_name: schema.name,
+        canonical_name: cName,
+        total_calls: 0,
+        success_count: 0,
+        failure_count: 0,
+        avg_ms: 0,
+        last_called: null,
+        last_error: null,
+        sources: [],
+      });
+    }
+  }
+}
+
+/** Join registry metadata onto the usage rows and apply the owner filter. */
+function enrichToolRows(
+  combined: Map<string, ToolUsageRow>,
+  schemaMap: Map<string, ToolSchema>,
+  ownerFilter: string | undefined,
+): EnrichedToolRow[] {
+  return Array.from(combined.values())
+    .map((row) => {
+      const schema = schemaMap.get(row.canonical_name);
+      const total = row.total_calls;
+      const successRate = total > 0 ? row.success_count / total : 1.0;
+      const ownerApp = schema?.owner_app || "shared";
+
+      return {
+        ...row,
+        owner_app: ownerApp,
+        domain: schema?.domain || "general",
+        tier: schema?.tier || "read_only",
+        permission: schema?.permission || "read_only",
+        description: schema?.description || "",
+        in_registry: Boolean(schema),
+        success_rate: Math.round(successRate * 1000) / 1000,
+        avg_latency_ms: Math.round(row.avg_ms * 10) / 10,
+      };
+    })
+    .filter((row) => !ownerFilter || row.owner_app === ownerFilter);
+}
+
+/** Per-owner roll-up and the overall counters for the response envelope. */
+function summarizeToolRows(enriched: EnrichedToolRow[]) {
+  const byOwner: Record<string, OwnerSummary> = {};
+  for (const row of enriched) {
+    const o = row.owner_app;
+    if (!byOwner[o]) byOwner[o] = { total_calls: 0, failures: 0, tools: 0 };
+    byOwner[o].total_calls += row.total_calls;
+    byOwner[o].failures += row.failure_count;
+    byOwner[o].tools += 1;
+  }
+
+  const totalCalls = enriched.reduce((sum, r) => sum + r.total_calls, 0);
+  const totalFailures = enriched.reduce((sum, r) => sum + r.failure_count, 0);
+
+  return {
+    byOwner,
+    totalCalls,
+    totalFailures,
+    totalActive: enriched.filter((r) => r.total_calls > 0).length,
+    overallSuccessRate:
+      totalCalls > 0 ? Math.round(((totalCalls - totalFailures) / totalCalls) * 1000) / 1000 : 1.0,
+  };
+}
+
 // ── GET /stats ─────────────────────────────────────────────────────────────
 // Cross-project usage, latencies, failure rates, and owner_app attribution.
 router.get(
@@ -133,149 +336,31 @@ router.get(
     const serviceFilter = (req.query.service as string) || undefined;
 
     const schemas = await loadRegistry();
-    const schemaMap = new Map<string, ToolSchema>();
-    for (const s of schemas) {
-      schemaMap.set(canonicalName(s.name), s);
-    }
+    const schemaMap = buildSchemaMap(schemas);
 
     try {
       const db = tradingDb(res);
       if (!db) return;
-      const since = new Date(Date.now() - hours * 3600 * 1000);
-      const match: Record<string, any> = {
-        called_at: { $gte: since },
-        service_source: { $ne: "probe" },
-      };
-      if (serviceFilter) {
-        match.service_source = serviceFilter;
-      }
 
-      const pipeline: any[] = [
-        { $match: match },
-        {
-          $group: {
-            _id: "$tool_name",
-            total_calls: { $sum: 1 },
-            success_count: { $sum: { $cond: ["$success", 1, 0] } },
-            failure_count: { $sum: { $cond: ["$success", 0, 1] } },
-            avg_ms: { $avg: "$execution_ms" },
-            last_called: { $max: "$called_at" },
-            last_error: { $last: "$error_message" },
-            sources: { $addToSet: "$service_source" },
-          },
-        },
-      ];
+      const match = buildToolUsageMatch(hours, serviceFilter);
+      const docs = await db
+        .collection("tool_usage_stats")
+        .aggregate<ToolUsageAggregateDoc>(buildToolUsagePipeline(match))
+        .toArray();
 
-      const docs = await db.collection("tool_usage_stats").aggregate(pipeline).toArray();
-
-      const combined = new Map<
-        string,
-        {
-          tool_name: string;
-          canonical_name: string;
-          total_calls: number;
-          success_count: number;
-          failure_count: number;
-          avg_ms: number;
-          last_called: string | null;
-          last_error: string | null;
-          sources: string[];
-        }
-      >();
-
-      for (const d of docs) {
-        const cName = canonicalName(d._id);
-        const existing = combined.get(cName);
-        if (!existing) {
-          combined.set(cName, {
-            tool_name: cName,
-            canonical_name: cName,
-            total_calls: Number(d.total_calls || 0),
-            success_count: Number(d.success_count || 0),
-            failure_count: Number(d.failure_count || 0),
-            avg_ms: Number(d.avg_ms || 0),
-            last_called: d.last_called ? new Date(d.last_called).toISOString() : null,
-            last_error: d.last_error || null,
-            sources: (d.sources || []).filter(Boolean),
-          });
-        } else {
-          const newTotal = existing.total_calls + Number(d.total_calls || 0);
-          const weightedMs =
-            newTotal > 0
-              ? (existing.avg_ms * existing.total_calls + Number(d.avg_ms || 0) * Number(d.total_calls || 0)) / newTotal
-              : 0;
-          existing.total_calls = newTotal;
-          existing.success_count += Number(d.success_count || 0);
-          existing.failure_count += Number(d.failure_count || 0);
-          existing.avg_ms = weightedMs;
-          if (d.last_called && (!existing.last_called || new Date(d.last_called) > new Date(existing.last_called))) {
-            existing.last_called = new Date(d.last_called).toISOString();
-            existing.last_error = d.last_error || existing.last_error;
-          }
-          for (const s of d.sources || []) {
-            if (s && !existing.sources.includes(s)) existing.sources.push(s);
-          }
-        }
-      }
-
-      for (const [cName, schema] of schemaMap.entries()) {
-        if (!combined.has(cName)) {
-          combined.set(cName, {
-            tool_name: schema.name,
-            canonical_name: cName,
-            total_calls: 0,
-            success_count: 0,
-            failure_count: 0,
-            avg_ms: 0,
-            last_called: null,
-            last_error: null,
-            sources: [],
-          });
-        }
-      }
-
-      const enriched = Array.from(combined.values())
-        .map((row) => {
-          const schema = schemaMap.get(row.canonical_name);
-          const total = row.total_calls;
-          const successRate = total > 0 ? row.success_count / total : 1.0;
-          const ownerApp = schema?.owner_app || "shared";
-
-          return {
-            ...row,
-            owner_app: ownerApp,
-            domain: schema?.domain || "general",
-            tier: schema?.tier || "read_only",
-            permission: schema?.permission || "read_only",
-            description: schema?.description || "",
-            in_registry: Boolean(schema),
-            success_rate: Math.round(successRate * 1000) / 1000,
-            avg_latency_ms: Math.round(row.avg_ms * 10) / 10,
-          };
-        })
-        .filter((row) => !ownerFilter || row.owner_app === ownerFilter);
-
-      const byOwner: Record<string, { total_calls: number; failures: number; tools: number }> = {};
-      for (const row of enriched) {
-        const o = row.owner_app;
-        if (!byOwner[o]) byOwner[o] = { total_calls: 0, failures: 0, tools: 0 };
-        byOwner[o].total_calls += row.total_calls;
-        byOwner[o].failures += row.failure_count;
-        byOwner[o].tools += 1;
-      }
-
-      const totalCalls = enriched.reduce((sum, r) => sum + r.total_calls, 0);
-      const totalFailures = enriched.reduce((sum, r) => sum + r.failure_count, 0);
+      const combined = combineUsageDocs(docs);
+      seedRegistryTools(combined, schemaMap);
+      const enriched = enrichToolRows(combined, schemaMap, ownerFilter);
+      const summary = summarizeToolRows(enriched);
 
       res.json({
         hours,
         total_registered: schemas.length,
-        total_active: enriched.filter((r) => r.total_calls > 0).length,
-        total_calls: totalCalls,
-        total_failures: totalFailures,
-        overall_success_rate:
-          totalCalls > 0 ? Math.round(((totalCalls - totalFailures) / totalCalls) * 1000) / 1000 : 1.0,
-        by_owner: byOwner,
+        total_active: summary.totalActive,
+        total_calls: summary.totalCalls,
+        total_failures: summary.totalFailures,
+        overall_success_rate: summary.overallSuccessRate,
+        by_owner: summary.byOwner,
         guards: guardStats(),
         tools: enriched,
       });
