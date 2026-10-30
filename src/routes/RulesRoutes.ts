@@ -5,6 +5,7 @@ import requireDb from "../middleware/RequireDbMiddleware.ts";
 import logger from "../utils/logger.ts";
 import { COLLECTIONS } from "../constants.ts";
 import { PostRuleSchema, PutRuleSchema } from "../types/index.ts";
+import { createDeleteByIdHandler } from "./utils/deleteByIdRoute.ts";
 
 const router = express.Router();
 router.use(requireDb);
@@ -145,23 +146,10 @@ router.put(
  */
 router.delete(
   "/:id",
-  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { db } = req;
-
-      const result = await db
-        .collection<RuleDocument>(COLLECTION)
-        .findOneAndDelete({ _id: new ObjectId(req.params.id as string) });
-
-      if (!result) {
-        return res.status(404).json({ error: "Rule not found" });
-      }
-
-      logger.info(`Rule deleted: ${result.name} (${req.params.id})`);
-      res.json({ success: true });
-    } catch (error: unknown) {
-      next(error);
-    }
+  createDeleteByIdHandler({
+    collection: COLLECTION,
+    notFoundError: "Rule not found",
+    logLabel: "Rule",
   }),
 );
 
