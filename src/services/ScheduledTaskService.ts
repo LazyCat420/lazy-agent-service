@@ -224,6 +224,107 @@ async function runTaskIfDue(
 
 let tickingInterval: ReturnType<typeof setInterval> | null = null;
 
+/** Best-effort default workspace root path for the task's project. */
+async function resolveTaskWorkspacePath(
+  db: Db,
+  task: ScheduledTask,
+): Promise<string | null> {
+  let workspacePath: string | null = null;
+  try {
+    const workspaceDoc = await db.collection(COLLECTIONS.WORKSPACES).findOne({
+      name: task.project,
+    });
+    if (workspaceDoc?.path) {
+      workspacePath = workspaceDoc.path as string;
+    }
+  } catch {
+    // Best-effort
+  }
+  return workspacePath;
+}
+
+/** Build the final prompt with optional payload context. */
+function buildTaskPrompt(
+  task: ScheduledTask,
+  payload?: Record<string, unknown>,
+): string {
+  let finalPrompt = task.prompt;
+  if (payload && Object.keys(payload).length > 0) {
+    finalPrompt += `\n\nTrigger payload: ${JSON.stringify(payload)}`;
+  }
+  return finalPrompt;
+}
+
+/** Auto-heal a vLLM task's model to the first generation model the provider has loaded. */
+async function resolveEffectiveTaskModel(
+  db: Db,
+  task: ScheduledTask,
+): Promise<string> {
+  let effectiveModel = task.model;
+  if (!isVllmProvider(task.provider)) return effectiveModel;
+
+  try {
+    const prov = getProvider(task.provider);
+    if (prov?.listModels) {
+      const result = await Promise.race([
+        prov.listModels(),
+        new Promise<any>((_, rej) =>
+          setTimeout(() => rej(new Error("timeout")), 2500),
+        ),
+      ]);
+      const models: Array<{ key?: string; id?: string }> =
+        result?.models || result?.data || [];
+      const modelKeys = models
+        .map((m) => m.key || m.id || "")
+        .filter(Boolean);
+      const generationModels = modelKeys.filter((m) => !isEmbeddingModel(m, ""));
+
+      if (generationModels.length > 0 && !generationModels.includes(task.model)) {
+        const liveModel = generationModels[0];
+        logger.warn(
+          `[ScheduledTasks] Task "${task.name}" requested model "${task.model}" which is not loaded on ${task.provider}. Dynamically auto-healing to live model "${liveModel}".`,
+        );
+        effectiveModel = liveModel;
+
+        // Persist healed model to MongoDB asynchronously
+        db.collection(COLLECTIONS.SCHEDULED_TASKS)
+          .updateOne(
+            { id: task.id },
+            {
+              $set: {
+                model: effectiveModel,
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          )
+          .catch((err: unknown) =>
+            logger.warn(
+              `[ScheduledTasks] Failed to update task ${task.id} with healed model: ${getErrorMessage(err)}`,
+            ),
+          );
+      }
+    }
+  } catch (probeError) {
+    logger.warn(
+      `[ScheduledTasks] Failed to probe models on provider ${task.provider} for task "${task.name}": ${getErrorMessage(probeError)}`,
+    );
+  }
+  return effectiveModel;
+}
+
+/** Canonical admission: profile-driven tool resolution; falls back to legacy resolution. */
+async function resolveScheduledTaskAdmission(
+  task: ScheduledTask,
+  resolvedConversationId: string,
+) {
+  return InternalLoopRunner.admit({
+    profileId: process.env.INTERNAL_AGENT_PROFILE || "internal-agent-v1",
+    appId: "scheduled-tasks",
+    sessionId: resolvedConversationId,
+    enabledTools: task.toolConfig?.enabledTools,
+  }).catch(() => undefined);
+}
+
 const ScheduledTaskService = {
   /**
    * Initializes the scheduler. Runs a tick loop every 60 seconds.
@@ -333,23 +434,10 @@ const ScheduledTaskService = {
     );
 
     // Determine default workspace root path if available
-    let workspacePath: string | null = null;
-    try {
-      const workspaceDoc = await db.collection(COLLECTIONS.WORKSPACES).findOne({
-        name: task.project,
-      });
-      if (workspaceDoc?.path) {
-        workspacePath = workspaceDoc.path as string;
-      }
-    } catch {
-      // Best-effort
-    }
+    const workspacePath = await resolveTaskWorkspacePath(db, task);
 
     // Build the final prompt with optional payload context
-    let finalPrompt = task.prompt;
-    if (payload && Object.keys(payload).length > 0) {
-      finalPrompt += `\n\nTrigger payload: ${JSON.stringify(payload)}`;
-    }
+    const finalPrompt = buildTaskPrompt(task, payload);
 
     const userTriggerMessage = {
       role: "user" as const,
@@ -360,56 +448,7 @@ const ScheduledTaskService = {
 
     // 1. Resolve provider and model dynamically for vLLM providers to prevent 404s
     const effectiveProvider = task.provider;
-    let effectiveModel = task.model;
-
-    if (isVllmProvider(task.provider)) {
-      try {
-        const prov = getProvider(task.provider);
-        if (prov?.listModels) {
-          const result = await Promise.race([
-            prov.listModels(),
-            new Promise<any>((_, rej) =>
-              setTimeout(() => rej(new Error("timeout")), 2500),
-            ),
-          ]);
-          const models: Array<{ key?: string; id?: string }> =
-            result?.models || result?.data || [];
-          const modelKeys = models
-            .map((m) => m.key || m.id || "")
-            .filter(Boolean);
-          const generationModels = modelKeys.filter((m) => !isEmbeddingModel(m, ""));
-
-          if (generationModels.length > 0 && !generationModels.includes(task.model)) {
-            const liveModel = generationModels[0];
-            logger.warn(
-              `[ScheduledTasks] Task "${task.name}" requested model "${task.model}" which is not loaded on ${task.provider}. Dynamically auto-healing to live model "${liveModel}".`,
-            );
-            effectiveModel = liveModel;
-
-            // Persist healed model to MongoDB asynchronously
-            db.collection(COLLECTIONS.SCHEDULED_TASKS)
-              .updateOne(
-                { id: task.id },
-                {
-                  $set: {
-                    model: effectiveModel,
-                    updatedAt: new Date().toISOString(),
-                  },
-                },
-              )
-              .catch((err: unknown) =>
-                logger.warn(
-                  `[ScheduledTasks] Failed to update task ${task.id} with healed model: ${getErrorMessage(err)}`,
-                ),
-              );
-          }
-        }
-      } catch (probeError) {
-        logger.warn(
-          `[ScheduledTasks] Failed to probe models on provider ${task.provider} for task "${task.name}": ${getErrorMessage(probeError)}`,
-        );
-      }
-    }
+    const effectiveModel = await resolveEffectiveTaskModel(db, task);
 
     // 2. Create agent session stub document
     const settings = {
@@ -455,12 +494,10 @@ const ScheduledTaskService = {
 
     // Canonical admission: profile-driven tool resolution + receipt-bound
     // execution; falls back to legacy resolution when the profile is absent.
-    const admission = await InternalLoopRunner.admit({
-      profileId: process.env.INTERNAL_AGENT_PROFILE || "internal-agent-v1",
-      appId: "scheduled-tasks",
-      sessionId: resolvedConversationId,
-      enabledTools: task.toolConfig?.enabledTools,
-    }).catch(() => undefined);
+    const admission = await resolveScheduledTaskAdmission(
+      task,
+      resolvedConversationId,
+    );
 
     // 4. Trigger AgenticLoopService
     try {

@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { LocalToolContinuation } from "../services/LocalToolContinuation.ts";
 
 import { runtimeAuth, getRuntimeScope, scopeOwnsRun, issueRuntimeSession } from "../middleware/RuntimeAuth.ts";
+import type { RuntimeScope } from "../middleware/RuntimeAuth.ts";
 
 import { RunEventSchema, RunResultSchema, ToolResultCommandSchema, ApprovalResolutionCommandSchema } from "../contracts/RuntimeWire.ts";
 import { RunApprovals } from "../services/RunApprovals.ts";
@@ -54,6 +55,110 @@ router.post("/:runId/tools/:callId/result", asyncHandler(async (req: Request, re
   }
 }));
 
+/** Trusted identity + app id resolution, and whether the requested app escapes the identity scope. */
+function resolveRunRequestScope(req: Request): {
+  payload: CreateRunRequest;
+  appViolatesScope: boolean;
+} {
+  const payload = {
+    ...req.body,
+    identity: {
+      project: req.project || "default",
+      username: req.username || "anonymous",
+    },
+  } as CreateRunRequest;
+  const requestedApp = payload.app_id || payload.appId;
+  const appViolatesScope =
+    Boolean(requestedApp) && requestedApp !== payload.identity!.project;
+  payload.app_id = requestedApp || payload.identity!.project;
+  return { payload, appViolatesScope };
+}
+
+/** A scoped session must not create a run outside its profile/session. */
+function isRunScopeViolation(
+  scope: RuntimeScope | undefined,
+  profileId: string | undefined,
+  payload: CreateRunRequest,
+): boolean {
+  if (!scope) return false;
+  return (
+    profileId !== scope.profile_id ||
+    (payload.session_id || payload.sessionId) !== scope.session_id
+  );
+}
+
+/** Idempotency and deadline headers override the body. */
+function applyRunHeaderOverrides(
+  req: Request,
+  payload: CreateRunRequest,
+): void {
+  const idempotencyHeader = req.headers["x-idempotency-key"] as
+    | string
+    | undefined;
+  if (idempotencyHeader) {
+    payload.idempotency_key = idempotencyHeader;
+    payload.idempotencyKey = idempotencyHeader;
+  }
+
+  const deadlineHeader = req.headers["x-deadline-ms"] as string | undefined;
+  if (deadlineHeader && !isNaN(Number(deadlineHeader))) {
+    payload.deadline_ms = Number(deadlineHeader);
+  }
+}
+
+/** Stream run events as SSE; delivery is serialized through the store. */
+function startStreamingRun(
+  runId: string,
+  payload: CreateRunRequest,
+  res: Response,
+): void {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  let delivery = Promise.resolve();
+  const sendEvent = (event: Omit<RunEvent, "id" | "timestamp">) => {
+    const fullEvent = RunEventSchema.parse({
+      ...event,
+      id: `evt-${randomUUID()}`,
+      timestamp: new Date().toISOString(),
+    }) as RunEvent;
+    delivery = delivery.then(async () => {
+      await RunStore.appendEvent(fullEvent);
+      if (!res.destroyed) res.write(`id: ${fullEvent.id}\nevent: ${fullEvent.type}\ndata: ${JSON.stringify(fullEvent)}\n\n`);
+    });
+  };
+
+  const controller = new AbortController();
+  payload.signal = controller.signal;
+  res.on("close", () => { if (!res.writableEnded && payload.runtime_overrides?.detached_delivery !== true) controller.abort(); });
+  RunExecutionEngine.startRun(runId, payload, sendEvent)
+    .then(async () => {
+      await delivery;
+      res.end();
+    })
+    .catch(() => {
+      res.end();
+    });
+}
+
+/** Map a run's structured error onto its HTTP status; false when there is none. */
+function sendRunResultError(result: RunResult, res: Response): boolean {
+  if (result.error?.code === "IDEMPOTENCY_CONFLICT") {
+    res.status(409).json({ error: result.error });
+    return true;
+  }
+  if (result.error?.code === "PROFILE_NOT_FOUND") {
+    res.status(404).json({ error: result.error });
+    return true;
+  }
+  if (result.error?.code === "INVALID_RUN_REQUEST") {
+    res.status(400).json({ error: result.error });
+    return true;
+  }
+  return false;
+}
+
 /**
  * POST /v1/runs
  * Creates and starts a new agent run.
@@ -61,13 +166,11 @@ router.post("/:runId/tools/:callId/result", asyncHandler(async (req: Request, re
 router.post(
   "/",
   asyncHandler(async (req: Request, res: Response) => {
-    const payload = { ...req.body, identity: { project: req.project || "default", username: req.username || "anonymous" } } as CreateRunRequest;
-    const requestedApp = payload.app_id || payload.appId;
-    if (requestedApp && requestedApp !== payload.identity!.project) return res.status(403).json({ error: { code: "SCOPE_VIOLATION" } });
-    payload.app_id = requestedApp || payload.identity!.project;
+    const { payload, appViolatesScope } = resolveRunRequestScope(req);
+    if (appViolatesScope) return res.status(403).json({ error: { code: "SCOPE_VIOLATION" } });
     const profileId = payload.profile_id || payload.profileId;
     const scope = getRuntimeScope(res);
-    if (scope && (profileId !== scope.profile_id || (payload.session_id || payload.sessionId) !== scope.session_id)) return res.status(403).json({ error: { code: "SCOPE_VIOLATION" } });
+    if (isRunScopeViolation(scope, profileId, payload)) return res.status(403).json({ error: { code: "SCOPE_VIOLATION" } });
 
     if (!profileId) {
       return res.status(400).json({
@@ -80,60 +183,16 @@ router.post(
       });
     }
 
-    const idempotencyHeader = req.headers["x-idempotency-key"] as string | undefined;
-    if (idempotencyHeader) {
-      payload.idempotency_key = idempotencyHeader;
-      payload.idempotencyKey = idempotencyHeader;
-    }
-
-    const deadlineHeader = req.headers["x-deadline-ms"] as string | undefined;
-    if (deadlineHeader && !isNaN(Number(deadlineHeader))) {
-      payload.deadline_ms = Number(deadlineHeader);
-    }
+    applyRunHeaderOverrides(req, payload);
 
     const runId = `run-${randomUUID()}`;
 
     if (payload.stream) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      let delivery = Promise.resolve();
-      const sendEvent = (event: Omit<RunEvent, "id" | "timestamp">) => {
-        const fullEvent = RunEventSchema.parse({
-          ...event,
-          id: `evt-${randomUUID()}`,
-          timestamp: new Date().toISOString(),
-        }) as RunEvent;
-        delivery = delivery.then(async () => {
-          await RunStore.appendEvent(fullEvent);
-          if (!res.destroyed) res.write(`id: ${fullEvent.id}\nevent: ${fullEvent.type}\ndata: ${JSON.stringify(fullEvent)}\n\n`);
-        });
-      };
-
-      const controller = new AbortController();
-      payload.signal = controller.signal;
-      res.on("close", () => { if (!res.writableEnded && payload.runtime_overrides?.detached_delivery !== true) controller.abort(); });
-      RunExecutionEngine.startRun(runId, payload, sendEvent)
-        .then(async () => {
-          await delivery;
-          res.end();
-        })
-        .catch(() => {
-          res.end();
-        });
+      startStreamingRun(runId, payload, res);
     } else {
       const result = await RunExecutionEngine.startRun(runId, payload, () => {});
 
-      if (result.error?.code === "IDEMPOTENCY_CONFLICT") {
-        return res.status(409).json({ error: result.error });
-      }
-      if (result.error?.code === "PROFILE_NOT_FOUND") {
-        return res.status(404).json({ error: result.error });
-      }
-      if (result.error?.code === "INVALID_RUN_REQUEST") {
-        return res.status(400).json({ error: result.error });
-      }
+      if (sendRunResultError(result, res)) return;
 
       res.status(201).json(RunResultSchema.parse(result));
     }

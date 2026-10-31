@@ -225,6 +225,74 @@ function resolveMinioRef(value: unknown, baseUrl: string) {
   return value;
 }
 
+/** Resolve minio:// refs inside one message's media fields. */
+function resolveMessageMediaRefs(
+  message: Record<string, unknown>,
+  baseUrl: string,
+): void {
+  for (const field of MEDIA_FIELDS) {
+    const value = message[field];
+    if (Array.isArray(value)) {
+      message[field] = value.map((item: unknown) =>
+        resolveMinioRef(item, baseUrl),
+      );
+    } else if (typeof value === "string") {
+      message[field] = resolveMinioRef(value, baseUrl);
+    }
+  }
+}
+
+/** Resolve minio:// refs on a single workflow node (content, messages, viewer outputs). */
+function resolveNodeFileRefs(
+  node: Record<string, unknown>,
+  baseUrl: string,
+): void {
+  // Node-level content (asset input nodes)
+  if (typeof node.content === "string") {
+    node.content = resolveMinioRef(node.content, baseUrl);
+  }
+
+  // Messages array (conversation / model nodes)
+  if (Array.isArray(node.messages)) {
+    for (const message of node.messages as Record<string, unknown>[]) {
+      resolveMessageMediaRefs(message, baseUrl);
+    }
+  }
+
+  // Viewer receivedOutputs
+  if (node.receivedOutputs && typeof node.receivedOutputs === "object") {
+    const receivedOutputs = node.receivedOutputs as Record<string, unknown>;
+    for (const [modality, data] of Object.entries(receivedOutputs)) {
+      receivedOutputs[modality] = resolveMinioRef(data, baseUrl);
+    }
+  }
+}
+
+function resolveNodeResultsFileRefs(
+  nodeResults: Record<string, unknown>,
+  baseUrl: string,
+): void {
+  for (const outputs of Object.values(nodeResults) as Record<
+    string,
+    unknown
+  >[]) {
+    if (!outputs || typeof outputs !== "object") continue;
+    for (const [modality, data] of Object.entries(outputs)) {
+      // conversation modality is an array of message objects with nested media
+      if (modality === "conversation" && Array.isArray(data)) {
+        for (const message of data) {
+          resolveMessageMediaRefs(message as Record<string, unknown>, baseUrl);
+        }
+      } else {
+        (outputs as Record<string, unknown>)[modality] = resolveMinioRef(
+          data,
+          baseUrl,
+        );
+      }
+    }
+  }
+}
+
 /**
  * Walk a workflow document and replace all minio:// refs with HTTP /files/ URLs
  * so the frontend receives browser-renderable URLs directly.
@@ -236,89 +304,16 @@ function resolveWorkflowFileRefs(
   // Resolve nodes
   if (Array.isArray(workflow.nodes)) {
     for (const node of workflow.nodes) {
-      // Node-level content (asset input nodes)
-      if (typeof (node as Record<string, unknown>).content === "string") {
-        (node as Record<string, unknown>).content = resolveMinioRef(
-          (node as Record<string, unknown>).content,
-          baseUrl,
-        );
-      }
-
-      // Messages array (conversation / model nodes)
-      if (Array.isArray((node as Record<string, unknown>).messages)) {
-        for (const message of (node as Record<string, unknown>)
-          .messages as Record<string, unknown>[]) {
-          for (const field of MEDIA_FIELDS) {
-            const value = (message as Record<string, unknown>)[field];
-            if (Array.isArray(value)) {
-              (message as Record<string, unknown>)[field] = value.map(
-                (item: unknown) => resolveMinioRef(item, baseUrl),
-              );
-            } else if (typeof value === "string") {
-              (message as Record<string, unknown>)[field] = resolveMinioRef(
-                value,
-                baseUrl,
-              );
-            }
-          }
-        }
-      }
-
-      // Viewer receivedOutputs
-      if (
-        (node as Record<string, unknown>).receivedOutputs &&
-        typeof (node as Record<string, unknown>).receivedOutputs === "object"
-      ) {
-        for (const [modality, data] of Object.entries(
-          (node as Record<string, unknown>).receivedOutputs as Record<
-            string,
-            unknown
-          >,
-        )) {
-          (
-            (node as Record<string, unknown>).receivedOutputs as Record<
-              string,
-              unknown
-            >
-          )[modality] = resolveMinioRef(data, baseUrl);
-        }
-      }
+      resolveNodeFileRefs(node as Record<string, unknown>, baseUrl);
     }
   }
 
   // Resolve nodeResults: { [nodeId]: { [modality]: value | messagesArray } }
   if (workflow.nodeResults && typeof workflow.nodeResults === "object") {
-    for (const outputs of Object.values(workflow.nodeResults) as Record<
-      string,
-      unknown
-    >[]) {
-      if (!outputs || typeof outputs !== "object") continue;
-      for (const [modality, data] of Object.entries(outputs)) {
-        // conversation modality is an array of message objects with nested media
-        if (modality === "conversation" && Array.isArray(data)) {
-          for (const message of data) {
-            for (const field of MEDIA_FIELDS) {
-              const value = (message as Record<string, unknown>)[field];
-              if (Array.isArray(value)) {
-                (message as Record<string, unknown>)[field] = value.map(
-                  (item: unknown) => resolveMinioRef(item, baseUrl),
-                );
-              } else if (typeof value === "string") {
-                (message as Record<string, unknown>)[field] = resolveMinioRef(
-                  value,
-                  baseUrl,
-                );
-              }
-            }
-          }
-        } else {
-          (outputs as Record<string, unknown>)[modality] = resolveMinioRef(
-            data,
-            baseUrl,
-          );
-        }
-      }
-    }
+    resolveNodeResultsFileRefs(
+      workflow.nodeResults as Record<string, unknown>,
+      baseUrl,
+    );
   }
 
   return workflow;

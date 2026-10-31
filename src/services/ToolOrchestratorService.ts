@@ -631,6 +631,52 @@ export function classifyReadUrlError(errorText: string): {
   };
 }
 
+/** Apply the tool's legacy argument aliases (`ARG_REMAPS`) without mutating the caller's object. */
+function resolveRemappedArgs(
+  name: string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const remaps = ARG_REMAPS[name as keyof typeof ARG_REMAPS];
+  if (!remaps) return args;
+  const resolvedArgs = { ...args };
+  for (const [from, to] of Object.entries(remaps)) {
+    if (resolvedArgs[from] !== undefined) {
+      resolvedArgs[to] = resolvedArgs[from];
+      delete resolvedArgs[from];
+    }
+  }
+  return resolvedArgs;
+}
+
+/** Redirect file paths into the session's worktree and pin the tools-api override header. */
+function applyWorktreePathOverrides(
+  body: Record<string, unknown>,
+  contextHeaders: Record<string, string>,
+  worktreeState: WorktreeState,
+): void {
+  const rewritePath = (provider: unknown): unknown => {
+    if (typeof provider !== "string") return provider;
+    if (provider.startsWith(worktreeState.originalRoot)) {
+      return (
+        worktreeState.worktreePath +
+        provider.slice(worktreeState.originalRoot.length)
+      );
+    }
+    return provider;
+  };
+
+  // Rewrite common path fields used by file/git/shell tools
+  if (body.path) body.path = rewritePath(body.path);
+  if (body.filePath) body.filePath = rewritePath(body.filePath);
+  if (body.oldPath) body.oldPath = rewritePath(body.oldPath);
+  if (body.newPath) body.newPath = rewritePath(body.newPath);
+  if (body.cwd) body.cwd = rewritePath(body.cwd);
+  if (body.directory) body.directory = rewritePath(body.directory);
+
+  // Inject workspace override header so tools-api sandbox validation passes
+  contextHeaders["X-Workspace-Override"] = worktreeState.worktreePath;
+}
+
 async function executeToolGeneric(
   name: string,
   args: Record<string, unknown> = {},
@@ -641,17 +687,7 @@ async function executeToolGeneric(
     return { error: `Unknown tool: ${name}` };
   }
 
-  const remaps = ARG_REMAPS[name as keyof typeof ARG_REMAPS];
-  let resolvedArgs: Record<string, unknown> = args;
-  if (remaps) {
-    resolvedArgs = { ...args };
-    for (const [from, to] of Object.entries(remaps)) {
-      if (resolvedArgs[from] !== undefined) {
-        resolvedArgs[to] = resolvedArgs[from];
-        delete resolvedArgs[from];
-      }
-    }
-  }
+  const resolvedArgs = resolveRemappedArgs(name, args);
 
   // Build caller-context headers for tools-api telemetry
   const contextHeaders = buildContextHeaders(context);
@@ -674,27 +710,7 @@ async function executeToolGeneric(
     // when the session has an active worktree.
     if (context.agentConversationId && activeWorktrees.has(context.agentConversationId)) {
       const worktreeState = activeWorktrees.get(context.agentConversationId)!;
-      const rewritePath = (provider: unknown): unknown => {
-        if (typeof provider !== "string") return provider;
-        if (provider.startsWith(worktreeState.originalRoot)) {
-          return (
-            worktreeState.worktreePath +
-            provider.slice(worktreeState.originalRoot.length)
-          );
-        }
-        return provider;
-      };
-
-      // Rewrite common path fields used by file/git/shell tools
-      if (body.path) body.path = rewritePath(body.path);
-      if (body.filePath) body.filePath = rewritePath(body.filePath);
-      if (body.oldPath) body.oldPath = rewritePath(body.oldPath);
-      if (body.newPath) body.newPath = rewritePath(body.newPath);
-      if (body.cwd) body.cwd = rewritePath(body.cwd);
-      if (body.directory) body.directory = rewritePath(body.directory);
-
-      // Inject workspace override header so tools-api sandbox validation passes
-      contextHeaders["X-Workspace-Override"] = worktreeState.worktreePath;
+      applyWorktreePathOverrides(body, contextHeaders, worktreeState);
     }
 
     return fetchJsonWithBody(
@@ -843,75 +859,105 @@ function buildAgentParameterDescription(locale?: string): string {
   return PromptLocaleService.get(activeLocale, "orchestrator.tools.create_team.parameters.memberAgentDefault");
 }
 
+/** Normalize any configured topology to one of the four labelled defaults. */
+function normalizeOrchestratorTopology(defaultTopology: string): string {
+  if (defaultTopology === TOPOLOGIES.PEER_TO_PEER) {
+    return TOPOLOGIES.PEER_TO_PEER;
+  }
+  if (defaultTopology === TOPOLOGIES.SEQUENTIAL) {
+    return TOPOLOGIES.SEQUENTIAL;
+  }
+  if (defaultTopology === TOPOLOGIES.HIERARCHICAL_AGGREGATION) {
+    return TOPOLOGIES.HIERARCHICAL_AGGREGATION;
+  }
+  return TOPOLOGIES.HIERARCHICAL;
+}
+
+/** Mark the configured topology in the schema enum descriptions. */
+function withDefaultSuffix(value: string, isDefault: boolean): string {
+  return isDefault ? `${value} (default)` : value;
+}
+
+function buildTopologyPromptNames(defaultTopology: string) {
+  const normalizedTopology = normalizeOrchestratorTopology(defaultTopology);
+  const isHierarchical = normalizedTopology === TOPOLOGIES.HIERARCHICAL;
+  const isHierarchicalAggregation =
+    normalizedTopology === TOPOLOGIES.HIERARCHICAL_AGGREGATION;
+  const isSequential = normalizedTopology === TOPOLOGIES.SEQUENTIAL;
+  const isPeerToPeer = normalizedTopology === TOPOLOGIES.PEER_TO_PEER;
+  return {
+    hierarchicalLabel: withDefaultSuffix(
+      TOPOLOGIES.HIERARCHICAL,
+      isHierarchical,
+    ),
+    hierarchicalAggregationLabel: withDefaultSuffix(
+      TOPOLOGIES.HIERARCHICAL_AGGREGATION,
+      isHierarchicalAggregation,
+    ),
+    sequentialLabel: withDefaultSuffix(TOPOLOGIES.SEQUENTIAL, isSequential),
+    peerToPeerLabel: withDefaultSuffix(TOPOLOGIES.PEER_TO_PEER, isPeerToPeer),
+    tournamentLabel: withDefaultSuffix(
+      TOPOLOGIES.TOURNAMENT,
+      defaultTopology === TOPOLOGIES.TOURNAMENT,
+    ),
+    criticLoopLabel: withDefaultSuffix(
+      TOPOLOGIES.CRITIC_LOOP,
+      defaultTopology === TOPOLOGIES.CRITIC_LOOP,
+    ),
+    divideAndConquerLabel: withDefaultSuffix(
+      TOPOLOGIES.DIVIDE_AND_CONQUER,
+      defaultTopology === TOPOLOGIES.DIVIDE_AND_CONQUER,
+    ),
+    mctsLabel: withDefaultSuffix(
+      TOPOLOGIES.MCTS,
+      defaultTopology === TOPOLOGIES.MCTS,
+    ),
+    hierarchicalDesc: withDefaultSuffix("'hierarchical'", isHierarchical),
+    hierarchicalAggregationDesc: withDefaultSuffix(
+      "'hierarchical_aggregation'",
+      isHierarchicalAggregation,
+    ),
+    sequentialDesc: withDefaultSuffix("'sequential'", isSequential),
+    peerToPeerDesc: withDefaultSuffix("'peer_to_peer'", isPeerToPeer),
+    tournamentDesc: withDefaultSuffix(
+      "'tournament'",
+      defaultTopology === TOPOLOGIES.TOURNAMENT,
+    ),
+    criticLoopDesc: withDefaultSuffix(
+      "'critic_loop'",
+      defaultTopology === TOPOLOGIES.CRITIC_LOOP,
+    ),
+    divideAndConquerDesc: withDefaultSuffix(
+      "'divide_and_conquer'",
+      defaultTopology === TOPOLOGIES.DIVIDE_AND_CONQUER,
+    ),
+    mctsDesc: withDefaultSuffix("'mcts'", defaultTopology === TOPOLOGIES.MCTS),
+  };
+}
+
 function getOrchestratorToolSchemas(
   defaultTopology: string = DEFAULT_TOPOLOGY,
   locale?: string,
 ) {
   const activeLocale = locale || PromptLocaleService.getDefaultLocale();
-
-  const normalizedTopology =
-    defaultTopology === TOPOLOGIES.PEER_TO_PEER
-      ? TOPOLOGIES.PEER_TO_PEER
-      : defaultTopology === TOPOLOGIES.SEQUENTIAL
-        ? TOPOLOGIES.SEQUENTIAL
-        : defaultTopology === TOPOLOGIES.HIERARCHICAL_AGGREGATION
-          ? TOPOLOGIES.HIERARCHICAL_AGGREGATION
-          : TOPOLOGIES.HIERARCHICAL;
-
-  const isHierarchical = normalizedTopology === TOPOLOGIES.HIERARCHICAL;
-  const isHierarchicalAggregation = normalizedTopology === TOPOLOGIES.HIERARCHICAL_AGGREGATION;
-  const isSequential = normalizedTopology === TOPOLOGIES.SEQUENTIAL;
-  const isPeerToPeer = normalizedTopology === TOPOLOGIES.PEER_TO_PEER;
-
-  const hierarchicalLabel = isHierarchical
-    ? `${TOPOLOGIES.HIERARCHICAL} (default)`
-    : TOPOLOGIES.HIERARCHICAL;
-  const hierarchicalAggregationLabel = isHierarchicalAggregation
-    ? `${TOPOLOGIES.HIERARCHICAL_AGGREGATION} (default)`
-    : TOPOLOGIES.HIERARCHICAL_AGGREGATION;
-  const sequentialLabel = isSequential
-    ? `${TOPOLOGIES.SEQUENTIAL} (default)`
-    : TOPOLOGIES.SEQUENTIAL;
-  const peerToPeerLabel = isPeerToPeer
-    ? `${TOPOLOGIES.PEER_TO_PEER} (default)`
-    : TOPOLOGIES.PEER_TO_PEER;
-  const tournamentLabel = defaultTopology === TOPOLOGIES.TOURNAMENT
-    ? `${TOPOLOGIES.TOURNAMENT} (default)`
-    : TOPOLOGIES.TOURNAMENT;
-  const criticLoopLabel = defaultTopology === TOPOLOGIES.CRITIC_LOOP
-    ? `${TOPOLOGIES.CRITIC_LOOP} (default)`
-    : TOPOLOGIES.CRITIC_LOOP;
-  const divideAndConquerLabel = defaultTopology === TOPOLOGIES.DIVIDE_AND_CONQUER
-    ? `${TOPOLOGIES.DIVIDE_AND_CONQUER} (default)`
-    : TOPOLOGIES.DIVIDE_AND_CONQUER;
-  const mctsLabel = defaultTopology === TOPOLOGIES.MCTS
-    ? `${TOPOLOGIES.MCTS} (default)`
-    : TOPOLOGIES.MCTS;
-
-  const hierarchicalDesc = isHierarchical
-    ? "'hierarchical' (default)"
-    : "'hierarchical'";
-  const hierarchicalAggregationDesc = isHierarchicalAggregation
-    ? "'hierarchical_aggregation' (default)"
-    : "'hierarchical_aggregation'";
-  const sequentialDesc = isSequential
-    ? "'sequential' (default)"
-    : "'sequential'";
-  const peerToPeerDesc = isPeerToPeer
-    ? "'peer_to_peer' (default)"
-    : "'peer_to_peer'";
-  const tournamentDesc = defaultTopology === TOPOLOGIES.TOURNAMENT
-    ? "'tournament' (default)"
-    : "'tournament'";
-  const criticLoopDesc = defaultTopology === TOPOLOGIES.CRITIC_LOOP
-    ? "'critic_loop' (default)"
-    : "'critic_loop'";
-  const divideAndConquerDesc = defaultTopology === TOPOLOGIES.DIVIDE_AND_CONQUER
-    ? "'divide_and_conquer' (default)"
-    : "'divide_and_conquer'";
-  const mctsDesc = defaultTopology === TOPOLOGIES.MCTS
-    ? "'mcts' (default)"
-    : "'mcts'";
+  const {
+    hierarchicalLabel,
+    hierarchicalAggregationLabel,
+    sequentialLabel,
+    peerToPeerLabel,
+    tournamentLabel,
+    criticLoopLabel,
+    divideAndConquerLabel,
+    mctsLabel,
+    hierarchicalDesc,
+    hierarchicalAggregationDesc,
+    sequentialDesc,
+    peerToPeerDesc,
+    tournamentDesc,
+    criticLoopDesc,
+    divideAndConquerDesc,
+    mctsDesc,
+  } = buildTopologyPromptNames(defaultTopology);
 
   return [
     {
@@ -1084,6 +1130,131 @@ function getOrchestratorToolSchemas(
       },
     },
   ];
+}
+
+type StreamChunkHandler = (
+  event: string,
+  data: string | null,
+  meta?: Record<string, unknown>,
+) => void;
+
+interface StreamingSseEvent {
+  event: string;
+  data: string | null;
+  success?: boolean;
+  exitCode?: number | null;
+  executionTimeMs?: number;
+  timedOut?: boolean;
+  error?: string;
+  [key: string]: unknown;
+}
+
+interface StreamChunkState {
+  finalResult: Record<string, unknown> | null;
+  stdoutChunks: string[];
+  stderrChunks: string[];
+}
+
+/** Wire a session abort signal into the per-call controller (timeout owns the other direction). */
+function linkSessionAbort(
+  controller: AbortController,
+  sessionSignal: AbortSignal | undefined,
+): void {
+  // If session signal exists, abort the local controller when session aborts
+  if (sessionSignal && !sessionSignal.aborted) {
+    const onSessionAbort = () => controller.abort();
+    sessionSignal.addEventListener("abort", onSessionAbort, {
+      once: true,
+    });
+    // Clean up listener when controller aborts from timeout (not session)
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        sessionSignal.removeEventListener("abort", onSessionAbort);
+      },
+      { once: true },
+    );
+  } else if (sessionSignal?.aborted) {
+    controller.abort();
+  }
+}
+
+function applyStreamEvent(
+  event: StreamingSseEvent,
+  state: StreamChunkState,
+  onChunk: StreamChunkHandler | null,
+): void {
+  if (event.event === "stdout") {
+    state.stdoutChunks.push(event.data || "");
+    onChunk?.(event.event, event.data);
+  } else if (event.event === "stderr") {
+    state.stderrChunks.push(event.data || "");
+    onChunk?.(event.event, event.data);
+  } else if (event.event === "exit") {
+    const finalResult = {
+      success: event.success,
+      stdout: state.stdoutChunks.join(""),
+      stderr: state.stderrChunks.join(""),
+      exitCode: event.exitCode,
+      executionTimeMs: event.executionTimeMs,
+      timedOut: event.timedOut || false,
+      ...(event.error && { error: event.error }),
+    };
+    state.finalResult = finalResult;
+    onChunk?.("exit", null, finalResult);
+  } else if (event.event === "start") {
+    onChunk?.("start", null, event);
+  }
+}
+
+/** Parse the SSE body — accumulate stdout/stderr so the final result keeps the full output. */
+async function consumeToolStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  state: StreamChunkState,
+  onChunk: StreamChunkHandler | null,
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || ""; // keep incomplete line in buffer
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        applyStreamEvent(
+          JSON.parse(line.slice(6)) as StreamingSseEvent,
+          state,
+          onChunk,
+        );
+      } catch {
+        // Skip malformed SSE lines
+      }
+    }
+  }
+}
+
+/** If we never got an exit event, return accumulated output anyway. */
+function finalizeStreamResult(
+  state: StreamChunkState,
+): Record<string, unknown> {
+  if (
+    !state.finalResult &&
+    (state.stdoutChunks.length > 0 || state.stderrChunks.length > 0)
+  ) {
+    state.finalResult = {
+      success: false,
+      stdout: state.stdoutChunks.join(""),
+      stderr: state.stderrChunks.join(""),
+      exitCode: null,
+      error: "Stream ended without exit event",
+    };
+  }
+  return state.finalResult || { error: "Stream ended without exit event" };
 }
 
 export default class ToolOrchestratorService {
@@ -2222,17 +2393,7 @@ export default class ToolOrchestratorService {
       return ToolOrchestratorService.executeTool(name, args, context);
     }
 
-    const remaps = ARG_REMAPS[name as keyof typeof ARG_REMAPS];
-    let resolvedArgs: Record<string, unknown> = args;
-    if (remaps) {
-      resolvedArgs = { ...args };
-      for (const [from, to] of Object.entries(remaps)) {
-        if (resolvedArgs[from] !== undefined) {
-          resolvedArgs[to] = resolvedArgs[from];
-          delete resolvedArgs[from];
-        }
-      }
-    }
+    const resolvedArgs = resolveRemappedArgs(name, args);
 
     const url = `${TOOLS_SERVICE_URL}${streamPath}`;
     const contextHeaders = buildContextHeaders(context);
@@ -2243,24 +2404,7 @@ export default class ToolOrchestratorService {
       // If 65s elapses, the fetch aborts via timeout.
       const controller = createAbortController();
       const timeout = setTimeout(() => controller.abort(), 65_000); // generous timeout
-
-      // If session signal exists, abort the local controller when session aborts
-      if (context.signal && !context.signal.aborted) {
-        const onSessionAbort = () => controller.abort();
-        context.signal.addEventListener("abort", onSessionAbort, {
-          once: true,
-        });
-        // Clean up listener when controller aborts from timeout (not session)
-        controller.signal.addEventListener(
-          "abort",
-          () => {
-            context.signal!.removeEventListener("abort", onSessionAbort);
-          },
-          { once: true },
-        );
-      } else if (context.signal?.aborted) {
-        controller.abort();
-      }
+      linkSessionAbort(controller, context.signal);
 
       const response = await fetch(url, {
         method: "POST",
@@ -2282,66 +2426,13 @@ export default class ToolOrchestratorService {
       if (!response.body) {
         return { error: "Response body is not readable" };
       }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalResult: Record<string, unknown> | null = null;
-      const stdoutChunks: string[] = [];
-      const stderrChunks: string[] = [];
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || ""; // keep incomplete line in buffer
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-
-            if (event.event === "stdout") {
-              stdoutChunks.push(event.data || "");
-              onChunk?.(event.event, event.data);
-            } else if (event.event === "stderr") {
-              stderrChunks.push(event.data || "");
-              onChunk?.(event.event, event.data);
-            } else if (event.event === "exit") {
-              finalResult = {
-                success: event.success,
-                stdout: stdoutChunks.join(""),
-                stderr: stderrChunks.join(""),
-                exitCode: event.exitCode,
-                executionTimeMs: event.executionTimeMs,
-                timedOut: event.timedOut || false,
-                ...(event.error && { error: event.error }),
-              };
-              onChunk?.("exit", null, finalResult);
-            } else if (event.event === "start") {
-              onChunk?.("start", null, event);
-            }
-          } catch {
-            // Skip malformed SSE lines
-          }
-        }
-      }
-
-      // If we never got an exit event, return accumulated output anyway
-      if (
-        !finalResult &&
-        (stdoutChunks.length > 0 || stderrChunks.length > 0)
-      ) {
-        finalResult = {
-          success: false,
-          stdout: stdoutChunks.join(""),
-          stderr: stderrChunks.join(""),
-          exitCode: null,
-          error: "Stream ended without exit event",
-        };
-      }
-      return finalResult || { error: "Stream ended without exit event" };
+      const state: StreamChunkState = {
+        finalResult: null,
+        stdoutChunks: [],
+        stderrChunks: [],
+      };
+      await consumeToolStream(response.body.getReader(), state, onChunk);
+      return finalizeStreamResult(state);
     } catch (error: unknown) {
       return { error: `Streaming failed: ${getErrorMessage(error)}` };
     }

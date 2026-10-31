@@ -102,6 +102,130 @@ const activeRequests = new Map<string, ActiveRequest>();
 const conversationIndex = new Map<string, Set<string>>();
 const conversationAccumulators = new Map<string, ConversationAccumulator>();
 
+/** Stats when nothing is actively generating: completed totals and the last completed rate. */
+function buildIdleConversationStats(
+  accumulator: ConversationAccumulator | undefined,
+): ConversationGenerationStats {
+  const completedOutputTokens = accumulator?.completedOutputTokens || 0;
+  const completedInputTokens = accumulator?.completedInputTokens || 0;
+  const ttftSamples = accumulator?.ttftSamples || [];
+  const totalOut = completedOutputTokens;
+  const totalIn = completedInputTokens;
+  const avgTtft =
+    ttftSamples.length > 0
+      ? ttftSamples.reduce(
+          (ttftSample: number, b: number) => ttftSample + b,
+          0,
+        ) / ttftSamples.length
+      : null;
+  // Use the most recent completed tok/s (last iteration's rate)
+  const completedSamples = accumulator?.completedTokPerSecSamples || [];
+  const lastTokPerSec =
+    completedSamples.length > 0
+      ? parseFloat(completedSamples[completedSamples.length - 1].toFixed(1))
+      : null;
+  return {
+    tokPerSec: lastTokPerSec,
+    activeRequests: 0,
+    totalOutputTokens: totalOut,
+    totalInputTokens: totalIn,
+    totalTokens: totalIn + totalOut,
+    avgTtft,
+  };
+}
+
+interface ActiveConversationRates {
+  totalTokPerSec: number;
+  generatingCount: number;
+  activeOutputTokens: number;
+  activeInputTokens: number;
+  activeTtftSum: number;
+  activeTtftCount: number;
+}
+
+/** Sum throughput and TTFT across the conversation's in-flight requests. */
+function computeActiveConversationRates(
+  requestIds: Set<string>,
+): ActiveConversationRates {
+  let totalTokPerSec = 0;
+  let generatingCount = 0;
+  let activeOutputTokens = 0;
+  let activeInputTokens = 0;
+  let activeTtftSum = 0;
+  let activeTtftCount = 0;
+
+  for (const rid of requestIds) {
+    const request = activeRequests.get(rid);
+    if (!request) continue;
+
+    activeOutputTokens += request.outputTokens;
+    activeInputTokens += request.inputTokens;
+
+    if (request.ttft != null) {
+      activeTtftSum += request.ttft;
+      activeTtftCount++;
+    }
+
+    // Only compute tok/s for requests that have warmed up:
+    // - firstTokenTime and lastTokenTime must exist
+    // - enough tokens/chunks to be statistically meaningful
+    // - enough elapsed time to avoid early-burst spikes
+    //
+    // Use provider-reported outputTokens when available (authoritative,
+    // set at stream end). During streaming, estimate from cumulative
+    // output characters using ~4 chars/token heuristic. This is far
+    // more accurate than raw chunkCount for providers like Anthropic
+    // that send large thinking deltas as single chunks.
+    const estimatedFromChars =
+      request.outputCharacters > 0
+        ? Math.ceil(request.outputCharacters / 4)
+        : request.chunkCount;
+    const effectiveTokens =
+      request.outputTokens > 0 ? request.outputTokens : estimatedFromChars;
+    if (
+      request.firstTokenTime &&
+      request.lastTokenTime &&
+      effectiveTokens >= MIN_TOKENS_FOR_RATE
+    ) {
+      if (request.providerTokPerSec != null && request.providerTokPerSec > 0) {
+        totalTokPerSec += request.providerTokPerSec;
+        generatingCount++;
+      } else {
+        const elapsed = (request.lastTokenTime - request.firstTokenTime) / 1000;
+        if (elapsed >= MIN_ELAPSED_SEC) {
+          totalTokPerSec += effectiveTokens / elapsed;
+          generatingCount++;
+        }
+      }
+    }
+  }
+
+  return {
+    totalTokPerSec,
+    generatingCount,
+    activeOutputTokens,
+    activeInputTokens,
+    activeTtftSum,
+    activeTtftCount,
+  };
+}
+
+/** Prefer the live aggregate rate; fall back to the last completed rate. */
+function resolveConversationTokPerSec(
+  generatingCount: number,
+  totalTokPerSec: number,
+  accumulator: ConversationAccumulator | undefined,
+): number | null {
+  if (generatingCount > 0) {
+    return parseFloat(totalTokPerSec.toFixed(1));
+  }
+  const completedSamples = accumulator?.completedTokPerSecSamples || [];
+  if (completedSamples.length > 0) {
+    return parseFloat(completedSamples[completedSamples.length - 1].toFixed(1));
+  }
+  return null;
+}
+
 const ConversationGenerationTracker: ConversationGenerationTrackerInterface = {
   register(
     agentConversationId: string,
@@ -276,108 +400,28 @@ const ConversationGenerationTracker: ConversationGenerationTrackerInterface = {
     const ttftSamples = accumulator?.ttftSamples || [];
 
     if (!requestIds || requestIds.size === 0) {
-      const totalOut = completedOutputTokens;
-      const totalIn = completedInputTokens;
-      const avgTtft =
-        ttftSamples.length > 0
-          ? ttftSamples.reduce(
-              (ttftSample: number, b: number) => ttftSample + b,
-              0,
-            ) / ttftSamples.length
-          : null;
-      // Use the most recent completed tok/s (last iteration's rate)
-      const completedSamples = accumulator?.completedTokPerSecSamples || [];
-      const lastTokPerSec =
-        completedSamples.length > 0
-          ? parseFloat(completedSamples[completedSamples.length - 1].toFixed(1))
-          : null;
-      return {
-        tokPerSec: lastTokPerSec,
-        activeRequests: 0,
-        totalOutputTokens: totalOut,
-        totalInputTokens: totalIn,
-        totalTokens: totalIn + totalOut,
-        avgTtft,
-      };
+      return buildIdleConversationStats(accumulator);
     }
 
-    let totalTokPerSec = 0;
-    let generatingCount = 0;
-    let activeOutputTokens = 0;
-    let activeInputTokens = 0;
-    let activeTtftSum = 0;
-    let activeTtftCount = 0;
-
-    for (const rid of requestIds) {
-      const request = activeRequests.get(rid);
-      if (!request) continue;
-
-      activeOutputTokens += request.outputTokens;
-      activeInputTokens += request.inputTokens;
-
-      if (request.ttft != null) {
-        activeTtftSum += request.ttft;
-        activeTtftCount++;
-      }
-
-      // Only compute tok/s for requests that have warmed up:
-      // - firstTokenTime and lastTokenTime must exist
-      // - enough tokens/chunks to be statistically meaningful
-      // - enough elapsed time to avoid early-burst spikes
-      //
-      // Use provider-reported outputTokens when available (authoritative,
-      // set at stream end). During streaming, estimate from cumulative
-      // output characters using ~4 chars/token heuristic. This is far
-      // more accurate than raw chunkCount for providers like Anthropic
-      // that send large thinking deltas as single chunks.
-      const estimatedFromChars =
-        request.outputCharacters > 0
-          ? Math.ceil(request.outputCharacters / 4)
-          : request.chunkCount;
-      const effectiveTokens =
-        request.outputTokens > 0 ? request.outputTokens : estimatedFromChars;
-      if (
-        request.firstTokenTime &&
-        request.lastTokenTime &&
-        effectiveTokens >= MIN_TOKENS_FOR_RATE
-      ) {
-        if (request.providerTokPerSec != null && request.providerTokPerSec > 0) {
-          totalTokPerSec += request.providerTokPerSec;
-          generatingCount++;
-        } else {
-          const elapsed = (request.lastTokenTime - request.firstTokenTime) / 1000;
-          if (elapsed >= MIN_ELAPSED_SEC) {
-            totalTokPerSec += effectiveTokens / elapsed;
-            generatingCount++;
-          }
-        }
-      }
-    }
-
-    const totalOut = completedOutputTokens + activeOutputTokens;
-    const totalIn = completedInputTokens + activeInputTokens;
+    const rates = computeActiveConversationRates(requestIds);
+    const totalOut = completedOutputTokens + rates.activeOutputTokens;
+    const totalIn = completedInputTokens + rates.activeInputTokens;
 
     // Average TTFT across completed + active samples
     const allTtftSum =
       ttftSamples.reduce((ttftSample: number, b: number) => ttftSample + b, 0) +
-      activeTtftSum;
-    const allTtftCount = ttftSamples.length + activeTtftCount;
+      rates.activeTtftSum;
+    const allTtftCount = ttftSamples.length + rates.activeTtftCount;
     const avgTtft = allTtftCount > 0 ? allTtftSum / allTtftCount : null;
 
     // Tok/s: aggregate throughput across all active requests (sum, not average).
     // When multiple sub-agents generate in parallel, the conversation-level rate
     // reflects total tokens/sec being produced across the entire conversation.
-    let tokPerSec: number | null = null;
-    if (generatingCount > 0) {
-      tokPerSec = parseFloat(totalTokPerSec.toFixed(1));
-    } else {
-      const completedSamples = accumulator?.completedTokPerSecSamples || [];
-      if (completedSamples.length > 0) {
-        tokPerSec = parseFloat(
-          completedSamples[completedSamples.length - 1].toFixed(1),
-        );
-      }
-    }
+    const tokPerSec = resolveConversationTokPerSec(
+      rates.generatingCount,
+      rates.totalTokPerSec,
+      accumulator,
+    );
 
     return {
       tokPerSec,

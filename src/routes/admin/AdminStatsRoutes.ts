@@ -825,6 +825,258 @@ router.get(
   }),
 );
 
+// ─── Timeline granularity tiers (ordered finest → coarsest) ────────────────
+const TIMELINE_TIER_KEYS = [
+  "1s",
+  "5s",
+  "15s",
+  "30s",
+  "1min",
+  "5min",
+  "15min",
+  "1hr",
+  "4hr",
+  "1day",
+  "1week",
+];
+
+const TIMELINE_MINUTES_MS = 60_000;
+const TIMELINE_HOURS_MS = 3_600_000;
+const TIMELINE_DAYS_MS = 86_400_000;
+
+const TIMELINE_SPAN_RULES = [
+  {
+    maxSpanMs: 2 * TIMELINE_MINUTES_MS,
+    defaultGranularity: "1s",
+    minGranularity: "1s",
+    maxGranularity: "15s",
+  },
+  {
+    maxSpanMs: 10 * TIMELINE_MINUTES_MS,
+    defaultGranularity: "5s",
+    minGranularity: "1s",
+    maxGranularity: "1min",
+  },
+  {
+    maxSpanMs: 30 * TIMELINE_MINUTES_MS,
+    defaultGranularity: "15s",
+    minGranularity: "5s",
+    maxGranularity: "5min",
+  },
+  {
+    maxSpanMs: 1 * TIMELINE_HOURS_MS,
+    defaultGranularity: "30s",
+    minGranularity: "15s",
+    maxGranularity: "5min",
+  },
+  {
+    maxSpanMs: 6 * TIMELINE_HOURS_MS,
+    defaultGranularity: "1min",
+    minGranularity: "15s",
+    maxGranularity: "15min",
+  },
+  {
+    maxSpanMs: 1 * TIMELINE_DAYS_MS,
+    defaultGranularity: "5min",
+    minGranularity: "1min",
+    maxGranularity: "1hr",
+  },
+  {
+    maxSpanMs: 3 * TIMELINE_DAYS_MS,
+    defaultGranularity: "15min",
+    minGranularity: "5min",
+    maxGranularity: "1day",
+  },
+  {
+    maxSpanMs: 7 * TIMELINE_DAYS_MS,
+    defaultGranularity: "1day",
+    minGranularity: "1hr",
+    maxGranularity: "1day",
+  },
+  {
+    maxSpanMs: 14 * TIMELINE_DAYS_MS,
+    defaultGranularity: "1day",
+    minGranularity: "4hr",
+    maxGranularity: "1day",
+  },
+  {
+    maxSpanMs: 30 * TIMELINE_DAYS_MS,
+    defaultGranularity: "1day",
+    minGranularity: "4hr",
+    maxGranularity: "1week",
+  },
+  {
+    maxSpanMs: 90 * TIMELINE_DAYS_MS,
+    defaultGranularity: "1day",
+    minGranularity: "1day",
+    maxGranularity: "1week",
+  },
+  {
+    maxSpanMs: Infinity,
+    defaultGranularity: "1week",
+    minGranularity: "1day",
+    maxGranularity: "1week",
+  },
+];
+
+interface TimelineWindow {
+  sinceDate: Date;
+  untilDate: Date | undefined;
+  spanMs: number;
+}
+
+function resolveTimelineWindow(query: Request["query"]): TimelineWindow {
+  const { hours = 24, from, to } = query;
+
+  // One clock reading for both ends: reading Date.now() twice made a
+  // `hours=24` span a few milliseconds longer than a day, which pushed it
+  // into the 3-day granularity tier (15min instead of 5min).
+  const nowMs = Date.now();
+  let sinceDate: Date;
+  let untilDate: Date | undefined;
+  if (typeof from === "string") {
+    sinceDate = new Date(from);
+  } else {
+    sinceDate = new Date(nowMs - hoursToMs(parseInt(hours as string, 10)));
+  }
+  if (typeof to === "string") {
+    untilDate = new Date(to);
+  }
+
+  const spanMs = (untilDate ? untilDate.getTime() : nowMs) - sinceDate.getTime();
+  return { sinceDate, untilDate, spanMs };
+}
+
+interface TimelineTiers {
+  validGranularities: string[];
+  defaultGranularity: string;
+}
+
+function resolveTimelineTiers(spanMs: number): TimelineTiers {
+  const tierIndex: Record<string, number> = {};
+  TIMELINE_TIER_KEYS.forEach((key, index) => {
+    tierIndex[key] = index;
+  });
+
+  const matchingRule =
+    TIMELINE_SPAN_RULES.find((rule) => spanMs <= rule.maxSpanMs) ||
+    TIMELINE_SPAN_RULES[TIMELINE_SPAN_RULES.length - 1];
+  const minimumIndex = tierIndex[matchingRule.minGranularity] ?? 0;
+  const maximumIndex =
+    tierIndex[matchingRule.maxGranularity] ?? TIMELINE_TIER_KEYS.length - 1;
+  return {
+    validGranularities: TIMELINE_TIER_KEYS.slice(minimumIndex, maximumIndex + 1),
+    defaultGranularity: matchingRule.defaultGranularity,
+  };
+}
+
+type TimelineGranularityResolution =
+  | { granularity: string }
+  | { error: string };
+
+function resolveTimelineGranularity(
+  requestedGranularity: unknown,
+  validGranularities: string[],
+  defaultGranularity: string,
+): TimelineGranularityResolution {
+  if (
+    typeof requestedGranularity === "string" &&
+    validGranularities.includes(requestedGranularity)
+  ) {
+    return { granularity: requestedGranularity };
+  }
+  if (
+    typeof requestedGranularity === "string" &&
+    !validGranularities.includes(requestedGranularity)
+  ) {
+    return {
+      error: `Invalid granularity "${requestedGranularity}" for this time span. Valid options: ${validGranularities.join(", ")}`,
+    };
+  }
+  return { granularity: defaultGranularity };
+}
+
+interface TimelineFloorExprs {
+  floorSecondsExpr: (interval: number) => Record<string, unknown>;
+  floorMinutesExpr: (interval: number) => Record<string, unknown>;
+  floorHoursExpr: (interval: number) => Record<string, unknown>;
+  weekStartExpr: Record<string, unknown>;
+}
+
+/** MongoDB $group _id expression per granularity. */
+function buildTimelineGroupId(
+  granularity: string,
+  exprs: TimelineFloorExprs,
+): Record<string, unknown> {
+  let groupId: Record<string, unknown>;
+  switch (granularity) {
+    case "1s":
+      groupId = {
+        $dateToString: {
+          format: "%Y-%m-%dT%H:%M:%S",
+          date: { $toDate: "$timestamp" },
+          timezone: "UTC",
+        },
+      };
+      break;
+    case "5s":
+      groupId = exprs.floorSecondsExpr(5);
+      break;
+    case "15s":
+      groupId = exprs.floorSecondsExpr(15);
+      break;
+    case "30s":
+      groupId = exprs.floorSecondsExpr(30);
+      break;
+    case "1min":
+      groupId = {
+        $dateToString: {
+          format: "%Y-%m-%dT%H:%M",
+          date: { $toDate: "$timestamp" },
+          timezone: "UTC",
+        },
+      };
+      break;
+    case "5min":
+      groupId = exprs.floorMinutesExpr(5);
+      break;
+    case "15min":
+      groupId = exprs.floorMinutesExpr(15);
+      break;
+    case "1hr":
+      groupId = { $substr: ["$timestamp", 0, 13] };
+      break;
+    case "4hr":
+      groupId = exprs.floorHoursExpr(4);
+      break;
+    case "1day":
+      groupId = { $substr: ["$timestamp", 0, 10] };
+      break;
+    case "1week":
+      groupId = exprs.weekStartExpr;
+      break;
+    default:
+      groupId = { $substr: ["$timestamp", 0, 10] };
+  }
+  return groupId;
+}
+
+function mapTimelineRow(r: Record<string, unknown>) {
+  return {
+    hour: r._id,
+    requests: r.requests,
+    tokens: r.tokens,
+    cost: r.cost,
+    avgLatency: r.avgLatency ? Math.round(r.avgLatency as number) : 0,
+    successRate:
+      (r.requests as number) > 0
+        ? Math.round(
+            ((r.successes as number) / (r.requests as number)) * 100,
+          )
+        : 100,
+  };
+}
+
 // ─── GET /stats/timeline — requests grouped by adaptive granularity ─
 // Supports an optional `granularity` query param for user-selected resolution.
 // Returns `validGranularities` and `defaultGranularity` so the frontend can
@@ -833,157 +1085,21 @@ router.get(
   "/timeline",
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const {
-        hours = 24,
-        from,
-        to,
-        granularity: requestedGranularity,
-      } = req.query;
+      const { granularity: requestedGranularity } = req.query;
+      const { sinceDate, untilDate, spanMs } = resolveTimelineWindow(req.query);
 
-      // One clock reading for both ends: reading Date.now() twice made a
-      // `hours=24` span a few milliseconds longer than a day, which pushed it
-      // into the 3-day granularity tier (15min instead of 5min).
-      const nowMs = Date.now();
-      let sinceDate: Date;
-      let untilDate: Date | undefined;
-      if (typeof from === "string") {
-        sinceDate = new Date(from);
-      } else {
-        sinceDate = new Date(nowMs - hoursToMs(parseInt(hours as string, 10)));
-      }
-      if (typeof to === "string") {
-        untilDate = new Date(to);
-      }
-
-      const spanMs = (untilDate ? untilDate.getTime() : nowMs) - sinceDate.getTime();
-
-      // ── Granularity tier definitions (ordered finest → coarsest) ──
-      const TIER_KEYS = [
-        "1s",
-        "5s",
-        "15s",
-        "30s",
-        "1min",
-        "5min",
-        "15min",
-        "1hr",
-        "4hr",
-        "1day",
-        "1week",
-      ];
-      const TIER_INDEX: Record<string, number> = {};
-      TIER_KEYS.forEach((key, index) => {
-        TIER_INDEX[key] = index;
-      });
-
-      const MINUTES_MS = 60_000;
-      const HOURS_MS = 3_600_000;
-      const DAYS_MS = 86_400_000;
-
-      const SPAN_RULES = [
-        {
-          maxSpanMs: 2 * MINUTES_MS,
-          defaultGranularity: "1s",
-          minGranularity: "1s",
-          maxGranularity: "15s",
-        },
-        {
-          maxSpanMs: 10 * MINUTES_MS,
-          defaultGranularity: "5s",
-          minGranularity: "1s",
-          maxGranularity: "1min",
-        },
-        {
-          maxSpanMs: 30 * MINUTES_MS,
-          defaultGranularity: "15s",
-          minGranularity: "5s",
-          maxGranularity: "5min",
-        },
-        {
-          maxSpanMs: 1 * HOURS_MS,
-          defaultGranularity: "30s",
-          minGranularity: "15s",
-          maxGranularity: "5min",
-        },
-        {
-          maxSpanMs: 6 * HOURS_MS,
-          defaultGranularity: "1min",
-          minGranularity: "15s",
-          maxGranularity: "15min",
-        },
-        {
-          maxSpanMs: 1 * DAYS_MS,
-          defaultGranularity: "5min",
-          minGranularity: "1min",
-          maxGranularity: "1hr",
-        },
-        {
-          maxSpanMs: 3 * DAYS_MS,
-          defaultGranularity: "15min",
-          minGranularity: "5min",
-          maxGranularity: "1day",
-        },
-        {
-          maxSpanMs: 7 * DAYS_MS,
-          defaultGranularity: "1day",
-          minGranularity: "1hr",
-          maxGranularity: "1day",
-        },
-        {
-          maxSpanMs: 14 * DAYS_MS,
-          defaultGranularity: "1day",
-          minGranularity: "4hr",
-          maxGranularity: "1day",
-        },
-        {
-          maxSpanMs: 30 * DAYS_MS,
-          defaultGranularity: "1day",
-          minGranularity: "4hr",
-          maxGranularity: "1week",
-        },
-        {
-          maxSpanMs: 90 * DAYS_MS,
-          defaultGranularity: "1day",
-          minGranularity: "1day",
-          maxGranularity: "1week",
-        },
-        {
-          maxSpanMs: Infinity,
-          defaultGranularity: "1week",
-          minGranularity: "1day",
-          maxGranularity: "1week",
-        },
-      ];
-
-      const matchingRule =
-        SPAN_RULES.find((rule) => spanMs <= rule.maxSpanMs) ||
-        SPAN_RULES[SPAN_RULES.length - 1];
-      const minimumIndex = TIER_INDEX[matchingRule.minGranularity] ?? 0;
-      const maximumIndex =
-        TIER_INDEX[matchingRule.maxGranularity] ?? TIER_KEYS.length - 1;
-      const validGranularities = TIER_KEYS.slice(
-        minimumIndex,
-        maximumIndex + 1,
+      const { validGranularities, defaultGranularity } =
+        resolveTimelineTiers(spanMs);
+      const resolvedGranularity = resolveTimelineGranularity(
+        requestedGranularity,
+        validGranularities,
+        defaultGranularity,
       );
-      const defaultGranularity = matchingRule.defaultGranularity;
-
-      let granularity: string;
-      if (
-        typeof requestedGranularity === "string" &&
-        validGranularities.includes(requestedGranularity)
-      ) {
-        granularity = requestedGranularity;
-      } else if (
-        typeof requestedGranularity === "string" &&
-        !validGranularities.includes(requestedGranularity)
-      ) {
-        res.status(400).json({
-          error: `Invalid granularity "${requestedGranularity}" for this time span. Valid options: ${validGranularities.join(", ")}`,
-        });
+      if ("error" in resolvedGranularity) {
+        res.status(400).json({ error: resolvedGranularity.error });
         return;
-      } else {
-        granularity = defaultGranularity;
       }
+      const granularity = resolvedGranularity.granularity;
 
       // ── MongoDB $group _id expressions per granularity ──
 
@@ -1224,56 +1340,12 @@ router.get(
         },
       };
 
-      let groupId: Record<string, unknown>;
-      switch (granularity) {
-        case "1s":
-          groupId = {
-            $dateToString: {
-              format: "%Y-%m-%dT%H:%M:%S",
-              date: { $toDate: "$timestamp" },
-              timezone: "UTC",
-            },
-          };
-          break;
-        case "5s":
-          groupId = floorSecondsExpr(5);
-          break;
-        case "15s":
-          groupId = floorSecondsExpr(15);
-          break;
-        case "30s":
-          groupId = floorSecondsExpr(30);
-          break;
-        case "1min":
-          groupId = {
-            $dateToString: {
-              format: "%Y-%m-%dT%H:%M",
-              date: { $toDate: "$timestamp" },
-              timezone: "UTC",
-            },
-          };
-          break;
-        case "5min":
-          groupId = floorMinutesExpr(5);
-          break;
-        case "15min":
-          groupId = floorMinutesExpr(15);
-          break;
-        case "1hr":
-          groupId = { $substr: ["$timestamp", 0, 13] };
-          break;
-        case "4hr":
-          groupId = floorHoursExpr(4);
-          break;
-        case "1day":
-          groupId = { $substr: ["$timestamp", 0, 10] };
-          break;
-        case "1week":
-          groupId = weekStartExpr;
-          break;
-        default:
-          groupId = { $substr: ["$timestamp", 0, 10] };
-      }
+      const groupId = buildTimelineGroupId(granularity, {
+        floorSecondsExpr,
+        floorMinutesExpr,
+        floorHoursExpr,
+        weekStartExpr,
+      });
 
       const timeMatch: Record<string, string> = {
         $gte: sinceDate.toISOString(),
@@ -1316,19 +1388,7 @@ router.get(
         granularity,
         defaultGranularity,
         validGranularities,
-        data: results.map((r: Record<string, unknown>) => ({
-          hour: r._id,
-          requests: r.requests,
-          tokens: r.tokens,
-          cost: r.cost,
-          avgLatency: r.avgLatency ? Math.round(r.avgLatency as number) : 0,
-          successRate:
-            (r.requests as number) > 0
-              ? Math.round(
-                  ((r.successes as number) / (r.requests as number)) * 100,
-                )
-              : 100,
-        })),
+        data: results.map((r: Record<string, unknown>) => mapTimelineRow(r)),
       });
     } catch (error: unknown) {
       logger.error(`Admin /stats/timeline error: ${getErrorMessage(error)}`);

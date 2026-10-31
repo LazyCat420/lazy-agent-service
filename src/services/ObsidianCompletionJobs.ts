@@ -15,6 +15,93 @@ export interface CompletionJob {
 /** OpenAI SSE tool-call fragment: name/arguments arrive split across chunks, keyed by index. */
 interface StreamToolCallDelta { index?: number; id?: string; function?: { name?: string; arguments?: string } }
 
+/** Assembled chat.completion tool call (OpenAI shape). */
+interface AssembledToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/** OpenAI-compatible SSE chunk. */
+interface CompletionStreamChunk {
+  id?: string;
+  created?: number;
+  model?: string;
+  choices?: Array<{
+    finish_reason?: string | null;
+    delta?: {
+      content?: string | null;
+      reasoning_content?: string | null;
+      reasoning?: string | null;
+      tool_calls?: StreamToolCallDelta[];
+    };
+  }>;
+  usage?: Record<string, unknown>;
+}
+
+interface CompletionStreamState {
+  id: string;
+  created: number;
+  model: string;
+  finishReason: string | null;
+  usage?: Record<string, unknown>;
+  partial: string;
+  toolCalls: AssembledToolCall[];
+}
+
+function applyToolCallDeltas(
+  calls: StreamToolCallDelta[],
+  toolCalls: AssembledToolCall[],
+): void {
+  for (const call of calls) {
+    const slot = (toolCalls[call.index ?? toolCalls.length] ||= { id: "", type: "function", function: { name: "", arguments: "" } });
+    if (call.id) slot.id = call.id;
+    if (call.function?.name) slot.function.name += call.function.name;
+    if (call.function?.arguments) slot.function.arguments += call.function.arguments;
+  }
+}
+
+function applyCompletionChunk(
+  chunk: CompletionStreamChunk,
+  state: CompletionStreamState,
+  flushPartial: () => void,
+): void {
+  if (chunk.id) state.id = chunk.id;
+  if (chunk.created) state.created = chunk.created;
+  if (chunk.model) state.model = chunk.model;
+  if (chunk.usage) state.usage = chunk.usage;
+  const choice = chunk.choices?.[0];
+  if (choice?.finish_reason) state.finishReason = choice.finish_reason;
+  const delta = choice?.delta;
+  applyToolCallDeltas(delta?.tool_calls || [], state.toolCalls);
+  if (typeof delta?.content === "string" && delta.content) { state.partial += delta.content; flushPartial(); }
+}
+
+function parseCompletionSseLine(
+  line: string,
+  state: CompletionStreamState,
+  flushPartial: () => void,
+): void {
+  if (!line.startsWith("data:")) return;
+  const data = line.slice(5).trim();
+  if (data === "[DONE]") return;
+  try {
+    applyCompletionChunk(JSON.parse(data) as CompletionStreamChunk, state, flushPartial);
+  } catch { /* ignore malformed chunks mid-stream */ }
+}
+
+/** Assemble the full chat.completion object old clients expect. */
+function buildCompletionResponse(
+  state: CompletionStreamState,
+  status: number,
+  jobId: string,
+): CompletionJob["response"] {
+  return { status, data: { id: state.id, object: "chat.completion", created: state.created, model: state.model, choices: [{ index: 0, message: {
+    role: "assistant", content: state.partial,
+    ...(state.toolCalls.length ? { tool_calls: state.toolCalls.filter(Boolean).map((call, i) => ({ ...call, id: call.id || `call_${jobId}_${i}` })) } : {}),
+  }, finish_reason: state.finishReason }], usage: state.usage } };
+}
+
 /** Durable model steps. Vault tools remain on the Obsidian client. */
 export class ObsidianCompletionJobs {
   private active = new Map<string, CompletionJob>();
@@ -78,17 +165,22 @@ export class ObsidianCompletionJobs {
    *  second) and assembling the full chat.completion object old clients expect. */
   private async consumeStream(file: string, job: CompletionJob, response: Response): Promise<CompletionJob["response"]> {
     if (!response.body) throw new Error("Streaming response had no body");
-    let partial = ""; let lastPartialWrite = 0;
+    let lastPartialWrite = 0;
+    const state: CompletionStreamState = {
+      id: `chatcmpl-${job.id}`,
+      created: Math.floor(Date.now() / 1000),
+      model: "",
+      finishReason: null,
+      partial: "",
+      toolCalls: [],
+    };
     const flushPartial = (force = false) => {
-      job.partial = partial; // Always visible in memory for GET; only the disk write is throttled.
+      job.partial = state.partial; // Always visible in memory for GET; only the disk write is throttled.
       const now = Date.now();
       if (!force && now - lastPartialWrite < 1000) return;
       lastPartialWrite = now;
       try { this.write(file, job); } catch { /* the final write below still reports persistence failures */ }
     };
-    let id = `chatcmpl-${job.id}`; let created = Math.floor(Date.now() / 1000); let model = ""; let finishReason: string | null = null;
-    let usage: Record<string, unknown> | undefined;
-    const toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -100,33 +192,11 @@ export class ObsidianCompletionJobs {
       while ((newline = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
-        if (!line.startsWith("data:")) continue;
-        const data = line.slice(5).trim();
-        if (data === "[DONE]") continue;
-        try {
-          const chunk = JSON.parse(data) as { id?: string; created?: number; model?: string; choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null; reasoning_content?: string | null; reasoning?: string | null; tool_calls?: StreamToolCallDelta[] } }>; usage?: Record<string, unknown> };
-          if (chunk.id) id = chunk.id;
-          if (chunk.created) created = chunk.created;
-          if (chunk.model) model = chunk.model;
-          if (chunk.usage) usage = chunk.usage;
-          const choice = chunk.choices?.[0];
-          if (choice?.finish_reason) finishReason = choice.finish_reason;
-          const delta = choice?.delta;
-          for (const call of delta?.tool_calls || []) {
-            const slot = toolCalls[call.index ?? toolCalls.length] ||= { id: "", type: "function", function: { name: "", arguments: "" } };
-            if (call.id) slot.id = call.id;
-            if (call.function?.name) slot.function.name += call.function.name;
-            if (call.function?.arguments) slot.function.arguments += call.function.arguments;
-          }
-          if (typeof delta?.content === "string" && delta.content) { partial += delta.content; flushPartial(); }
-        } catch { /* ignore malformed chunks mid-stream */ }
+        parseCompletionSseLine(line, state, flushPartial);
       }
     }
     flushPartial(true);
-    return { status: response.status, data: { id, object: "chat.completion", created, model, choices: [{ index: 0, message: {
-      role: "assistant", content: partial,
-      ...(toolCalls.length ? { tool_calls: toolCalls.filter(Boolean).map((call, i) => ({ ...call, id: call.id || `call_${job.id}_${i}` })) } : {}),
-    }, finish_reason: finishReason }], usage } };
+    return buildCompletionResponse(state, response.status, job.id);
   }
   private async execute(file: string, job: CompletionJob, target: string, payload: Record<string, unknown>) {
     const signal = AbortSignal.any([this.controllers.get(file)!.signal, AbortSignal.timeout(Number(process.env.OBSIDIAN_COMPLETION_TIMEOUT_MS) || 600000)]);

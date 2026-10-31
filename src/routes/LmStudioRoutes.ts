@@ -106,18 +106,114 @@ router.post(
  *   { type: "complete" }
  *   { type: "error", message: "..." }
  */
+/** Only pass the load options the caller actually supplied. */
+function buildStreamLoadOptions(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const {
+    context_length,
+    flash_attention,
+    offload_kv_cache_to_gpu,
+    eval_batch_size,
+    parallel,
+    unified_kv_cache,
+  } = body;
+  const loadOptions: Record<string, unknown> = {};
+  if (context_length != null) loadOptions.context_length = context_length;
+  if (flash_attention != null) loadOptions.flash_attention = flash_attention;
+  if (offload_kv_cache_to_gpu != null)
+    loadOptions.offload_kv_cache_to_gpu = offload_kv_cache_to_gpu;
+  if (eval_batch_size != null)
+    loadOptions.eval_batch_size = eval_batch_size;
+  if (parallel != null) loadOptions.parallel = parallel;
+  if (unified_kv_cache != null)
+    loadOptions.unified_kv_cache = unified_kv_cache;
+  return loadOptions;
+}
+
+/** Quick check: skip an already-loaded model, else unload every other loaded model. */
+async function checkAndUnloadModels(
+  provider: LmStudioProvider,
+  model: string,
+  send: (data: Record<string, unknown>) => void,
+): Promise<boolean> {
+  let needsLoad = true;
+  try {
+    const { models } = await provider.listModels();
+    const modelEntry = (models || []).find((entry) => entry.key === model);
+    const isLoaded = (modelEntry?.loaded_instances?.length ?? 0) > 0;
+    if (isLoaded) {
+      // Already loaded — skip entirely
+      logger.info(`[load-stream] Model ${model} already loaded — skipping`);
+      send({ type: "progress", progress: 1 });
+      send({ type: "complete", alreadyLoaded: true });
+      needsLoad = false;
+    } else {
+      // Unload any other loaded models first (single-model enforcement)
+      for (const message of models || []) {
+        for (const inst of message.loaded_instances || []) {
+          send({ type: "unloading", model: message.key });
+          logger.info(
+            `[load-stream] Auto-unloading ${inst.id} before loading ${model}`,
+          );
+          await provider.unloadModel(inst.id);
+        }
+      }
+    }
+  } catch (listError: unknown) {
+    logger.warn(
+      `[load-stream] Could not check models before loading: ${getErrorMessage(listError)}`,
+    );
+  }
+  return needsLoad;
+}
+
+/** Fire the load in the background and emit synthetic progress until it settles. */
+async function loadModelWithProgress(
+  provider: LmStudioProvider,
+  model: string,
+  loadOptions: Record<string, unknown>,
+  send: (data: Record<string, unknown>) => void,
+  isAborted: () => boolean,
+): Promise<Record<string, unknown> | null> {
+  let loadDone = false;
+  let loadError: Record<string, unknown> | null = null;
+  const loadPromise = provider
+    .loadModel(model, loadOptions)
+    .then(() => {
+      loadDone = true;
+    })
+    .catch((error: Record<string, unknown>) => {
+      loadDone = true;
+      loadError = error;
+    });
+  const startTime = Date.now();
+  const EXPECTED_LOAD_MS = 15_000;
+  let lastPercentage = 0;
+  while (!loadDone && !isAborted()) {
+    await sleep(300);
+    if (loadDone || isAborted()) break;
+    const elapsed = Date.now() - startTime;
+    const percentage = Math.min(
+      0.95,
+      elapsed / (elapsed + EXPECTED_LOAD_MS),
+    );
+    if (percentage > lastPercentage + 0.005) {
+      lastPercentage = percentage;
+      send({
+        type: "progress",
+        progress: parseFloat(percentage.toFixed(3)),
+      });
+    }
+  }
+  await loadPromise;
+  return loadError;
+}
+
 router.post(
   "/load-stream",
   asyncHandler(async (req: Request, res: Response) => {
-    const {
-      model,
-      context_length,
-      flash_attention,
-      offload_kv_cache_to_gpu,
-      eval_batch_size,
-      parallel,
-      unified_kv_cache,
-    } = req.body;
+    const { model } = req.body;
     if (!model) {
       return res.status(400).json({ error: "Missing 'model' in request body" });
     }
@@ -137,85 +233,23 @@ router.post(
       const instanceId = resolveInstanceId(req);
       const provider = getProvider(instanceId) as LmStudioProvider;
       send({ type: "start", model });
-      // Build load options
-      const loadOptions: Record<string, unknown> = {};
-      if (context_length != null) loadOptions.context_length = context_length;
-      if (flash_attention != null)
-        loadOptions.flash_attention = flash_attention;
-      if (offload_kv_cache_to_gpu != null)
-        loadOptions.offload_kv_cache_to_gpu = offload_kv_cache_to_gpu;
-      if (eval_batch_size != null)
-        loadOptions.eval_batch_size = eval_batch_size;
-      if (parallel != null) loadOptions.parallel = parallel;
-      if (unified_kv_cache != null)
-        loadOptions.unified_kv_cache = unified_kv_cache;
+      const loadOptions = buildStreamLoadOptions(req.body);
       if (aborted) return res.end();
       // Check if model is already loaded and unload others if needed
       // (non-streaming part — quick check + unload)
-      let needsLoad = true;
-      try {
-        const { models } = await provider.listModels();
-        const modelEntry = (models || []).find((entry) => entry.key === model);
-        const isLoaded = (modelEntry?.loaded_instances?.length ?? 0) > 0;
-        if (isLoaded) {
-          // Already loaded — skip entirely
-          logger.info(`[load-stream] Model ${model} already loaded — skipping`);
-          send({ type: "progress", progress: 1 });
-          send({ type: "complete", alreadyLoaded: true });
-          needsLoad = false;
-        } else {
-          // Unload any other loaded models first (single-model enforcement)
-          for (const message of models || []) {
-            for (const inst of message.loaded_instances || []) {
-              send({ type: "unloading", model: message.key });
-              logger.info(
-                `[load-stream] Auto-unloading ${inst.id} before loading ${model}`,
-              );
-              await provider.unloadModel(inst.id);
-            }
-          }
-        }
-      } catch (listError: unknown) {
-        logger.warn(
-          `[load-stream] Could not check models before loading: ${getErrorMessage(listError)}`,
-        );
-      }
+      const needsLoad = await checkAndUnloadModels(provider, model, send);
       if (!needsLoad || aborted) {
         return res.end();
       }
       send({ type: "progress", progress: 0 });
       // Fire load in background, poll for synthetic progress
-      let loadDone = false;
-      let loadError: Record<string, unknown> | null = null;
-      const loadPromise = provider
-        .loadModel(model, loadOptions)
-        .then(() => {
-          loadDone = true;
-        })
-        .catch((error: Record<string, unknown>) => {
-          loadDone = true;
-          loadError = error;
-        });
-      const startTime = Date.now();
-      const EXPECTED_LOAD_MS = 15_000;
-      let lastPercentage = 0;
-      while (!loadDone && !aborted) {
-        await sleep(300);
-        if (loadDone || aborted) break;
-        const elapsed = Date.now() - startTime;
-        const percentage = Math.min(
-          0.95,
-          elapsed / (elapsed + EXPECTED_LOAD_MS),
-        );
-        if (percentage > lastPercentage + 0.005) {
-          lastPercentage = percentage;
-          send({
-            type: "progress",
-            progress: parseFloat(percentage.toFixed(3)),
-          });
-        }
-      }
-      await loadPromise;
+      const loadError = await loadModelWithProgress(
+        provider,
+        model,
+        loadOptions,
+        send,
+        () => aborted,
+      );
       if (aborted) return res.end();
       if (loadError) {
         logger.error(

@@ -477,55 +477,230 @@ function optionNumber(
   return null;
 }
 
+/**
+ * Identity/log fields. Optional params keep the null defaults the public
+ * signature documents; `operation`/`agent`/`harness` use `||` to keep the
+ * empty-string → null behaviour.
+ */
+function buildLogIdentityFields(params: LogParams, now: string) {
+  return {
+    requestId: params.requestId,
+    timestamp: now,
+    createdAt: now,
+    endpoint: params.endpoint,
+    operation: params.operation || null,
+    project: params.project,
+    username: params.username,
+    clientIp: params.clientIp ?? null,
+    agent: params.agent || null,
+    harness: params.harness || null,
+    provider: params.provider,
+    model: params.model,
+    conversationId: params.conversationId ?? null,
+    traceId: params.traceId ?? null,
+    ...(params.agentConversationId && {
+      agentConversationId: params.agentConversationId,
+    }),
+    ...(params.parentAgentConversationId && {
+      parentAgentConversationId: params.parentAgentConversationId,
+    }),
+  };
+}
+
+function buildLogToolFields(params: LogParams) {
+  const toolApiNames = params.toolApiNames ?? [];
+  return {
+    toolsUsed: params.toolsUsed ?? false,
+    toolDisplayNames: params.toolDisplayNames ?? [],
+    toolApiNames,
+    toolApiNameCount: toolApiNames.length,
+  };
+}
+
+function buildLogUsageFields(params: LogParams) {
+  const cacheReadInputTokens = params.cacheReadInputTokens ?? 0;
+  const cacheCreationInputTokens = params.cacheCreationInputTokens ?? 0;
+  const reasoningOutputTokens = params.reasoningOutputTokens ?? 0;
+  return {
+    success: params.success,
+    errorMessage: params.errorMessage ?? null,
+    inputTokens: params.inputTokens ?? 0,
+    outputTokens: params.outputTokens ?? 0,
+    ...(cacheReadInputTokens > 0 && { cacheReadInputTokens }),
+    ...(cacheCreationInputTokens > 0 && { cacheCreationInputTokens }),
+    ...(reasoningOutputTokens > 0 && { reasoningOutputTokens }),
+    estimatedCost: params.estimatedCost ?? null,
+    tokensPerSec: params.tokensPerSec ?? null,
+  };
+}
+
+function buildLogOptionFields(params: LogParams) {
+  return {
+    temperature: params.temperature ?? null,
+    maxTokens: params.maxTokens ?? null,
+    topP: params.topP ?? null,
+    topK: params.topK ?? null,
+    frequencyPenalty: params.frequencyPenalty ?? null,
+    presencePenalty: params.presencePenalty ?? null,
+    stopSequences: params.stopSequences ?? null,
+  };
+}
+
+function buildLogMessageFields(params: LogParams) {
+  return {
+    messageCount: params.messageCount ?? 0,
+    inputCharacters: params.inputCharacters ?? 0,
+    outputCharacters: params.outputCharacters ?? 0,
+    // seconds — time to first token (TTFT)
+    timeToGeneration: params.timeToGeneration ?? null,
+    // seconds — token generation duration
+    generationTime: params.generationTime ?? null,
+    // seconds — end-to-end request time
+    totalTime: params.totalTime ?? null,
+  };
+}
+
+function buildLogPayloadFields(params: LogParams) {
+  return {
+    requestPayload: params.requestPayload ?? null,
+    responsePayload: params.responsePayload ?? null,
+    modalities: params.modalities ?? null,
+    rateLimits: params.rateLimits ?? null,
+  };
+}
+
+/** Model-sizing fields are omitted (not null) when the caller did not pass them. */
+function buildLogTailFields(params: LogParams) {
+  return {
+    ...(params.contextLength != null && {
+      contextLength: params.contextLength,
+    }),
+    ...(params.evalBatchSize != null && { evalBatchSize: params.evalBatchSize }),
+    ...(params.physicalBatchSize != null && {
+      physicalBatchSize: params.physicalBatchSize,
+    }),
+    status: "completed",
+  };
+}
+
+function buildRequestDocument(params: LogParams, now: string) {
+  return {
+    ...buildLogIdentityFields(params, now),
+    ...buildLogToolFields(params),
+    ...buildLogUsageFields(params),
+    ...buildLogOptionFields(params),
+    ...buildLogMessageFields(params),
+    ...buildLogPayloadFields(params),
+    ...buildLogTailFields(params),
+  };
+}
+
+/** Prefer real API-reported usage over the ~4 chars/token heuristic. */
+function estimateBackgroundUsage(
+  aiMessages: MessagePayload[],
+  resultText: string | null,
+  apiUsage: LogBackgroundLlmCallParams["usage"],
+  model: LogBackgroundLlmCallParams["model"],
+) {
+  const inputText = aiMessages
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : JSON.stringify(message.content),
+    )
+    .join("\n");
+
+  const inputTokens = apiUsage
+    ? getTotalInputTokens(
+        apiUsage as Parameters<typeof getTotalInputTokens>[0],
+      )
+    : estimateTokens(inputText);
+  const outputTokens = apiUsage
+    ? apiUsage.outputTokens || 0
+    : resultText
+      ? estimateTokens(resultText)
+      : 0;
+  const cacheReadInputTokens = apiUsage?.cacheReadInputTokens || 0;
+  const cacheCreationInputTokens = apiUsage?.cacheCreationInputTokens || 0;
+
+  const pricing = getPricing(TYPES.TEXT, TYPES.TEXT)[model as string];
+  let estimatedCost: number | null = null;
+  if (pricing) {
+    estimatedCost = calculateTextCost(
+      (apiUsage || { inputTokens, outputTokens }) as Parameters<
+        typeof calculateTextCost
+      >[0],
+      pricing,
+    );
+  }
+  return {
+    inputText,
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    estimatedCost,
+  };
+}
+
+interface PendingDocumentFields {
+  requestId: string;
+  endpoint: string | null;
+  operation: string | null;
+  project: string | null;
+  username: string | null;
+  clientIp: string | null;
+  agent: string | null;
+  harness: string | null;
+  provider: string | null;
+  model: string | null;
+  conversationId: string | null;
+  traceId: string | null;
+  agentConversationId: string | null;
+  parentAgentConversationId: string | null;
+  agenticIteration: number | null;
+}
+
+function buildPendingRequestDocument(fields: PendingDocumentFields) {
+  // `createdAt` mirrors `timestamp`: prism writes `createdAt`, and every
+  // reader of the shared `prism.requests` collection (trading's Monitor
+  // and audits, prism-client) filters and sorts on it. Our own admin
+  // routes and indexes read `timestamp`, so both are written.
+  const pendingNow = new Date().toISOString();
+  return {
+    requestId: fields.requestId,
+    timestamp: pendingNow,
+    createdAt: pendingNow,
+    endpoint: fields.endpoint || null,
+    operation: fields.operation || null,
+    project: fields.project || null,
+    username: fields.username || null,
+    clientIp: fields.clientIp || null,
+    agent: fields.agent || null,
+    harness: fields.harness || null,
+    provider: fields.provider || null,
+    model: fields.model || null,
+    conversationId: fields.conversationId || null,
+    traceId: fields.traceId || null,
+    ...(fields.agentConversationId && {
+      agentConversationId: fields.agentConversationId,
+    }),
+    ...(fields.parentAgentConversationId && {
+      parentAgentConversationId: fields.parentAgentConversationId,
+    }),
+    ...(fields.agenticIteration !== null && {
+      agenticIteration: fields.agenticIteration,
+    }),
+    status: "pending",
+    inputTokens: 0,
+    outputTokens: 0,
+    estimatedCost: null,
+    success: null,
+  };
+}
+
 const RequestLogger = {
-  async log({
-    requestId,
-    endpoint,
-    operation = null,
-    project,
-    username,
-    clientIp = null,
-    agent = null,
-    harness = null,
-    provider,
-    model,
-    conversationId = null,
-    traceId = null,
-    agentConversationId = null,
-    parentAgentConversationId = null,
-    toolsUsed = false,
-    toolDisplayNames = [],
-    toolApiNames = [],
-    success,
-    errorMessage = null,
-    inputTokens = 0,
-    outputTokens = 0,
-    cacheReadInputTokens = 0,
-    cacheCreationInputTokens = 0,
-    reasoningOutputTokens = 0,
-    estimatedCost = null,
-    tokensPerSec = null,
-    temperature = null,
-    maxTokens = null,
-    topP = null,
-    topK = null,
-    frequencyPenalty = null,
-    presencePenalty = null,
-    stopSequences = null,
-    messageCount = 0,
-    inputCharacters = 0,
-    outputCharacters = 0,
-    timeToGeneration = null, // seconds — time to first token (TTFT)
-    generationTime = null, // seconds — token generation duration
-    totalTime = null, // seconds — end-to-end request time
-    requestPayload = null,
-    responsePayload = null,
-    modalities = null,
-    rateLimits = null,
-    contextLength = null,
-    evalBatchSize = null,
-    physicalBatchSize = null,
-  }: LogParams) {
+  async log(params: LogParams) {
     try {
       const db = MongoWrapper.getDb(MONGO_DB_NAME);
       if (!db) {
@@ -534,58 +709,7 @@ const RequestLogger = {
       }
       // `createdAt` mirrors `timestamp` — see insertPending for why both.
       const now = new Date().toISOString();
-      const document = {
-        requestId,
-        timestamp: now,
-        createdAt: now,
-        endpoint,
-        operation: operation || null,
-        project,
-        username,
-        clientIp,
-        agent: agent || null,
-        harness: harness || null,
-        provider,
-        model,
-        conversationId,
-        traceId,
-        ...(agentConversationId && { agentConversationId }),
-        ...(parentAgentConversationId && { parentAgentConversationId }),
-        toolsUsed,
-        toolDisplayNames,
-        toolApiNames,
-        toolApiNameCount: toolApiNames.length,
-        success,
-        errorMessage,
-        inputTokens,
-        outputTokens,
-        ...(cacheReadInputTokens > 0 && { cacheReadInputTokens }),
-        ...(cacheCreationInputTokens > 0 && { cacheCreationInputTokens }),
-        ...(reasoningOutputTokens > 0 && { reasoningOutputTokens }),
-        estimatedCost,
-        tokensPerSec,
-        temperature,
-        maxTokens,
-        topP,
-        topK,
-        frequencyPenalty,
-        presencePenalty,
-        stopSequences,
-        messageCount,
-        inputCharacters,
-        outputCharacters,
-        timeToGeneration,
-        generationTime,
-        totalTime,
-        requestPayload,
-        responsePayload,
-        modalities,
-        rateLimits,
-        ...(contextLength != null && { contextLength }),
-        ...(evalBatchSize != null && { evalBatchSize }),
-        ...(physicalBatchSize != null && { physicalBatchSize }),
-        status: "completed",
-      };
+      const document = buildRequestDocument(params, now);
       await db.collection(COLLECTION).insertOne(document);
 
       WebhookEventBus.emit("request.created", { ...document });
@@ -720,39 +844,14 @@ const RequestLogger = {
     extraResponsePayload,
   }: LogBackgroundLlmCallParams) {
     const totalSec = (performance.now() - requestStartMs) / 1000;
-    const inputText = aiMessages
-      .map((message) =>
-        typeof message.content === "string"
-          ? message.content
-          : JSON.stringify(message.content),
-      )
-      .join("\n");
-
-    // Prefer real API-reported usage over the ~4 chars/token heuristic.
-    // The heuristic remains as fallback for callers that don't pass usage.
-    const inputTokens = apiUsage
-      ? getTotalInputTokens(
-          apiUsage as Parameters<typeof getTotalInputTokens>[0],
-        )
-      : estimateTokens(inputText);
-    const outputTokens = apiUsage
-      ? apiUsage.outputTokens || 0
-      : resultText
-        ? estimateTokens(resultText)
-        : 0;
-    const cacheReadInputTokens = apiUsage?.cacheReadInputTokens || 0;
-    const cacheCreationInputTokens = apiUsage?.cacheCreationInputTokens || 0;
-
-    const pricing = getPricing(TYPES.TEXT, TYPES.TEXT)[model as string];
-    let estimatedCost: number | null = null;
-    if (pricing) {
-      estimatedCost = calculateTextCost(
-        (apiUsage || { inputTokens, outputTokens }) as Parameters<
-          typeof calculateTextCost
-        >[0],
-        pricing,
-      );
-    }
+    const {
+      inputText,
+      inputTokens,
+      outputTokens,
+      cacheReadInputTokens,
+      cacheCreationInputTokens,
+      estimatedCost,
+    } = estimateBackgroundUsage(aiMessages, resultText, apiUsage, model);
     return this.log({
       requestId,
       endpoint: endpoint || null,
@@ -826,31 +925,23 @@ const RequestLogger = {
       // reader of the shared `prism.requests` collection (trading's Monitor
       // and audits, prism-client) filters and sorts on it. Our own admin
       // routes and indexes read `timestamp`, so both are written.
-      const pendingNow = new Date().toISOString();
-      const pendingDocument = {
+      const pendingDocument = buildPendingRequestDocument({
         requestId,
-        timestamp: pendingNow,
-        createdAt: pendingNow,
-        endpoint: endpoint || null,
-        operation: operation || null,
-        project: project || null,
-        username: username || null,
-        clientIp: clientIp || null,
-        agent: agent || null,
-        harness: harness || null,
-        provider: provider || null,
-        model: model || null,
-        conversationId: conversationId || null,
-        traceId: traceId || null,
-        ...(agentConversationId && { agentConversationId }),
-        ...(parentAgentConversationId && { parentAgentConversationId }),
-        ...(agenticIteration !== null && { agenticIteration }),
-        status: "pending",
-        inputTokens: 0,
-        outputTokens: 0,
-        estimatedCost: null,
-        success: null,
-      };
+        endpoint,
+        operation,
+        project,
+        username,
+        clientIp,
+        agent,
+        harness,
+        provider,
+        model,
+        conversationId,
+        traceId,
+        agentConversationId,
+        parentAgentConversationId,
+        agenticIteration,
+      });
       const insertResult = await db.collection(COLLECTION).insertOne(pendingDocument);
       return insertResult.insertedId;
     } catch (error: unknown) {

@@ -208,6 +208,41 @@ function buildToolUsagePipeline(
   ];
 }
 
+/** First row for a canonical tool name, with zeroed counters for missing numbers. */
+function buildUsageRow(d: ToolUsageAggregateDoc, cName: string): ToolUsageRow {
+  return {
+    tool_name: cName,
+    canonical_name: cName,
+    total_calls: Number(d.total_calls || 0),
+    success_count: Number(d.success_count || 0),
+    failure_count: Number(d.failure_count || 0),
+    avg_ms: Number(d.avg_ms || 0),
+    last_called: d.last_called ? new Date(d.last_called).toISOString() : null,
+    last_error: d.last_error || null,
+    sources: (d.sources || []).filter(Boolean),
+  };
+}
+
+/** Fold a duplicate spelling into an existing canonical row. */
+function mergeUsageRow(existing: ToolUsageRow, d: ToolUsageAggregateDoc): void {
+  const newTotal = existing.total_calls + Number(d.total_calls || 0);
+  const weightedMs =
+    newTotal > 0
+      ? (existing.avg_ms * existing.total_calls + Number(d.avg_ms || 0) * Number(d.total_calls || 0)) / newTotal
+      : 0;
+  existing.total_calls = newTotal;
+  existing.success_count += Number(d.success_count || 0);
+  existing.failure_count += Number(d.failure_count || 0);
+  existing.avg_ms = weightedMs;
+  if (d.last_called && (!existing.last_called || new Date(d.last_called) > new Date(existing.last_called))) {
+    existing.last_called = new Date(d.last_called).toISOString();
+    existing.last_error = d.last_error || existing.last_error;
+  }
+  for (const s of d.sources || []) {
+    if (s && !existing.sources.includes(s)) existing.sources.push(s);
+  }
+}
+
 /** Fold prefixed/unprefixed spellings of a tool into one canonical row. */
 function combineUsageDocs(
   docs: ToolUsageAggregateDoc[],
@@ -218,34 +253,9 @@ function combineUsageDocs(
     const cName = canonicalName(d._id);
     const existing = combined.get(cName);
     if (!existing) {
-      combined.set(cName, {
-        tool_name: cName,
-        canonical_name: cName,
-        total_calls: Number(d.total_calls || 0),
-        success_count: Number(d.success_count || 0),
-        failure_count: Number(d.failure_count || 0),
-        avg_ms: Number(d.avg_ms || 0),
-        last_called: d.last_called ? new Date(d.last_called).toISOString() : null,
-        last_error: d.last_error || null,
-        sources: (d.sources || []).filter(Boolean),
-      });
+      combined.set(cName, buildUsageRow(d, cName));
     } else {
-      const newTotal = existing.total_calls + Number(d.total_calls || 0);
-      const weightedMs =
-        newTotal > 0
-          ? (existing.avg_ms * existing.total_calls + Number(d.avg_ms || 0) * Number(d.total_calls || 0)) / newTotal
-          : 0;
-      existing.total_calls = newTotal;
-      existing.success_count += Number(d.success_count || 0);
-      existing.failure_count += Number(d.failure_count || 0);
-      existing.avg_ms = weightedMs;
-      if (d.last_called && (!existing.last_called || new Date(d.last_called) > new Date(existing.last_called))) {
-        existing.last_called = new Date(d.last_called).toISOString();
-        existing.last_error = d.last_error || existing.last_error;
-      }
-      for (const s of d.sources || []) {
-        if (s && !existing.sources.includes(s)) existing.sources.push(s);
-      }
+      mergeUsageRow(existing, d);
     }
   }
 

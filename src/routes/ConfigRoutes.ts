@@ -23,6 +23,7 @@ import { listInstances } from "../providers/instance-registry.ts";
 import { ARENA_SCORES } from "../arrays.ts";
 import ToolOrchestratorService from "../services/ToolOrchestratorService.ts";
 import AgentPersonaRegistry from "../services/AgentPersonaRegistry.ts";
+import type { Persona } from "../services/AgentPersonaRegistry.ts";
 import SettingsService from "../services/SettingsService.ts";
 import SystemPromptAssembler from "../services/system-prompt/index.ts";
 import rateLimitStore from "../services/RateLimitStore.ts";
@@ -388,6 +389,118 @@ localConfigRouter.get("/", async (_req: Request, res: Response) => {
 
 export { localConfigRouter };
 
+interface PersonaToolResolution {
+  resolvedTools: Set<string> | null;
+  isWildcard: boolean;
+  toolCount: number;
+  toolNames: string[];
+}
+
+/** Resolve a persona's enabled tools, including the locked core-tool bypass. */
+function resolvePersonaToolResolution(
+  persona: Persona | null,
+  defaultTopology: string,
+): PersonaToolResolution {
+  const resolvedTools = resolveAvailableToolsToSet(
+    persona?.availableTools,
+    defaultTopology,
+  );
+  // null sentinel means "*" wildcard → all tools
+  const isWildcard = resolvedTools === null;
+  if (isWildcard) {
+    return { resolvedTools, isWildcard, toolCount: -1, toolNames: ["*"] };
+  }
+
+  const clientSchemas =
+    ToolOrchestratorService.getClientToolSchemas(defaultTopology) || [];
+
+  // Core tool bypass: system:true tools AND CORE_AGENTIC_TOOLS members
+  // This must match AgenticToolResolver.resolve() bypass logic exactly
+  const isCoreToolsLocked = persona?.coreToolsLocked ?? true;
+  let coreBypassToolNames: string[] = isCoreToolsLocked
+    ? clientSchemas
+        .filter(
+          (tool) => tool.system === true || CORE_AGENTIC_TOOLS.has(tool.name),
+        )
+        .map((tool) => tool.name)
+    : [];
+
+  // Apply persona blockedTools denylist to core bypass tools (enabledSet protects)
+  if (persona?.blockedTools?.length) {
+    const disabledSet = resolveToolEntriesToSet(
+      persona.blockedTools,
+      clientSchemas,
+    );
+    coreBypassToolNames = coreBypassToolNames.filter(
+      (toolName) => !disabledSet.has(toolName) || resolvedTools.has(toolName),
+    );
+  }
+
+  const unionSet = new Set([...resolvedTools, ...coreBypassToolNames]);
+  return {
+    resolvedTools,
+    isWildcard,
+    toolCount: unionSet.size,
+    toolNames: [...unionSet],
+  };
+}
+
+function resolveEnabledByDefaultToolNames(
+  persona: Persona | null,
+  defaultTopology: string,
+  isWildcard: boolean,
+  resolvedTools: Set<string> | null,
+): string[] {
+  // Wildcard personas expose "*"; otherwise the resolved tool names.
+  const fallback = isWildcard ? ["*"] : [...(resolvedTools || [])];
+  if (!persona?.enabledByDefaultTools) return fallback;
+  const resolvedEnabledByDefaultSet = resolveAvailableToolsToSet(
+    persona.enabledByDefaultTools,
+    defaultTopology,
+  );
+  if (resolvedEnabledByDefaultSet === null) return fallback;
+  return [...resolvedEnabledByDefaultSet];
+}
+
+interface PersonaListEntry {
+  id: string;
+  name: string;
+  custom?: boolean;
+}
+
+function buildAgentPersonaEntry(
+  first: PersonaListEntry,
+  defaultTopology: string,
+) {
+  const persona = AgentPersonaRegistry.get(first.id);
+  const toolResolution = resolvePersonaToolResolution(persona, defaultTopology);
+  return {
+    id: first.id,
+    name: first.name,
+    description: persona?.description || "",
+    custom: first.custom || false,
+    icon: persona?.icon || "",
+    avatar: persona?.avatar || "",
+    color: persona?.color || "",
+    backgroundImage: persona?.backgroundImage || "",
+    project: persona?.project,
+    toolCount: toolResolution.toolCount,
+    enabledToolNames: toolResolution.toolNames,
+    enabledByDefaultToolNames: resolveEnabledByDefaultToolNames(
+      persona,
+      defaultTopology,
+      toolResolution.isWildcard,
+      toolResolution.resolvedTools,
+    ),
+    coreToolsLocked: persona?.coreToolsLocked ?? true,
+    canSpawnSubAgents: ORCHESTRATOR_ONLY_TOOLS.includes(
+      TOOL_NAMES.CREATE_SUBAGENT,
+    ),
+    usesDirectoryTree: persona?.usesDirectoryTree || false,
+    usesCodingGuidelines: persona?.usesCodingGuidelines || false,
+  };
+}
+
 /**
  * GET /config/agents
  * Returns the list of registered agent personas with metadata for the frontend picker.
@@ -398,91 +511,9 @@ router.get(
     await ToolOrchestratorService.ensureSchemas();
     const settings = await SettingsService.getSection("agents");
     const defaultTopology = settings?.topology || DEFAULT_TOPOLOGY;
-    const agents = AgentPersonaRegistry.list().map((first) => {
-      const persona = AgentPersonaRegistry.get(first.id);
-      const resolvedTools = resolveAvailableToolsToSet(
-        persona?.availableTools,
-        defaultTopology,
-      );
-      // null sentinel means "*" wildcard → all tools
-      const isWildcard = resolvedTools === null;
-
-      let finalToolsCount = isWildcard ? -1 : resolvedTools.size;
-      let finalToolNames = isWildcard ? ["*"] : [...(resolvedTools || [])];
-
-      if (!isWildcard) {
-        const clientSchemas =
-          ToolOrchestratorService.getClientToolSchemas(defaultTopology) || [];
-
-        // Core tool bypass: system:true tools AND CORE_AGENTIC_TOOLS members
-        // This must match AgenticToolResolver.resolve() bypass logic exactly
-        const isCoreToolsLocked = persona?.coreToolsLocked ?? true;
-        let coreBypassToolNames: string[] = isCoreToolsLocked
-          ? clientSchemas
-              .filter(
-                (tool) =>
-                  tool.system === true || CORE_AGENTIC_TOOLS.has(tool.name),
-              )
-              .map((tool) => tool.name)
-          : [];
-
-        // Apply persona blockedTools denylist to core bypass tools (enabledSet protects)
-        if (persona?.blockedTools?.length) {
-          const disabledSet = resolveToolEntriesToSet(
-            persona.blockedTools,
-            clientSchemas,
-          );
-          coreBypassToolNames = coreBypassToolNames.filter(
-            (toolName) =>
-              !disabledSet.has(toolName) || resolvedTools.has(toolName),
-          );
-        }
-
-        const unionSet = new Set([...finalToolNames, ...coreBypassToolNames]);
-        finalToolsCount = unionSet.size;
-        finalToolNames = [...unionSet];
-      }
-
-      let finalEnabledByDefaultToolNames: string[];
-      if (persona?.enabledByDefaultTools) {
-        const resolvedEnabledByDefaultSet = resolveAvailableToolsToSet(
-          persona.enabledByDefaultTools,
-          defaultTopology,
-        );
-        if (resolvedEnabledByDefaultSet === null) {
-          finalEnabledByDefaultToolNames = isWildcard
-            ? ["*"]
-            : [...(resolvedTools || [])];
-        } else {
-          finalEnabledByDefaultToolNames = [...resolvedEnabledByDefaultSet];
-        }
-      } else {
-        finalEnabledByDefaultToolNames = isWildcard
-          ? ["*"]
-          : [...(resolvedTools || [])];
-      }
-
-      return {
-        id: first.id,
-        name: first.name,
-        description: persona?.description || "",
-        custom: first.custom || false,
-        icon: persona?.icon || "",
-        avatar: persona?.avatar || "",
-        color: persona?.color || "",
-        backgroundImage: persona?.backgroundImage || "",
-        project: persona?.project,
-        toolCount: finalToolsCount,
-        enabledToolNames: finalToolNames,
-        enabledByDefaultToolNames: finalEnabledByDefaultToolNames,
-        coreToolsLocked: persona?.coreToolsLocked ?? true,
-        canSpawnSubAgents: ORCHESTRATOR_ONLY_TOOLS.includes(
-          TOOL_NAMES.CREATE_SUBAGENT,
-        ),
-        usesDirectoryTree: persona?.usesDirectoryTree || false,
-        usesCodingGuidelines: persona?.usesCodingGuidelines || false,
-      };
-    });
+    const agents = AgentPersonaRegistry.list().map((first) =>
+      buildAgentPersonaEntry(first, defaultTopology),
+    );
     res.json(agents);
   }),
 );

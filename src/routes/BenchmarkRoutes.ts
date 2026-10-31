@@ -367,6 +367,84 @@ router.get("/presets", (_req: Request, res: Response) => {
   res.json({ presets: BENCHMARK_PRESETS, count: BENCHMARK_PRESETS.length });
 });
 
+interface BenchmarkCreateBody {
+  name?: string;
+  prompt?: string;
+  expectedValue?: string;
+  matchMode?: string;
+  assertions?: TextAssertion[];
+  assertionOperator?: string;
+  benchmarkMode?: string;
+  agentAssertions?: unknown[];
+}
+
+function validateBenchmarkAssertions(
+  assertions: unknown,
+  validModes: readonly string[],
+): string | null {
+  if (!assertions || !Array.isArray(assertions)) return null;
+  for (const assertion of assertions as TextAssertion[]) {
+    if (assertion.matchMode && !validModes.includes(assertion.matchMode)) {
+      return `Invalid matchMode in assertion. Must be one of: ${validModes.join(", ")}`;
+    }
+  }
+  return null;
+}
+
+function findBenchmarkValidationError(
+  body: BenchmarkCreateBody,
+): string | null {
+  const {
+    name,
+    prompt,
+    expectedValue,
+    matchMode,
+    assertions,
+    assertionOperator,
+    benchmarkMode,
+    agentAssertions,
+  } = body;
+
+  if (!name || !prompt) {
+    return "Missing required fields: name, prompt";
+  }
+
+  // Model and combined benchmarks require at least an expectedValue or assertions
+  if (
+    benchmarkMode !== "agent" &&
+    !expectedValue &&
+    (!assertions ||
+      !assertions.some((assertion: TextAssertion) => assertion.expectedValue))
+  ) {
+    return "Model/combined benchmarks require at least one text assertion (expectedValue)";
+  }
+
+  // Agent benchmarks require at least one agent assertion
+  if (
+    benchmarkMode === "agent" &&
+    (!agentAssertions || agentAssertions.length === 0)
+  ) {
+    return "Agent benchmarks require at least one behavioral assertion";
+  }
+
+  const validModes = Object.values(BenchmarkService.MATCH_MODES);
+
+  // Validate top-level matchMode (backward compat)
+  if (matchMode && !(validModes as readonly string[]).includes(matchMode)) {
+    return `Invalid matchMode. Must be one of: ${validModes.join(", ")}`;
+  }
+
+  // Validate assertions array if provided
+  const assertionError = validateBenchmarkAssertions(assertions, validModes);
+  if (assertionError) return assertionError;
+
+  if (assertionOperator && !["AND", "OR"].includes(assertionOperator)) {
+    return "Invalid assertionOperator. Must be AND or OR.";
+  }
+
+  return null;
+}
+
 // ─── POST /benchmark — Create a new benchmark test ──────────
 
 router.post(
@@ -389,64 +467,9 @@ router.post(
         agentAssertionOperator,
       } = req.body;
 
-      if (!name || !prompt) {
-        return res
-          .status(400)
-          .json({ error: "Missing required fields: name, prompt" });
-      }
-
-      // Model and combined benchmarks require at least an expectedValue or assertions
-      if (
-        benchmarkMode !== "agent" &&
-        !expectedValue &&
-        (!assertions ||
-          !assertions.some(
-            (assertion: TextAssertion) => assertion.expectedValue,
-          ))
-      ) {
-        return res.status(400).json({
-          error:
-            "Model/combined benchmarks require at least one text assertion (expectedValue)",
-        });
-      }
-
-      // Agent benchmarks require at least one agent assertion
-      if (
-        benchmarkMode === "agent" &&
-        (!agentAssertions || agentAssertions.length === 0)
-      ) {
-        return res.status(400).json({
-          error: "Agent benchmarks require at least one behavioral assertion",
-        });
-      }
-
-      const validModes = Object.values(BenchmarkService.MATCH_MODES);
-
-      // Validate top-level matchMode (backward compat)
-      if (matchMode && !validModes.includes(matchMode)) {
-        return res.status(400).json({
-          error: `Invalid matchMode. Must be one of: ${validModes.join(", ")}`,
-        });
-      }
-
-      // Validate assertions array if provided
-      if (assertions && Array.isArray(assertions)) {
-        for (const assertion of assertions) {
-          if (
-            assertion.matchMode &&
-            !validModes.includes(assertion.matchMode)
-          ) {
-            return res.status(400).json({
-              error: `Invalid matchMode in assertion. Must be one of: ${validModes.join(", ")}`,
-            });
-          }
-        }
-      }
-
-      if (assertionOperator && !["AND", "OR"].includes(assertionOperator)) {
-        return res.status(400).json({
-          error: "Invalid assertionOperator. Must be AND or OR.",
-        });
+      const validationError = findBenchmarkValidationError(req.body);
+      if (validationError) {
+        return res.status(400).json({ error: validationError });
       }
 
       const benchmark = await BenchmarkService.create(

@@ -15,6 +15,7 @@ import ConversationService from "../services/ConversationService.ts";
 import FileService from "../services/FileService.ts";
 import logger from "../utils/logger.ts";
 import RequestLogger from "../services/RequestLogger.ts";
+import type { LogParams } from "../services/RequestLogger.ts";
 import { FILE_CATEGORIES } from "../constants.ts";
 
 import type { ChatMessage } from "../types/admin.ts";
@@ -178,6 +179,118 @@ async function persistVoiceConversationMessages(
     );
 }
 
+/** Validate the request and return the TTS provider, throwing in the same order as before. */
+function resolveVoiceProvider(providerName: string, text: string) {
+  if (!providerName) {
+    throw new ProviderError(
+      "server",
+      "Missing required field: provider",
+      400,
+    );
+  }
+  if (!text) {
+    throw new ProviderError("server", "Missing required field: text", 400);
+  }
+  const provider = getProvider(providerName);
+  if (!provider.generateSpeech) {
+    throw new ProviderError(
+      providerName,
+      `Provider "${providerName}" does not support text-to-speech`,
+      400,
+    );
+  }
+  return provider;
+}
+
+function markVoiceGenerating(
+  conversationId: string,
+  project: string,
+  username: string,
+  conversationMeta: ConversationMeta | null,
+): void {
+  ConversationService.setGenerating(
+    conversationId,
+    project,
+    username,
+    true,
+    {
+      title:
+        typeof conversationMeta?.title === "string"
+          ? conversationMeta.title
+          : undefined,
+    },
+  ).catch((error: unknown) =>
+    logger.error(`Failed to set isGenerating: ${getErrorMessage(error)}`),
+  );
+}
+
+function clearVoiceGenerating(
+  conversationId: string,
+  project: string,
+  username: string,
+): void {
+  ConversationService.setGenerating(
+    conversationId,
+    project,
+    username,
+    false,
+  ).catch((error: unknown) =>
+    logger.error(`Failed to clear isGenerating on error: ${getErrorMessage(error)}`),
+  );
+}
+
+interface VoiceLogContext {
+  requestId: string;
+  project: string;
+  username: string;
+  clientIp: string | null;
+  providerName: string;
+  model: string | undefined;
+  conversationId: string | null | undefined;
+  traceId: string | null;
+}
+
+function buildVoiceSuccessLog(
+  context: VoiceLogContext,
+  text: string,
+  totalSec: number,
+): LogParams {
+  return {
+    requestId: context.requestId,
+    endpoint: "text-to-audio",
+    project: context.project,
+    username: context.username,
+    clientIp: context.clientIp,
+    provider: context.providerName,
+    model: context.model || null,
+    conversationId: context.conversationId || null,
+    traceId: context.traceId || null,
+    success: true,
+    inputCharacters: text.length,
+    totalTime: roundMilliseconds(totalSec),
+  };
+}
+
+function buildVoiceErrorLog(
+  context: VoiceLogContext,
+  error: unknown,
+  totalSec: number,
+): LogParams {
+  return {
+    requestId: context.requestId,
+    endpoint: "text-to-audio",
+    project: context.project,
+    username: context.username,
+    clientIp: context.clientIp,
+    provider: context.providerName,
+    model: context.model || null,
+    traceId: context.traceId || null,
+    success: false,
+    errorMessage: errorMessage(error),
+    totalTime: totalSec,
+  };
+}
+
 // ─── used by both REST and WebSocket ────────────────────────
 export async function handleVoice(
   params: VoiceParams,
@@ -199,41 +312,21 @@ export async function handleVoice(
   } = params;
   const { conversationId, conversationMeta, traceId } =
     resolveVoiceConversationContext(params);
+  const logContext: VoiceLogContext = {
+    requestId,
+    project,
+    username,
+    clientIp,
+    providerName,
+    model,
+    conversationId,
+    traceId,
+  };
 
   try {
-    if (!providerName) {
-      throw new ProviderError(
-        "server",
-        "Missing required field: provider",
-        400,
-      );
-    }
-    if (!text) {
-      throw new ProviderError("server", "Missing required field: text", 400);
-    }
-    const provider = getProvider(providerName);
-    if (!provider.generateSpeech) {
-      throw new ProviderError(
-        providerName,
-        `Provider "${providerName}" does not support text-to-speech`,
-        400,
-      );
-    }
+    const provider = resolveVoiceProvider(providerName, text);
     if (conversationId) {
-      ConversationService.setGenerating(
-        conversationId,
-        project,
-        username,
-        true,
-        {
-          title:
-            typeof conversationMeta?.title === "string"
-              ? conversationMeta.title
-              : undefined,
-        },
-      ).catch((error: unknown) =>
-        logger.error(`Failed to set isGenerating: ${getErrorMessage(error)}`),
-      );
+      markVoiceGenerating(conversationId, project, username, conversationMeta);
     }
     const options = { instructions, model, ...extraOptions };
     const result = await provider.generateSpeech(text, voice, options);
@@ -250,20 +343,7 @@ export async function handleVoice(
       `[audio] ${providerName} model=${model || "default"} — ` +
         `total: ${totalSec.toFixed(2)}s`,
     );
-    RequestLogger.log({
-      requestId,
-      endpoint: "text-to-audio",
-      project,
-      username,
-      clientIp,
-      provider: providerName,
-      model: model || null,
-      conversationId: conversationId || null,
-      traceId: traceId || null,
-      success: true,
-      inputCharacters: text.length,
-      totalTime: roundMilliseconds(totalSec),
-    });
+    RequestLogger.log(buildVoiceSuccessLog(logContext, text, totalSec));
     emitJSON({ type: "done" });
     if (conversationId && audioChunks) {
       await persistVoiceConversationMessages(
@@ -283,29 +363,10 @@ export async function handleVoice(
     return contentType;
   } catch (error: unknown) {
     if (conversationId) {
-      ConversationService.setGenerating(
-        conversationId,
-        project,
-        username,
-        false,
-      ).catch((error: unknown) =>
-        logger.error(`Failed to clear isGenerating on error: ${getErrorMessage(error)}`),
-      );
+      clearVoiceGenerating(conversationId, project, username);
     }
     const totalSec = (performance.now() - requestStart) / 1000;
-    RequestLogger.log({
-      requestId,
-      endpoint: "text-to-audio",
-      project,
-      username,
-      clientIp,
-      provider: providerName,
-      model: model || null,
-      traceId: traceId || null,
-      success: false,
-      errorMessage: errorMessage(error),
-      totalTime: totalSec,
-    });
+    RequestLogger.log(buildVoiceErrorLog(logContext, error, totalSec));
     emitJSON({ type: "error", message: errorMessage(error) });
     throw error;
   }
@@ -586,6 +647,62 @@ async function persistTranscriptionConversation({
     );
 }
 
+interface TranscriptionLogContext {
+  requestId: string;
+  project: string | undefined;
+  username: string | undefined;
+  clientIp: string | null | undefined;
+  providerName: string | undefined;
+  model: string | undefined;
+  conversationId: string | null;
+  traceId: string | null;
+}
+
+function buildTranscriptionSuccessLog(
+  context: TranscriptionLogContext,
+  result: TranscriptionResult,
+  estimatedCost: number | null,
+  totalSec: number,
+): LogParams {
+  return {
+    requestId: context.requestId,
+    endpoint: "audio-to-text",
+    project: context.project,
+    username: context.username,
+    clientIp: context.clientIp,
+    provider: context.providerName,
+    model: context.model || null,
+    conversationId: context.conversationId,
+    traceId: context.traceId || null,
+    success: true,
+    inputTokens: result.usage?.inputTokens || 0,
+    outputTokens: result.usage?.outputTokens || 0,
+    estimatedCost,
+    totalTime: roundMilliseconds(totalSec),
+  };
+}
+
+function buildTranscriptionErrorLog(
+  context: TranscriptionLogContext,
+  error: unknown,
+  totalSec: number,
+): LogParams {
+  return {
+    requestId: context.requestId,
+    endpoint: "audio-to-text",
+    project: context.project,
+    username: context.username,
+    clientIp: context.clientIp,
+    provider: context.providerName,
+    model: context.model || null,
+    conversationId: context.conversationId,
+    traceId: context.traceId || null,
+    success: false,
+    errorMessage: errorMessage(error),
+    totalTime: totalSec,
+  };
+}
+
 /**
  * POST /audio-to-text
  * Body: { provider, audio (base64 string or data URL), model?, language?, prompt? }
@@ -608,6 +725,16 @@ router.post(
       resolveTranscriptionContext(body);
     const projectAny = req.project || "any";
     const usernameAny = req.username || "any";
+    const logContext: TranscriptionLogContext = {
+      requestId,
+      project: req.project,
+      username: req.username,
+      clientIp: req.clientIp,
+      providerName,
+      model,
+      conversationId,
+      traceId,
+    };
 
     try {
       if (!providerName) {
@@ -662,22 +789,14 @@ router.post(
         `[audio/transcribe] ${providerName} model=${model || "default"} — ` +
           `total: ${totalSec.toFixed(2)}s${costString}`,
       );
-      RequestLogger.log({
-        requestId,
-        endpoint: "audio-to-text",
-        project: req.project,
-        username: req.username,
-        clientIp: req.clientIp,
-        provider: providerName,
-        model: model || null,
-        conversationId,
-        traceId: traceId || null,
-        success: true,
-        inputTokens: result.usage?.inputTokens || 0,
-        outputTokens: result.usage?.outputTokens || 0,
-        estimatedCost,
-        totalTime: roundMilliseconds(totalSec),
-      });
+      RequestLogger.log(
+        buildTranscriptionSuccessLog(
+          logContext,
+          result,
+          estimatedCost,
+          totalSec,
+        ),
+      );
       // ── Conversation persistence ────────────────────────────────
       if (conversationId) {
         await persistTranscriptionConversation({
@@ -707,20 +826,9 @@ router.post(
         clearTranscriptionGenerating(conversationId, projectAny, usernameAny);
       }
       const totalSec = (performance.now() - requestStart) / 1000;
-      RequestLogger.log({
-        requestId,
-        endpoint: "audio-to-text",
-        project: req.project,
-        username: req.username,
-        clientIp: req.clientIp,
-        provider: providerName,
-        model: model || null,
-        conversationId,
-        traceId: traceId || null,
-        success: false,
-        errorMessage: errorMessage(error),
-        totalTime: totalSec,
-      });
+      RequestLogger.log(
+        buildTranscriptionErrorLog(logContext, error, totalSec),
+      );
       next(error);
     }
   }),

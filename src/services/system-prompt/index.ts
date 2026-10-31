@@ -27,6 +27,31 @@ import WorkflowMemoryService from "../WorkflowMemoryService.ts";
 import { excludesLearnedState } from "../learning/TradingLearningBoundary.ts";
 import { PROMPT_DELIMITERS } from "../../constants.ts";
 import PromptLocaleService from "../PromptLocaleService.ts";
+import type { Persona } from "../AgentPersonaRegistry.ts";
+
+/** Orchestrator-only tools are merged into a sub-agent-free persona with locked core tools. */
+function applyOrchestratorToolPolicy(
+  context: AssemblerContext,
+  isSubAgent: boolean,
+  persona: Persona | null,
+): void {
+  if (!isSubAgent && context.enabledTools && persona?.coreToolsLocked !== false) {
+    context.enabledTools = Array.from(new Set([...context.enabledTools, ...ORCHESTRATOR_ONLY_TOOLS]));
+  }
+}
+
+function appendToolPolicySection(
+  persona: Persona | null,
+  context: AssemblerContext,
+  locale: string,
+  sections: string[],
+): void {
+  if (persona?.toolPolicy) {
+    const policyText =
+      typeof persona.toolPolicy === "function" ? persona.toolPolicy({ ...context, locale }) : persona.toolPolicy;
+    if (policyText) sections.push(policyText);
+  }
+}
 
 export default class SystemPromptAssembler {
   workspaceRoot: string;
@@ -79,9 +104,7 @@ export default class SystemPromptAssembler {
     const isSubAgent = !!context.parentAgentConversationId;
     const isTradingRun = excludesLearnedState(context.project);
     const withoutLearnedState = isSubAgent || isTradingRun;
-    if (!isSubAgent && context.enabledTools && persona?.coreToolsLocked !== false) {
-      context.enabledTools = Array.from(new Set([...context.enabledTools, ...ORCHESTRATOR_ONLY_TOOLS]));
-    }
+    applyOrchestratorToolPolicy(context, isSubAgent, persona);
 
     const codingFallback = !isDirectMode && (!persona || persona.id === AGENT_IDS.CODING);
     const settings = await SettingsService.getSection("agents");
@@ -102,30 +125,20 @@ export default class SystemPromptAssembler {
     }
 
     // ── 3. Tool Policy ──────────────────────────────────────────
-    if (persona?.toolPolicy) {
-      const policyText =
-        typeof persona.toolPolicy === "function" ? persona.toolPolicy({ ...context, locale }) : persona.toolPolicy;
-      if (policyText) sections.push(policyText);
-    }
+    appendToolPolicySection(persona, context, locale, sections);
 
     // ── 4. Enabled Tools (domain-grouped) ───────────────────────
     await ToolOrchestratorService.ensureSchemas(locale);
     const lockedOffToolNames = await resolveLockedOffToolNames();
-    const toolDescriptions = this.buildToolDescriptions(
-      context.enabledTools,
+    this.appendEnabledToolsSection({
+      context,
       agentId,
       defaultTopology,
-      context.resolvedToolNames,
-      lockedOffToolNames,
-      persona?.compactToolDocs === true,
       locale,
-      context.loadedTools,
-    );
-    if (toolDescriptions) {
-      const count = countEnabledToolsForHeader(context, agentId, defaultTopology, locale, lockedOffToolNames);
-      const header = PromptLocaleService.get(locale, "system-prompt.enabledToolsHeader", { count: String(count) });
-      sections.push(header + "\n" + toolDescriptions);
-    }
+      persona,
+      lockedOffToolNames,
+      sections,
+    });
 
     // ── 5 & 5b. Guidelines & Orchestrator Addendum ──────────────
     appendGuidelineSections(isDirectMode, persona, codingFallback, locale, sections);
@@ -137,13 +150,13 @@ export default class SystemPromptAssembler {
     // ── 6 & 7. Environment & Project Structure ──────────────────
     const isWorkspaceEnabled = context.workspaceEnabled !== false;
     appendEnvironmentSection(isWorkspaceEnabled, this.workspaceRoot, locale, sections);
-    if (isWorkspaceEnabled && (codingFallback || persona?.usesDirectoryTree)) {
-      const dirTree = await this.fetchDirectoryTree();
-      if (dirTree) {
-        const header = PromptLocaleService.get(locale, "system-prompt.projectStructureHeader");
-        sections.push(header + "\n" + dirTree);
-      }
-    }
+    await this.appendProjectStructureSection(
+      isWorkspaceEnabled,
+      codingFallback,
+      persona,
+      locale,
+      sections,
+    );
 
     // ── 8, 9, 10. Skills, Conversation Memory, Workflow Memory ──
     const { skillNames, skillsText, memoriesText, workflowsText } = await fetchLearnedContextBlocks(
@@ -166,6 +179,56 @@ export default class SystemPromptAssembler {
       memoriesText,
       workflowsText,
     };
+  }
+
+  private appendEnabledToolsSection({
+    context,
+    agentId,
+    defaultTopology,
+    locale,
+    persona,
+    lockedOffToolNames,
+    sections,
+  }: {
+    context: AssemblerContext;
+    agentId: string;
+    defaultTopology: string;
+    locale: string;
+    persona: Persona | null;
+    lockedOffToolNames: Set<string>;
+    sections: string[];
+  }): void {
+    const toolDescriptions = this.buildToolDescriptions(
+      context.enabledTools,
+      agentId,
+      defaultTopology,
+      context.resolvedToolNames,
+      lockedOffToolNames,
+      persona?.compactToolDocs === true,
+      locale,
+      context.loadedTools,
+    );
+    if (toolDescriptions) {
+      const count = countEnabledToolsForHeader(context, agentId, defaultTopology, locale, lockedOffToolNames);
+      const header = PromptLocaleService.get(locale, "system-prompt.enabledToolsHeader", { count: String(count) });
+      sections.push(header + "\n" + toolDescriptions);
+    }
+  }
+
+  private async appendProjectStructureSection(
+    isWorkspaceEnabled: boolean,
+    codingFallback: boolean,
+    persona: Persona | null,
+    locale: string,
+    sections: string[],
+  ): Promise<void> {
+    if (isWorkspaceEnabled && (codingFallback || persona?.usesDirectoryTree)) {
+      const dirTree = await this.fetchDirectoryTree();
+      if (dirTree) {
+        const header = PromptLocaleService.get(locale, "system-prompt.projectStructureHeader");
+        sections.push(header + "\n" + dirTree);
+      }
+    }
   }
 
   createHook() {

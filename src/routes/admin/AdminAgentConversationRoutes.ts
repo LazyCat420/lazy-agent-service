@@ -18,6 +18,99 @@ const { REQUESTS: REQUESTS_COLLECTION } = COLLECTIONS;
 conversationStatsRouter.use(requireDb);
 agentConversationRouter.use(requireDb);
 
+interface ConversationRequestRow {
+  estimatedCost?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  reasoningOutputTokens?: number;
+  provider?: string;
+  model?: string;
+  operation?: string;
+  timestamp?: string;
+  modalities?: Record<string, boolean>;
+  toolApiNames?: string[];
+  agentConversationId?: string;
+}
+
+function accumulateRequestStats(rows: ConversationRequestRow[]) {
+  const providers = new Set<string>();
+  const models = new Set<string>();
+  const operations = new Set<string>();
+  let totalCost = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCacheReadInputTokens = 0;
+  let totalCacheCreationInputTokens = 0;
+  let totalReasoningOutputTokens = 0;
+  const mergedModalities: Record<string, boolean> = {};
+  const toolCounts: Record<string, number> = {};
+
+  for (const row of rows) {
+    totalCost += row.estimatedCost || 0;
+    totalInputTokens += row.inputTokens || 0;
+    totalOutputTokens += row.outputTokens || 0;
+    totalCacheReadInputTokens += row.cacheReadInputTokens || 0;
+    totalCacheCreationInputTokens += row.cacheCreationInputTokens || 0;
+    totalReasoningOutputTokens += row.reasoningOutputTokens || 0;
+    if (row.provider) providers.add(row.provider);
+    if (row.model) models.add(row.model);
+    if (row.operation) operations.add(row.operation);
+    if (row.modalities) {
+      for (const [key, value] of Object.entries(row.modalities)) {
+        if (value) mergedModalities[key] = true;
+      }
+    }
+    if (row.toolApiNames?.length > 0) {
+      for (const name of row.toolApiNames) {
+        toolCounts[name] = (toolCounts[name] || 0) + 1;
+      }
+    }
+  }
+
+  return {
+    providers,
+    models,
+    operations,
+    totalCost,
+    totalInputTokens,
+    totalOutputTokens,
+    totalCacheReadInputTokens,
+    totalCacheCreationInputTokens,
+    totalReasoningOutputTokens,
+    mergedModalities,
+    toolCounts,
+  };
+}
+
+function computeConversationElapsed(rows: ConversationRequestRow[]) {
+  const createdAt = rows.reduce(
+    (min: string | null, row) =>
+      !min || (row.timestamp as string) < min
+        ? (row.timestamp as string)
+        : min,
+    null as string | null,
+  );
+  const updatedAt = rows.reduce(
+    (max: string | null, row) =>
+      !max || (row.timestamp as string) > max
+        ? (row.timestamp as string)
+        : max,
+    null as string | null,
+  );
+  const totalElapsedTime =
+    createdAt && updatedAt
+      ? Math.max(
+          0,
+          (new Date(updatedAt as string).getTime() -
+            new Date(createdAt as string).getTime()) /
+            1000,
+        )
+      : 0;
+  return { createdAt, updatedAt, totalElapsedTime };
+}
+
 // ─── GET /agent-conversations/:id/stats — aggregate stats for an agent conversation ─
 conversationStatsRouter.get(
   "/:id/stats",
@@ -59,69 +152,26 @@ conversationStatsRouter.get(
           .json({ error: "No requests found for this conversation" });
       }
 
-      const providers = new Set();
-      const models = new Set();
-      const operations = new Set();
-      let totalCost = 0;
-      let totalInputTokens = 0;
-      let totalOutputTokens = 0;
-      let totalCacheReadInputTokens = 0;
-      let totalCacheCreationInputTokens = 0;
-      let totalReasoningOutputTokens = 0;
-      const mergedModalities: Record<string, boolean> = {};
-      const toolCounts: Record<string, number> = {};
-
-      for (const requestItem of requests) {
-        totalCost += requestItem.estimatedCost || 0;
-        totalInputTokens += requestItem.inputTokens || 0;
-        totalOutputTokens += requestItem.outputTokens || 0;
-        totalCacheReadInputTokens += requestItem.cacheReadInputTokens || 0;
-        totalCacheCreationInputTokens +=
-          requestItem.cacheCreationInputTokens || 0;
-        totalReasoningOutputTokens += requestItem.reasoningOutputTokens || 0;
-        if (requestItem.provider) providers.add(requestItem.provider);
-        if (requestItem.model) models.add(requestItem.model);
-        if (requestItem.operation) operations.add(requestItem.operation);
-        if (requestItem.modalities) {
-          for (const [key, value] of Object.entries(requestItem.modalities)) {
-            if (value) mergedModalities[key] = true;
-          }
-        }
-        if (requestItem.toolApiNames?.length > 0) {
-          for (const name of requestItem.toolApiNames) {
-            toolCounts[name] = (toolCounts[name] || 0) + 1;
-          }
-        }
-      }
+      const {
+        providers,
+        models,
+        operations,
+        totalCost,
+        totalInputTokens,
+        totalOutputTokens,
+        totalCacheReadInputTokens,
+        totalCacheCreationInputTokens,
+        totalReasoningOutputTokens,
+        mergedModalities,
+        toolCounts,
+      } = accumulateRequestStats(requests);
 
       const subAgentRequestCount = requests.filter(
         (requestItem) => requestItem.agentConversationId !== conversationId,
       ).length;
 
-      const createdAt = (requests as Record<string, unknown>[]).reduce(
-        (min: string | null, requestItem) =>
-          !min || (requestItem.timestamp as string) < min
-            ? (requestItem.timestamp as string)
-            : min,
-        null as string | null,
-      );
-      const updatedAt = (requests as Record<string, unknown>[]).reduce(
-        (max: string | null, requestItem) =>
-          !max || (requestItem.timestamp as string) > max
-            ? (requestItem.timestamp as string)
-            : max,
-        null as string | null,
-      );
-
-      const totalElapsedTime =
-        createdAt && updatedAt
-          ? Math.max(
-              0,
-              (new Date(updatedAt as string).getTime() -
-                new Date(createdAt as string).getTime()) /
-                1000,
-            )
-          : 0;
+      const { createdAt, updatedAt, totalElapsedTime } =
+        computeConversationElapsed(requests);
 
       res.json({
         agentConversationId: conversationId,
