@@ -8,6 +8,13 @@ type: record
 
 # Chapter 16 — Prism MCP re-dialer & LocalToolRouter repeat guards (2026-10-26 / 2026-10-27)
 
+> **RETIRED 2026-10-31.** prism-service was removed from the stack. The MCP
+> re-dialer (`PrismMcpRedial.ts`), the `/prism-proxy` guardrail
+> (`PrismProxyService.ts`, `PrismAttribution.ts`) and their `PRISM_MCP_*` /
+> `PRISM_PROXY_SESSIONS_FILE` compose variables were deleted; nothing forwards
+> to `:7777` any more. The `LocalToolRouter` repeat guards below stay. This
+> chapter is kept as history.
+
 ## Resolved tickets
 
 | Ticket | Issue | Root cause | Fix | Commit |

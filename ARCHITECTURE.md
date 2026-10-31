@@ -38,18 +38,19 @@ mount resolves against a missing path.
 
 ## Overview
 
-This service wears **three hats** on one port (host `5591` → container `7778`):
+This service wears **two hats** on one port (host `5591` → container `7778`):
 
-1. **MCP tool server** — `/mcp/sse`, `/mcp/messages`, `/execute/*`. Self-registers
-   into prism (`:7777`) at boot via `PrismRegistrationService`, inside
-   `server.listen()` so prism's dial-back cannot race it.
-2. **prism-proxy guardrail** — `/prism-proxy/*` forwards to `REAL_PRISM_URL`
-   (`:7777`) while enforcing a per-conversation `sessionAllowedTools` whitelist and
-   rewriting non-leading system messages for Qwen. `trading-service`'s `PRISM_URL`
-   points *here*, so its LLM traffic transits this process.
-3. **Agent harness** — a fork of prism-service: `/agent`, `AgenticLoopService`,
-   personas, and the platform dashboard at `/dashboard`. Opt-in for callers
-   (HTML-Notes toggles between this and canonical prism per request).
+1. **MCP tool server** — `/mcp/sse`, `/mcp/messages`, `/execute/*`. Clients
+   (this repo's own harness, trading-service's agent calls, other services) dial
+   in; every tool call is gated by the signed tool context for trading cycles.
+2. **Agent harness** — `/agent`, `AgenticLoopService`, personas, `/custom-agents`,
+   `/webhooks/requests/stream`, `/config`, `/conversations`, `/embed`, and the
+   platform dashboard at `/dashboard`. This is the gateway every caller uses.
+
+prism-service (`:7777`) is **retired** (2026-10-31): no route forwards to it, the
+MCP re-dialer and the `/prism-proxy` guardrail were deleted, and trading-service
+talks to this service directly through `LAZY_AGENT_URL`. The Mongo database
+still named `prism` holds the custom-agent personas and is not the service.
 
 It must **never** contain trading cycle management or cognition/evaluation logic.
 
@@ -117,24 +118,23 @@ The following categories of code must live in `trading-service`:
    │ trading-service │               │
    │  (orchestrator) │               │
    └────────┬────────┘               │
-            │ PRISM_URL =            │
-            │ :5591/prism-proxy      │
+            │ LAZY_AGENT_URL =       │
+            │ :5591                  │
    ┌────────▼───────────────────────▼────────┐
    │  THIS SERVICE   host :5591 → ctr :7778  │
    │  ├─ /mcp/sse, /execute   tool server    │
-   │  ├─ /prism-proxy         guardrail ─────┼──► prism-service :7777
-   │  └─ /agent               harness fork   │      (Rod's, canonical)
+   │  └─ /agent               harness       │
    └─────────────────────┬───────────────────┘
                          │ HTTP tool dispatch
         trading-service · HTML-Notes · treesearch · music-player
 ```
 
-- prism (`:7777`) dials **in** to `:5591/mcp/sse` — the MCP registration is what
-  makes the 83 tools visible to every prism-hosted agent.
-- trading-service's LLM traffic goes **out** through `:5591/prism-proxy` to
-  `:7777`, which is where the per-conversation tool whitelist is enforced.
-- Tool execution itself is dispatched back out over HTTP; this process holds no
-  trading state and talks to no trading database directly.
+- Callers dial **in** to `:5591` (`/agent`, `/chat`, `/mcp/sse`, `/execute`); there
+  is no upstream gateway. prism-service (`:7777`) is retired.
+- Trading cycles are gated by the signed tool context (`x-tool-context`), not by
+  a per-conversation proxy whitelist.
+- Tool execution is dispatched back out over HTTP; this process holds no trading
+  state and talks to no trading database directly.
 
 ## Rules for Future Development
 

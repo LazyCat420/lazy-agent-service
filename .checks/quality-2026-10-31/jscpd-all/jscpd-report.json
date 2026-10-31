@@ -7298,44 +7298,6 @@
     },
     {
       "firstFile": {
-        "end": 269,
-        "endLoc": {
-          "column": 20,
-          "line": 269,
-          "position": 10250
-        },
-        "name": "services/prism/PrismProxyService.ts",
-        "start": 258,
-        "startLoc": {
-          "column": 55,
-          "line": 258,
-          "position": 9872
-        }
-      },
-      "format": "typescript",
-      "fragment": "      const reader = (response.body as any).getReader();\n      let clientDisconnected = false;\n      const handleClientDisconnect = () => {\n        clientDisconnected = true;\n        reader.cancel?.().catch(() => {});\n      };\n      res.on(\"close\", handleClientDisconnect);\n      try {\n        while (true) {\n          const { done, value } = await reader.read();\n          if (done || clientDisconnected) break;\n          res.write(value);",
-      "isNew": false,
-      "kind": "exact",
-      "lines": 12,
-      "secondFile": {
-        "end": 979,
-        "endLoc": {
-          "column": 20,
-          "line": 979,
-          "position": 41110
-        },
-        "name": "services/vllm/VllmShimService.ts",
-        "start": 968,
-        "startLoc": {
-          "column": 90,
-          "line": 968,
-          "position": 40732
-        }
-      },
-      "tokens": 77
-    },
-    {
-      "firstFile": {
         "end": 318,
         "endLoc": {
           "column": 16,
@@ -7640,32 +7602,32 @@
     }
   ],
   "statistics": {
-    "detectionDate": "2026-10-31T05:22:41.521Z",
+    "detectionDate": "2026-10-31T07:10:45.077Z",
     "formats": {
       "typescript": {
-        "clones": 201,
-        "duplicatedLines": 2928,
-        "duplicatedTokens": 17156,
-        "lines": 118896,
+        "clones": 200,
+        "duplicatedLines": 2916,
+        "duplicatedTokens": 17079,
+        "lines": 118061,
         "newClones": 0,
         "newDuplicatedLines": 0,
-        "percentage": 2.4626564392410173,
-        "percentageTokens": 2.809621759010573,
-        "sources": 384,
-        "tokens": 610616
+        "percentage": 2.4699096229915045,
+        "percentageTokens": 2.8198849855447667,
+        "sources": 382,
+        "tokens": 605663
       }
     },
     "total": {
-      "clones": 201,
-      "duplicatedLines": 2928,
-      "duplicatedTokens": 17156,
-      "lines": 118896,
+      "clones": 200,
+      "duplicatedLines": 2916,
+      "duplicatedTokens": 17079,
+      "lines": 118061,
       "newClones": 0,
       "newDuplicatedLines": 0,
-      "percentage": 2.4626564392410173,
-      "percentageTokens": 2.809621759010573,
-      "sources": 384,
-      "tokens": 610616
+      "percentage": 2.4699096229915045,
+      "percentageTokens": 2.8198849855447667,
+      "sources": 382,
+      "tokens": 605663
     }
   }
 }

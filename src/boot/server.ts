@@ -55,7 +55,6 @@ import runRouter from "../routes/RunRoutes.ts";
 import { createObsidianCompletionRouter } from "../routes/ObsidianCompletionRoutes.ts";
 import contractRouter from "../routes/ContractRoutes.ts";
 import openAIEmbeddingsRouter from "../routes/OpenAIEmbeddingsRoutes.ts";
-import { PrismProxyService } from "../services/prism/PrismProxyService.js";
 import { VllmShimService } from "../services/vllm/VllmShimService.js";
 import wallgardenRouter from "../routes/WallgardenRoutes.js";
 
@@ -136,7 +135,7 @@ function installMiddleware(app: Express): void {
 function installHealthRoutes(app: Express): void {
   app.get("/", (_req: Request, res: Response) => {
     res.json({
-      name: "Prism the AI Gateway",
+      name: "Lazy Agent Service",
       version: "1.0.0",
       providers: listProviders(),
       endpoints: ENDPOINTS,
@@ -218,16 +217,11 @@ function installCompatRoutes(app: Express, mcpAdapter: McpAdapter): void {
   app.post("/mcp/messages", (req: Request, res: Response, next: NextFunction) => {
     mcpAdapter.handleMessage(req, res).catch(next);
   });
-  app.use("/prism-proxy", async (req: Request, res: Response) => {
-    await PrismProxyService.handle(req, res);
-  });
-  // Prism→vLLM translation shim. ALL PROVIDER_VLLM_*_URL entries in the vault
-  // point here (/vllm-shim/gold-spark, /vllm-shim/jetson, /vllm-shim/jetson-2)
-  // so prism's Qwen-spelled thinking flag works on every model family and a
-  // model swap on any box can never silently strand it again. This service is
-  // now the gateway (:5591); prism-service is only reached via the
-  // /prism-proxy route above, kept for parity runs until 2026-10-23.
-  // See VllmShimService for why.
+  // vLLM translation shim. ALL PROVIDER_VLLM_*_URL entries in the vault point
+  // here (/vllm-shim/gold-spark, /vllm-shim/jetson, /vllm-shim/jetson-2) so a
+  // model swap on any box can never silently strand a thinking-flag spelling.
+  // This service is the gateway (:5591); prism-service is retired and no route
+  // forwards to it. See VllmShimService for why.
   app.use("/vllm-shim", async (req: Request, res: Response) => {
     await VllmShimService.handle(req, res);
   });

@@ -78,7 +78,6 @@ const fakes = vi.hoisted(() => ({
     error: null as Error | null,
     calls: [] as Array<{ toolName: string; args: Record<string, unknown>; ctx: Record<string, unknown> }>,
   },
-  prism: { allowed: true },
   classify: null as null | ((result: unknown) => { success: boolean; errorMessage?: string }),
   chat: {
     sseCalls: [] as Array<{ params: Record<string, unknown>; handler: unknown }>,
@@ -200,12 +199,6 @@ vi.mock("../../services/ToolDispatch.ts", () => ({
     fakes.dispatch.calls.push({ toolName, args, ctx });
     if (fakes.dispatch.error) throw fakes.dispatch.error;
     return fakes.dispatch.result;
-  },
-}));
-
-vi.mock("../../services/prism/PrismProxyService.ts", () => ({
-  PrismProxyService: {
-    isToolAllowed: () => fakes.prism.allowed,
   },
 }));
 
@@ -1276,7 +1269,6 @@ describe("ExecuteRoutes POST /:toolName", () => {
     fakes.dispatch.calls.length = 0;
     fakes.dispatch.error = null;
     fakes.dispatch.result = { ok: true };
-    fakes.prism.allowed = true;
     fakes.classify = () => ({ success: true });
     process.env.TRADING_TOOL_CONTEXT_KEY = "test-signing-key";
   });
@@ -1285,7 +1277,6 @@ describe("ExecuteRoutes POST /:toolName", () => {
   });
 
   it("refuses tools outside the conversation whitelist", async () => {
-    fakes.prism.allowed = false;
     const handler = executeHandler();
     const { res, state } = makeRes();
     await handler(

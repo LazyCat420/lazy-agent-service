@@ -6,7 +6,6 @@ import fs from "node:fs";
 import path from "node:path";
 import CONFIG from "../../config.ts";
 import logger from "../utils/logger.ts";
-import { PrismProxyService } from "../services/prism/PrismProxyService.ts";
 import { dispatchTool } from "../services/ToolDispatch.ts";
 
 const router = Router();
@@ -142,14 +141,12 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
   const { toolName, toolArguments, agentName, cycleId, ticker, hasCapability } =
     ctx;
 
-  if (
-    !hasCapability &&
-    cycleId &&
-    !PrismProxyService.isToolAllowed(cycleId, toolName)
-  ) {
+  // The signed tool context (`hasCapability`) is the authoritative gate: a
+  // cycle-scoped call only runs when the tool is in the agent's whitelist.
+  if (!hasCapability && cycleId) {
     const errorMsg = `The tool "${toolName}" is not whitelisted for your agent role. You must reason using the data in the 'Pre-Collected Data Report' instead of calling unauthorized tools.`;
     logger.warn(
-      `[PrismProxy] Intercepted unauthorized tool call for conversation ${cycleId}: ${toolName}`,
+      `[Execute] Intercepted unauthorized tool call for cycle ${cycleId}: ${toolName}`,
     );
 
     reportExecuteUsageFireAndForget(

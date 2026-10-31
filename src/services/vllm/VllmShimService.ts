@@ -72,7 +72,7 @@ const CAPACITY_GROUPS: Record<string, string> = {
  * Headers timeout only — cleared once the upstream responds, so long
  * generations and SSE streams are never cut off mid-flight. Non-stream vLLM
  * calls hold headers until generation completes, so this needs the same large
- * budget PrismProxyService learned to give /agent (multi-minute generations).
+ * budget the old proxy learned to give /agent (multi-minute generations).
  */
 const UPSTREAM_HEADERS_TIMEOUT_MS = 900_000;
 

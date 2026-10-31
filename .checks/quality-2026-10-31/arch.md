@@ -1,6 +1,6 @@
-# Architecture report (2026-10-31T05:22:44.092Z)
+# Architecture report (2026-10-31T07:10:48.030Z)
 
-Modules: 621 · dependencies: 2719
+Modules: 617 · dependencies: 2707
 
 ## error (0)
 

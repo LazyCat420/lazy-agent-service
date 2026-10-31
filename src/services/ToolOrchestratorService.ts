@@ -1799,14 +1799,6 @@ export default class ToolOrchestratorService {
     args: Record<string, unknown> = {},
     context: ToolExecutionContext = {},
   ) {
-    const { PrismProxyService } = await import("./prism/PrismProxyService.js");
-    if (context.conversationId && !PrismProxyService.isToolAllowed(context.conversationId, name)) {
-      logger.warn(
-        `[ToolOrchestrator] Blocked execution of disallowed tool "${name}" for conversation ${context.conversationId}`
-      );
-      return { error: `Execution of tool "${name}" is not allowed in this agent session.` };
-    }
-
     if (ToolOrchestratorService.isTradingToolCall(name, context)) {
       return ToolOrchestratorService.executeTradingTool(name, args, context);
     }

@@ -400,9 +400,8 @@ describe("logStartupBanner", () => {
 describe("onListening", () => {
   function makeListening(overrides: Partial<ListeningDeps> = {}) {
     const cleanups: Array<() => Promise<void>> = [];
-    const stopRedial = vi.fn<() => void>();
     const deps: ListeningDeps = {
-      runtime: { mcpAdapter: { countLiveClientSessions: () => 0 } } as unknown as ListeningDeps["runtime"],
+      runtime: { mcpAdapter: {} } as unknown as ListeningDeps["runtime"],
       logger: makeLog(),
       registerCleanup: (fn) => {
         cleanups.push(fn);
@@ -412,19 +411,17 @@ describe("onListening", () => {
       registerEvalChaos: vi.fn(async () => undefined),
       syncPersonas: vi.fn(async () => undefined),
       connectMcpServers: vi.fn(async () => undefined),
-      startPrismRedial: () => ({ stop: stopRedial }),
       ...overrides,
     };
-    return Object.assign(deps, { cleanups, stopRedial });
+    return Object.assign(deps, { cleanups });
   }
 
-  it("starts the prism re-dialer first and stops it on shutdown", async () => {
+  it("logs the banner, syncs personas and reconnects MCP servers", async () => {
     const deps = makeListening();
 
     await onListening(deps);
-    await deps.cleanups[0]();
 
-    expect(deps.stopRedial).toHaveBeenCalled();
+    expect(deps.logger.info).toHaveBeenCalled();
     expect(deps.syncPersonas).toHaveBeenCalled();
     expect(deps.connectMcpServers).toHaveBeenCalled();
   });
@@ -465,20 +462,5 @@ describe("onListening", () => {
     await onListening(deps);
 
     expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining("MCP auto-connect failed"));
-  });
-
-  it("survives a re-dialer that cannot start", async () => {
-    const deps = makeListening({
-      startPrismRedial: () => {
-        throw new Error("no prism");
-      },
-    });
-
-    await onListening(deps);
-
-    expect(deps.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Prism MCP re-dialer failed to start"),
-    );
-    expect(deps.syncPersonas).toHaveBeenCalled();
   });
 });

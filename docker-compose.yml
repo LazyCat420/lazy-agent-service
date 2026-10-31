@@ -15,30 +15,16 @@ services:
       - CHART_OUTPUT_DIR=/app/data/charts
       - RUNTIME_STORE_PATH=/app/runtime-data/run_store_durable.json
       # The /platform dashboard reads tool_usage_stats from the TRADING
-      # database, not prism's. MONGO_URI comes from the deployed .env.
+      # database, not the primary one. MONGO_URI comes from the deployed .env.
       - TRADING_MONGO_DB=${TRADING_MONGO_DB:-trading_bot}
       # vLLM nemotron35. :8080 (llama.cpp Bonsai) is gone; see VllmShimService UPSTREAMS.
       - VLLM_SHIM_JETSON_URL=${VLLM_SHIM_JETSON_URL:-http://10.0.0.30:8000}
       # NAS otel-collector (deploy-kit/infra/observability); unset = tracing off.
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://10.0.0.16:4318}
-      # Prism-proxy tool whitelists survive a container restart (audit D11).
-      - PRISM_PROXY_SESSIONS_FILE=/app/runtime-data/prism-proxy-sessions.json
       # scraper-service on the NAS. The code default (localhost:8001) is this
       # container itself, so the SearXNG search fallback and the scraper
       # extract path were refused (ECONNREFUSED) in production.
       - SCRAPER_SERVICE_URL=${SCRAPER_SERVICE_URL:-http://10.0.0.16:8001}
-      # Re-dial prism's MCP link to this service after every restart (prism
-      # only dials at its own boot). Not secrets. Unset URL or ID = disabled.
-      # See documentation/chapters/16-prism-mcp-redial-2026-10-26.md.
-      - PRISM_MCP_REDIAL_URL=${PRISM_MCP_REDIAL_URL:-http://10.0.0.16:7777}
-      - PRISM_MCP_SERVER_ID=${PRISM_MCP_SERVER_ID:-6a764f9e6729baa25e6f2153}
-      - PRISM_MCP_PROJECT=${PRISM_MCP_PROJECT:-vllm-trading-bot}
-      - PRISM_MCP_USERNAME=${PRISM_MCP_USERNAME:-lazy-trader}
-      - PRISM_MCP_REDIAL_INTERVAL_MS=${PRISM_MCP_REDIAL_INTERVAL_MS:-300000}
-      # Stale-entry rule OFF (empty client name), measured 2026-10-26: prism's SSE
-      # stream reconnects every ~5 min without a new initialize, so the local
-      # count read 0 over a healthy link and re-dialed hourly (ch.16).
-      - PRISM_MCP_CLIENT_NAME=${PRISM_MCP_CLIENT_NAME-}
     volumes:
       - /usr/share/zoneinfo/America/Los_Angeles:/etc/localtime:ro
       - ./data/charts:/app/data/charts

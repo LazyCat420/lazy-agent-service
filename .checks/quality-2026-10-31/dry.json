@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-10-31T05:22:41.593Z",
+  "generatedAt": "2026-10-31T07:10:45.124Z",
   "minTokens": 60,
   "logic": {
     "name": "logic",
-    "percent": 2.1379176857700903,
-    "lines": 113662,
-    "duplicatedLines": 2430,
-    "clones": 175,
+    "percent": 2.1431040442447284,
+    "lines": 112827,
+    "duplicatedLines": 2418,
+    "clones": 174,
     "top": [
       {
         "tokens": 249,
@@ -72,10 +72,10 @@
   },
   "all": {
     "name": "all",
-    "percent": 2.4626564392410173,
-    "lines": 118896,
-    "duplicatedLines": 2928,
-    "clones": 201,
+    "percent": 2.4699096229915045,
+    "lines": 118061,
+    "duplicatedLines": 2916,
+    "clones": 200,
     "top": [
       {
         "tokens": 249,

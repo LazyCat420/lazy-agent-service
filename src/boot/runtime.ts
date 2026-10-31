@@ -20,7 +20,6 @@ import {
   MINIO_BUCKET_NAME,
 } from "../../config.ts";
 import { listProviders } from "../providers/index.ts";
-import { startPrismMcpRedial } from "../services/PrismMcpRedial.ts";
 import { evalChaosEnabled } from "../services/EvalChaosCapabilities.ts";
 import { INDEX_DEFINITIONS, type IndexDefinition } from "./indexes.ts";
 import { ENDPOINTS, type HttpRuntime } from "./server.ts";
@@ -401,24 +400,14 @@ export interface ListeningDeps {
   registerEvalChaos: () => Promise<void>;
   syncPersonas: () => Promise<void>;
   connectMcpServers: () => Promise<void>;
-  startPrismRedial: (adapter: HttpRuntime["mcpAdapter"]) => { stop: () => void } | null;
 }
 
 /**
- * Work that only makes sense once the port is accepting connections: the prism
- * MCP re-dialer (prism only dials at its own boot, so our restart would leave it
- * without our tools), the startup banner, profiles, eval-chaos, personas and the
- * MCP server reconnects. Started first so a slow step below cannot delay the
- * re-dialer; nothing here throws.
+ * Work that only makes sense once the port is accepting connections: the
+ * startup banner, profiles, eval-chaos, personas and the MCP server reconnects.
+ * Nothing here throws; one broken step never blocks the next.
  */
 export async function onListening(deps: ListeningDeps): Promise<void> {
-  try {
-    const redialer = deps.startPrismRedial(deps.runtime.mcpAdapter);
-    if (redialer) deps.registerCleanup(async () => redialer.stop());
-  } catch (error: unknown) {
-    deps.logger.warn(`Prism MCP re-dialer failed to start: ${errorMessage(error)}`);
-  }
-
   logStartupBanner(PORT, deps.logger);
 
   try {
@@ -471,9 +460,5 @@ export function defaultListeningDeps(runtime: HttpRuntime): ListeningDeps {
       const { default: MCPClientService } = await import("../services/MCPClientService.ts");
       await MCPClientService.connectAllFromDB(MongoWrapper.getDb(MONGO_DB_NAME));
     },
-    startPrismRedial: (adapter) =>
-      startPrismMcpRedial({
-        countLocalClientSessions: (clientName) => adapter.countLiveClientSessions(clientName),
-      }),
   };
 }

@@ -5,6 +5,61 @@ type: record
 updated: 2026-10-31
 ---
 
+# HANDOFF — prism-service retired; lazy-agent-service is the only gateway (2026-10-31)
+
+prism-service was removed from the NAS. Nothing in the trading cycle broke: the
+agent path already used lazy-agent-service (`LAZY_AGENT_URL`, host `:5591`), and
+v3 agent registration, `/agent`, `/chat`, `/custom-agents`, `/embed`,
+`/conversations`, `/config` and `/webhooks/requests/stream` are all served here.
+What was left were dead seams that only produced warnings.
+
+**Deleted here**
+- `src/services/prism/PrismProxyService.ts` (proxy + per-conversation
+  `sessionAllowedTools` registry) and the `/prism-proxy` mount in
+  `src/boot/server.ts`. Nothing called it: the registry was only ever populated
+  by proxied `/agent` requests, so `isToolAllowed` always returned true.
+- `src/services/PrismMcpRedial.ts` (re-dialled prism's MCP link every 5 min →
+  `ECONNREFUSED :7777` warnings since the container was removed).
+- `src/utils/PrismAttribution.ts` (only the proxy used it).
+- The two dead gates that consulted the empty registry:
+  `ToolOrchestratorService.executeTool`'s block and `ExecuteRoutes`'s
+  `!hasCapability && cycleId && !isToolAllowed(...)` clause. The execute gate is
+  now `!hasCapability && cycleId` — the signed tool context is the authoritative
+  whitelist (unchanged behaviour: the old clause could never fire).
+- `McpAdapter.countLiveClientSessions` (only the redialer read it).
+- compose: `PRISM_PROXY_SESSIONS_FILE`, `PRISM_MCP_REDIAL_URL`,
+  `PRISM_MCP_SERVER_ID`, `PRISM_MCP_PROJECT`, `PRISM_MCP_USERNAME`,
+  `PRISM_MCP_REDIAL_INTERVAL_MS`, `PRISM_MCP_CLIENT_NAME`.
+- Tests: `PrismProxySessions`, `PrismProxyCoverage2`, `PrismMcpRedial`, plus the
+  prism mocks in `SearchWebShared` and `RoutesCoverage2` and the redialer cases
+  in `boot/__tests__/runtime.test.ts`.
+- `GET /` now reports `name: "Lazy Agent Service"` instead of "Prism the AI
+  Gateway" (nothing consumes that field).
+
+**Kept on purpose**
+- The Mongo database named `prism` — it holds the custom-agent personas and
+  project docs this service reads and writes. It is a database name, not the
+  retired service (`MongoDB connected: prism` at boot is correct).
+- `app/config/config.py`'s `PRISM_PROJECT` / `PRISM_USERNAME` env names in
+  trading-service/trading-client — they are the `x-project` / `x-username`
+  attribution headers this gateway reads, not prism calls.
+
+**Trading-service side (same batch):** dropped `prism-service` from
+`cycle_health.LOG_EVIDENCE_CONTAINERS` (a missing container made
+`container_logs` permanently NO_DATA) and from `boundary_probe.WATCHED`
+(triggered a stack-change probe on a container that no longer exists), and
+renamed the health-probe label `prism-service` → `lazy-agent-service` (the probe
+always hit `harness_base_url()`). Python module names (`prism_agent_caller.py`,
+`prism_agent_registry.py`, `v3/prism_registration.py`) are kept: they are
+legacy names for code that talks to lazy-agent-service, and renaming them would
+churn tests without changing behaviour.
+
+**Verified:** `npm run verify` exit 0; targeted suites 104 passed; tsc clean;
+eslint 0 errors. Live after deploy: no `PrismMcpRedial` / `PrismProxy` warnings,
+MongoDB `prism` + `trading_bot` connected, indexes 48/48, `/health` 200.
+
+---
+
 # HANDOFF — CRAP 0, complexity ratchet at error 20, tested boot (2026-10-31)
 
 The quality tail of the 2026-10-29 gates closed. Measured on `main` after the

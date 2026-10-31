@@ -133,7 +133,7 @@ router.post(
       //   2. body.workspaceRoot (for server-to-server / API callers)
       workspaceRoot: req.workspaceRoot || req.body.workspaceRoot || null,
     };
-    // The same trading boundary /prism-proxy applies (signed tool context,
+    // The same trading boundary every trading route applies (signed tool context,
     // learning marker, unattended) — see TradingAgentRequest.ts. A no-op for
     // every other project.
     try {

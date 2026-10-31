@@ -6,15 +6,11 @@ import type * as ConfigModule from "../../../config.ts";
 // and fetch throws, so a call that leaks to tools-service fails the test.
 const mocks = vi.hoisted(() => ({
   webSearch: vi.fn(),
-  isToolAllowed: vi.fn(() => true),
 }));
 vi.mock("../WebSearchService.ts", async (importActual) => {
   const actual = await importActual<typeof import("../WebSearchService.ts")>();
   return { webSearch: mocks.webSearch, filterResultsByDomain: actual.filterResultsByDomain, withSiteSearch: actual.withSiteSearch };
 });
-vi.mock("../prism/PrismProxyService.js", () => ({
-  PrismProxyService: { isToolAllowed: mocks.isToolAllowed },
-}));
 vi.mock("../../../config.ts", async (importOriginal) => ({
   ...(await importOriginal<Promise<typeof ConfigModule>>()),
   TOOLS_SERVICE_URL: "http://tools-service.invalid",
@@ -44,7 +40,6 @@ const fetchSpy = vi.fn(async () => {
 
 beforeEach(() => {
   mocks.webSearch.mockReset();
-  mocks.isToolAllowed.mockReset().mockReturnValue(true);
   fetchSpy.mockClear();
   vi.stubGlobal("fetch", fetchSpy);
 });
@@ -84,12 +79,5 @@ it("reports a search that did not run as an error, not as an empty web", async (
 it("rejects an empty query without searching", async () => {
   const out = await ToolOrchestratorService.executeTool("search_web", { query: "   " });
   expect(out).toEqual({ error: "'query' is required and must be a non-empty string" });
-  expect(mocks.webSearch).not.toHaveBeenCalled();
-});
-
-it("still enforces the session's tool allowlist first", async () => {
-  mocks.isToolAllowed.mockReturnValue(false);
-  const out = await ToolOrchestratorService.executeTool("search_web", { query: "x" }, { conversationId: "c2" }) as Record<string, unknown>;
-  expect(String(out.error)).toContain("not allowed");
   expect(mocks.webSearch).not.toHaveBeenCalled();
 });

@@ -691,23 +691,6 @@
           "valid": true
         },
         {
-          "dynamic": false,
-          "module": "../services/PrismMcpRedial.ts",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/services/PrismMcpRedial.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
           "dynamic": true,
           "module": "../services/ProfileRegistry.ts",
           "moduleSystem": "es6",
@@ -1016,7 +999,6 @@
         "src/services/SubagentRegistry.ts",
         "src/platform/context/ContextAssembly.ts",
         "src/services/orchestrator/GitWorktreeHelper.ts",
-        "src/services/prism/PrismProxyService.ts",
         "src/services/ToolSchemaService.ts",
         "src/routes/ContractRoutes.ts",
         "src/routes/ExecuteRoutes.ts",
@@ -2196,7 +2178,6 @@
         "src/services/ScheduledTaskService.ts",
         "src/services/VllmModelSyncService.ts",
         "src/services/EmbeddingCorpusService.ts",
-        "src/services/PrismMcpRedial.ts",
         "src/services/WebhookDispatcher.ts",
         "src/middleware/RequestLoggerMiddleware.ts",
         "src/routes/admin/AdminAgentConversationRoutes.ts",
@@ -2834,6 +2815,7 @@
         "src/services/harnesses/__tests__/SystemPathAuthorization.test.ts",
         "src/services/harnesses/__tests__/ToolExecutorAuthorization.test.ts",
         "src/services/harnesses/__tests__/messageArrayConstruction.test.ts",
+        "src/services/harnesses/lifecycle/__tests__/ToolRetryInterceptorSpans.test.ts",
         "src/utils/__tests__/MalformedToolCallArgs.test.ts"
       ],
       "orphan": false,
@@ -4668,7 +4650,6 @@
         "src/platform/context/ContextAssembly.ts",
         "src/services/WebExtractService.ts",
         "src/services/orchestrator/GitWorktreeHelper.ts",
-        "src/services/prism/PrismProxyService.ts",
         "src/services/ToolSchemaService.ts",
         "src/services/BackgroundHousekeepingService.ts",
         "src/routes/ContractRoutes.ts",
@@ -7042,7 +7023,6 @@
         "src/providers/vllm.ts",
         "src/providers/anthropic.ts",
         "src/providers/openai.ts",
-        "src/services/prism/PrismProxyService.ts",
         "src/core/loop/__tests__/CoreLoopV2Upgrades.test.ts",
         "src/providers/__tests__/CutStream.test.ts",
         "src/providers/__tests__/IdentitySystemPrompt.test.ts",
@@ -11996,23 +11976,6 @@
           "valid": true
         },
         {
-          "dynamic": true,
-          "module": "./prism/PrismProxyService.js",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "dynamic-import"
-          ],
-          "resolved": "src/services/prism/PrismProxyService.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
           "dynamic": false,
           "module": "./PromptLocaleService.ts",
           "moduleSystem": "es6",
@@ -13687,7 +13650,8 @@
         "src/services/harnesses/lifecycle/Finalizer.ts",
         "src/services/harnesses/lifecycle/ToolRetryInterceptor.ts",
         "src/utils/SseUtilities.ts",
-        "src/platform/__tests__/HarnessTracePropagation.test.ts"
+        "src/platform/__tests__/HarnessTracePropagation.test.ts",
+        "src/services/harnesses/lifecycle/__tests__/ToolRetryInterceptorSpans.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -13723,7 +13687,8 @@
         "src/services/harnesses/lifecycle/ToolRetryInterceptor.ts",
         "src/platform/__tests__/HarnessTracePropagation.test.ts",
         "src/platform/__tests__/PlatformArchitecture.test.ts",
-        "src/platform/__tests__/ToolExecutionErrorResultSpan.test.ts"
+        "src/platform/__tests__/ToolExecutionErrorResultSpan.test.ts",
+        "src/services/harnesses/lifecycle/__tests__/ToolRetryInterceptorSpans.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -21532,7 +21497,6 @@
       "dependents": [
         "src/services/harnesses/lifecycle/Finalizer.ts",
         "src/services/harnesses/lifecycle/PostExecutionEmitter.ts",
-        "src/services/prism/PrismProxyService.ts",
         "src/routes/AgentRoutes.ts",
         "src/core/loop/__tests__/CoreLoopV2Upgrades.test.ts",
         "src/services/__tests__/NativeTradingBoundary.test.ts"
@@ -21648,7 +21612,6 @@
       "dependents": [
         "src/services/learning/TradingLearningBoundary.ts",
         "src/services/harnesses/lifecycle/ToolExecutor.ts",
-        "src/services/prism/PrismProxyService.ts",
         "src/services/ToolDispatch.ts",
         "src/services/ToolSchemaService.ts",
         "src/routes/WallgardenRoutes.ts",
@@ -30615,7 +30578,8 @@
         "src/services/harnesses/ReActHarness.ts",
         "src/services/harnesses/strategies/GraphOfThoughtsStrategy.ts",
         "src/services/harnesses/strategies/TreeOfThoughtsStrategy.ts",
-        "src/services/harnesses/VisionLanguageHarness.ts"
+        "src/services/harnesses/VisionLanguageHarness.ts",
+        "src/services/harnesses/lifecycle/__tests__/ToolRetryInterceptorSpans.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -35884,8 +35848,7 @@
         "src/routes/__tests__/DurableApprovals.test.ts",
         "src/services/__tests__/McpGaps.test.ts",
         "src/services/__tests__/McpServersPort.test.ts",
-        "src/services/__tests__/McpStdioGuard.test.ts",
-        "src/services/__tests__/PrismMcpRedial.test.ts"
+        "src/services/__tests__/McpStdioGuard.test.ts"
       ],
       "orphan": false,
       "valid": true
@@ -38166,133 +38129,6 @@
       ],
       "dependents": [
         "src/services/OrchestratorService.ts"
-      ],
-      "orphan": false,
-      "valid": true
-    },
-    {
-      "source": "src/services/prism/PrismProxyService.ts",
-      "dependencies": [
-        {
-          "dynamic": false,
-          "module": "../../logger.js",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/logger.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
-          "module": "../../utils/openai-compat.ts",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/utils/openai-compat.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
-          "module": "../../utils/PrismAttribution.ts",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/utils/PrismAttribution.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
-          "module": "../TradingAgentRequest.ts",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/services/TradingAgentRequest.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
-          "module": "fs",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "core",
-            "import"
-          ],
-          "protocol": "node:",
-          "resolved": "fs",
-          "coreModule": true,
-          "followable": false,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
-          "module": "path",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "core",
-            "import"
-          ],
-          "protocol": "node:",
-          "resolved": "path",
-          "coreModule": true,
-          "followable": false,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        }
-      ],
-      "dependents": [
-        "src/services/ToolOrchestratorService.ts",
-        "src/boot/server.ts",
-        "src/routes/ExecuteRoutes.ts",
-        "src/services/__tests__/PrismProxyCoverage2.test.ts",
-        "src/services/prism/__tests__/PrismProxySessions.test.ts"
-      ],
-      "orphan": false,
-      "valid": true
-    },
-    {
-      "source": "src/utils/PrismAttribution.ts",
-      "dependencies": [],
-      "dependents": [
-        "src/services/prism/PrismProxyService.ts"
       ],
       "orphan": false,
       "valid": true
@@ -40677,34 +40513,6 @@
       "valid": true
     },
     {
-      "source": "src/services/PrismMcpRedial.ts",
-      "dependencies": [
-        {
-          "dynamic": false,
-          "module": "../utils/logger.ts",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/utils/logger.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        }
-      ],
-      "dependents": [
-        "src/boot/runtime.ts",
-        "src/services/__tests__/PrismMcpRedial.test.ts"
-      ],
-      "orphan": false,
-      "valid": true
-    },
-    {
       "source": "src/services/WebhookDispatcher.ts",
       "dependencies": [
         {
@@ -41690,23 +41498,6 @@
         },
         {
           "dynamic": false,
-          "module": "../services/prism/PrismProxyService.js",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/services/prism/PrismProxyService.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
           "module": "../services/vllm/VllmShimService.js",
           "moduleSystem": "es6",
           "exoticallyRequired": false,
@@ -41809,7 +41600,6 @@
         "src/services/__tests__/McpServersPort.test.ts",
         "src/services/__tests__/McpStdioGuard.test.ts",
         "src/services/__tests__/NativeTradingBoundary.test.ts",
-        "src/services/__tests__/PrismMcpRedial.test.ts",
         "src/services/__tests__/ReadUrlFailures.test.ts",
         "src/services/__tests__/ToolFixes20261016.test.ts",
         "src/services/__tests__/WriteTimeoutAudit.test.ts"
@@ -46770,23 +46560,6 @@
         },
         {
           "dynamic": false,
-          "module": "../services/prism/PrismProxyService.ts",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/services/prism/PrismProxyService.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
           "module": "../services/ToolDispatch.ts",
           "moduleSystem": "es6",
           "exoticallyRequired": false,
@@ -51327,7 +51100,6 @@
         "src/boot/server.ts",
         "src/services/__tests__/McpAuditCharacterization.test.ts",
         "src/services/__tests__/McpDeadline.test.ts",
-        "src/services/__tests__/PrismMcpRedial.test.ts",
         "src/services/__tests__/WriteTimeoutAudit.test.ts"
       ],
       "orphan": false,
@@ -60362,110 +60134,6 @@
       "valid": true
     },
     {
-      "source": "src/services/__tests__/PrismMcpRedial.test.ts",
-      "dependencies": [
-        {
-          "dynamic": false,
-          "module": "../McpAdapter.ts",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/services/McpAdapter.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
-          "module": "../PrismMcpRedial.ts",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/services/PrismMcpRedial.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
-          "module": "http",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "core",
-            "import"
-          ],
-          "protocol": "node:",
-          "resolved": "http",
-          "coreModule": true,
-          "followable": false,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        },
-        {
-          "dynamic": false,
-          "module": "net",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "core",
-            "type-only",
-            "import"
-          ],
-          "protocol": "node:",
-          "resolved": "net",
-          "coreModule": true,
-          "followable": false,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        }
-      ],
-      "dependents": [],
-      "orphan": false,
-      "valid": true
-    },
-    {
-      "source": "src/services/__tests__/PrismProxyCoverage2.test.ts",
-      "dependencies": [
-        {
-          "dynamic": false,
-          "module": "../prism/PrismProxyService.ts",
-          "moduleSystem": "es6",
-          "exoticallyRequired": false,
-          "dependencyTypes": [
-            "local",
-            "import"
-          ],
-          "resolved": "src/services/prism/PrismProxyService.ts",
-          "coreModule": false,
-          "followable": true,
-          "couldNotResolve": false,
-          "matchesDoNotFollow": false,
-          "circular": false,
-          "valid": true
-        }
-      ],
-      "dependents": [],
-      "orphan": false,
-      "valid": true
-    },
-    {
       "source": "src/services/__tests__/ProbeFault.test.ts",
       "dependencies": [
         {
@@ -65187,18 +64855,86 @@
       "valid": true
     },
     {
-      "source": "src/services/memory/__tests__/ExtractionWatermark.test.ts",
+      "source": "src/services/harnesses/lifecycle/__tests__/ToolRetryInterceptorSpans.test.ts",
       "dependencies": [
         {
           "dynamic": false,
-          "module": "../ExtractionWatermark.ts",
+          "module": "../../../../platform/trace/TraceContext.ts",
           "moduleSystem": "es6",
           "exoticallyRequired": false,
           "dependencyTypes": [
             "local",
             "import"
           ],
-          "resolved": "src/services/memory/ExtractionWatermark.ts",
+          "resolved": "src/platform/trace/TraceContext.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../../../../platform/trace/TraceExporter.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/platform/trace/TraceExporter.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../../AgenticLoopState.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "unknown"
+          ],
+          "resolved": "../../AgenticLoopState.ts",
+          "coreModule": false,
+          "followable": false,
+          "couldNotResolve": true,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../../types.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "type-only",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/types.ts",
+          "coreModule": false,
+          "followable": true,
+          "couldNotResolve": false,
+          "matchesDoNotFollow": false,
+          "circular": false,
+          "valid": true
+        },
+        {
+          "dynamic": false,
+          "module": "../ToolRetryInterceptor.ts",
+          "moduleSystem": "es6",
+          "exoticallyRequired": false,
+          "dependencyTypes": [
+            "local",
+            "import"
+          ],
+          "resolved": "src/services/harnesses/lifecycle/ToolRetryInterceptor.ts",
           "coreModule": false,
           "followable": true,
           "couldNotResolve": false,
@@ -65212,18 +64948,34 @@
       "valid": true
     },
     {
-      "source": "src/services/prism/__tests__/PrismProxySessions.test.ts",
+      "source": "../../AgenticLoopState.ts",
+      "followable": false,
+      "coreModule": false,
+      "couldNotResolve": true,
+      "matchesDoNotFollow": false,
+      "dependencyTypes": [
+        "unknown"
+      ],
+      "dependencies": [],
+      "dependents": [
+        "src/services/harnesses/lifecycle/__tests__/ToolRetryInterceptorSpans.test.ts"
+      ],
+      "orphan": false,
+      "valid": true
+    },
+    {
+      "source": "src/services/memory/__tests__/ExtractionWatermark.test.ts",
       "dependencies": [
         {
           "dynamic": false,
-          "module": "../PrismProxyService.ts",
+          "module": "../ExtractionWatermark.ts",
           "moduleSystem": "es6",
           "exoticallyRequired": false,
           "dependencyTypes": [
             "local",
             "import"
           ],
-          "resolved": "src/services/prism/PrismProxyService.ts",
+          "resolved": "src/services/memory/ExtractionWatermark.ts",
           "coreModule": false,
           "followable": true,
           "couldNotResolve": false,
@@ -75323,8 +75075,8 @@
     "info": 0,
     "ignore": 0,
     "advisedExitCode": 0,
-    "totalCruised": 621,
-    "totalDependenciesCruised": 2719,
+    "totalCruised": 617,
+    "totalDependenciesCruised": 2707,
     "optionsUsed": {
       "baseDir": "/home/lazycat/github/projects/sun/agents/lazy-agent-service",
       "combinedDependencies": false,
