@@ -20,6 +20,7 @@ const fakes = vi.hoisted(() => ({
   callTool: vi.fn(),
   scrapeTargetGuard: vi.fn(),
   chargeScrape: vi.fn(),
+  scrapeBudgetStatus: vi.fn(),
   unscrapableDomainOf: vi.fn(),
   filterSearchResultLinks: vi.fn(),
   registerRunUrls: vi.fn(),
@@ -65,6 +66,7 @@ vi.mock("../UnscrapableDomains.ts", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   scrapeTargetGuard: fakes.scrapeTargetGuard,
   chargeScrape: fakes.chargeScrape,
+  scrapeBudgetStatus: fakes.scrapeBudgetStatus,
   unscrapableDomainOf: fakes.unscrapableDomainOf,
   filterSearchResultLinks: fakes.filterSearchResultLinks,
   registerRunUrls: fakes.registerRunUrls,
@@ -112,6 +114,7 @@ beforeEach(() => {
   fakes.callTool.mockResolvedValue({ content: "remote" });
   fakes.scrapeTargetGuard.mockReturnValue(null);
   fakes.chargeScrape.mockReturnValue(null);
+  fakes.scrapeBudgetStatus.mockReturnValue({ used: 1, budget: 4, remaining: 3 });
   fakes.unscrapableDomainOf.mockReturnValue(null);
   fakes.filterSearchResultLinks.mockImplementation((result: unknown) => result);
   fakes.executeWebExtract.mockResolvedValue({ markdown: "# page" });
@@ -465,6 +468,12 @@ describe("routeLocalTool — scrape_url and remote MCP", () => {
     await routeLocalTool("scrape_url", {});
     expect(fakes.scrapeTargetGuard).not.toHaveBeenCalled();
     expect(fakes.executeWebExtract).toHaveBeenCalledWith({});
+  });
+
+  it("tells the model how much of the run's scrape budget is left", async () => {
+    fakes.scrapeBudgetStatus.mockReturnValue({ used: 1, budget: 4, remaining: 3 });
+    const result = (await routeLocalTool("scrape_url", { url: "https://blog.test/post" })) as Record<string, unknown>;
+    expect(result.scrape_budget).toEqual({ used: 1, budget: 4, remaining: 3 });
   });
 
   it("normalizes a bare domain before the guards and the extractor", async () => {

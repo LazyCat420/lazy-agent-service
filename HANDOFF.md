@@ -2,8 +2,41 @@
 part: Consumer apps
 status: shipped
 type: record
-updated: 2026-10-30
+updated: 2026-10-31
 ---
+
+# HANDOFF — `scrape_url` no longer advertises a file it cannot read (2026-10-31)
+
+Measured after `cc3308a` (31 scrape_url calls, 15 failed): the malformed bucket
+did not disappear, and its cause was not the URL text. Three calls were
+`scrape_url` on `/tmp/lazy-agent-web-extract/<hash>.txt` and
+`file:///tmp/lazy-agent-web-extract/...` — the truncated-extract footer told the
+model "the full text is stored at <path> — read it", and `readHint` said
+`read_file "<path>"`, but no tool in this service is `read_file`. The agent
+tried the only tool it had on the path, which failed as a malformed URL and
+spent a budget slot.
+
+- `truncateAndStore` footer now says "call scrape_url again on this same URL
+  with a higher char_limit (up to 500,000)"; the full text stays in the per-URL
+  cache, so the re-call costs no second fetch. `readHint` and
+  `WebExtractAnsweredResult.stored_file` are deleted; `storedPath` stays on the
+  result for the store sweeper but is never put in a tool payload.
+- `ToolOrchestratorService` no longer emits `stored_path` / `read_hint` on the
+  `scrape_url`, `read_url` fallback, or answered paths.
+- `tool_schemas/shared/web.json` (+ regenerated `tool_schemas.json` and
+  trading-service's copy) states the re-call instead of the file.
+- Budget visibility: `chargeScrape`'s refusal only fires on the call that
+  exceeds the budget, so 4 of 31 calls were spent on refusals. Every successful
+  scrape now carries `scrape_budget: {used, budget, remaining}`
+  (`UnscrapableDomains.scrapeBudgetStatus`), so the model can plan the rest of
+  its run instead of discovering the wall by hitting it.
+
+**Verified:** `npm run verify` exit 0 — 239 files / 3,317 tests, 0 lint errors
+(182 warnings), dry 2.25 %, arch 0 errors / 144 warnings, prompt budget PASS.
+Tests pin: the footer names the re-call and not the path, the tool result never
+contains a `/tmp` path or `stored_path`/`read_hint`, and a successful scrape
+carries the budget counter.
+
 
 # HANDOFF — `scrape_url` scheme normalization + actionable retry message (2026-10-30, `cc3308a`)
 

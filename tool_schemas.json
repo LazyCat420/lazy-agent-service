@@ -2206,7 +2206,7 @@
   },
   {
     "name": "scrape_url",
-    "description": "Read a web page's text content. Use AFTER search_web: pick the 2-3 most promising result URLs and scrape each one rather than guessing from snippets alone. Handles JS-heavy pages (engine auto). Returns clean text under a fixed character budget: if truncated, the middle is stored to a file and the reply names it — read that file (with line ranges) to continue. Prefer narrower queries or site: searches over scraping many pages. When `prompt` is set, a cheap model answers the question from the page content instead of returning raw text.",
+    "description": "Read a web page's text content. Use AFTER search_web: pick the 2-3 most promising result URLs and scrape each one rather than guessing from snippets alone. Handles JS-heavy pages (engine auto). Returns clean text under a fixed character budget: if truncated, call scrape_url again on the same URL with a higher char_limit to read more (the page is cached, so that costs no second fetch). Prefer narrower queries or site: searches over scraping many pages. When `prompt` is set, a cheap model answers the question from the page content instead of returning raw text.",
     "parameters": {
       "type": "object",
       "properties": {

@@ -66,13 +66,17 @@ describe("webExtract", () => {
     expect(h.calls[0].body).toEqual({ url: "https://example.com/article", engine: "auto" });
   });
 
-  it("stores the full text and names it in the footer when over budget", async () => {
+  it("stores the full text but tells the model to re-call with a higher char_limit", async () => {
     const longText = `${"x".repeat(40_000)}\nEND-OF-PAGE`;
     const h = harness([{ body: JSON.stringify({ success: true, content: longText, engine_used: "playwright" }) }]);
     const result = await webExtract("https://example.com/long", 15_000, h.deps);
     expect(result.truncated).toBe(true);
     expect(result.storedPath).toBeTruthy();
-    expect(result.content).toContain(result.storedPath!);
+    // No agent in this service has a read_file tool, so a footer naming a
+    // /tmp path made agents scrape_url that path (3 of 31 calls on 10-30).
+    expect(result.content).not.toContain(result.storedPath!);
+    expect(result.content).not.toContain("read_file");
+    expect(result.content).toContain("higher char_limit");
     expect(result.content).toContain("END-OF-PAGE");
     const stored = await fs.readFile(result.storedPath!, "utf-8");
     expect(stored).toBe(longText);
@@ -277,6 +281,19 @@ describe("scrape_url handler", () => {
     expect(out.success).toBe(false);
     expect(out.error).toContain("Call scrape_url again with the full URL including https://");
     expect(out.error).toContain("(url: /investors/earnings)");
+  });
+
+  it("never hands the model a stored-file path it cannot read", async () => {
+    const plainSpy = vi.spyOn(WebExtractModule, "webExtract").mockResolvedValue({
+      status: "ok", url: "https://example.com/long", content: "head\n\n[TRUNCATED] ...\n\ntail",
+      truncated: true, cached: false, storedPath: "/tmp/lazy-agent-web-extract/abc-1.txt",
+    });
+    const out = await (ToolOrchestratorService as any).executeWebExtract({ url: "https://example.com/long" });
+    expect(out).toMatchObject({ url: "https://example.com/long", success: true, truncated: true });
+    expect(out).not.toHaveProperty("stored_path");
+    expect(out).not.toHaveProperty("read_hint");
+    expect(JSON.stringify(out)).not.toContain("/tmp/lazy-agent-web-extract");
+    plainSpy.mockRestore();
   });
 
   it("normalizes a bare domain through the handler", async () => {

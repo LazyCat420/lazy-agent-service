@@ -351,3 +351,21 @@ export function __resetScrapeBudgetForTests(): void {
   runs.clear();
   runUrls.clear();
 }
+
+/**
+ * How much of this run's scrape budget is left, for the tool result. Four of
+ * 31 scrape_url calls on 2026-10-30 were made after the budget was spent: the
+ * refusal only fires on the call that exceeds it, so a model that cannot see
+ * the counter spends its remaining steps on refusals. Attaching the counter to
+ * every successful result lets it plan instead of guessing.
+ */
+export function scrapeBudgetStatus(
+  scope: ScrapeRunScope = {},
+  now = Date.now(),
+): { used: number; budget: number; remaining: number } {
+  const budget = scrapeBudgetPerRun();
+  const key = scrapeRunKey(scope);
+  const entry = key ? runs.get(key) : undefined;
+  const used = entry && now - entry.at <= RUN_TTL_MS ? entry.count : 0;
+  return { used, budget, remaining: Math.max(0, budget - used) };
+}

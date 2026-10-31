@@ -1878,7 +1878,6 @@ export default class ToolOrchestratorService {
           success: true,
           content: extracted.content,
           truncated: extracted.truncated,
-          ...(extracted.storedPath ? { stored_path: extracted.storedPath, read_hint: extracted.readHint } : {}),
           ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
           fallback: "web_extract",
         };
@@ -1921,7 +1920,6 @@ export default class ToolOrchestratorService {
           success: true,
           content: answered.content,
           truncated: answered.truncated,
-          ...(answered.stored_file ? { stored_path: answered.stored_file, read_hint: `read_file "${answered.stored_file}" and page with line ranges to reach the omitted middle` } : {}),
           ...(answered.engine_used ? { engine_used: answered.engine_used } : {}),
           cached: answered.cached ?? false,
         };
@@ -1931,7 +1929,6 @@ export default class ToolOrchestratorService {
         success: true,
         answer: answered.answer,
         truncated: answered.truncated,
-        ...(answered.stored_file ? { stored_path: answered.stored_file } : {}),
         ...(answered.engine_used ? { engine_used: answered.engine_used } : {}),
         cached: answered.cached ?? false,
       };
@@ -1945,7 +1942,6 @@ export default class ToolOrchestratorService {
       success: true,
       content: extracted.content,
       truncated: extracted.truncated,
-      ...(extracted.storedPath ? { stored_path: extracted.storedPath, read_hint: extracted.readHint } : {}),
       ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
       cached: extracted.cached,
     };

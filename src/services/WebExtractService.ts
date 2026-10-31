@@ -56,10 +56,8 @@ export interface WebExtractResult {
   content: string;
   /** True when the content above is a window over the full page. */
   truncated: boolean;
-  /** Present only when truncated: path of the file with the full text. */
+  /** Present only when truncated: internal path of the full text (never sent to a model). */
   storedPath?: string;
-  /** Present only when truncated: the read_file call that pages the middle. */
-  readHint?: string;
   engineUsed?: string;
   cached: boolean;
   error?: string;
@@ -187,7 +185,12 @@ export function bucketCharLimit(charLimit: number): number {
 /**
  * Head+tail window over the text, cut on line boundaries: the start of the
  * page and the end (where conclusions/references live) survive; the middle
- * goes to the stored file.
+ * is cut. The footer must only name actions the caller can actually take: no
+ * agent in this service has a `read_file` tool, and naming a `/tmp` path made
+ * agents call `scrape_url` on that path (3 of 31 scrape_url calls on
+ * 2026-10-30), which failed as a malformed URL and burned a budget slot.
+ * The full text stays in the per-URL cache, so raising `char_limit` on the
+ * same URL serves more of it without a second fetch.
  */
 export function truncateAndStore(text: string, charLimit: number): { content: string; truncated: boolean } {
   if (text.length <= charLimit) return { content: text, truncated: false };
@@ -203,7 +206,7 @@ export function truncateAndStore(text: string, charLimit: number): { content: st
 
   const omitted = text.length - head.length - tail.length;
   return {
-    content: `${head}\n\n[TRUNCATED] ${omitted.toLocaleString()} characters of the middle were cut. The full text is stored at {STORED_PATH} — read it to continue.\n\n${tail}`,
+    content: `${head}\n\n[TRUNCATED] ${omitted.toLocaleString()} characters of the middle were cut to fit char_limit. Call scrape_url again on this same URL with a higher char_limit (up to ${MAX_LIMIT.toLocaleString()}) to read more; the page is cached, so that costs no second fetch.\n\n${tail}`,
     truncated: true,
   };
 }
@@ -284,7 +287,7 @@ export async function webExtract(url: string, charLimit = DEFAULT_CHAR_LIMIT, de
   const fromScrape = async (scraped: WebExtractResult & { storedPath?: string }, cachedFlag: boolean): Promise<WebExtractResult> => {
     const fullText = scraped.content;
     const { content, truncated } = truncateAndStore(fullText, requested);
-    if (!truncated) return { ...scraped, content, truncated: false, cached: cachedFlag, storedPath: undefined, readHint: undefined };
+    if (!truncated) return { ...scraped, content, truncated: false, cached: cachedFlag, storedPath: undefined };
     let storedPath = scraped.storedPath;
     if (!storedPath) {
       const digest = createHash("sha1").update(cleanUrl).digest("hex").slice(0, 12);
@@ -299,7 +302,7 @@ export async function webExtract(url: string, charLimit = DEFAULT_CHAR_LIMIT, de
         return { ...scraped, content: `${fullText.slice(0, Math.floor(requested * 0.75))}\n\n[TRUNCATED] the middle was cut and could not be stored (${(error as Error).message.slice(0, 100)}).`, truncated: true, cached: cachedFlag, storedPath: undefined };
       }
     }
-    return { ...scraped, content: content.replace("{STORED_PATH}", storedPath), truncated: true, cached: cachedFlag, storedPath, readHint: `read_file "${storedPath}" and page with line ranges to reach the omitted middle` };
+    return { ...scraped, content, truncated: true, cached: cachedFlag, storedPath };
   };
   if (!exempt) {
     const hit = cache.get(key);
@@ -341,8 +344,6 @@ export interface WebExtractAnsweredResult {
   /** The model's answer, grounded in the truncated page content. */
   answer: string;
   truncated: boolean;
-  /** Present when the full text was stored and named by the extract. */
-  stored_file?: string;
   /** Present only on the graceful-degradation path (no LLM pass ran). */
   content?: string;
   cached?: boolean;
@@ -369,7 +370,6 @@ export async function webExtractAnswered(
   const base = {
     url: extracted.url,
     truncated: extracted.truncated,
-    ...(extracted.storedPath ? { stored_file: extracted.storedPath } : {}),
     ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
     cached: extracted.cached,
   };

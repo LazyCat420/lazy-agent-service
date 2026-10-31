@@ -13,6 +13,7 @@ import {
   filterSearchResultLinks,
   registerRunUrls,
   registerSearchResultUrls,
+  scrapeBudgetStatus,
   scrapeTargetGuard,
   unscrapableDomainOf,
 } from "./UnscrapableDomains.ts";
@@ -420,7 +421,10 @@ async function routeScrapeUrlTool(
   // from this module, so a static import here would make the cycle load-order
   // dependent (one side must resolve the other lazily).
   const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
-  return ToolOrchestratorService.executeWebExtract(normalized);
+  const result = await ToolOrchestratorService.executeWebExtract(normalized);
+  if (!url || unscrapableDomainOf(url)) return result;
+  if (!result || typeof result !== "object") return result;
+  return { ...(result as Record<string, unknown>), scrape_budget: scrapeBudgetStatus(context) };
 }
 
 async function routeWebSearchTool(
