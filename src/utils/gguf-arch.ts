@@ -191,47 +191,12 @@ const ARCH_DB: Record<string, ArchVariant[]> = {
   ],
 };
 
-export function resolveArchParams(
-  architecture: string | null | undefined,
-  paramsString: string | null | undefined,
-  sizeBytes: number,
-  bitsPerWeight = 4,
-): ArchParams {
-  let billions = 0;
-  if (paramsString) {
-    const match = paramsString.match(/([\d.]+)\s*[Bb]/);
-    if (match) billions = parseFloat(match[1]);
-  }
-  if (!billions && sizeBytes > 0 && bitsPerWeight > 0) {
-    billions = (sizeBytes * 8) / (bitsPerWeight * 1e9);
-  }
-  if (billions <= 0) billions = 7;
-
-  const archKey = architecture?.toLowerCase() || "";
-  const variants = ARCH_DB[archKey];
-  if (variants) {
-    for (const value of variants) {
-      if (billions >= value.minB && billions < value.maxB) {
-        return {
-          layers: value.layers,
-          kvHeads: value.kvHeads,
-          headDim: value.headDim,
-          attnRatio: value.attnRatio ?? 1.0,
-          isKnown: true,
-        };
-      }
-    }
-    const last = variants[variants.length - 1];
-    return {
-      layers: last.layers,
-      kvHeads: last.kvHeads,
-      headDim: last.headDim,
-      attnRatio: last.attnRatio ?? 1.0,
-      isKnown: true,
-    };
-  }
-
-  // Fallback: generic estimate from param count
+/** Generic layer/kv/head estimate derived from the parameter count. */
+function _genericArchEstimate(billions: number): {
+  layers: number;
+  kvHeads: number;
+  headDim: number;
+} {
   let layers: number, kvHeads: number, headDim: number;
   if (billions < 2) {
     layers = 24;
@@ -262,6 +227,59 @@ export function resolveArchParams(
     kvHeads = 8;
     headDim = 128;
   }
+  return { layers, kvHeads, headDim };
+}
+
+/** Match a known architecture's variant table, clamping to the last entry. */
+function _archParamsFromVariants(
+  variants: ArchVariant[],
+  billions: number,
+): ArchParams {
+  for (const value of variants) {
+    if (billions >= value.minB && billions < value.maxB) {
+      return {
+        layers: value.layers,
+        kvHeads: value.kvHeads,
+        headDim: value.headDim,
+        attnRatio: value.attnRatio ?? 1.0,
+        isKnown: true,
+      };
+    }
+  }
+  const last = variants[variants.length - 1];
+  return {
+    layers: last.layers,
+    kvHeads: last.kvHeads,
+    headDim: last.headDim,
+    attnRatio: last.attnRatio ?? 1.0,
+    isKnown: true,
+  };
+}
+
+export function resolveArchParams(
+  architecture: string | null | undefined,
+  paramsString: string | null | undefined,
+  sizeBytes: number,
+  bitsPerWeight = 4,
+): ArchParams {
+  let billions = 0;
+  if (paramsString) {
+    const match = paramsString.match(/([\d.]+)\s*[Bb]/);
+    if (match) billions = parseFloat(match[1]);
+  }
+  if (!billions && sizeBytes > 0 && bitsPerWeight > 0) {
+    billions = (sizeBytes * 8) / (bitsPerWeight * 1e9);
+  }
+  if (billions <= 0) billions = 7;
+
+  const archKey = architecture?.toLowerCase() || "";
+  const variants = ARCH_DB[archKey];
+  if (variants) {
+    return _archParamsFromVariants(variants, billions);
+  }
+
+  // Fallback: generic estimate from param count
+  const { layers, kvHeads, headDim } = _genericArchEstimate(billions);
   return { layers, kvHeads, headDim, attnRatio: 1.0, isKnown: false };
 }
 

@@ -242,17 +242,11 @@ export function convertToolsToGoogle(
   ];
 }
 
-/**
- * Build a GoogleGenerateConfig from ProviderOptions.
- * Centralizes the repeated config-building pattern across generateText,
- * generateTextStream, and generateTextStreamLive.
- */
-function buildGenerateConfig(
+/** Sampling/penalty/stop fields on GenerateContentConfig. */
+function _applySamplingConfig(
+  config: GenerateContentConfig,
   options: ProviderOptions,
-  modelDefinition: ModelDefinition | null | undefined,
-): GenerateContentConfig {
-  const config: GenerateContentConfig = {};
-
+): void {
   if (options.temperature !== undefined)
     config.temperature = options.temperature;
   if (options.topP !== undefined) config.topP = options.topP;
@@ -271,6 +265,13 @@ function buildGenerateConfig(
     config.maxOutputTokens = options.maxTokens;
   }
   if (options.seed !== undefined) config.seed = parseInt(String(options.seed));
+}
+
+/** Response-shape fields on GenerateContentConfig. */
+function _applyResponseShapeConfig(
+  config: GenerateContentConfig,
+  options: ProviderOptions,
+): void {
   if (options.responseMimeType)
     config.responseMimeType = options.responseMimeType;
   else if (options.responseFormat === "json_object")
@@ -285,8 +286,14 @@ function buildGenerateConfig(
   if (options.serviceTier && options.serviceTier !== "auto") {
     config.serviceTier = options.serviceTier as ServiceTier;
   }
+}
 
-  // Thinking config
+/** Thinking config, honoring explicit disable and budget/level selection. */
+function _applyThinkingConfig(
+  config: GenerateContentConfig,
+  options: ProviderOptions,
+  modelDefinition: ModelDefinition | null | undefined,
+): void {
   const supportsThinking = modelDefinition?.thinking === true;
   if (supportsThinking) {
     if (options.thinkingEnabled === false) {
@@ -308,6 +315,24 @@ function buildGenerateConfig(
       }
     }
   }
+}
+
+/**
+ * Build a GoogleGenerateConfig from ProviderOptions.
+ * Centralizes the repeated config-building pattern across generateText,
+ * generateTextStream, and generateTextStreamLive.
+ */
+function buildGenerateConfig(
+  options: ProviderOptions,
+  modelDefinition: ModelDefinition | null | undefined,
+): GenerateContentConfig {
+  const config: GenerateContentConfig = {};
+
+  _applySamplingConfig(config, options);
+  _applyResponseShapeConfig(config, options);
+
+  // Thinking config
+  _applyThinkingConfig(config, options, modelDefinition);
 
   // System prompt
   if (options.systemPrompt) {
@@ -315,6 +340,95 @@ function buildGenerateConfig(
   }
 
   return config;
+}
+
+/**
+ * Merge a run of consecutive `tool` messages starting at `startIndex` into the
+ * functionResponse parts of a single user turn. `nextIndex` is the last consumed
+ * index (the caller's loop increments past it).
+ */
+function _mergeToolResultTurn(
+  messages: ConversationMessage[],
+  startIndex: number,
+): { parts: Part[]; nextIndex: number } {
+  const responseParts: Part[] = [];
+  let j = startIndex;
+  while (j < messages.length && messages[j].role === "tool") {
+    const toolMessage = messages[j];
+    responseParts.push({
+      functionResponse: {
+        name: toolMessage.name || "any",
+        response: {
+          result:
+            typeof toolMessage.content === "string"
+              ? toolMessage.content
+              : JSON.stringify(toolMessage.content),
+        },
+      },
+    });
+    j++;
+  }
+  return { parts: responseParts, nextIndex: j - 1 };
+}
+
+/** Inline media parts for a message: data URLs, and HTTP URLs fetched to base64. */
+async function _mediaPartsFor(item: ConversationMessage): Promise<Part[]> {
+  const parts: Part[] = [];
+  // All media fields are arrays of data URLs or HTTP URLs
+  for (const field of ["images", "audio", "video", "pdf"] as const) {
+    const array = item[field];
+    if (array && Array.isArray(array)) {
+      for (const mediaRef of array) {
+        const match = (mediaRef as string).match(
+          /^data:([\w-]+\/[\w.+-]+);base64,(.+)$/,
+        );
+        if (match) {
+          parts.push({
+            inlineData: { mimeType: match[1], data: match[2] },
+          });
+        } else if (
+          (mediaRef as string).startsWith("http://") ||
+          (mediaRef as string).startsWith("https://")
+        ) {
+          // HTTP URLs — fetch and convert to inline base64
+          try {
+            const response = await fetch(mediaRef as string);
+            if (response.ok) {
+              const arrayBuffer = await response.arrayBuffer();
+              const base64Data =
+                Buffer.from(arrayBuffer).toString("base64");
+              const mimeType =
+                response.headers.get("content-type") || "image/jpeg";
+              parts.push({
+                inlineData: { mimeType, data: base64Data },
+              });
+            }
+          } catch (fetchError: unknown) {
+            logger.warn(
+              `[Google] Failed to fetch media URL for inline data: ${getErrorMessage(fetchError)}`,
+            );
+          }
+        }
+      }
+    }
+  }
+  return parts;
+}
+
+/** functionCall parts for an assistant message, preserving thoughtSignature. */
+function _assistantToolCallParts(item: ConversationMessage): Part[] {
+  const parts: Part[] = [];
+  for (const toolCall of item.toolCalls!) {
+    const functionCallPart: Part = {
+      functionCall: { name: toolCall.name, args: toolCall.args || {} },
+    };
+    // Preserve thoughtSignature (sibling of functionCall, required by Gemini)
+    if (toolCall.thoughtSignature) {
+      functionCallPart.thoughtSignature = toolCall.thoughtSignature;
+    }
+    parts.push(functionCallPart);
+  }
+  return parts;
 }
 
 async function convertMessages(
@@ -330,83 +444,21 @@ async function convertMessages(
     // Gemini requires ALL functionResponse parts for a model turn
     // to be grouped in one user message.
     if (item.role === "tool") {
-      const responseParts: Part[] = [];
-      let j = i;
-      while (j < messages.length && messages[j].role === "tool") {
-        const toolMessage = messages[j];
-        responseParts.push({
-          functionResponse: {
-            name: toolMessage.name || "any",
-            response: {
-              result:
-                typeof toolMessage.content === "string"
-                  ? toolMessage.content
-                  : JSON.stringify(toolMessage.content),
-            },
-          },
-        });
-        j++;
-      }
-      result.push({ role: "user", parts: responseParts });
-      i = j - 1; // skip merged messages (loop will i++)
+      const merged = _mergeToolResultTurn(messages, i);
+      result.push({ role: "user", parts: merged.parts });
+      i = merged.nextIndex; // skip merged messages (loop will i++)
       continue;
     }
 
     // Only include media for user messages — model-generated media
     // require a thought_signature when sent back, so we skip them.
     if (item.role !== "assistant") {
-      // All media fields are arrays of data URLs or HTTP URLs
-      for (const field of ["images", "audio", "video", "pdf"] as const) {
-        const array = item[field];
-        if (array && Array.isArray(array)) {
-          for (const mediaRef of array) {
-            const match = (mediaRef as string).match(
-              /^data:([\w-]+\/[\w.+-]+);base64,(.+)$/,
-            );
-            if (match) {
-              parts.push({
-                inlineData: { mimeType: match[1], data: match[2] },
-              });
-            } else if (
-              (mediaRef as string).startsWith("http://") ||
-              (mediaRef as string).startsWith("https://")
-            ) {
-              // HTTP URLs — fetch and convert to inline base64
-              try {
-                const response = await fetch(mediaRef as string);
-                if (response.ok) {
-                  const arrayBuffer = await response.arrayBuffer();
-                  const base64Data =
-                    Buffer.from(arrayBuffer).toString("base64");
-                  const mimeType =
-                    response.headers.get("content-type") || "image/jpeg";
-                  parts.push({
-                    inlineData: { mimeType, data: base64Data },
-                  });
-                }
-              } catch (fetchError: unknown) {
-                logger.warn(
-                  `[Google] Failed to fetch media URL for inline data: ${getErrorMessage(fetchError)}`,
-                );
-              }
-            }
-          }
-        }
-      }
+      parts.push(...(await _mediaPartsFor(item)));
     }
 
     // Assistant messages with tool calls — include functionCall parts
     if (item.role === "assistant" && item.toolCalls) {
-      for (const toolCall of item.toolCalls) {
-        const functionCallPart: Part = {
-          functionCall: { name: toolCall.name, args: toolCall.args || {} },
-        };
-        // Preserve thoughtSignature (sibling of functionCall, required by Gemini)
-        if (toolCall.thoughtSignature) {
-          functionCallPart.thoughtSignature = toolCall.thoughtSignature;
-        }
-        parts.push(functionCallPart);
-      }
+      parts.push(..._assistantToolCallParts(item));
     }
 
     // Mid-conversation system messages (e.g. dynamic tool updates from the
@@ -926,6 +978,59 @@ function* emitLiveQueueItem(
   }
 }
 
+/** Build the prompt + inlineData parts from prompt and input images. */
+function _buildGoogleImageParts(
+  prompt: string,
+  images: Array<string | { imageData: string; mimeType?: string }>,
+): Part[] {
+  const parts: Part[] = [{ text: prompt }];
+  if (images.length) {
+    for (const image of images) {
+      // Support both data URL strings and { imageData, mimeType } objects
+      if (typeof image === "string") {
+        const match = image.match(/^data:([\w-]+\/[\w.+-]+);base64,(.+)$/);
+        if (match) {
+          parts.push({
+            inlineData: { mimeType: match[1], data: match[2] },
+          });
+        }
+      } else {
+        parts.push({
+          inlineData: {
+            data: image.imageData,
+            mimeType: image.mimeType || "image/jpeg",
+          },
+        });
+      }
+    }
+  }
+  return parts;
+}
+
+/** Drain the generateContentStream, returning the first inline image. */
+async function _collectGoogleImageStream(
+  response: AsyncIterable<GenerateContentResponse>,
+): Promise<{ imageData: string; mimeType: string; text: string }> {
+  let combinedText = "";
+  for await (const chunk of response) {
+    if (!chunk.candidates?.[0]?.content?.parts) continue;
+    if (chunk.candidates?.[0]?.finishReason === "PROHIBITED_CONTENT") {
+      throw new Error("Content was flagged as prohibited by Google AI");
+    }
+    const part = chunk.candidates[0].content.parts[0];
+    if (part.inlineData) {
+      return {
+        imageData: part.inlineData.data,
+        mimeType: part.inlineData.mimeType || "image/png",
+        text: combinedText,
+      };
+    } else if (chunk.text) {
+      combinedText += chunk.text;
+    }
+  }
+  throw new Error("No image data received from Google AI");
+}
+
 const googleProvider = {
   name: "google",
 
@@ -1229,27 +1334,7 @@ const googleProvider = {
         config.systemInstruction = systemPrompt;
       }
 
-      const parts: Part[] = [{ text: prompt }];
-      if (images.length) {
-        for (const image of images) {
-          // Support both data URL strings and { imageData, mimeType } objects
-          if (typeof image === "string") {
-            const match = image.match(/^data:([\w-]+\/[\w.+-]+);base64,(.+)$/);
-            if (match) {
-              parts.push({
-                inlineData: { mimeType: match[1], data: match[2] },
-              });
-            }
-          } else {
-            parts.push({
-              inlineData: {
-                data: image.imageData,
-                mimeType: image.mimeType || "image/jpeg",
-              },
-            });
-          }
-        }
-      }
+      const parts: Part[] = _buildGoogleImageParts(prompt, images);
 
       const contents = [{ role: "user", parts }];
       const response = await getClient().models.generateContentStream({
@@ -1258,24 +1343,7 @@ const googleProvider = {
         contents,
       });
 
-      let combinedText = "";
-      for await (const chunk of response) {
-        if (!chunk.candidates?.[0]?.content?.parts) continue;
-        if (chunk.candidates?.[0]?.finishReason === "PROHIBITED_CONTENT") {
-          throw new Error("Content was flagged as prohibited by Google AI");
-        }
-        const part = chunk.candidates[0].content.parts[0];
-        if (part.inlineData) {
-          return {
-            imageData: part.inlineData.data,
-            mimeType: part.inlineData.mimeType || "image/png",
-            text: combinedText,
-          };
-        } else if (chunk.text) {
-          combinedText += chunk.text;
-        }
-      }
-      throw new Error("No image data received from Google AI");
+      return await _collectGoogleImageStream(response);
     } catch (error: unknown) {
       if (error instanceof ProviderError) throw error;
       throw new ProviderError("google", getErrorMessage(error), 500, error);

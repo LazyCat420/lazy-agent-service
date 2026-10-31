@@ -353,36 +353,14 @@ export interface WebExtractAnsweredResult {
 }
 
 /**
- * `scrape_url` with a question: run the deterministic extract (same cache
- * and guards as webExtract), then — when a prompt is given — one cheap
- * LLM call from Settings → Memory `extractionProvider`/`extractionModel`
- * answers from the truncated content. No provider configured or any LLM
- * failure degrades gracefully to the deterministic extract; the Q&A pass
- * itself is never cached.
+ * Resolve the provider/model pair for the Q&A pass, in order:
+ *   1. AUX_WEB_PROVIDER/MODEL env (auxiliary chain, tier 1) — explicit override.
+ *   2. Settings → Memory extractionProvider/extractionModel (existing behavior).
+ *   3. resolveAuxModel("web") tiering (light-role → vllm, then online fallback),
+ *      so the pass degrades to "no model" only when nothing is online.
+ * Returns null when no model is available.
  */
-export async function webExtractAnswered(
-  url: string,
-  prompt: string,
-  charLimit = DEFAULT_CHAR_LIMIT,
-  deps: WebExtractDeps = defaultDeps,
-): Promise<WebExtractAnsweredResult> {
-  const extracted = await webExtract(url, charLimit, deps);
-  const base = {
-    url: extracted.url,
-    truncated: extracted.truncated,
-    ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
-    cached: extracted.cached,
-  };
-  if (extracted.status !== "ok") return { ...base, answer: "", error: extracted.error || "no detail" };
-  const question = String(prompt ?? "").trim();
-  if (!question) return { ...base, answer: extracted.content, content: extracted.content };
-  const qaStart = Date.now();
-
-  // Model resolution for the Q&A pass, in order:
-  //   1. AUX_WEB_PROVIDER/MODEL env (auxiliary chain, tier 1) — explicit override.
-  //   2. Settings → Memory extractionProvider/extractionModel (existing behavior).
-  //   3. resolveAuxModel("web") tiering (light-role → vllm, then online fallback),
-  //      so the pass degrades to "no model" only when nothing is online.
+async function _resolveQaModel(): Promise<{ provider: string; model: string } | null> {
   let resolvedProvider: string | undefined;
   let resolvedModel: string | undefined;
   const auxEnvProvider = process.env.AUX_WEB_PROVIDER?.trim();
@@ -409,14 +387,24 @@ export async function webExtractAnswered(
       resolvedModel = aux.model;
     } catch {
       logger.info("[WebExtract] No aux model resolvable; skipping Q&A pass.");
-      return { ...base, answer: extracted.content, content: extracted.content };
+      return null;
     }
     if (!resolvedProvider || !resolvedModel || resolvedModel === "default-model") {
       logger.info("[WebExtract] No Q&A model available; skipping Q&A pass.");
-      return { ...base, answer: extracted.content, content: extracted.content };
+      return null;
     }
   }
+  return { provider: resolvedProvider, model: resolvedModel };
+}
 
+/** Run the Q&A LLM pass; returns the trimmed answer or null when it failed. */
+async function _runQaPass(
+  resolvedProvider: string,
+  resolvedModel: string,
+  extracted: WebExtractResult,
+  question: string,
+  qaStart: number,
+): Promise<string | null> {
   const messages: ChatMessage[] = [
     { role: "system", content: ANSWER_SYSTEM_PROMPT },
     { role: "user", content: `Page content from ${extracted.url}:\n\n${extracted.content}\n\nQuestion: ${question}` },
@@ -442,12 +430,46 @@ export async function webExtractAnswered(
     qaStats.lastModel = model;
     qaStats.lastLatencyMs = latencyMs;
     logger.info(`[WebExtract] Q&A pass: provider=${resolvedProvider} model=${model} latencyMs=${latencyMs} url=${extracted.url}`);
-    return { ...base, answer };
+    return answer;
   } catch (error) {
     qaStats.degraded++;
     logger.warn(`[WebExtract] Q&A pass failed, returning deterministic extract: ${(error as Error)?.message?.slice(0, 200)}`);
-    return { ...base, answer: extracted.content, content: extracted.content };
+    return null;
   }
+}
+
+/**
+ * `scrape_url` with a question: run the deterministic extract (same cache
+ * and guards as webExtract), then — when a prompt is given — one cheap
+ * LLM call from Settings → Memory `extractionProvider`/`extractionModel`
+ * answers from the truncated content. No provider configured or any LLM
+ * failure degrades gracefully to the deterministic extract; the Q&A pass
+ * itself is never cached.
+ */
+export async function webExtractAnswered(
+  url: string,
+  prompt: string,
+  charLimit = DEFAULT_CHAR_LIMIT,
+  deps: WebExtractDeps = defaultDeps,
+): Promise<WebExtractAnsweredResult> {
+  const extracted = await webExtract(url, charLimit, deps);
+  const base = {
+    url: extracted.url,
+    truncated: extracted.truncated,
+    ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
+    cached: extracted.cached,
+  };
+  if (extracted.status !== "ok") return { ...base, answer: "", error: extracted.error || "no detail" };
+  const question = String(prompt ?? "").trim();
+  if (!question) return { ...base, answer: extracted.content, content: extracted.content };
+  const qaStart = Date.now();
+
+  const qaModel = await _resolveQaModel();
+  if (!qaModel) return { ...base, answer: extracted.content, content: extracted.content };
+
+  const answer = await _runQaPass(qaModel.provider, qaModel.model, extracted, question, qaStart);
+  if (answer === null) return { ...base, answer: extracted.content, content: extracted.content };
+  return { ...base, answer };
 }
 
 /** Per-process Q&A pass counters, surfaced through webExtractStatus. */

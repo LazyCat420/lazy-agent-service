@@ -252,6 +252,60 @@ interface PendingFunction {
   kind: "declaration" | "arrow";
 }
 
+/** True when the identifier at `index` begins a method/function member. */
+function _startsFunctionMember(tokens: Token[], index: number): boolean {
+  const prev = tokens[index - 1];
+  return (
+    prev === undefined ||
+    prev.text === "{" ||
+    prev.text === "}" ||
+    prev.text === ";" ||
+    prev.text === "," ||
+    prev.text === "*" ||
+    (prev.kind === "id" && METHOD_MODIFIERS[prev.text])
+  );
+}
+
+/** Push a body frame for `pending` when the `{` opens a function body; returns whether it did. */
+function _pushFunctionFrame(
+  stack: FunctionFrame[],
+  pending: PendingFunction | null,
+  parenDepth: number,
+  depth: number,
+): boolean {
+  if (pending && (pending.kind === "arrow" || parenDepth === 0)) {
+    stack.push({
+      name: pending.name,
+      startLine: pending.startLine,
+      depth,
+      complexity: 1,
+    });
+    return true;
+  }
+  return false;
+}
+
+/** Close the innermost frame when `}` ends its body. */
+function _popFunctionFrame(
+  stack: FunctionFrame[],
+  functions: FunctionHealth[],
+  path: string,
+  depth: number,
+  token: Token,
+): void {
+  const frame = stack[stack.length - 1];
+  if (frame && frame.depth === depth) {
+    stack.pop();
+    functions.push({
+      path,
+      name: frame.name,
+      line: frame.startLine,
+      complexity: frame.complexity,
+      lines: Math.max(1, token.line - frame.startLine + 1),
+    });
+  }
+}
+
 function analyzeFunctions(path: string, tokens: Token[]): FunctionHealth[] {
   const functions: FunctionHealth[] = [];
   const stack: FunctionFrame[] = [];
@@ -317,16 +371,7 @@ function analyzeFunctions(path: string, tokens: Token[]): FunctionHealth[] {
       !NOT_METHOD_PREFIX[token.text] &&
       tokens[index + 1]?.text === "("
     ) {
-      const prev = tokens[index - 1];
-      const startsMember =
-        prev === undefined ||
-        prev.text === "{" ||
-        prev.text === "}" ||
-        prev.text === ";" ||
-        prev.text === "," ||
-        prev.text === "*" ||
-        (prev.kind === "id" && METHOD_MODIFIERS[prev.text]);
-      if (startsMember) {
+      if (_startsFunctionMember(tokens, index)) {
         pending = { name: token.text, startLine: token.line, kind: "declaration" };
       }
       continue;
@@ -347,30 +392,12 @@ function analyzeFunctions(path: string, tokens: Token[]): FunctionHealth[] {
       // A brace inside a parameter list is a type literal, not a body. An arrow
       // body brace sits inside the caller's argument list, so paren depth does
       // not apply to it.
-      if (pending && (pending.kind === "arrow" || parenDepth === 0)) {
-        stack.push({
-          name: pending.name,
-          startLine: pending.startLine,
-          depth,
-          complexity: 1,
-        });
-        pending = null;
-      }
+      if (_pushFunctionFrame(stack, pending, parenDepth, depth)) pending = null;
       continue;
     }
 
     if (token.text === "}") {
-      const frame = stack[stack.length - 1];
-      if (frame && frame.depth === depth) {
-        stack.pop();
-        functions.push({
-          path,
-          name: frame.name,
-          line: frame.startLine,
-          complexity: frame.complexity,
-          lines: Math.max(1, token.line - frame.startLine + 1),
-        });
-      }
+      _popFunctionFrame(stack, functions, path, depth, token);
       depth = Math.max(0, depth - 1);
       continue;
     }

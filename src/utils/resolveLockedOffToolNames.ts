@@ -1,4 +1,4 @@
-import SettingsService from "../services/SettingsService.ts";
+import SettingsService, { type SettingsData } from "../services/SettingsService.ts";
 import ToolOrchestratorService from "../services/ToolOrchestratorService.ts";
 import {
   TOOL_NAMES,
@@ -19,12 +19,10 @@ import {
  *   - TTS/STT models
  *   - Workspace agent connectivity (mirrors client isAgentServed check)
  */
-export async function resolveLockedOffToolNames(): Promise<Set<string>> {
-  const lockedOff = new Set<string>();
-
-  const memorySettings = await SettingsService.getSection("memory");
-  const creativeSettings = await SettingsService.getSection("creative");
-
+function _addMemoryToolLocks(
+  lockedOff: Set<string>,
+  memorySettings: SettingsData["memory"],
+): void {
   const hasExtraction = Boolean(
     memorySettings?.extractionProvider && memorySettings?.extractionModel,
   );
@@ -40,7 +38,12 @@ export async function resolveLockedOffToolNames(): Promise<Set<string>> {
   if (!hasExtraction) lockedOff.add(TOOL_NAMES.EXTRACT_MEMORIES);
   if (!hasConsolidation) lockedOff.add(TOOL_NAMES.CONSOLIDATE_MEMORIES);
   if (!hasEmbedding) lockedOff.add(TOOL_NAMES.SEARCH_MEMORIES);
+}
 
+function _addCreativeToolLocks(
+  lockedOff: Set<string>,
+  creativeSettings: SettingsData["creative"],
+): void {
   const hasImageModel = Boolean(
     creativeSettings?.imageProvider && creativeSettings?.imageModel,
   );
@@ -60,7 +63,18 @@ export async function resolveLockedOffToolNames(): Promise<Set<string>> {
   if (!hasVisionModel) lockedOff.add(TOOL_NAMES.DESCRIBE_IMAGE);
   if (!hasTextToSpeech) lockedOff.add(TOOL_NAMES.SYNTHESIZE_SPEECH);
   if (!hasSpeechToText) lockedOff.add(TOOL_NAMES.TRANSCRIBE_AUDIO);
+}
 
+function _isWorkspaceTool(tool: { domain?: string; domainKey?: string; name: string }): boolean {
+  return (
+    tool.domain === DOMAINS.CORE_WORKSPACE.displayName ||
+    tool.domainKey === DOMAINS.CORE_WORKSPACE.key ||
+    tool.name === TOOL_NAMES.ENTER_WORKTREE ||
+    tool.name === TOOL_NAMES.EXIT_WORKTREE
+  );
+}
+
+async function _addWorkspaceToolLocks(lockedOff: Set<string>): Promise<void> {
   // Workspace agent connectivity — mirrors the client's isAgentServed check.
   // If no workspace agent is connected, lock off all workspace-domain tools
   // (the same set the client locks off when currentWorkspace.isAgentServed is false).
@@ -69,16 +83,22 @@ export async function resolveLockedOffToolNames(): Promise<Set<string>> {
   if (!isWorkspaceAgentConnected) {
     const allSchemas = ToolOrchestratorService.getClientToolSchemas();
     for (const tool of allSchemas) {
-      const isWorkspaceTool =
-        tool.domain === DOMAINS.CORE_WORKSPACE.displayName ||
-        tool.domainKey === DOMAINS.CORE_WORKSPACE.key ||
-        tool.name === TOOL_NAMES.ENTER_WORKTREE ||
-        tool.name === TOOL_NAMES.EXIT_WORKTREE;
-      if (isWorkspaceTool) {
+      if (_isWorkspaceTool(tool)) {
         lockedOff.add(tool.name as string);
       }
     }
   }
+}
+
+export async function resolveLockedOffToolNames(): Promise<Set<string>> {
+  const lockedOff = new Set<string>();
+
+  const memorySettings = await SettingsService.getSection("memory");
+  const creativeSettings = await SettingsService.getSection("creative");
+
+  _addMemoryToolLocks(lockedOff, memorySettings);
+  _addCreativeToolLocks(lockedOff, creativeSettings);
+  await _addWorkspaceToolLocks(lockedOff);
 
   return lockedOff;
 }

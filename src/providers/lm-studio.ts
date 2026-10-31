@@ -1704,6 +1704,45 @@ async function performEnsureModelLoad(
   return { alreadyLoaded: false, contextLength };
 }
 
+/** Wait for an in-flight load of `modelKey` to settle, if one is registered. */
+async function _awaitInflightModelLoad(
+  state: LmStudioState,
+  modelKey: string,
+  onStatus?: (message: string) => void,
+): Promise<void> {
+  const inflight = state.loadInflight.get(modelKey);
+  if (!inflight) return;
+  logger.info(
+    `[LM-Studio:${state.instanceId}] ensureModelLoaded("${modelKey}") — waiting on inflight load…`,
+  );
+  onStatus?.("Waiting for model load…");
+  try {
+    await inflight;
+  } catch {
+    // Ignore, we'll recheck status
+  }
+}
+
+/** Minimal shape of a listed model entry needed to detect an already-loaded model. */
+interface ListedModelEntry {
+  loaded_instances?: Array<{ config?: { context_length?: number } }>;
+}
+
+/** Result when the model already has a loaded instance; null when it does not. */
+function _alreadyLoadedResult(
+  modelEntry: ListedModelEntry | undefined,
+  modelKey: string,
+): EnsureModelLoadedResult | null {
+  const isLoaded = (modelEntry?.loaded_instances?.length ?? 0) > 0;
+  if (!isLoaded) return null;
+  const loadedContextValue =
+    modelEntry?.loaded_instances?.[0]?.config?.context_length || null;
+  logger.info(
+    `[LM-Studio] Model ${modelKey} already loaded (ctx=${loadedContextValue})`,
+  );
+  return { alreadyLoaded: true, contextLength: loadedContextValue };
+}
+
 async function lmStudioEnsureModelLoaded(
   provider: LmStudioProvider,
   state: LmStudioState,
@@ -1714,15 +1753,7 @@ async function lmStudioEnsureModelLoaded(
 ): Promise<EnsureModelLoadedResult> {
   while (!signal?.aborted) {
     if (state.loadInflight.has(modelKey)) {
-      logger.info(
-        `[LM-Studio:${state.instanceId}] ensureModelLoaded("${modelKey}") — waiting on inflight load…`,
-      );
-      onStatus?.("Waiting for model load…");
-      try {
-        await state.loadInflight.get(modelKey);
-      } catch {
-        // Ignore, we'll recheck status
-      }
+      await _awaitInflightModelLoad(state, modelKey, onStatus);
       continue;
     }
 
@@ -1732,15 +1763,8 @@ async function lmStudioEnsureModelLoaded(
     const modelEntry = (ensureModels || []).find(
       (modelItem) => modelItem.key === modelKey,
     );
-    const isLoaded = (modelEntry?.loaded_instances?.length ?? 0) > 0;
-    if (isLoaded) {
-      const loadedContextValue =
-        modelEntry?.loaded_instances?.[0]?.config?.context_length || null;
-      logger.info(
-        `[LM-Studio] Model ${modelKey} already loaded (ctx=${loadedContextValue})`,
-      );
-      return { alreadyLoaded: true, contextLength: loadedContextValue };
-    }
+    const alreadyLoaded = _alreadyLoadedResult(modelEntry, modelKey);
+    if (alreadyLoaded) return alreadyLoaded;
 
     if (state.loadInflight.has(modelKey)) continue;
 

@@ -658,48 +658,55 @@ export function prepareOpenAICompatMessages(
 // ── Non-Streaming Response Processing ───────────────────────
 
 /**
- * Process a non-streaming OpenAI-compatible chat completion response.
- * Extracts text, thinking (native + <think> tags), usage, and tool calls.
- *
- * When thinkingEnabled is false, thinking content is folded into the text
- * output and the `thinking` field is null.
+ * Result shape for a non-streaming completion, with empty-output diagnostics.
  */
-export function processNonStreamingResponse(
+interface CompatCompletionResult {
+  text: string;
+  thinking: string | null;
+  usage: TokenUsage;
+  toolCalls: ToolCallEntry[] | null;
+  emptyOutputDiagnostic?: { finishReason: string | null; completionTokens: number };
+}
+
+/** Response processing when thinking is disabled: raw text, no <think> parsing. */
+function _processWithoutThinking(
   data: OpenAICompletionResponse,
-  options: { thinkingEnabled?: boolean } = {},
-) {
-  const choice = data.choices?.[0];
-  const message = choice?.message;
-  const finishReason = choice?.finish_reason ?? null;
-  const rawText = message?.content || "";
-
-  // When thinking is disabled, return raw text without parsing <think> tags
-  if (options.thinkingEnabled === false) {
-    const usage = normalizeUsage(data.usage);
-    const toolCalls = extractToolCallsFromMessage(message ?? null);
-    const isEmpty =
-      rawText.trim() === "" && (!toolCalls || toolCalls.length === 0);
-    if (isEmpty) {
-      logger.warn(
-        `[openai-compat] Zero-output completion (thinkingEnabled=false): finish_reason=${finishReason ?? "null"} completion_tokens=${usage.outputTokens ?? 0}`,
-      );
-    }
-    return {
-      text: rawText,
-      thinking: null,
-      usage,
-      toolCalls,
-      ...(isEmpty
-        ? {
-            emptyOutputDiagnostic: {
-              finishReason,
-              completionTokens: usage.outputTokens ?? 0,
-            },
-          }
-        : {}),
-    };
+  message: NonNullable<OpenAICompletionResponse["choices"]>[number]["message"] | null | undefined,
+  finishReason: string | null,
+  rawText: string,
+): CompatCompletionResult {
+  const usage = normalizeUsage(data.usage);
+  const toolCalls = extractToolCallsFromMessage(message ?? null);
+  const isEmpty =
+    rawText.trim() === "" && (!toolCalls || toolCalls.length === 0);
+  if (isEmpty) {
+    logger.warn(
+      `[openai-compat] Zero-output completion (thinkingEnabled=false): finish_reason=${finishReason ?? "null"} completion_tokens=${usage.outputTokens ?? 0}`,
+    );
   }
+  return {
+    text: rawText,
+    thinking: null,
+    usage,
+    toolCalls,
+    ...(isEmpty
+      ? {
+          emptyOutputDiagnostic: {
+            finishReason,
+            completionTokens: usage.outputTokens ?? 0,
+          },
+        }
+      : {}),
+  };
+}
 
+/** Response processing with thinking: native reasoning fields, else <think> tags. */
+function _processWithThinking(
+  data: OpenAICompletionResponse,
+  message: NonNullable<OpenAICompletionResponse["choices"]>[number]["message"] | null | undefined,
+  finishReason: string | null,
+  rawText: string,
+): CompatCompletionResult {
   // Check native reasoning fields first, fall back to <think> tag parsing
   const nativeThinking =
     message?.reasoning_content || message?.reasoning || null;
@@ -730,6 +737,30 @@ export function processNonStreamingResponse(
         }
       : {}),
   };
+}
+
+/**
+ * Process a non-streaming OpenAI-compatible chat completion response.
+ * Extracts text, thinking (native + <think> tags), usage, and tool calls.
+ *
+ * When thinkingEnabled is false, thinking content is folded into the text
+ * output and the `thinking` field is null.
+ */
+export function processNonStreamingResponse(
+  data: OpenAICompletionResponse,
+  options: { thinkingEnabled?: boolean } = {},
+) {
+  const choice = data.choices?.[0];
+  const message = choice?.message;
+  const finishReason = choice?.finish_reason ?? null;
+  const rawText = message?.content || "";
+
+  // When thinking is disabled, return raw text without parsing <think> tags
+  if (options.thinkingEnabled === false) {
+    return _processWithoutThinking(data, message, finishReason, rawText);
+  }
+
+  return _processWithThinking(data, message, finishReason, rawText);
 }
 
 // ── Text-markup tool call recovery ──────────────────────────
@@ -766,40 +797,48 @@ const parseMarkupValue = (value: string): unknown => {
   }
 };
 
+/** Parse the JSON body form (`{"name": ..., "arguments": ...}`); null when invalid. */
+function _markupCallFromJsonBody(body: string): MarkupToolCall | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || !("name" in parsed) || typeof parsed.name !== "string" || !parsed.name) return null;
+  const raw = "arguments" in parsed ? parsed.arguments : undefined;
+  if (typeof raw === "string") {
+    const value = parseMarkupValue(raw);
+    if (value && typeof value === "object" && !Array.isArray(value)) return { name: parsed.name, args: value as Record<string, unknown> };
+    return { name: parsed.name, args: {}, argsParseError: true, rawArgs: raw.slice(0, 2000) };
+  }
+  return { name: parsed.name, args: raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {} };
+}
+
+/** Parse the GLM body form (`NAME<arg_key>K</arg_key><arg_value>V…`); null when not a call. */
+function _markupCallFromGlmBody(body: string): MarkupToolCall | null {
+  const firstKey = body.indexOf("<arg_key>");
+  const name = (firstKey < 0 ? body : body.slice(0, firstKey)).trim();
+  // A bare name with no args is a valid call; anything with spaces or markup is prose.
+  if (!name || /[\s<>]/.test(name)) return null;
+  const args: Record<string, unknown> = {};
+  if (firstKey >= 0) {
+    for (const pair of body.slice(firstKey).matchAll(MARKUP_ARG_PAIR)) {
+      const key = pair[1].trim();
+      if (key) args[key] = parseMarkupValue(pair[2].trim());
+    }
+  }
+  return { name, args };
+}
+
 export function extractMarkupToolCalls(text: string): MarkupToolCall[] {
   const calls: MarkupToolCall[] = [];
   for (const match of text.matchAll(MARKUP_TOOL_CALL_BLOCK)) {
     const body = match[1].trim();
-    if (body.startsWith("{")) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(body);
-      } catch {
-        continue;
-      }
-      if (!parsed || typeof parsed !== "object" || !("name" in parsed) || typeof parsed.name !== "string" || !parsed.name) continue;
-      const raw = "arguments" in parsed ? parsed.arguments : undefined;
-      if (typeof raw === "string") {
-        const value = parseMarkupValue(raw);
-        if (value && typeof value === "object" && !Array.isArray(value)) calls.push({ name: parsed.name, args: value as Record<string, unknown> });
-        else calls.push({ name: parsed.name, args: {}, argsParseError: true, rawArgs: raw.slice(0, 2000) });
-      } else {
-        calls.push({ name: parsed.name, args: raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {} });
-      }
-      continue;
-    }
-    const firstKey = body.indexOf("<arg_key>");
-    const name = (firstKey < 0 ? body : body.slice(0, firstKey)).trim();
-    // A bare name with no args is a valid call; anything with spaces or markup is prose.
-    if (!name || /[\s<>]/.test(name)) continue;
-    const args: Record<string, unknown> = {};
-    if (firstKey >= 0) {
-      for (const pair of body.slice(firstKey).matchAll(MARKUP_ARG_PAIR)) {
-        const key = pair[1].trim();
-        if (key) args[key] = parseMarkupValue(pair[2].trim());
-      }
-    }
-    calls.push({ name, args });
+    const call = body.startsWith("{")
+      ? _markupCallFromJsonBody(body)
+      : _markupCallFromGlmBody(body);
+    if (call) calls.push(call);
   }
   return calls;
 }

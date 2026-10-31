@@ -69,6 +69,7 @@ import type {
   ToolSchema,
 } from "../../services/harnesses/types.ts";
 import type { ChatMessage } from "../../types/ProviderTypes.ts";
+import type { GenerateImageResult } from "../../types/provider.ts";
 import { getErrorMessage } from "../../utils/ErrorHelpers.ts";
 import { PROVIDERS, FILE_CATEGORIES } from "../../constants.ts";
 
@@ -792,6 +793,163 @@ export async function handleConversation(
   }
 }
 // ─── Agent conversation path (agentConversationId, no conversationId) ─
+type GenerationContextBase = Awaited<
+  ReturnType<typeof prepareGenerationContext>
+>;
+
+/** Identity values resolved once per agent request. */
+interface AgentRequestIds {
+  agentConversationId: string;
+  conversationId: string;
+  conversationMeta: Record<string, unknown> | null;
+  traceId: string | null;
+}
+
+/** Throws when the provider exposes no text-generation entry point. */
+function _assertAgentProviderSupportsText(
+  context: GenerationContextBase,
+  providerName: string,
+): void {
+  if (!context.provider.generateTextStream && !context.provider.generateText) {
+    throw new ProviderError(
+      providerName,
+      `Provider "${providerName}" does not support text generation`,
+      400,
+    );
+  }
+}
+
+/** Dispatch the agentic loop for an agent request. */
+async function _runAgenticLoop(
+  context: GenerationContextBase,
+  ids: AgentRequestIds,
+  emit: (event: SseEvent) => void,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const {
+    providerName,
+    resolvedModel,
+    options,
+    incomingConversationId,
+    project,
+    username,
+    clientIp,
+    agent,
+    requestId,
+    requestStart,
+  } = context;
+  const { default: AgenticLoopService } =
+    await import("../../services/AgenticLoopService.js");
+
+  await AgenticLoopService.runAgenticLoop({
+    provider:
+      context.provider as import("../../services/harnesses/types.ts").LLMProvider,
+    providerName,
+    resolvedModel,
+    modelDefinition: context.modelDefinition,
+    messages: context.messages,
+    originalMessages: context.originalMessages as ConversationMessage[],
+    options,
+    agentConversationId: ids.agentConversationId,
+    conversationId: ids.conversationId,
+    isNewConversation: !incomingConversationId,
+    userMessage: context.userMessage as ConversationMessage | null,
+    conversationMeta: ids.conversationMeta,
+    traceId: ids.traceId,
+    project,
+    username,
+    clientIp,
+    agent,
+    workspaceRoot: context.workspaceRoot,
+    requestId,
+    requestStart,
+    emit,
+    signal,
+  });
+}
+
+/**
+ * Release the local GPU lock and, when the SSE connection was severed, abort
+ * sub-agents still running under this orchestrator session.
+ */
+async function _cleanupAfterAgentRun(
+  localRelease: (() => void) | null,
+  resolvedModel: string,
+  conversationId: string,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (localRelease) {
+    localRelease();
+    logger.info(`[agent] 🔓 Released local GPU lock for ${resolvedModel}`);
+  }
+  // When the SSE connection is severed (user pressed stop), abort any
+  // spawned sub-agents that are still running under this orchestrator session.
+  if (signal?.aborted) {
+    try {
+      const { default: OrchestratorService } =
+        await import("../../services/OrchestratorService.js");
+      await OrchestratorService.abortSubAgentsByConversation(conversationId);
+    } catch (cleanupError: unknown) {
+      logger.warn(
+        `[agent] Sub-agent cleanup failed: ${getErrorMessage(cleanupError)}`,
+      );
+    }
+  }
+}
+
+/** Mark the conversation idle again, log the failure and emit the error event. */
+function _reportAgentFailure(
+  context: GenerationContextBase,
+  ids: AgentRequestIds,
+  emit: (event: SseEvent) => void,
+  error: unknown,
+): void {
+  const {
+    providerName,
+    resolvedModel,
+    requestedModel,
+    options,
+    project,
+    username,
+    clientIp,
+    agent,
+    requestId,
+    requestStart,
+  } = context;
+  markGenerating(
+    ids.conversationId,
+    project,
+    username,
+    false,
+    getCollectionOpts(project, agent),
+  );
+  const totalSec = (performance.now() - requestStart) / 1000;
+  RequestLogger.logChatGeneration({
+    requestId,
+    endpoint: "/agent",
+    operation: "agent",
+    project,
+    username,
+    clientIp,
+    agent: agent || null,
+    harness: (options.harness as string) || null,
+    provider: providerName,
+    model: resolvedModel || requestedModel || "any",
+    agentConversationId: ids.agentConversationId,
+    conversationId: ids.conversationId || null,
+    traceId: ids.traceId || null,
+    success: false,
+    errorMessage: getErrorMessage(error),
+    totalSec,
+    messages: context.rawMessages || [],
+    options,
+  });
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.ERROR,
+    message: getErrorMessage(error),
+  });
+}
+
 /**
  * Handle an agent request: always dispatches to AgenticLoopService.
  * Persistence uses agentConversationId (not conversationId).
@@ -803,8 +961,7 @@ export async function handleAgent(
   emit: (event: SseEvent) => void,
   { signal }: { signal?: AbortSignal } = {},
 ) {
-  let context: Awaited<ReturnType<typeof prepareGenerationContext>> | null =
-    null;
+  let context: GenerationContextBase | null = null;
   try {
     context = await prepareGenerationContext(params, emit, { signal });
   } catch (error: unknown) {
@@ -818,135 +975,194 @@ export async function handleAgent(
   const {
     providerName,
     resolvedModel,
-    requestedModel,
-    options,
     incomingConversationId,
     agentConversationId,
     incomingConversationMeta,
     incomingTraceId,
     project,
     username,
-    clientIp,
     agent,
-    requestStart,
-    requestId,
     localRelease,
   } = context;
   // ── Agent conversation identity ─────────────────────────────────
-  const resolvedAgentConversationId = agentConversationId || crypto.randomUUID();
-  const conversationId = incomingConversationId || crypto.randomUUID();
-  const traceId = incomingTraceId || null;
-  const conversationMeta = incomingConversationMeta || null;
+  const ids: AgentRequestIds = {
+    agentConversationId: agentConversationId || crypto.randomUUID(),
+    conversationId: incomingConversationId || crypto.randomUUID(),
+    traceId: incomingTraceId || null,
+    conversationMeta: incomingConversationMeta || null,
+  };
   // ── Eager conversation stub ───────────────────────────────────────
   // Create the conversation document immediately via upsert so that
   // GET /agent-conversations/:id never 404s while the loop is running
   // (e.g. when the user switches away and back during generation).
-  markGenerating(conversationId, project, username, true, {
+  markGenerating(ids.conversationId, project, username, true, {
     ...getCollectionOpts(project, agent),
     agent: agent ?? undefined,
-    agentConversationId: resolvedAgentConversationId,
+    agentConversationId: ids.agentConversationId,
     title:
-      typeof conversationMeta?.title === "string"
-        ? conversationMeta.title
+      typeof ids.conversationMeta?.title === "string"
+        ? ids.conversationMeta.title
         : undefined,
   });
   try {
     try {
-      if (
-        !context!.provider.generateTextStream &&
-        !context!.provider.generateText
-      ) {
-        throw new ProviderError(
-          providerName,
-          `Provider "${providerName}" does not support text generation`,
-          400,
-        );
-      }
-      const { default: AgenticLoopService } =
-        await import("../../services/AgenticLoopService.js");
-
-      await AgenticLoopService.runAgenticLoop({
-        provider:
-          context.provider as import("../../services/harnesses/types.ts").LLMProvider,
-        providerName,
-        resolvedModel,
-        modelDefinition: context.modelDefinition,
-        messages: context.messages,
-        originalMessages: context.originalMessages as ConversationMessage[],
-        options,
-        agentConversationId: resolvedAgentConversationId,
-        conversationId,
-        isNewConversation: !incomingConversationId,
-        userMessage: context.userMessage as ConversationMessage | null,
-        conversationMeta,
-        traceId,
-        project,
-        username,
-        clientIp,
-        agent,
-        workspaceRoot: context.workspaceRoot,
-        requestId,
-        requestStart,
-        emit,
-        signal,
-      });
+      _assertAgentProviderSupportsText(context, providerName);
+      await _runAgenticLoop(context, ids, emit, signal);
     } finally {
-      if (localRelease) {
-        localRelease();
-        logger.info(`[agent] 🔓 Released local GPU lock for ${resolvedModel}`);
-      }
-      // When the SSE connection is severed (user pressed stop), abort any
-      // spawned sub-agents that are still running under this orchestrator session.
-      if (signal?.aborted) {
-        try {
-          const { default: OrchestratorService } =
-            await import("../../services/OrchestratorService.js");
-          await OrchestratorService.abortSubAgentsByConversation(
-            conversationId,
-          );
-        } catch (cleanupError: unknown) {
-          logger.warn(
-            `[agent] Sub-agent cleanup failed: ${getErrorMessage(cleanupError)}`,
-          );
-        }
-      }
+      await _cleanupAfterAgentRun(
+        localRelease,
+        resolvedModel,
+        ids.conversationId,
+        signal,
+      );
     }
   } catch (error: unknown) {
-    markGenerating(
-      conversationId,
-      project,
-      username,
-      false,
-      getCollectionOpts(project, agent),
-    );
-    const totalSec = (performance.now() - requestStart) / 1000;
-    RequestLogger.logChatGeneration({
-      requestId,
-      endpoint: "/agent",
-      operation: "agent",
-      project,
-      username,
-      clientIp,
-      agent: agent || null,
-      harness: (options.harness as string) || null,
-      provider: providerName,
-      model: resolvedModel || requestedModel || "any",
-      agentConversationId: resolvedAgentConversationId,
-      conversationId: conversationId || null,
-      traceId: traceId || null,
-      success: false,
-      errorMessage: getErrorMessage(error),
-      totalSec,
-      messages: context.rawMessages || [],
-      options,
-    });
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.ERROR,
-      message: getErrorMessage(error),
-    });
+    _reportAgentFailure(context, ids, emit, error);
   }
 }
 // ─── Dispatch: Image API models (e.g. GPT Image 1.5, OpenAI images) ─
+/** All image references collected across the conversation. */
+function _collectConversationImages(
+  messages: ConversationMessage[],
+): string[] {
+  const allImages: string[] = [];
+  for (const message of messages) {
+    if (message.images && message.images.length > 0) {
+      allImages.push(...message.images);
+    }
+  }
+  return allImages;
+}
+
+/** Upload the generated image to MinIO; null when absent or the upload failed. */
+async function _uploadGeneratedImage(
+  result: GenerateImageResult,
+  project: string,
+  username: string,
+): Promise<string | null> {
+  let minioRef: string | null = null;
+  if (result.imageData) {
+    try {
+      const mimeType = result.mimeType || "image/png";
+      const dataUrl = `data:${mimeType};base64,${result.imageData}`;
+      const { ref } = await FileService.uploadFile(
+        dataUrl,
+        FILE_CATEGORIES.GENERATIONS,
+        project,
+        username,
+      );
+      minioRef = ref;
+    } catch (uploadError: unknown) {
+      logger.error(
+        `[chat/image-api] MinIO upload failed: ${getErrorMessage(uploadError)}`,
+      );
+    }
+  }
+  return minioRef;
+}
+
+/** Emit the text chunk (when present) followed by the image event. */
+function _emitImageResultEvents(
+  result: GenerateImageResult,
+  minioRef: string | null,
+  emit: (event: SseEvent) => void,
+): void {
+  if (result.text) {
+    emit({ type: SERVER_SENT_EVENT_TYPES.CHUNK, content: result.text });
+  }
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.IMAGE,
+    data: result.imageData,
+    mimeType: result.mimeType || "image/png",
+    minioRef,
+  });
+}
+
+/** Estimated input tokens for an image request (prompt + input images). */
+function _estimateImageInputTokens(
+  prompt: string,
+  imageCount: number,
+  modelDefinition: unknown,
+): number {
+  return (
+    estimateTokens(prompt) +
+    imageCount *
+      (((modelDefinition as Record<string, unknown> | null)
+        ?.imageTokensPerImage as number) || 1120)
+  );
+}
+
+/** Everything needed to persist one image turn. */
+interface ImageTurnPersist {
+  conversationId: string;
+  project: string;
+  username: string;
+  userMessage: ConversationMessage | null | undefined;
+  conversationMeta: Record<string, unknown> | null | undefined;
+  result: GenerateImageResult;
+  minioRef: string | null;
+  resolvedModel: string;
+  providerName: string;
+  totalSec: number;
+  estimatedCost: number;
+}
+
+/** Append the user message (first call only) and the assistant image turn. */
+async function _appendImageTurn(turn: ImageTurnPersist): Promise<void> {
+  const {
+    conversationId,
+    project,
+    username,
+    userMessage,
+    conversationMeta,
+    result,
+    minioRef,
+    resolvedModel,
+    providerName,
+    totalSec,
+    estimatedCost,
+  } = turn;
+  const messagesToAppend: ConversationMessage[] = [];
+  // Only append the user message on the first call for this turn
+  // (indicated by conversationMeta). Follow-up tool iterations reuse
+  // the same conversationId but omit conversationMeta, so the user
+  // message is already persisted from the first call.
+  if (userMessage && conversationMeta) {
+    messagesToAppend.push({
+      ...userMessage,
+      role: "user",
+      timestamp:
+        (userMessage as ConversationMessage).timestamp ||
+        new Date().toISOString(),
+    } as ConversationMessage);
+  }
+  const assistantImages = minioRef ? [minioRef] : [];
+  messagesToAppend.push({
+    role: "assistant",
+    content: result.text || "",
+    ...(assistantImages.length > 0 && { images: assistantImages }),
+    model: resolvedModel,
+    provider: providerName,
+    timestamp: new Date().toISOString(),
+    totalTime: roundMilliseconds(totalSec),
+    estimatedCost,
+  });
+  const meta = conversationMeta
+    ? {
+        ...conversationMeta,
+        settings: { provider: providerName, model: resolvedModel },
+      }
+    : undefined;
+  await appendAndFinalize(
+    conversationId,
+    project,
+    username,
+    messagesToAppend,
+    meta,
+    getCollectionOpts(project),
+  );
+}
+
 async function handleImageAPIModel(
   context: Awaited<ReturnType<typeof prepareGenerationContext>> & {
     conversationId?: string | null;
@@ -985,12 +1201,9 @@ async function handleImageAPIModel(
     .pop();
   const prompt = lastUserMessage?.content || "";
   // Collect all images from the conversation
-  const allImages: string[] = [];
-  for (const message of messages as ConversationMessage[]) {
-    if (message.images && message.images.length > 0) {
-      allImages.push(...message.images);
-    }
-  }
+  const allImages = _collectConversationImages(
+    messages as ConversationMessage[],
+  );
   if (!provider.generateImage) {
     throw new Error(
       `Provider "${providerName}" does not support image generation`,
@@ -1026,30 +1239,13 @@ async function handleImageAPIModel(
       formatCostTag(estimatedCost),
   );
   // Upload generated image to MinIO
-  let minioRef: string | null = null;
-  if (result.imageData) {
-    try {
-      const mimeType = result.mimeType || "image/png";
-      const dataUrl = `data:${mimeType};base64,${result.imageData}`;
-      const { ref } = await FileService.uploadFile(
-        dataUrl,
-        FILE_CATEGORIES.GENERATIONS,
-        project,
-        username,
-      );
-      minioRef = ref;
-    } catch (uploadError: unknown) {
-      logger.error(
-        `[chat/image-api] MinIO upload failed: ${getErrorMessage(uploadError)}`,
-      );
-    }
-  }
+  const minioRef = await _uploadGeneratedImage(result, project, username);
   // Estimate token counts for tracking
-  const estimatedInputTokens =
-    estimateTokens(prompt) +
-    allImages.length *
-      (((modelDefinition as Record<string, unknown> | null)
-        ?.imageTokensPerImage as number) || 1120);
+  const estimatedInputTokens = _estimateImageInputTokens(
+    prompt,
+    allImages.length,
+    modelDefinition,
+  );
   RequestLogger.log({
     requestId,
     endpoint: "/chat",
@@ -1070,58 +1266,24 @@ async function handleImageAPIModel(
     totalTime: roundMilliseconds(totalSec),
   });
   // Emit events
-  if (result.text) {
-    emit({ type: SERVER_SENT_EVENT_TYPES.CHUNK, content: result.text });
-  }
-  emit({
-    type: SERVER_SENT_EVENT_TYPES.IMAGE,
-    data: result.imageData,
-    mimeType: result.mimeType || "image/png",
-    minioRef,
-  });
+  _emitImageResultEvents(result, minioRef, emit);
   // Link conversation to session
   // Auto-append to conversation — persist BEFORE emitting `done`
   // so the client's post-stream DB fetch sees the complete conversation.
   if (conversationId) {
-    const messagesToAppend: ConversationMessage[] = [];
-    // Only append the user message on the first call for this turn
-    // (indicated by conversationMeta). Follow-up tool iterations reuse
-    // the same conversationId but omit conversationMeta, so the user
-    // message is already persisted from the first call.
-    if (userMessage && conversationMeta) {
-      messagesToAppend.push({
-        ...userMessage,
-        role: "user",
-        timestamp:
-          (userMessage as ConversationMessage).timestamp ||
-          new Date().toISOString(),
-      } as ConversationMessage);
-    }
-    const assistantImages = minioRef ? [minioRef] : [];
-    messagesToAppend.push({
-      role: "assistant",
-      content: result.text || "",
-      ...(assistantImages.length > 0 && { images: assistantImages }),
-      model: resolvedModel,
-      provider: providerName,
-      timestamp: new Date().toISOString(),
-      totalTime: roundMilliseconds(totalSec),
-      estimatedCost,
-    });
-    const meta = conversationMeta
-      ? {
-          ...conversationMeta,
-          settings: { provider: providerName, model: resolvedModel },
-        }
-      : undefined;
-    await appendAndFinalize(
+    await _appendImageTurn({
       conversationId,
       project,
       username,
-      messagesToAppend,
-      meta,
-      getCollectionOpts(project),
-    );
+      userMessage: userMessage as ConversationMessage | null | undefined,
+      conversationMeta,
+      result,
+      minioRef,
+      resolvedModel,
+      providerName,
+      totalSec,
+      estimatedCost,
+    });
   }
   emit({
     type: SERVER_SENT_EVENT_TYPES.DONE,

@@ -22,6 +22,39 @@ export function initSseResponse(res: Response) {
   res.flushHeaders();
 }
 
+/** Add trace/run/span ids from the active TraceContext without overwriting existing ones. */
+function _enrichSseEvent(event: SseEvent): Record<string, unknown> {
+  const activeCtx = TraceContext.get();
+  return {
+    ...event,
+    ...(activeCtx?.trace_id && !("trace_id" in event) && !("traceId" in event)
+      ? { trace_id: activeCtx.trace_id, traceId: activeCtx.trace_id }
+      : {}),
+    ...(activeCtx?.run_id && !("run_id" in event)
+      ? { run_id: activeCtx.run_id }
+      : {}),
+    ...(activeCtx?.current_span_id && !("span_id" in event)
+      ? { span_id: activeCtx.current_span_id }
+      : {}),
+  };
+}
+
+/**
+ * Force-flush the write buffer. Without compression middleware, res.flush()
+ * doesn't exist — use cork()/uncork() to guarantee Node flushes pending writes
+ * to the socket immediately.
+ */
+function _flushSseResponse(res: Response): void {
+  const responseWithFlush = res as Response & { flush?: () => void };
+  if (typeof responseWithFlush.flush === "function") {
+    responseWithFlush.flush();
+  } else if (res.socket && !res.socket.destroyed) {
+    res.socket.uncork?.();
+    res.socket.cork?.();
+    res.socket.uncork?.();
+  }
+}
+
 /**
  * Create an SSE emit callback that writes events to the response.
  * Strips heavy base64 data from image events when minioRef is available.
@@ -35,21 +68,10 @@ export function createSseEmitter(res: Response, connectionSignal: AbortSignal) {
 
   return (event: SseEvent) => {
     if (!connectionSignal.aborted && !res.destroyed && !res.writableEnded) {
-      const activeCtx = TraceContext.get();
-      const enrichedEvent: Record<string, unknown> = {
-        ...event,
-        ...(activeCtx?.trace_id && !("trace_id" in event) && !("traceId" in event)
-          ? { trace_id: activeCtx.trace_id, traceId: activeCtx.trace_id }
-          : {}),
-        ...(activeCtx?.run_id && !("run_id" in event)
-          ? { run_id: activeCtx.run_id }
-          : {}),
-        ...(activeCtx?.current_span_id && !("span_id" in event)
-          ? { span_id: activeCtx.current_span_id }
-          : {}),
-      };
+      const enrichedEvent = _enrichSseEvent(event);
+      const imageEvent = event as { minioRef?: unknown; data?: unknown };
 
-      if (event.type === "image" && (event as any).minioRef && (event as any).data) {
+      if (event.type === "image" && imageEvent.minioRef && imageEvent.data) {
         const { data: _stripped, ...lightweight } = enrichedEvent;
         res.write(`data: ${JSON.stringify(lightweight)}\n\n`);
       } else {
@@ -60,14 +82,7 @@ export function createSseEmitter(res: Response, connectionSignal: AbortSignal) {
       // Node flushes pending writes to the socket immediately. Critical
       // for events emitted before an await block (plan_proposal,
       // approval_required) where no further writes push the buffer.
-      const responseWithFlush = res as Response & { flush?: () => void };
-      if (typeof responseWithFlush.flush === "function") {
-        responseWithFlush.flush();
-      } else if (res.socket && !res.socket.destroyed) {
-        res.socket.uncork?.();
-        res.socket.cork?.();
-        res.socket.uncork?.();
-      }
+      _flushSseResponse(res);
     }
   };
 }

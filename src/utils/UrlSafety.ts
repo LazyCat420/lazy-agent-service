@@ -90,6 +90,28 @@ const defaultResolve = (host: string): Promise<string[]> =>
     });
   });
 
+/** Throws unless the URL scheme (and credentials) are allowed. */
+function _assertUrlShape(url: URL, allowHttp: boolean): void {
+  if (url.protocol !== "https:" && !(allowHttp && url.protocol === "http:")) {
+    throw new UnsafeUrlError(`protocol ${url.protocol} is not allowed`);
+  }
+  if (url.username || url.password) throw new UnsafeUrlError("credentials in URL are not allowed");
+}
+
+/** Throws when the host is a local/internal name. */
+function _assertHostNotLocal(host: string): void {
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
+    throw new UnsafeUrlError(`host ${host} is local`);
+  }
+}
+
+/** Throws when any resolved address is private or the host resolved to nothing. */
+function _assertResolvedAddresses(host: string, addresses: string[]): void {
+  if (addresses.length === 0) throw new UnsafeUrlError(`${host} has no addresses`);
+  const bad = addresses.find(isPrivateAddress);
+  if (bad) throw new UnsafeUrlError(`${host} resolves to private address ${bad}`);
+}
+
 /** Throws UnsafeUrlError unless the URL is http(s) and every address its host resolves to is public. */
 export async function assertPublicUrl(raw: string, options: UrlSafetyOptions = {}): Promise<URL> {
   let url: URL;
@@ -99,15 +121,10 @@ export async function assertPublicUrl(raw: string, options: UrlSafetyOptions = {
     throw new UnsafeUrlError("invalid URL");
   }
   const allowHttp = options.allowHttp ?? true;
-  if (url.protocol !== "https:" && !(allowHttp && url.protocol === "http:")) {
-    throw new UnsafeUrlError(`protocol ${url.protocol} is not allowed`);
-  }
-  if (url.username || url.password) throw new UnsafeUrlError("credentials in URL are not allowed");
+  _assertUrlShape(url, allowHttp);
   if (allowPrivateUrls()) return url;
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
-    throw new UnsafeUrlError(`host ${host} is local`);
-  }
+  _assertHostNotLocal(host);
   if (isIP(host)) {
     if (isPrivateAddress(host)) throw new UnsafeUrlError(`address ${host} is private or reserved`);
     return url;
@@ -119,9 +136,7 @@ export async function assertPublicUrl(raw: string, options: UrlSafetyOptions = {
   } catch (error) {
     throw new UnsafeUrlError(`could not resolve ${host}: ${(error as Error).message}`);
   }
-  if (addresses.length === 0) throw new UnsafeUrlError(`${host} has no addresses`);
-  const bad = addresses.find(isPrivateAddress);
-  if (bad) throw new UnsafeUrlError(`${host} resolves to private address ${bad}`);
+  _assertResolvedAddresses(host, addresses);
   return url;
 }
 

@@ -1375,6 +1375,76 @@ function finalizeChatToolCalls(
   return events;
 }
 
+/** Decode the last input image into a Buffer + mime type for the edit endpoint. */
+function _openAIImageEditBuffer(
+  lastImage: string | { imageData: string; mimeType?: string },
+): { imageBuffer: Buffer; mimeType: string } {
+  if (typeof lastImage === "string") {
+    // Data URL format: data:image/png;base64,...
+    const base64Match = lastImage.match(/^data:([^;]+);base64,(.+)$/);
+    if (!base64Match) {
+      throw new Error("Invalid image data format");
+    }
+    return {
+      imageBuffer: Buffer.from(base64Match[2], "base64"),
+      mimeType: base64Match[1],
+    };
+  }
+  if (lastImage && typeof lastImage === "object" && "imageData" in lastImage) {
+    // Object format: { imageData: base64, mimeType }
+    return {
+      imageBuffer: Buffer.from(lastImage.imageData, "base64"),
+      mimeType: lastImage.mimeType || "image/png",
+    };
+  }
+  throw new Error("Invalid image data format");
+}
+
+/** Call the images edit endpoint when input images exist, else generate. */
+async function _requestOpenAIImage(
+  prompt: string,
+  images: Array<string | { imageData: string; mimeType?: string }>,
+  model: string,
+): Promise<OpenAI.Images.ImagesResponse> {
+  if (images.length > 0) {
+    // Use the edit endpoint when input images are provided
+    // Take the last image in conversation as the one to edit
+    const lastImage = images[images.length - 1];
+    const { imageBuffer, mimeType } = _openAIImageEditBuffer(lastImage);
+    const ext = mimeType.split("/")[1] || "png";
+    const imageFile = await toFile(imageBuffer, `input.${ext}`, {
+      type: mimeType,
+    });
+
+    return await getClient().images.edit({
+      model,
+      prompt,
+      image: imageFile,
+      size: "1024x1024",
+    });
+  }
+  // Generate new image
+  return await getClient().images.generate({
+    model,
+    prompt,
+    output_format: "png",
+    size: "1024x1024",
+    quality: "high",
+  });
+}
+
+/** Pull base64 image data out of an images response. */
+function _openAIImageData(
+  response: OpenAI.Images.ImagesResponse,
+): string | undefined {
+  const firstImage = response.data?.[0];
+  return (
+    firstImage?.b64_json ||
+    (firstImage as unknown as Record<string, unknown>)?.b64 ||
+    (response as unknown as Record<string, unknown>)?.b64
+  ) as string | undefined;
+}
+
 const openaiProvider = {
   name: "openai",
 
@@ -1641,60 +1711,9 @@ const openaiProvider = {
       `generateImage model=${model} images=${images.length}`,
     );
     try {
-      let response: OpenAI.Images.ImagesResponse;
+      const response = await _requestOpenAIImage(prompt, images, model);
 
-      if (images.length > 0) {
-        // Use the edit endpoint when input images are provided
-        // Take the last image in conversation as the one to edit
-        const lastImage = images[images.length - 1];
-        let imageBuffer: Buffer, mimeType: string;
-
-        if (typeof lastImage === "string") {
-          // Data URL format: data:image/png;base64,...
-          const base64Match = lastImage.match(/^data:([^;]+);base64,(.+)$/);
-          if (!base64Match) {
-            throw new Error("Invalid image data format");
-          }
-          imageBuffer = Buffer.from(base64Match[2], "base64");
-          mimeType = base64Match[1];
-        } else if (
-          lastImage &&
-          typeof lastImage === "object" &&
-          "imageData" in lastImage
-        ) {
-          // Object format: { imageData: base64, mimeType }
-          imageBuffer = Buffer.from(lastImage.imageData, "base64");
-          mimeType = lastImage.mimeType || "image/png";
-        } else {
-          throw new Error("Invalid image data format");
-        }
-        const ext = mimeType.split("/")[1] || "png";
-        const imageFile = await toFile(imageBuffer, `input.${ext}`, {
-          type: mimeType,
-        });
-
-        response = await getClient().images.edit({
-          model,
-          prompt,
-          image: imageFile,
-          size: "1024x1024",
-        });
-      } else {
-        // Generate new image
-        response = await getClient().images.generate({
-          model,
-          prompt,
-          output_format: "png",
-          size: "1024x1024",
-          quality: "high",
-        });
-      }
-
-      const firstImage = response.data?.[0];
-      const imageData =
-        firstImage?.b64_json ||
-        (firstImage as unknown as Record<string, unknown>)?.b64 ||
-        (response as unknown as Record<string, unknown>)?.b64;
+      const imageData = _openAIImageData(response);
       if (!imageData) {
         throw new Error("No image data received from OpenAI");
       }

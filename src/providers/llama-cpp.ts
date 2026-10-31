@@ -48,6 +48,7 @@ import {
   fetchOpenAICompat,
   MEDIA_STRATEGIES,
   type OpenAICompletionResponse,
+  type PreparedMessage,
   prependIdentitySystemMessage,
 } from "../utils/openai-compat.ts";
 import type { TokenUsage } from "../types/admin.ts";
@@ -291,6 +292,40 @@ function buildServerProps(
 }
 
 // ── Provider ─────────────────────────────────────────────────
+/** Payload for a llama.cpp streaming chat completion (stream: true + extensions). */
+function _buildLlamaCppStreamPayload(
+  prepared: PreparedMessage[],
+  model: string,
+  options: ProviderOptions,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    messages: prepared,
+    model,
+    ...buildPayloadParams(options),
+    // llama.cpp extension: top_k
+    ...(options.topK !== undefined &&
+      options.topK > 0 && { top_k: options.topK }),
+    // llama.cpp extension: min_p sampling
+    ...(options.minP !== undefined && { min_p: options.minP }),
+    // llama.cpp extension: repeat_penalty
+    ...(options.repeatPenalty !== undefined &&
+      options.repeatPenalty !== 1 && {
+        repeat_penalty: options.repeatPenalty,
+      }),
+    stream: true,
+    // Per OpenAI spec: request usage stats in the final SSE chunk
+    stream_options: { include_usage: true },
+  };
+
+  // Function calling tools
+  const tools = convertToolsToOpenAI(options.tools);
+  if (tools) {
+    payload.tools = tools;
+    payload.tool_choice = "auto";
+  }
+  return payload;
+}
+
 export function createLlamaCppProvider(
   baseUrl: string,
   instanceId: string = "llama-cpp",
@@ -413,31 +448,7 @@ export function createLlamaCppProvider(
           mediaStrategy: MEDIA_STRATEGIES.TEXT_FALLBACK,
         });
 
-        const payload: Record<string, unknown> = {
-          messages: prepared,
-          model,
-          ...buildPayloadParams(options),
-          // llama.cpp extension: top_k
-          ...(options.topK !== undefined &&
-            options.topK > 0 && { top_k: options.topK }),
-          // llama.cpp extension: min_p sampling
-          ...(options.minP !== undefined && { min_p: options.minP }),
-          // llama.cpp extension: repeat_penalty
-          ...(options.repeatPenalty !== undefined &&
-            options.repeatPenalty !== 1 && {
-              repeat_penalty: options.repeatPenalty,
-            }),
-          stream: true,
-          // Per OpenAI spec: request usage stats in the final SSE chunk
-          stream_options: { include_usage: true },
-        };
-
-        // Function calling tools
-        const tools = convertToolsToOpenAI(options.tools);
-        if (tools) {
-          payload.tools = tools;
-          payload.tool_choice = "auto";
-        }
+        const payload = _buildLlamaCppStreamPayload(prepared, model, options);
 
         const response = await fetchOpenAICompat(
           `${baseUrl}/v1/chat/completions`,

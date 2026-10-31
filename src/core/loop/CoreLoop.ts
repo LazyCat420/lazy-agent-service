@@ -663,6 +663,81 @@ function resolveCoreLoopConfig(options: CoreLoopOptions) {
   };
 }
 
+/** State carried out of a runaway turn. */
+interface RunawayTurnOutcome {
+  nudged: boolean;
+  lastAssistantText: string;
+  cutText: string;
+  /** True when the loop nudged the model and should retry the turn. */
+  recovered: boolean;
+}
+
+/** Inputs for one runaway turn. */
+interface RunawayTurnInput {
+  text: string;
+  thinking: string;
+  runawayReason: string | null | undefined;
+  messages: ChatMessage[];
+  runawayNudged: boolean;
+  lastAssistantText: string;
+  cutText: string;
+}
+
+/**
+ * Emit the runaway warning and apply the runaway-recovery policy for one turn:
+ * the first trip nudges the model and retries; a second trip finalizes.
+ */
+async function* _handleRunawayTurn(
+  input: RunawayTurnInput,
+): AsyncGenerator<CoreLoopEvent, RunawayTurnOutcome> {
+  yield {
+    type: "warning",
+    code: "RUNAWAY_GENERATION",
+    message: input.runawayReason ?? "Runaway token repetition detected",
+  };
+  appendRunawayAssistantMessage(input.messages, input.text, input.thinking);
+  let nextLastAssistantText = input.lastAssistantText;
+  if (input.text.trim() !== "") nextLastAssistantText = input.text;
+  if (!input.runawayNudged) {
+    input.messages.push({ role: "user", content: RUNAWAY_RECOVERY_NUDGE });
+    return {
+      nudged: true,
+      lastAssistantText: nextLastAssistantText,
+      cutText: input.cutText,
+      recovered: true,
+    };
+  }
+  let nextCutText = input.cutText;
+  if (input.text.trim() !== "") nextCutText = input.text;
+  return {
+    nudged: input.runawayNudged,
+    lastAssistantText: nextLastAssistantText,
+    cutText: nextCutText,
+    recovered: false,
+  };
+}
+
+/** State carried out of a cut-off turn. */
+interface CutOffOutcome {
+  cutOffs: number;
+  finalizeReason: CoreFinalizeReason | undefined;
+}
+
+/** Append the cut-off tool results and count it; finalize on the second cut-off. */
+async function* _handleCutOffTurn(
+  calls: CoreToolCall[],
+  messages: ChatMessage[],
+  cutOffs: number,
+  finalizeReason: CoreFinalizeReason | undefined,
+): AsyncGenerator<CoreLoopEvent, CutOffOutcome> {
+  yield* emitCutOffToolCalls(calls, messages);
+  const nextCutOffs = cutOffs + 1;
+  return {
+    cutOffs: nextCutOffs,
+    finalizeReason: nextCutOffs >= 2 ? "CUT_OFF_TWICE" : finalizeReason,
+  };
+}
+
 export async function* runCoreLoop(
   options: CoreLoopOptions,
 ): AsyncGenerator<CoreLoopEvent, CoreLoopResult> {
@@ -730,19 +805,19 @@ export async function* runCoreLoop(
       const { text, thinking, cutOff, runawayTripped, runawayReason, calls } = turnOutcome.turn;
 
       if (runawayTripped) {
-        yield {
-          type: "warning",
-          code: "RUNAWAY_GENERATION",
-          message: runawayReason ?? "Runaway token repetition detected",
-        };
-        appendRunawayAssistantMessage(messages, text, thinking);
-        if (text.trim() !== "") lastAssistantText = text;
-        if (!runawayNudged) {
-          runawayNudged = true;
-          messages.push({ role: "user", content: RUNAWAY_RECOVERY_NUDGE });
-          continue;
-        }
-        if (text.trim() !== "") cutText = text;
+        const runaway = yield* _handleRunawayTurn({
+          text,
+          thinking,
+          runawayReason,
+          messages,
+          runawayNudged,
+          lastAssistantText,
+          cutText,
+        });
+        runawayNudged = runaway.nudged;
+        lastAssistantText = runaway.lastAssistantText;
+        cutText = runaway.cutText;
+        if (runaway.recovered) continue;
         finalizeReason = "RUNAWAY_GENERATION";
         continue;
       }
@@ -752,9 +827,14 @@ export async function* runCoreLoop(
       if (text.trim() !== "") lastAssistantText = text;
 
       if (cutOff && calls.length > 0) {
-        yield* emitCutOffToolCalls(calls, messages);
-        cutOffs++;
-        if (cutOffs >= 2) finalizeReason = "CUT_OFF_TWICE";
+        const cutOffOutcome = yield* _handleCutOffTurn(
+          calls,
+          messages,
+          cutOffs,
+          finalizeReason,
+        );
+        cutOffs = cutOffOutcome.cutOffs;
+        finalizeReason = cutOffOutcome.finalizeReason;
         continue;
       }
 

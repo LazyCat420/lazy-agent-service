@@ -213,48 +213,25 @@ export function verifyToolPairAtomicity(messages: ChatMessage[]): {
 }
 
 /**
- * H6 / B8: Tool-Pair-Atomic Message Compactor.
- *
- * Ensures that:
- * 1. Orphan `role: "tool"` messages are always stripped.
- * 2. When total estimated tokens exceed `budgetTokens`, the oldest middle
- *    atomic groups (`tool_pair_group` or `single`) are evicted as complete
- *    units so an `assistant` message with `toolCalls` is never separated
- *    from its `role: "tool"` results.
- * 3. Leading `system` messages, the first `user` message, and the most recent
- *    tail atomic group(s) are preserved.
+ * Eviction state while trimming middle groups to fit the token budget.
  */
-export function compactMessages(
-  messages: ChatMessage[],
-  opts: CompactionOptions = {},
-): ChatMessage[] {
-  const budgetTokens = opts.budgetTokens ?? DEFAULT_COMPACT_TOKEN_BUDGET;
-  const keepRecentGroups = Math.max(1, opts.keepRecentGroups ?? 2);
-  const insertCompactionMarker = opts.insertCompactionMarker ?? true;
+interface EvictionResult {
+  totalTokens: number;
+  evictedCount: number;
+  evictedMessages: number;
+  cursor: number;
+}
 
-  const groups = partitionIntoAtomicGroups(messages);
-  let totalTokens = groups.reduce((acc, g) => acc + g.estimatedTokens, 0);
-
-  if (totalTokens <= budgetTokens) {
-    return groups.flatMap((g) => g.messages);
-  }
-
-  const headGroups: AtomicMessageGroup[] = [];
-  const middleGroups: AtomicMessageGroup[] = [];
-  for (const g of groups) {
-    if (g.kind === "system_prefix" || g.kind === "first_user") {
-      headGroups.push(g);
-    } else {
-      middleGroups.push(g);
-    }
-  }
-
-  if (middleGroups.length <= 1) {
-    return groups.flatMap((g) => g.messages);
-  }
-
-  // Always preserve at least the last atomic group; preserve up to `keepRecentGroups`
-  // when they fit or while evicting from the front of `middleGroups`.
+/**
+ * Evict atomic groups from the front of `middleGroups` until the budget fits:
+ * first down to `keepRecentGroups`, then (if still over) down to the last group.
+ */
+function _evictMiddleGroups(
+  middleGroups: AtomicMessageGroup[],
+  totalTokens: number,
+  budgetTokens: number,
+  keepRecentGroups: number,
+): EvictionResult {
   let evictedCount = 0;
   let evictedMessages = 0;
   let cursor = 0;
@@ -276,23 +253,93 @@ export function compactMessages(
     cursor += 1;
   }
 
-  const keptMiddle = middleGroups.slice(cursor);
+  return { totalTokens, evictedCount, evictedMessages, cursor };
+}
+
+/** Compaction marker message, inserted after the preserved head groups. */
+function _buildCompactionMarker(
+  result: ChatMessage[],
+  keptMiddle: AtomicMessageGroup[],
+  evictedMessages: number,
+  evictedCount: number,
+): ChatMessage {
+  const markerContent = `[Context compacted: ${evictedMessages} earlier messages across ${evictedCount} tool/turn group(s) were removed to fit the context window.]`;
+  const lastHead = result[result.length - 1];
+  const firstKept = keptMiddle[0]?.messages[0];
+  return {
+    role:
+      lastHead?.role === "user" && firstKept?.role === "user"
+        ? "assistant"
+        : "system",
+    content: markerContent,
+  };
+}
+
+/**
+ * H6 / B8: Tool-Pair-Atomic Message Compactor.
+ *
+ * Ensures that:
+ * 1. Orphan `role: "tool"` messages are always stripped.
+ * 2. When total estimated tokens exceed `budgetTokens`, the oldest middle
+ *    atomic groups (`tool_pair_group` or `single`) are evicted as complete
+ *    units so an `assistant` message with `toolCalls` is never separated
+ *    from its `role: "tool"` results.
+ * 3. Leading `system` messages, the first `user` message, and the most recent
+ *    tail atomic group(s) are preserved.
+ */
+export function compactMessages(
+  messages: ChatMessage[],
+  opts: CompactionOptions = {},
+): ChatMessage[] {
+  const budgetTokens = opts.budgetTokens ?? DEFAULT_COMPACT_TOKEN_BUDGET;
+  const keepRecentGroups = Math.max(1, opts.keepRecentGroups ?? 2);
+  const insertCompactionMarker = opts.insertCompactionMarker ?? true;
+
+  const groups = partitionIntoAtomicGroups(messages);
+  const totalTokens = groups.reduce((acc, g) => acc + g.estimatedTokens, 0);
+
+  if (totalTokens <= budgetTokens) {
+    return groups.flatMap((g) => g.messages);
+  }
+
+  const headGroups: AtomicMessageGroup[] = [];
+  const middleGroups: AtomicMessageGroup[] = [];
+  for (const g of groups) {
+    if (g.kind === "system_prefix" || g.kind === "first_user") {
+      headGroups.push(g);
+    } else {
+      middleGroups.push(g);
+    }
+  }
+
+  if (middleGroups.length <= 1) {
+    return groups.flatMap((g) => g.messages);
+  }
+
+  // Always preserve at least the last atomic group; preserve up to `keepRecentGroups`
+  // when they fit or while evicting from the front of `middleGroups`.
+  const eviction = _evictMiddleGroups(
+    middleGroups,
+    totalTokens,
+    budgetTokens,
+    keepRecentGroups,
+  );
+
+  const keptMiddle = middleGroups.slice(eviction.cursor);
   const result: ChatMessage[] = [];
   for (const g of headGroups) {
     result.push(...g.messages);
   }
 
-  if (evictedCount > 0 && insertCompactionMarker) {
-    const markerContent = `[Context compacted: ${evictedMessages} earlier messages across ${evictedCount} tool/turn group(s) were removed to fit the context window.]`;
-    const lastHead = result[result.length - 1];
-    const firstKept = keptMiddle[0]?.messages[0];
-    result.push({
-      role:
-        lastHead?.role === "user" && firstKept?.role === "user"
-          ? "assistant"
-          : "system",
-      content: markerContent,
-    });
+  if (eviction.evictedCount > 0 && insertCompactionMarker) {
+    result.push(
+      _buildCompactionMarker(
+        result,
+        keptMiddle,
+        eviction.evictedMessages,
+        eviction.evictedCount,
+      ),
+    );
   }
 
   for (const g of keptMiddle) {
