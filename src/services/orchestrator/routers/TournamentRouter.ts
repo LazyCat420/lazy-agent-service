@@ -150,6 +150,17 @@ function buildSelectionPrompt(
   ].join("\n");
 }
 
+interface TournamentJudgeParams {
+  teamName: string;
+  memberCount: number;
+  memberResults: (SubAgentResult | { error: string })[];
+  successfulResults: (SubAgentResult | { error: string })[];
+  verificationOutcomes: Map<number, VerificationOutcome> | undefined;
+  providerName: string;
+  resolvedModel: string;
+  orchestratorContext: OrchestratorContext;
+}
+
 /**
  * Tournament Router — Best-of-N Selection with Judge Pass (BoN)
  *
@@ -336,6 +347,38 @@ export class TournamentRouter implements TopologyRouter {
       `[TournamentRouter] Running judge selection over ${successfulResults.length} successful sub-agent results...`,
     );
 
+    const judgeSubAgentResult = await this.runTournamentJudgePass({
+      teamName,
+      memberCount: members.length,
+      memberResults,
+      successfulResults,
+      verificationOutcomes,
+      providerName,
+      resolvedModel,
+      orchestratorContext,
+    });
+
+    if (!judgeSubAgentResult) {
+      return memberResults;
+    }
+
+    return [...memberResults, judgeSubAgentResult];
+  }
+
+  private async runTournamentJudgePass(
+    params: TournamentJudgeParams,
+  ): Promise<SubAgentResult | null> {
+    const {
+      teamName,
+      memberCount,
+      memberResults,
+      successfulResults,
+      verificationOutcomes,
+      providerName,
+      resolvedModel,
+      orchestratorContext,
+    } = params;
+
     try {
       const selectionPrompt = buildSelectionPrompt(teamName, memberResults, verificationOutcomes);
       const provider = getProvider(providerName);
@@ -344,7 +387,7 @@ export class TournamentRouter implements TopologyRouter {
         logger.error(
           `[TournamentRouter] Provider "${providerName}" not found for judge pass`,
         );
-        return memberResults;
+        return null;
       }
 
       const selectionStartTime = Date.now();
@@ -376,7 +419,7 @@ export class TournamentRouter implements TopologyRouter {
         requestStartMs: selectionRequestStartMs,
         extraRequestPayload: {
           teamName,
-          memberCount: members.length,
+          memberCount,
           successfulCount: successfulResults.length,
         },
       }).catch((loggingError: unknown) =>
@@ -405,7 +448,7 @@ export class TournamentRouter implements TopologyRouter {
         `[TournamentRouter] Judge selection complete in ${selectionDurationMs}ms (${inputTokens} input, ${outputTokens} output tokens)`,
       );
 
-      return [...memberResults, judgeSubAgentResult];
+      return judgeSubAgentResult;
     } catch (judgeError: unknown) {
       const errorMessage =
         judgeError instanceof Error
@@ -414,7 +457,7 @@ export class TournamentRouter implements TopologyRouter {
       logger.error(
         `[TournamentRouter] Judge pass failed: ${errorMessage}`,
       );
-      return memberResults;
+      return null;
     }
   }
 }

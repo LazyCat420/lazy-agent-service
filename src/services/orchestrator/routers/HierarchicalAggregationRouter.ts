@@ -101,6 +101,25 @@ function checkModelDiversity(
   }
 }
 
+interface SynthesisLayerParams {
+  teamName: string;
+  layerLabel: string;
+  layerIndex: number;
+  layerCount: number;
+  memberCount: number;
+  memberResults: (SubAgentResult | { error: string })[];
+  successfulResults: (SubAgentResult | { error: string })[];
+  providerName: string;
+  resolvedModel: string;
+  orchestratorContext: OrchestratorContext;
+}
+
+interface SynthesisLayerOutcome {
+  aborted: boolean;
+  synthesisText: string | null;
+  synthesisResult: SubAgentResult | null;
+}
+
 /**
  * Hierarchical Aggregation Router — Mixture-of-Agents Synthesis (MoA)
  *
@@ -214,97 +233,137 @@ export class HierarchicalAggregationRouter implements TopologyRouter {
         `[HierarchicalAggregationRouter]${layerLabel} Running synthesis over ${successfulResults.length} successful proposer results...`,
       );
 
-      try {
-        const synthesisPrompt = buildSynthesisPrompt(
-          teamName,
-          memberResults,
-          layerIndex,
-          layerCount,
-        );
-        const provider = getProvider(providerName);
+      const synthesisOutcome = await this.runSynthesisLayer({
+        teamName,
+        layerLabel,
+        layerIndex,
+        layerCount,
+        memberCount: members.length,
+        memberResults,
+        successfulResults,
+        providerName,
+        resolvedModel,
+        orchestratorContext,
+      });
 
-        if (!provider) {
-          logger.error(
-            `[HierarchicalAggregationRouter]${layerLabel} Provider "${providerName}" not found for synthesis`,
-          );
-          break;
-        }
+      if (synthesisOutcome.aborted) break;
 
-        const synthesisStartTime = Date.now();
-        const synthesisRequestStartMs = performance.now();
-        const synthesisMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [{ role: "user", content: synthesisPrompt }];
-        const synthesisResult = await provider.generateText(
-          synthesisMessages,
-          resolvedModel,
-          { maxTokens: 8192 },
-        );
-        const synthesisDurationMs = Date.now() - synthesisStartTime;
-
-        RequestLogger.logBackgroundLlmCall({
-          requestId: `${orchestratorContext.conversationId || "unknown"}-synthesis-L${layerIndex + 1}-${teamName}`,
-          endpoint: "/agent",
-          operation: "orchestrator:synthesis",
-          project: orchestratorContext.project || null,
-          username: orchestratorContext.username || "system",
-          agent: null,
-          provider: providerName,
-          model: resolvedModel,
-          traceId: orchestratorContext.traceId || null,
-          agentConversationId: orchestratorContext.agentConversationId || null,
-          aiMessages: synthesisMessages,
-          resultText: synthesisResult.text || "",
-          usage: synthesisResult.usage || null,
-          success: true,
-          errorMessage: null,
-          requestStartMs: synthesisRequestStartMs,
-          extraRequestPayload: {
-            teamName,
-            layer: layerIndex + 1,
-            totalLayers: layerCount,
-            memberCount: members.length,
-            successfulCount: successfulResults.length,
-          },
-        }).catch((loggingError: unknown) =>
-          logger.error(
-            `[HierarchicalAggregationRouter]${layerLabel} Failed to log synthesis request: ${getErrorMessage(loggingError)}`,
-          ),
-        );
-
-        const synthesisSubAgentResult: SubAgentResult = {
-          agent_id: `synthesis-${teamName}-L${layerIndex + 1}-${Date.now()}`,
-          description: `Synthesis pass for team "${teamName}"${layerLabel}`,
-          status: "completed",
-          summary: `Aggregated ${successfulResults.length} sub-agent results into a unified synthesis${layerLabel}`,
-          result: synthesisResult.text,
-          toolUses: 0,
-          iterations: 1,
-          durationMs: synthesisDurationMs,
-          messages: [],
-          diff: { additions: 0, deletions: 0, files: [] },
-        };
-
-        const inputTokens = synthesisResult.usage?.inputTokens ?? 0;
-        const outputTokens = synthesisResult.usage?.outputTokens ?? 0;
-
-        logger.info(
-          `[HierarchicalAggregationRouter]${layerLabel} Synthesis complete in ${synthesisDurationMs}ms ` +
-          `(${inputTokens} input, ${outputTokens} output tokens)`,
-        );
-
-        previousLayerSynthesis = synthesisResult.text || null;
-        allLayerResults.push(synthesisSubAgentResult);
-      } catch (synthesisError: unknown) {
-        const errorMessage =
-          synthesisError instanceof Error
-            ? synthesisError.message
-            : String(synthesisError);
-        logger.error(
-          `[HierarchicalAggregationRouter]${layerLabel} Synthesis failed: ${errorMessage}`,
-        );
-        break;
+      previousLayerSynthesis = synthesisOutcome.synthesisText;
+      if (synthesisOutcome.synthesisResult) {
+        allLayerResults.push(synthesisOutcome.synthesisResult);
       }
     }
 
     return allLayerResults;
+  }
+
+  private async runSynthesisLayer(
+    params: SynthesisLayerParams,
+  ): Promise<SynthesisLayerOutcome> {
+    const {
+      teamName,
+      layerLabel,
+      layerIndex,
+      layerCount,
+      memberCount,
+      memberResults,
+      successfulResults,
+      providerName,
+      resolvedModel,
+      orchestratorContext,
+    } = params;
+
+    try {
+      const synthesisPrompt = buildSynthesisPrompt(
+        teamName,
+        memberResults,
+        layerIndex,
+        layerCount,
+      );
+      const provider = getProvider(providerName);
+
+      if (!provider) {
+        logger.error(
+          `[HierarchicalAggregationRouter]${layerLabel} Provider "${providerName}" not found for synthesis`,
+        );
+        return { aborted: true, synthesisText: null, synthesisResult: null };
+      }
+
+      const synthesisStartTime = Date.now();
+      const synthesisRequestStartMs = performance.now();
+      const synthesisMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [{ role: "user", content: synthesisPrompt }];
+      const synthesisResult = await provider.generateText(
+        synthesisMessages,
+        resolvedModel,
+        { maxTokens: 8192 },
+      );
+      const synthesisDurationMs = Date.now() - synthesisStartTime;
+
+      RequestLogger.logBackgroundLlmCall({
+        requestId: `${orchestratorContext.conversationId || "unknown"}-synthesis-L${layerIndex + 1}-${teamName}`,
+        endpoint: "/agent",
+        operation: "orchestrator:synthesis",
+        project: orchestratorContext.project || null,
+        username: orchestratorContext.username || "system",
+        agent: null,
+        provider: providerName,
+        model: resolvedModel,
+        traceId: orchestratorContext.traceId || null,
+        agentConversationId: orchestratorContext.agentConversationId || null,
+        aiMessages: synthesisMessages,
+        resultText: synthesisResult.text || "",
+        usage: synthesisResult.usage || null,
+        success: true,
+        errorMessage: null,
+        requestStartMs: synthesisRequestStartMs,
+        extraRequestPayload: {
+          teamName,
+          layer: layerIndex + 1,
+          totalLayers: layerCount,
+          memberCount,
+          successfulCount: successfulResults.length,
+        },
+      }).catch((loggingError: unknown) =>
+        logger.error(
+          `[HierarchicalAggregationRouter]${layerLabel} Failed to log synthesis request: ${getErrorMessage(loggingError)}`,
+        ),
+      );
+
+      const synthesisSubAgentResult: SubAgentResult = {
+        agent_id: `synthesis-${teamName}-L${layerIndex + 1}-${Date.now()}`,
+        description: `Synthesis pass for team "${teamName}"${layerLabel}`,
+        status: "completed",
+        summary: `Aggregated ${successfulResults.length} sub-agent results into a unified synthesis${layerLabel}`,
+        result: synthesisResult.text,
+        toolUses: 0,
+        iterations: 1,
+        durationMs: synthesisDurationMs,
+        messages: [],
+        diff: { additions: 0, deletions: 0, files: [] },
+      };
+
+      const inputTokens = synthesisResult.usage?.inputTokens ?? 0;
+      const outputTokens = synthesisResult.usage?.outputTokens ?? 0;
+
+      logger.info(
+        `[HierarchicalAggregationRouter]${layerLabel} Synthesis complete in ${synthesisDurationMs}ms ` +
+        `(${inputTokens} input, ${outputTokens} output tokens)`,
+      );
+
+      return {
+        aborted: false,
+        synthesisText: synthesisResult.text || null,
+        synthesisResult: synthesisSubAgentResult,
+      };
+    } catch (synthesisError: unknown) {
+      const errorMessage =
+        synthesisError instanceof Error
+          ? synthesisError.message
+          : String(synthesisError);
+      logger.error(
+        `[HierarchicalAggregationRouter]${layerLabel} Synthesis failed: ${errorMessage}`,
+      );
+      return { aborted: true, synthesisText: null, synthesisResult: null };
+    }
   }
 }

@@ -12,6 +12,100 @@ import {
 
 const PERSONAS = new Map<string, Persona>(BUILT_IN_PERSONAS);
 
+interface CustomPersonaBaseFields {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  project: string;
+  custom: true;
+  icon: string;
+  avatar: string;
+  color: string;
+  backgroundImage: string;
+  guidelines: string;
+  interactionRules: string;
+  capabilities: string;
+}
+
+function buildCustomPersonaBaseFields(
+  doc: Record<string, unknown>,
+): CustomPersonaBaseFields {
+  return {
+    id: doc.agentId as string,
+    name: (doc.name as string) || (doc.agentId as string),
+    type: (doc.type as string) || "",
+    description: (doc.description as string) || "",
+    project: (doc.project as string) || "prism-chat",
+    custom: true,
+    icon: (doc.icon as string) || "",
+    avatar: (doc.avatar as string) || "",
+    color: (doc.color as string) || "",
+    backgroundImage: (doc.backgroundImage as string) || "",
+    guidelines: (doc.guidelines as string) || "",
+    interactionRules: "",
+    capabilities: "",
+  };
+}
+
+interface CustomPersonaToolingFields {
+  availableTools: string[];
+  enabledByDefaultTools?: string[];
+  blockedTools?: string[];
+  coreToolsLocked?: boolean;
+  compactToolDocs?: boolean;
+  thinkingDefault?: boolean;
+  policies?: PolicyRule[];
+  platformRules?: Record<string, string>;
+  hasSomaticState: boolean;
+  usesDirectoryTree: boolean;
+  usesCodingGuidelines: boolean;
+}
+
+function buildCustomPersonaTooling(
+  doc: Record<string, unknown>,
+  policies: PolicyRule[],
+): CustomPersonaToolingFields {
+  return {
+    availableTools: Array.isArray(doc.availableTools)
+      ? (doc.availableTools as string[])
+      : Array.isArray(doc.enabledTools)
+        ? (doc.enabledTools as string[])
+        : [],
+    enabledByDefaultTools: Array.isArray(doc.enabledByDefaultTools)
+      ? (doc.enabledByDefaultTools as string[])
+      : undefined,
+    // Lean-agent fields. These were silently dropped before, which meant a
+    // custom agent could never opt out of the 30 force-included core tools
+    // or the always-on thinking default — only built-in personas could.
+    blockedTools: Array.isArray(doc.blockedTools)
+      ? (doc.blockedTools as string[])
+      : undefined,
+    coreToolsLocked:
+      typeof doc.coreToolsLocked === "boolean"
+        ? doc.coreToolsLocked
+        : undefined,
+    compactToolDocs:
+      typeof doc.compactToolDocs === "boolean"
+        ? doc.compactToolDocs
+        : undefined,
+    thinkingDefault:
+      typeof doc.thinkingDefault === "boolean"
+        ? doc.thinkingDefault
+        : undefined,
+    policies: policies.length > 0 ? policies : undefined,
+    platformRules:
+      typeof doc.platformRules === "object" &&
+      doc.platformRules !== null &&
+      Object.keys(doc.platformRules as object).length > 0
+        ? (doc.platformRules as Record<string, string>)
+        : undefined,
+    hasSomaticState: (doc.hasSomaticState as boolean) || false,
+    usesDirectoryTree: (doc.usesDirectoryTree as boolean) || false,
+    usesCodingGuidelines: (doc.usesCodingGuidelines as boolean) || false,
+  };
+}
+
 // ── Registry API ─────────────────────────────────────────────────
 
 const AgentPersonaRegistry = {
@@ -92,19 +186,8 @@ const AgentPersonaRegistry = {
     });
 
     const persona: Persona = {
-      id: doc.agentId as string,
-      name: (doc.name as string) || (doc.agentId as string),
-      type: (doc.type as string) || "",
-      description: (doc.description as string) || "",
-      project: (doc.project as string) || "prism-chat",
-      custom: true,
-      icon: (doc.icon as string) || "",
-      avatar: (doc.avatar as string) || "",
-      color: (doc.color as string) || "",
-      backgroundImage: (doc.backgroundImage as string) || "",
+      ...buildCustomPersonaBaseFields(doc),
       identity: () => (doc.identity as string) || "",
-      guidelines: (doc.guidelines as string) || "",
-      interactionRules: "",
       toolPolicy: (personaContext: PersonaContext) => {
         // Support structured ToolPolicySection[] stored in MongoDB,
         // or fall back to wrapping a plain string as a single section.
@@ -125,43 +208,7 @@ const AgentPersonaRegistry = {
 
         return buildToolPolicy(sections, personaContext);
       },
-      availableTools: Array.isArray(doc.availableTools)
-        ? (doc.availableTools as string[])
-        : Array.isArray(doc.enabledTools)
-          ? (doc.enabledTools as string[])
-          : [],
-      enabledByDefaultTools: Array.isArray(doc.enabledByDefaultTools)
-        ? (doc.enabledByDefaultTools as string[])
-        : undefined,
-      // Lean-agent fields. These were silently dropped before, which meant a
-      // custom agent could never opt out of the 30 force-included core tools
-      // or the always-on thinking default — only built-in personas could.
-      blockedTools: Array.isArray(doc.blockedTools)
-        ? (doc.blockedTools as string[])
-        : undefined,
-      coreToolsLocked:
-        typeof doc.coreToolsLocked === "boolean"
-          ? doc.coreToolsLocked
-          : undefined,
-      compactToolDocs:
-        typeof doc.compactToolDocs === "boolean"
-          ? doc.compactToolDocs
-          : undefined,
-      thinkingDefault:
-        typeof doc.thinkingDefault === "boolean"
-          ? doc.thinkingDefault
-          : undefined,
-      policies: policies.length > 0 ? policies : undefined,
-      capabilities: "",
-      platformRules:
-        typeof doc.platformRules === "object" &&
-        doc.platformRules !== null &&
-        Object.keys(doc.platformRules as object).length > 0
-          ? (doc.platformRules as Record<string, string>)
-          : undefined,
-      hasSomaticState: (doc.hasSomaticState as boolean) || false,
-      usesDirectoryTree: (doc.usesDirectoryTree as boolean) || false,
-      usesCodingGuidelines: (doc.usesCodingGuidelines as boolean) || false,
+      ...buildCustomPersonaTooling(doc, policies),
     };
 
     PERSONAS.set(doc.agentId as string, persona);

@@ -13,6 +13,89 @@ export interface ExecutionResult {
   };
 }
 
+function buildWebSearchResults(
+  query: string,
+  items: WebResult[],
+  provider: string | undefined,
+): ExecutionResult {
+  return {
+    success: true,
+    result: {
+      query,
+      results: items.map((r: WebResult) => ({
+        title: r.title || "Untitled",
+        url: r.url || "",
+        snippet: r.snippet || "",
+        ...(r.published ? { published: r.published } : {}),
+        source: provider || "web",
+      })),
+    },
+  };
+}
+
+function buildWebSearchFailure(
+  status: string | undefined,
+  errorDetail: string | undefined,
+): ExecutionResult {
+  return {
+    success: false,
+    error: {
+      code: "WEB_SEARCH_FAILED",
+      message: `Web search did not run (${status || "error"}): ${errorDetail || "no detail"}. Try again later.`,
+    },
+  };
+}
+
+function mapWebSearchError(
+  err: any,
+  signal?: AbortSignal,
+): ExecutionResult {
+  if (signal?.aborted || err?.name === "AbortError") {
+    return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Web search was cancelled" } };
+  }
+  return {
+    success: false,
+    error: {
+      code: "WEB_SEARCH_FAILED",
+      message: err.message || "Failed to execute web search",
+    },
+  };
+}
+
+interface PageMetadata {
+  title: string;
+  description: string;
+  image: string | undefined;
+}
+
+function extractPageMetadata(html: string): PageMetadata {
+  const titleMatch = /<title[^>]*>([^<]+)<\/title>/i.exec(html);
+  const descMatch = /<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html);
+  const ogImgMatch = /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(html);
+  return {
+    title: titleMatch ? titleMatch[1].trim() : "Metadata Result",
+    description: descMatch ? descMatch[1].trim() : "",
+    image: ogImgMatch ? ogImgMatch[1].trim() : undefined,
+  };
+}
+
+async function fetchMetadataHtml(
+  url: string,
+  signal?: AbortSignal,
+): Promise<SafeFetchResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
+  try {
+    return await safeFetch(url, { signal: controller.signal, maxBytes: 512_000 });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
 export class GlobalCapabilityExecutor {
   /** Injectable fallback extractor for `global.web.read_page` on 401/403 or EMPTY_CONTENT. */
   static webExtractFallback: (
@@ -39,40 +122,7 @@ export class GlobalCapabilityExecutor {
         if (!evalChaosEnabled()) return { success: false, error: { code: "UNKNOWN_CAPABILITY", message: `Unknown global capability '${capabilityId}'` } };
         return await executeEvalChaos(capabilityId, signal);
       }
-      switch (capabilityId) {
-        case "global.data.sort":
-          return this.executeSort(args);
-        case "global.data.filter":
-          return this.executeFilter(args);
-        case "global.data.transform":
-          return this.executeTransform(args);
-        case "global.data.extract":
-          return this.executeExtract(args);
-        case "global.data.group":
-          return this.executeGroup(args);
-        case "global.data.classify":
-          return this.executeClassify(args);
-        case "global.document.chunk":
-          return this.executeChunk(args);
-        case "global.time.now":
-          return this.executeTimeNow(args);
-        case "global.math.calculate":
-          return this.executeCalculate(args);
-        case "global.web.search":
-          return await this.executeWebSearch(args, signal);
-        case "global.web.read_page":
-          return await this.executeReadPage(args, signal);
-        case "global.web.fetch_metadata":
-          return await this.executeFetchMetadata(args, signal);
-        default:
-          return {
-            success: false,
-            error: {
-              code: "UNKNOWN_CAPABILITY",
-              message: `Unknown global capability '${capabilityId}'`,
-            },
-          };
-      }
+      return await this.dispatchCapability(capabilityId, args, signal);
     } catch (err: any) {
       if (signal?.aborted || err?.name === "AbortError") {
         return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Capability execution was cancelled" } };
@@ -84,6 +134,47 @@ export class GlobalCapabilityExecutor {
           message: err.message || "Unknown error executing global capability",
         },
       };
+    }
+  }
+
+  private static async dispatchCapability(
+    capabilityId: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<ExecutionResult> {
+    switch (capabilityId) {
+      case "global.data.sort":
+        return this.executeSort(args);
+      case "global.data.filter":
+        return this.executeFilter(args);
+      case "global.data.transform":
+        return this.executeTransform(args);
+      case "global.data.extract":
+        return this.executeExtract(args);
+      case "global.data.group":
+        return this.executeGroup(args);
+      case "global.data.classify":
+        return this.executeClassify(args);
+      case "global.document.chunk":
+        return this.executeChunk(args);
+      case "global.time.now":
+        return this.executeTimeNow(args);
+      case "global.math.calculate":
+        return this.executeCalculate(args);
+      case "global.web.search":
+        return await this.executeWebSearch(args, signal);
+      case "global.web.read_page":
+        return await this.executeReadPage(args, signal);
+      case "global.web.fetch_metadata":
+        return await this.executeFetchMetadata(args, signal);
+      default:
+        return {
+          success: false,
+          error: {
+            code: "UNKNOWN_CAPABILITY",
+            message: `Unknown global capability '${capabilityId}'`,
+          },
+        };
     }
   }
 
@@ -347,38 +438,11 @@ export class GlobalCapabilityExecutor {
         return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Web search was cancelled" } };
       }
       if (searchRes?.status !== "ok" && items.length === 0) {
-        return {
-          success: false,
-          error: {
-            code: "WEB_SEARCH_FAILED",
-            message: `Web search did not run (${searchRes?.status || "error"}): ${searchRes?.error || "no detail"}. Try again later.`,
-          },
-        };
+        return buildWebSearchFailure(searchRes?.status, searchRes?.error);
       }
-      return {
-        success: true,
-        result: {
-          query,
-          results: items.map((r: WebResult) => ({
-            title: r.title || "Untitled",
-            url: r.url || "",
-            snippet: r.snippet || "",
-            ...(r.published ? { published: r.published } : {}),
-            source: searchRes?.provider || "web",
-          })),
-        },
-      };
+      return buildWebSearchResults(query, items, searchRes?.provider);
     } catch (err: any) {
-      if (signal?.aborted || err?.name === "AbortError") {
-        return { success: false, error: { code: "CAPABILITY_CANCELLED", message: "Web search was cancelled" } };
-      }
-      return {
-        success: false,
-        error: {
-          code: "WEB_SEARCH_FAILED",
-          message: err.message || "Failed to execute web search",
-        },
-      };
+      return mapWebSearchError(err, signal);
     }
   }
 
@@ -657,30 +721,17 @@ export class GlobalCapabilityExecutor {
       return { success: false, error: { code: "INVALID_ARGUMENTS", message: "url must be a valid HTTP/HTTPS address" } };
     }
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10000);
-      const abort = () => controller.abort(signal?.reason);
-      if (signal?.aborted) abort();
-      else signal?.addEventListener("abort", abort, { once: true });
-      let res: SafeFetchResult;
-      try {
-        res = await safeFetch(url, { signal: controller.signal, maxBytes: 512_000 });
-      } finally {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abort);
-      }
+      const res = await fetchMetadataHtml(url, signal);
       const html = res.text;
-      const titleMatch = /<title[^>]*>([^<]+)<\/title>/i.exec(html);
-      const descMatch = /<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html);
-      const ogImgMatch = /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(html);
+      const { title, description, image } = extractPageMetadata(html);
       return {
         success: true,
         result: {
           url,
-          title: titleMatch ? titleMatch[1].trim() : "Metadata Result",
-          description: descMatch ? descMatch[1].trim() : "",
+          title,
+          description,
           canonical_url: url,
-          image: ogImgMatch ? ogImgMatch[1].trim() : undefined,
+          image,
         },
       };
     } catch (err: any) {

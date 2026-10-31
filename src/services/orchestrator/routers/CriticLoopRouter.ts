@@ -10,6 +10,7 @@ import {
   resolveSiblingInstances,
   selectInstanceForMember,
 } from "../InstanceResolver.ts";
+import type { Provider } from "../../../types/provider.ts";
 import logger from "../../../utils/logger.ts";
 import PromptLocaleService from "../../PromptLocaleService.ts";
 
@@ -104,6 +105,53 @@ interface JurySelectionResult {
   bestActorIndex: number;
   verdict: "PASS" | "FAIL";
   feedback: string;
+}
+
+interface JurySuccessfulActor {
+  actorIndex: number;
+  result: SubAgentResult;
+}
+
+interface JuryActorSpawnParams {
+  actorMembers: TeamMember[];
+  actualActorCount: number;
+  maximumRounds: number;
+  orchestratorContext: OrchestratorContext;
+  spawnSubAgent: (
+    assignment: OrchestratorSpawnParams,
+  ) => Promise<SubAgentResult | { error: string }>;
+}
+
+interface JurySelectionParams {
+  provider: Provider;
+  resolvedModel: string;
+  originalTask: string;
+  actorMembers: TeamMember[];
+  successfulActors: JurySuccessfulActor[];
+}
+
+interface JuryWinnerSelection {
+  winnerActorIndex: number;
+  winnerResult: SubAgentResult;
+  selection: JurySelectionResult;
+}
+
+interface JuryRefinementParams {
+  winnerAgentId: string;
+  winnerActorIndex: number;
+  selection: JurySelectionResult;
+  actorMembers: TeamMember[];
+  originalTask: string;
+  provider: Provider;
+  resolvedModel: string;
+  continueSubAgent: ContinueSubAgentCallback;
+  orchestratorContext: OrchestratorContext;
+  maximumRounds: number;
+}
+
+interface JuryRefinementOutcome {
+  results: (SubAgentResult | { error: string })[];
+  exhausted: boolean;
 }
 
 function parseJurySelectionResponse(responseText: string, actorCount: number): JurySelectionResult {
@@ -571,6 +619,103 @@ export class CriticLoopRouter implements TopologyRouter {
 
     // ── Phase 1: Spawn competing actors in parallel (Tournament phase) ──
 
+    const { actorResults, successfulActors } = await this.spawnJuryActors({
+      actorMembers,
+      actualActorCount,
+      maximumRounds,
+      orchestratorContext,
+      spawnSubAgent,
+    });
+    allResults.push(...actorResults);
+
+    if (successfulActors.length === 0) {
+      logger.error(`[CriticLoopRouter] All ${actualActorCount} actors failed in Jury mode. Aborting.`);
+      return allResults;
+    }
+
+    // ── Phase 2: Judge selects best + provides feedback ──────────────────
+
+    const { getProvider } = await import("../../../providers/index.ts");
+    const provider = getProvider(providerName);
+
+    if (!provider) {
+      logger.error(`[CriticLoopRouter] Provider "${providerName}" not found for jury selection`);
+      return allResults;
+    }
+
+    const originalTask = actorMembers[0]?.prompt || "";
+
+    const juryWinnerSelection = await this.selectJuryWinner({
+      provider,
+      resolvedModel,
+      originalTask,
+      actorMembers,
+      successfulActors,
+    });
+
+    if (!juryWinnerSelection) {
+      return allResults;
+    }
+
+    const { winnerActorIndex, winnerResult, selection } = juryWinnerSelection;
+
+    logger.info(
+      `[CriticLoopRouter] Jury selected Actor ${winnerActorIndex + 1} — verdict: ${selection.verdict}`,
+    );
+
+    if (selection.verdict === "PASS") {
+      logger.info(`[CriticLoopRouter] Jury PASSED Actor ${winnerActorIndex + 1}. Done.`);
+      return allResults;
+    }
+
+    // ── Phase 3: Iterative refinement on the winner ─────────────────────
+
+    const winnerAgentId = winnerResult.agent_id;
+
+    if (!continueSubAgent) {
+      logger.error(
+        `[CriticLoopRouter] continueSubAgent callback not provided — cannot refine winner in Jury mode.`,
+      );
+      return allResults;
+    }
+
+    const refinementOutcome = await this.refineJuryWinner({
+      winnerAgentId,
+      winnerActorIndex,
+      selection,
+      actorMembers,
+      originalTask,
+      provider,
+      resolvedModel,
+      continueSubAgent,
+      orchestratorContext,
+      maximumRounds,
+    });
+    allResults.push(...refinementOutcome.results);
+
+    if (refinementOutcome.exhausted) {
+      logger.warn(
+        `[CriticLoopRouter] Maximum rounds (${maximumRounds}) reached in Jury mode. Returning best effort.`,
+      );
+    }
+    return allResults;
+  }
+
+  private async spawnJuryActors(
+    params: JuryActorSpawnParams,
+  ): Promise<{
+    actorResults: (SubAgentResult | { error: string })[];
+    successfulActors: JurySuccessfulActor[];
+  }> {
+    const {
+      actorMembers,
+      actualActorCount,
+      maximumRounds,
+      orchestratorContext,
+      spawnSubAgent,
+    } = params;
+    const { providerName, resolvedModel } = orchestratorContext;
+
     const resolvedSiblings = await resolveSiblingInstances(
       { providerName, resolvedModel },
       "CriticLoopRouter:Jury",
@@ -609,9 +754,8 @@ export class CriticLoopRouter implements TopologyRouter {
     const actorResults = await Promise.all(
       actorAssignments.map((assignment) => spawnSubAgent(assignment)),
     );
-    allResults.push(...actorResults);
 
-    const successfulActors: { actorIndex: number; result: SubAgentResult }[] = [];
+    const successfulActors: JurySuccessfulActor[] = [];
     for (let actorIndex = 0; actorIndex < actorResults.length; actorIndex++) {
       const actorResult = actorResults[actorIndex];
       if (!("error" in actorResult) && actorResult.status === "completed") {
@@ -619,23 +763,19 @@ export class CriticLoopRouter implements TopologyRouter {
       }
     }
 
-    if (successfulActors.length === 0) {
-      logger.error(`[CriticLoopRouter] All ${actualActorCount} actors failed in Jury mode. Aborting.`);
-      return allResults;
-    }
+    return { actorResults, successfulActors };
+  }
 
-    // ── Phase 2: Judge selects best + provides feedback ──────────────────
-
-    const { getProvider } = await import("../../../providers/index.ts");
-    const provider = getProvider(providerName);
-
-    if (!provider) {
-      logger.error(`[CriticLoopRouter] Provider "${providerName}" not found for jury selection`);
-      return allResults;
-    }
-
-    const originalTask = actorMembers[0]?.prompt || "";
-    let previousFeedback: string | null = null;
+  private async selectJuryWinner(
+    params: JurySelectionParams,
+  ): Promise<JuryWinnerSelection | null> {
+    const {
+      provider,
+      resolvedModel,
+      originalTask,
+      actorMembers,
+      successfulActors,
+    } = params;
 
     const actorOutputs = successfulActors.map((actor) => ({
       actorIndex: actor.actorIndex,
@@ -651,44 +791,45 @@ export class CriticLoopRouter implements TopologyRouter {
       juryResponse = await provider.generateText(juryMessages, resolvedModel, { maxTokens: 4096 });
     } catch (juryError: unknown) {
       logger.error(`[CriticLoopRouter] Jury selection failed: ${String(juryError)}`);
-      return allResults;
+      return null;
     }
 
-    let selection = parseJurySelectionResponse(juryResponse.text || "", successfulActors.length);
+    const selection = parseJurySelectionResponse(juryResponse.text || "", successfulActors.length);
     const winnerActorIndex = successfulActors[selection.bestActorIndex]?.actorIndex ?? 0;
-    let winnerResult = successfulActors[selection.bestActorIndex]?.result;
+    const winnerResult = successfulActors[selection.bestActorIndex]?.result;
 
     if (!winnerResult) {
       logger.error(`[CriticLoopRouter] Jury selected invalid actor index. Aborting.`);
-      return allResults;
+      return null;
     }
 
-    logger.info(
-      `[CriticLoopRouter] Jury selected Actor ${winnerActorIndex + 1} — verdict: ${selection.verdict}`,
-    );
+    return { winnerActorIndex, winnerResult, selection };
+  }
 
-    if (selection.verdict === "PASS") {
-      logger.info(`[CriticLoopRouter] Jury PASSED Actor ${winnerActorIndex + 1}. Done.`);
-      return allResults;
-    }
-
-    // ── Phase 3: Iterative refinement on the winner ─────────────────────
-
-    const winnerAgentId = winnerResult.agent_id;
-
-    if (!continueSubAgent) {
-      logger.error(
-        `[CriticLoopRouter] continueSubAgent callback not provided — cannot refine winner in Jury mode.`,
-      );
-      return allResults;
-    }
+  private async refineJuryWinner(
+    params: JuryRefinementParams,
+  ): Promise<JuryRefinementOutcome> {
+    const {
+      winnerAgentId,
+      winnerActorIndex,
+      actorMembers,
+      originalTask,
+      provider,
+      resolvedModel,
+      continueSubAgent,
+      orchestratorContext,
+      maximumRounds,
+    } = params;
+    let selection = params.selection;
+    let previousFeedback: string | null = null;
+    const results: (SubAgentResult | { error: string })[] = [];
 
     for (let roundNumber = 2; roundNumber <= maximumRounds; roundNumber++) {
       if (detectDegenerationOfThought(previousFeedback, selection.feedback)) {
         logger.warn(
           `[CriticLoopRouter] Degeneration-of-Thought detected in Jury mode. Force-terminating.`,
         );
-        return allResults;
+        return { results, exhausted: false };
       }
       previousFeedback = selection.feedback;
 
@@ -704,19 +845,17 @@ export class CriticLoopRouter implements TopologyRouter {
         orchestratorContext,
         roundNumber,
       );
-      allResults.push(revisedResult);
+      results.push(revisedResult);
 
       if ("error" in revisedResult) {
         logger.error(`[CriticLoopRouter] Winner revision failed in round ${roundNumber}: ${revisedResult.error}`);
-        return allResults;
+        return { results, exhausted: false };
       }
 
       if (revisedResult.status !== "completed") {
         logger.warn(`[CriticLoopRouter] Winner did not complete revision in round ${roundNumber}.`);
-        return allResults;
+        return { results, exhausted: false };
       }
-
-      winnerResult = revisedResult;
 
       const revisedOutput = extractActorOutputText(revisedResult);
       const reevaluationPrompt = buildJurySelectionPrompt(originalTask, [{
@@ -734,7 +873,7 @@ export class CriticLoopRouter implements TopologyRouter {
         selection = parseJurySelectionResponse(reevaluationResponse.text || "", 1);
       } catch {
         logger.warn(`[CriticLoopRouter] Re-evaluation failed in round ${roundNumber}. Returning current results.`);
-        return allResults;
+        return { results, exhausted: false };
       }
 
       logger.info(
@@ -745,13 +884,10 @@ export class CriticLoopRouter implements TopologyRouter {
         logger.info(
           `[CriticLoopRouter] Jury PASSED revised output in round ${roundNumber}. Done.`,
         );
-        return allResults;
+        return { results, exhausted: false };
       }
     }
 
-    logger.warn(
-      `[CriticLoopRouter] Maximum rounds (${maximumRounds}) reached in Jury mode. Returning best effort.`,
-    );
-    return allResults;
+    return { results, exhausted: true };
   }
 }

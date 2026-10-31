@@ -3,6 +3,51 @@ import { RunStore } from "./RunStore.ts";
 import type { RunEvent } from "../types/run.ts";
 
 /** Receipt-bound return channel. Acknowledgement is persisted before waking the model. */
+interface SubmitScopeParams {
+  payload: {
+    authorization_receipt?: {
+      signature?: unknown;
+      run_id?: unknown;
+      tool_call_id?: unknown;
+      app_id?: unknown;
+      session_id?: unknown;
+      arguments_hash?: unknown;
+    };
+    is_error?: unknown;
+    result?: unknown;
+  };
+  receiptSignature: unknown;
+  receiptAppId: unknown;
+  receiptSessionId: unknown;
+  receiptArgumentsHash: unknown;
+  runId: string;
+  callId: string;
+}
+
+function checkSubmitScope(params: SubmitScopeParams): string | null {
+  const {
+    payload,
+    receiptSignature,
+    receiptAppId,
+    receiptSessionId,
+    receiptArgumentsHash,
+    runId,
+    callId,
+  } = params;
+
+  const supplied = payload?.authorization_receipt;
+  if (!supplied || typeof supplied.signature !== "string" || typeof payload.is_error !== "boolean" || !("result" in payload)) {
+    return "A signed receipt, result and boolean is_error are required";
+  }
+  const expected = Buffer.from(receiptSignature as string);
+  const actual = Buffer.from(supplied.signature);
+  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)
+    || supplied.run_id !== runId || supplied.tool_call_id !== callId
+    || supplied.app_id !== receiptAppId || supplied.session_id !== receiptSessionId
+    || supplied.arguments_hash !== receiptArgumentsHash) return "Tool result scope or signature mismatch";
+  return null;
+}
+
 export class LocalToolContinuation {
   private static waiters = new Map<string, { resolve: (result: unknown) => void; reject: (err: Error) => void }>();
 
@@ -54,16 +99,16 @@ export class LocalToolContinuation {
     const fail = (message: string) => { throw Object.assign(new Error(message), { status: 409 }); };
     if (!pending) return fail("Unknown pending tool call");
     const receipt = pending.event.authorization_receipt;
-    const supplied = payload?.authorization_receipt;
-    if (!supplied || typeof supplied.signature !== "string" || typeof payload.is_error !== "boolean" || !("result" in payload)) {
-      return fail("A signed receipt, result and boolean is_error are required");
-    }
-    const expected = Buffer.from(receipt.signature);
-    const actual = Buffer.from(supplied.signature);
-    if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)
-      || supplied.run_id !== runId || supplied.tool_call_id !== callId
-      || supplied.app_id !== receipt.app_id || supplied.session_id !== receipt.session_id
-      || supplied.arguments_hash !== receipt.arguments_hash) return fail("Tool result scope or signature mismatch");
+    const scopeError = checkSubmitScope({
+      payload,
+      receiptSignature: receipt.signature,
+      receiptAppId: receipt.app_id,
+      receiptSessionId: receipt.session_id,
+      receiptArgumentsHash: receipt.arguments_hash,
+      runId,
+      callId,
+    });
+    if (scopeError) return fail(scopeError);
     const observation = { result: payload.result, is_error: payload.is_error };
     const digest = crypto.createHash("sha256").update(JSON.stringify(observation)).digest("hex");
     if (pending.result_digest) {

@@ -89,13 +89,7 @@ export function buildSubAgentResult(subAgent: SubAgentState): SubAgentResult {
   );
 
   // Construct a mapped tool usage count for frontend badge rendering.
-  const toolNames: Record<string, number> = {};
-  if (subAgent.toolCalls?.length) {
-    for (const toolCall of subAgent.toolCalls) {
-      const name = toolCall.name || "unknown";
-      toolNames[name] = (toolNames[name] || 0) + 1;
-    }
-  }
+  const toolNames = countToolCallNames(subAgent.toolCalls);
 
   const result: SubAgentResult = {
     agent_id: subAgent.agentId,
@@ -114,6 +108,39 @@ export function buildSubAgentResult(subAgent: SubAgentState): SubAgentResult {
     ),
   };
 
+  applyResultDiagnostics(
+    result,
+    subAgent,
+    status,
+    hasResult,
+    toolCallCount,
+    iterationCount,
+  );
+
+  return result;
+}
+
+function countToolCallNames(
+  toolCalls: SubAgentState["toolCalls"],
+): Record<string, number> {
+  const toolNames: Record<string, number> = {};
+  if (toolCalls?.length) {
+    for (const toolCall of toolCalls) {
+      const name = toolCall.name || "unknown";
+      toolNames[name] = (toolNames[name] || 0) + 1;
+    }
+  }
+  return toolNames;
+}
+
+function applyResultDiagnostics(
+  result: SubAgentResult,
+  subAgent: SubAgentState,
+  status: string,
+  hasResult: boolean,
+  toolCallCount: number,
+  iterationCount: number,
+): void {
   if (subAgent.diff?.hasChanges) {
     result.diff = {
       additions: subAgent.diff.additions || 0,
@@ -139,8 +166,6 @@ export function buildSubAgentResult(subAgent: SubAgentState): SubAgentResult {
   if (subtreeMetrics) {
     result.subtreeMetrics = subtreeMetrics;
   }
-
-  return result;
 }
 
 function buildDiagnosticSummary(

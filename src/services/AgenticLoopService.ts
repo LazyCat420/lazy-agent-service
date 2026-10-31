@@ -669,6 +669,44 @@ async function resolveEmptyPendingApprovalStatus(
     : { status: "not_found" };
 }
 
+interface ApprovalDecisionInput {
+  isApproved: boolean;
+  toolCallId?: string;
+  batchWide?: boolean;
+  reason?: string;
+  editedArgs?: Record<string, unknown>;
+}
+
+function computeApprovalReasonAndScope(
+  input: ApprovalDecisionInput,
+): { reason: string | undefined; scope: "batch" | "call" } {
+  const reason = input.isApproved
+    ? undefined
+    : input.reason?.trim().slice(0, PENDING_DECISIONS.MAX_REASON_CHARS) || undefined;
+  const scope = input.batchWide ? "batch" : "call";
+  return { reason, scope };
+}
+
+interface ApprovalDeliveryParams {
+  conversationId: string;
+  input: ApprovalDecisionInput;
+  targetItemId: string | undefined;
+  reason: string | undefined;
+}
+
+function deliverApprovalDecision(params: ApprovalDeliveryParams): void {
+  const { conversationId, input, targetItemId, reason } = params;
+
+  AgenticLoopService.resolveApproval(conversationId, input.isApproved, {
+    shouldApproveAll: input.batchWide === true && input.isApproved,
+    reason: input.reason,
+    ...(reason ? { denialReason: reason } : {}),
+    ...(targetItemId !== undefined && input.editedArgs !== undefined
+      ? { editedArgs: { [targetItemId]: input.editedArgs } }
+      : {}),
+  });
+}
+
 async function validateTargetApprovalSelection(
   conversationId: string,
   input: {
@@ -922,10 +960,7 @@ export default class AgenticLoopService {
     }
     const { pendingIds, target } = selection;
 
-    const reason = input.isApproved
-      ? undefined
-      : input.reason?.trim().slice(0, PENDING_DECISIONS.MAX_REASON_CHARS) || undefined;
-    const scope = input.batchWide ? "batch" : "call";
+    const { reason, scope } = computeApprovalReasonAndScope(input);
     const delivered = entry?.type === type;
     const ordered = target ? [target, ...pending.filter((record) => record !== target)] : pending;
     for (const [index, record] of ordered.entries()) {
@@ -945,13 +980,11 @@ export default class AgenticLoopService {
     }
 
     if (delivered) {
-      AgenticLoopService.resolveApproval(conversationId, input.isApproved, {
-        shouldApproveAll: input.batchWide === true && input.isApproved,
-        reason: input.reason,
-        ...(reason ? { denialReason: reason } : {}),
-        ...(target && input.editedArgs !== undefined
-          ? { editedArgs: { [target.itemId]: input.editedArgs } }
-          : {}),
+      deliverApprovalDecision({
+        conversationId,
+        input,
+        targetItemId: target?.itemId,
+        reason,
       });
     }
     return {

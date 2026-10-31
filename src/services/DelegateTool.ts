@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { SubagentRegistry } from "./SubagentRegistry.ts";
+import type { SubagentDefinition } from "./SubagentRegistry.ts";
 import { getLastAssistantText } from "./orchestrator/SubAgentResultBuilder.ts";
 import logger from "../utils/logger.ts";
 import type AgenticLoopService from "./AgenticLoopService.ts";
@@ -45,6 +46,29 @@ export interface DelegateContext {
   policies?: PolicyRule[];
   /** Test seam: replaces AgenticLoopService.runAgenticLoop. */
   runner?: AgenticLoopRunner;
+}
+
+interface DelegateRuntime {
+  providerInstance: unknown;
+  resolvedModel: string;
+  modelDefinition: unknown;
+}
+
+interface DelegateRuntimeError {
+  error: true;
+  message: string;
+}
+
+interface DelegateLoopParams {
+  runAgenticLoop: AgenticLoopRunner;
+  providerInstance: unknown;
+  providerName: string;
+  resolvedModel: string;
+  modelDefinition: unknown;
+  task: string;
+  definition: SubagentDefinition;
+  context: DelegateContext;
+  subAgentConversationId: string;
 }
 
 function buildMessages(task: string, systemPrompt: string) {
@@ -128,70 +152,109 @@ export const DelegateTool = {
 
     // Provider + model: prefer the calling loop's provider; the subagent's
     // `model:` frontmatter (resolved via config) overrides the model only.
-    let providerInstance: unknown;
-    let resolvedModel = context.resolvedModel || "default";
-    let modelDefinition: unknown;
-    if (!context.runner) {
-      const { getProvider } = await import("../providers/index.ts");
-      const { getModelByName } = await import("../config.ts");
-      providerInstance = getProvider(context.providerName || "default");
-      if (!providerInstance) {
-        return {
-          error: true,
-          message: `Provider not found: ${context.providerName || "default"}`,
-        };
-      }
-      if (definition.model) {
-        resolvedModel = definition.model;
-      }
-      modelDefinition = getModelByName(resolvedModel);
+    const runtime = await resolveDelegateRuntime(context, definition);
+    if ("error" in runtime) {
+      return runtime;
     }
+    const { providerInstance, resolvedModel, modelDefinition } = runtime;
 
     const subAgentConversationId = crypto.randomUUID().replaceAll("-", "");
-    try {
-      const loopResult = (await runAgenticLoop({
-        provider: providerInstance,
-        providerName: context.providerName || "default",
-        resolvedModel,
-        modelDefinition,
-        messages: buildMessages(task, definition.systemPrompt),
-        options: {
-          // autoApprove only answers asks; the caller's DENYs still bind.
-          autoApprove: true,
-          ...(context.policies ? { policies: context.policies } : {}),
-          agenticLoopEnabled: true,
-          isSubAgent: true,
-          enabledTools: definition.tools === "all" ? undefined : [...definition.tools],
-          maxTokens: 8192,
-        },
-        agentConversationId: subAgentConversationId,
-        parentAgentConversationId: context.agentConversationId,
-        conversationId: subAgentConversationId,
-        parentConversationId: context.conversationId,
-        traceId: context.traceId || crypto.randomUUID().replaceAll("-", ""),
-        project: context.project,
-        username: context.username,
-        agent: definition.name,
-        requestId: crypto.randomUUID(),
-        requestStart: performance.now(),
-        emit: context.emit || (() => {}),
-        workspaceRoot: context.workspaceRoot,
-      } as Parameters<AgenticLoopRunner>[0])) as { messages?: Array<{ role: string; content: unknown }> } | undefined;
-
-      const finalText = getLastAssistantText(
-        (loopResult?.messages || []) as Parameters<typeof getLastAssistantText>[0],
-      );
-      return finalText || "(subagent returned no final message)";
-    } catch (error) {
-      logger.warn(
-        `[DelegateTool] Subagent ${definition.name} failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return {
-        error: true,
-        message: `Subagent "${definition.name}" failed: ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
+    const providerName = context.providerName || "default";
+    return invokeDelegateLoop({
+      runAgenticLoop,
+      providerInstance,
+      providerName,
+      resolvedModel,
+      modelDefinition,
+      task,
+      definition,
+      context,
+      subAgentConversationId,
+    });
   },
 };
+
+async function resolveDelegateRuntime(
+  context: DelegateContext,
+  definition: SubagentDefinition,
+): Promise<DelegateRuntime | DelegateRuntimeError> {
+  let providerInstance: unknown;
+  let resolvedModel = context.resolvedModel || "default";
+  let modelDefinition: unknown;
+  if (!context.runner) {
+    const { getProvider } = await import("../providers/index.ts");
+    const { getModelByName } = await import("../config.ts");
+    providerInstance = getProvider(context.providerName || "default");
+    if (!providerInstance) {
+      return {
+        error: true,
+        message: `Provider not found: ${context.providerName || "default"}`,
+      };
+    }
+    if (definition.model) {
+      resolvedModel = definition.model;
+    }
+    modelDefinition = getModelByName(resolvedModel);
+  }
+  return { providerInstance, resolvedModel, modelDefinition };
+}
+
+async function invokeDelegateLoop(params: DelegateLoopParams): Promise<unknown> {
+  const {
+    runAgenticLoop,
+    providerInstance,
+    providerName,
+    resolvedModel,
+    modelDefinition,
+    task,
+    definition,
+    context,
+    subAgentConversationId,
+  } = params;
+
+  try {
+    const loopResult = (await runAgenticLoop({
+      provider: providerInstance,
+      providerName,
+      resolvedModel,
+      modelDefinition,
+      messages: buildMessages(task, definition.systemPrompt),
+      options: {
+        // autoApprove only answers asks; the caller's DENYs still bind.
+        autoApprove: true,
+        ...(context.policies ? { policies: context.policies } : {}),
+        agenticLoopEnabled: true,
+        isSubAgent: true,
+        enabledTools: definition.tools === "all" ? undefined : [...definition.tools],
+        maxTokens: 8192,
+      },
+      agentConversationId: subAgentConversationId,
+      parentAgentConversationId: context.agentConversationId,
+      conversationId: subAgentConversationId,
+      parentConversationId: context.conversationId,
+      traceId: context.traceId || crypto.randomUUID().replaceAll("-", ""),
+      project: context.project,
+      username: context.username,
+      agent: definition.name,
+      requestId: crypto.randomUUID(),
+      requestStart: performance.now(),
+      emit: context.emit || (() => {}),
+      workspaceRoot: context.workspaceRoot,
+    } as Parameters<AgenticLoopRunner>[0])) as { messages?: Array<{ role: string; content: unknown }> } | undefined;
+
+    const finalText = getLastAssistantText(
+      (loopResult?.messages || []) as Parameters<typeof getLastAssistantText>[0],
+    );
+    return finalText || "(subagent returned no final message)";
+  } catch (error) {
+    logger.warn(
+      `[DelegateTool] Subagent ${definition.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return {
+      error: true,
+      message: `Subagent "${definition.name}" failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
 
 export default DelegateTool;

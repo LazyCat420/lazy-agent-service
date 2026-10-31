@@ -21,6 +21,128 @@ interface SubAgentSummary {
   toolNames?: Record<string, number>;
 }
 
+const MAX_DESCENDANT_DEPTH = 10;
+
+function processChildConversationDocument(
+  childDocument: Record<string, unknown>,
+  visitedConversationIds: Set<string>,
+  nextFrontier: string[],
+  persistedSubAgentsList: SubAgentSummary[],
+): void {
+  const childConversationId = childDocument.id as string;
+  if (visitedConversationIds.has(childConversationId)) return;
+  visitedConversationIds.add(childConversationId);
+  nextFrontier.push(childConversationId);
+
+  // Also track the agentConversationId (if stored and different from id)
+  // so that grandchildren linked via parentAgentConversationId are found.
+  const childAgentConversationId =
+    childDocument.agentConversationId as string | undefined;
+  if (
+    childAgentConversationId &&
+    childAgentConversationId !== childConversationId &&
+    !visitedConversationIds.has(childAgentConversationId)
+  ) {
+    visitedConversationIds.add(childAgentConversationId);
+    nextFrontier.push(childAgentConversationId);
+  }
+
+  if (
+    Array.isArray(childDocument.subAgents) &&
+    childDocument.subAgents.length > 0
+  ) {
+    for (const descendantSubAgent of childDocument.subAgents) {
+      persistedSubAgentsList.push(descendantSubAgent);
+    }
+  }
+}
+
+async function loadPersistedSubAgents(
+  conversationIdentifier: string,
+): Promise<SubAgentSummary[]> {
+  const persistedSubAgentsList: SubAgentSummary[] = [];
+  try {
+    const { default: MongoWrapper } =
+      await import("../wrappers/MongoWrapper.js");
+    const { MONGO_DB_NAME } = await import("../../config.js");
+    const { COLLECTIONS } = await import("../constants.js");
+    const collection = MongoWrapper.getCollection(
+      MONGO_DB_NAME,
+      COLLECTIONS.AGENT_CONVERSATIONS,
+    );
+
+    const rootConversationDocument = await collection.findOne(
+      { id: conversationIdentifier },
+      { projection: { subAgents: 1, agentConversationId: 1 } },
+    );
+    if (rootConversationDocument && rootConversationDocument.subAgents) {
+      if (rootConversationDocument.subAgents.length > 0) {
+        persistedSubAgentsList.push(...rootConversationDocument.subAgents);
+      }
+    }
+
+    // Recursively discover all descendant sub-agents by traversing the
+    // parentAgentConversationId / parentConversationId chain in AGENT_CONVERSATIONS.
+    // Each sub-agent conversation may itself have a subAgents array if it
+    // spawned its own workers (recursive sub-agent delegation).
+    //
+    // The root conversation's document `id` differs from the in-memory
+    // `agentConversationId` used by the agentic loop. Child conversations
+    // store `parentConversationId` → parent's `id`, and
+    // `parentAgentConversationId` → parent's `agentConversationId`.
+    // Seed the frontier with both IDs and query with $or at every hop.
+    let frontier: string[] = [conversationIdentifier];
+    const visitedConversationIds = new Set<string>([conversationIdentifier]);
+
+    // Include the root's agentConversationId (if different from id)
+    const rootAgentConversationId =
+      rootConversationDocument?.agentConversationId as string | undefined;
+    if (
+      rootAgentConversationId &&
+      rootAgentConversationId !== conversationIdentifier
+    ) {
+      frontier.push(rootAgentConversationId);
+      visitedConversationIds.add(rootAgentConversationId);
+    }
+
+    for (
+      let depth = 0;
+      depth < MAX_DESCENDANT_DEPTH && frontier.length > 0;
+      depth++
+    ) {
+      const childConversationDocuments = await collection
+        .find(
+          {
+            $or: [
+              { parentAgentConversationId: { $in: frontier } },
+              { parentConversationId: { $in: frontier } },
+            ],
+          },
+          { projection: { id: 1, agentConversationId: 1, subAgents: 1 } },
+        )
+        .toArray();
+
+      if (childConversationDocuments.length === 0) break;
+
+      const nextFrontier: string[] = [];
+      for (const childDocument of childConversationDocuments) {
+        processChildConversationDocument(
+          childDocument as Record<string, unknown>,
+          visitedConversationIds,
+          nextFrontier,
+          persistedSubAgentsList,
+        );
+      }
+      frontier = nextFrontier;
+    }
+  } catch (error: unknown) {
+    logger.warn(
+      `[orchestrator] Failed to load persisted sub-agents: ${getErrorMessage(error)}`,
+    );
+  }
+  return persistedSubAgentsList;
+}
+
 const router = Router();
 
 // ═══════════════════════════════════════════════════════════════
@@ -42,109 +164,9 @@ router.get(
       ? OrchestratorService.listAllDescendantSubAgents(conversationIdentifier)
       : OrchestratorService.listSubAgents();
 
-    let persistedSubAgentsList: SubAgentSummary[] = [];
-    if (conversationIdentifier) {
-      try {
-        const { default: MongoWrapper } =
-          await import("../wrappers/MongoWrapper.js");
-        const { MONGO_DB_NAME } = await import("../../config.js");
-        const { COLLECTIONS } = await import("../constants.js");
-        const collection = MongoWrapper.getCollection(
-          MONGO_DB_NAME,
-          COLLECTIONS.AGENT_CONVERSATIONS,
-        );
-
-        const rootConversationDocument = await collection.findOne(
-          { id: conversationIdentifier },
-          { projection: { subAgents: 1, agentConversationId: 1 } },
-        );
-        if (rootConversationDocument && rootConversationDocument.subAgents) {
-          if (rootConversationDocument.subAgents.length > 0) {
-            persistedSubAgentsList = rootConversationDocument.subAgents;
-          }
-        }
-
-        // Recursively discover all descendant sub-agents by traversing the
-        // parentAgentConversationId / parentConversationId chain in AGENT_CONVERSATIONS.
-        // Each sub-agent conversation may itself have a subAgents array if it
-        // spawned its own workers (recursive sub-agent delegation).
-        //
-        // The root conversation's document `id` differs from the in-memory
-        // `agentConversationId` used by the agentic loop. Child conversations
-        // store `parentConversationId` → parent's `id`, and
-        // `parentAgentConversationId` → parent's `agentConversationId`.
-        // Seed the frontier with both IDs and query with $or at every hop.
-        const MAX_DESCENDANT_DEPTH = 10;
-        let frontier: string[] = [conversationIdentifier];
-        const visitedConversationIds = new Set<string>([conversationIdentifier]);
-
-        // Include the root's agentConversationId (if different from id)
-        const rootAgentConversationId =
-          rootConversationDocument?.agentConversationId as string | undefined;
-        if (
-          rootAgentConversationId &&
-          rootAgentConversationId !== conversationIdentifier
-        ) {
-          frontier.push(rootAgentConversationId);
-          visitedConversationIds.add(rootAgentConversationId);
-        }
-
-        for (
-          let depth = 0;
-          depth < MAX_DESCENDANT_DEPTH && frontier.length > 0;
-          depth++
-        ) {
-          const childConversationDocuments = await collection
-            .find(
-              {
-                $or: [
-                  { parentAgentConversationId: { $in: frontier } },
-                  { parentConversationId: { $in: frontier } },
-                ],
-              },
-              { projection: { id: 1, agentConversationId: 1, subAgents: 1 } },
-            )
-            .toArray();
-
-          if (childConversationDocuments.length === 0) break;
-
-          const nextFrontier: string[] = [];
-          for (const childDocument of childConversationDocuments) {
-            const childConversationId = childDocument.id as string;
-            if (visitedConversationIds.has(childConversationId)) continue;
-            visitedConversationIds.add(childConversationId);
-            nextFrontier.push(childConversationId);
-
-            // Also track the agentConversationId (if stored and different from id)
-            // so that grandchildren linked via parentAgentConversationId are found.
-            const childAgentConversationId =
-              childDocument.agentConversationId as string | undefined;
-            if (
-              childAgentConversationId &&
-              childAgentConversationId !== childConversationId &&
-              !visitedConversationIds.has(childAgentConversationId)
-            ) {
-              visitedConversationIds.add(childAgentConversationId);
-              nextFrontier.push(childAgentConversationId);
-            }
-
-            if (
-              Array.isArray(childDocument.subAgents) &&
-              childDocument.subAgents.length > 0
-            ) {
-              for (const descendantSubAgent of childDocument.subAgents) {
-                persistedSubAgentsList.push(descendantSubAgent);
-              }
-            }
-          }
-          frontier = nextFrontier;
-        }
-      } catch (error: unknown) {
-        logger.warn(
-          `[orchestrator] Failed to load persisted sub-agents: ${getErrorMessage(error)}`,
-        );
-      }
-    }
+    const persistedSubAgentsList = conversationIdentifier
+      ? await loadPersistedSubAgents(conversationIdentifier)
+      : [];
 
     const mergedSubAgentsMap = new Map<string, SubAgentSummary>();
     for (const subAgent of persistedSubAgentsList) {

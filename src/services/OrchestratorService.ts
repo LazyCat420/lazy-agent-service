@@ -778,103 +778,23 @@ export default class OrchestratorService {
     // Validate member prompts before routing — undefined/empty prompts cause
     // runaway loops where sub-agents report "no task" without converging.
     // Return an actionable error so the orchestrator LLM can retry with proper prompts.
-    const membersWithMissingPrompts = teamCreationArguments.members
-      .map((member, memberIndex) => ({ member, memberIndex }))
-      .filter(
-        ({ member }) =>
-          !member.prompt ||
-          typeof member.prompt !== "string" ||
-          member.prompt.trim().length === 0,
-      );
+    const memberPromptError =
+      OrchestratorService.validateMemberPrompts(teamCreationArguments.members);
 
-    if (membersWithMissingPrompts.length > 0) {
-      const missingDescriptions = membersWithMissingPrompts.map(
-        ({ member, memberIndex }) =>
-          `member[${memberIndex}] "${member.description || "(no description)"}"`,
-      );
-      const errorMessage = `${membersWithMissingPrompts.length} member(s) have missing or empty prompts: ${missingDescriptions.join(", ")}. Every member requires a non-empty 'prompt' field with a self-contained task description.`;
-      logger.error(`[Orchestrator] createTeam: ${errorMessage}`);
-      return [{ error: errorMessage }];
+    if (memberPromptError) {
+      logger.error(`[Orchestrator] createTeam: ${memberPromptError}`);
+      return [{ error: memberPromptError }];
     }
 
     // Sync the active topology to the conversation settings in MongoDB so the UI badge and state match execution
     if (orchestratorContext.conversationId) {
-      try {
-        const { MONGO_DB_NAME: databaseName } = await import("../../config.ts");
-        const { COLLECTIONS: collectionNames } =
-          await import("../constants.ts");
-        const MongoWrapper = (await import("../wrappers/MongoWrapper.ts"))
-          .default;
-        const databaseCollection = MongoWrapper.getCollection(
-          databaseName,
-          collectionNames.AGENT_CONVERSATIONS,
-        );
-
-        if (databaseCollection) {
-          const topologyResult = await databaseCollection.updateOne(
-            {
-              id: orchestratorContext.conversationId,
-              project: orchestratorContext.project,
-              username: orchestratorContext.username,
-            },
-            {
-              $set: {
-                "settings.agents.topology": topology,
-                updatedAt: new Date().toISOString(),
-              },
-            },
-          );
-          if (topologyResult.matchedCount === 0) {
-            logger.warn(
-              `[Orchestrator] Topology sync matched 0 documents for conversation ${orchestratorContext.conversationId}`,
-            );
-          } else {
-            logger.info(
-              `[Orchestrator] Updated conversation settings topology to "${topology}" for conversation ${orchestratorContext.conversationId}`,
-            );
-          }
-        }
-      } catch (databaseError: unknown) {
-        logger.warn(
-          `[Orchestrator] Failed to update conversation settings topology in MongoDB: ${getErrorMessage(databaseError)}`,
-        );
-      }
+      await OrchestratorService.syncConversationTopology(
+        orchestratorContext,
+        topology,
+      );
     }
 
-    let router: TopologyRouter;
-    if (topology === TOPOLOGIES.SEQUENTIAL) {
-      const { SequentialRouter } =
-        await import("./orchestrator/routers/SequentialRouter.ts");
-      router = new SequentialRouter();
-    } else if (topology === TOPOLOGIES.PEER_TO_PEER) {
-      const { PeerToPeerRouter } =
-        await import("./orchestrator/routers/PeerToPeerRouter.ts");
-      router = new PeerToPeerRouter();
-    } else if (topology === TOPOLOGIES.HIERARCHICAL_AGGREGATION) {
-      const { HierarchicalAggregationRouter } =
-        await import("./orchestrator/routers/HierarchicalAggregationRouter.ts");
-      router = new HierarchicalAggregationRouter();
-    } else if (topology === TOPOLOGIES.TOURNAMENT) {
-      const { TournamentRouter } =
-        await import("./orchestrator/routers/TournamentRouter.ts");
-      router = new TournamentRouter();
-    } else if (topology === TOPOLOGIES.CRITIC_LOOP) {
-      const { CriticLoopRouter } =
-        await import("./orchestrator/routers/CriticLoopRouter.ts");
-      router = new CriticLoopRouter();
-    } else if (topology === TOPOLOGIES.DIVIDE_AND_CONQUER) {
-      const { DivideAndConquerRouter } =
-        await import("./orchestrator/routers/DivideAndConquerRouter.ts");
-      router = new DivideAndConquerRouter();
-    } else if (topology === TOPOLOGIES.MCTS) {
-      const { MCTSRouter } =
-        await import("./orchestrator/routers/MCTSRouter.ts");
-      router = new MCTSRouter();
-    } else {
-      const { HierarchicalRouter } =
-        await import("./orchestrator/routers/HierarchicalRouter.ts");
-      router = new HierarchicalRouter();
-    }
+    const router = await OrchestratorService.resolveTopologyRouter(topology);
 
     const spawnResults = await router.execute(
       teamCreationArguments.name,
@@ -903,6 +823,116 @@ export default class OrchestratorService {
     );
 
     return spawnResults;
+  }
+
+  private static validateMemberPrompts(members: TeamMember[]): string | null {
+    const membersWithMissingPrompts = members
+      .map((member, memberIndex) => ({ member, memberIndex }))
+      .filter(
+        ({ member }) =>
+          !member.prompt ||
+          typeof member.prompt !== "string" ||
+          member.prompt.trim().length === 0,
+      );
+
+    if (membersWithMissingPrompts.length === 0) {
+      return null;
+    }
+
+    const missingDescriptions = membersWithMissingPrompts.map(
+      ({ member, memberIndex }) =>
+        `member[${memberIndex}] "${member.description || "(no description)"}"`,
+    );
+    return `${membersWithMissingPrompts.length} member(s) have missing or empty prompts: ${missingDescriptions.join(", ")}. Every member requires a non-empty 'prompt' field with a self-contained task description.`;
+  }
+
+  private static async syncConversationTopology(
+    orchestratorContext: OrchestratorContext,
+    topology: string,
+  ): Promise<void> {
+    try {
+      const { MONGO_DB_NAME: databaseName } = await import("../../config.ts");
+      const { COLLECTIONS: collectionNames } =
+        await import("../constants.ts");
+      const MongoWrapper = (await import("../wrappers/MongoWrapper.ts"))
+        .default;
+      const databaseCollection = MongoWrapper.getCollection(
+        databaseName,
+        collectionNames.AGENT_CONVERSATIONS,
+      );
+
+      if (databaseCollection) {
+        const topologyResult = await databaseCollection.updateOne(
+          {
+            id: orchestratorContext.conversationId,
+            project: orchestratorContext.project,
+            username: orchestratorContext.username,
+          },
+          {
+            $set: {
+              "settings.agents.topology": topology,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        );
+        if (topologyResult.matchedCount === 0) {
+          logger.warn(
+            `[Orchestrator] Topology sync matched 0 documents for conversation ${orchestratorContext.conversationId}`,
+          );
+        } else {
+          logger.info(
+            `[Orchestrator] Updated conversation settings topology to "${topology}" for conversation ${orchestratorContext.conversationId}`,
+          );
+        }
+      }
+    } catch (databaseError: unknown) {
+      logger.warn(
+        `[Orchestrator] Failed to update conversation settings topology in MongoDB: ${getErrorMessage(databaseError)}`,
+      );
+    }
+  }
+
+  private static async resolveTopologyRouter(
+    topology: string,
+  ): Promise<TopologyRouter> {
+    if (topology === TOPOLOGIES.SEQUENTIAL) {
+      const { SequentialRouter } =
+        await import("./orchestrator/routers/SequentialRouter.ts");
+      return new SequentialRouter();
+    }
+    if (topology === TOPOLOGIES.PEER_TO_PEER) {
+      const { PeerToPeerRouter } =
+        await import("./orchestrator/routers/PeerToPeerRouter.ts");
+      return new PeerToPeerRouter();
+    }
+    if (topology === TOPOLOGIES.HIERARCHICAL_AGGREGATION) {
+      const { HierarchicalAggregationRouter } =
+        await import("./orchestrator/routers/HierarchicalAggregationRouter.ts");
+      return new HierarchicalAggregationRouter();
+    }
+    if (topology === TOPOLOGIES.TOURNAMENT) {
+      const { TournamentRouter } =
+        await import("./orchestrator/routers/TournamentRouter.ts");
+      return new TournamentRouter();
+    }
+    if (topology === TOPOLOGIES.CRITIC_LOOP) {
+      const { CriticLoopRouter } =
+        await import("./orchestrator/routers/CriticLoopRouter.ts");
+      return new CriticLoopRouter();
+    }
+    if (topology === TOPOLOGIES.DIVIDE_AND_CONQUER) {
+      const { DivideAndConquerRouter } =
+        await import("./orchestrator/routers/DivideAndConquerRouter.ts");
+      return new DivideAndConquerRouter();
+    }
+    if (topology === TOPOLOGIES.MCTS) {
+      const { MCTSRouter } =
+        await import("./orchestrator/routers/MCTSRouter.ts");
+      return new MCTSRouter();
+    }
+    const { HierarchicalRouter } =
+      await import("./orchestrator/routers/HierarchicalRouter.ts");
+    return new HierarchicalRouter();
   }
 
   static async deleteTeam(
@@ -1092,21 +1122,8 @@ export default class OrchestratorService {
     preserveWorktree = false,
   ) {
     const { default: AgenticLoopService } = await OrchestratorService.getAgenticLoopService();
-    const workspaceRoots = ToolOrchestratorService.getWorkspaceRoots();
-    const hasWorkspaceSetup = Array.isArray(workspaceRoots) && workspaceRoots.length > 0;
-    const parentWorkspaceRoot =
-      orchestratorContext.workspaceRoot || (hasWorkspaceSetup ? workspaceRoots[0] : subAgent.repositoryPath);
-
-    if (subAgent.isolated && subAgent.worktreePath) {
-      ToolOrchestratorService._setWorktree(subAgent.subAgentConversationId, {
-        originalRoot: parentWorkspaceRoot,
-        worktreePath: subAgent.worktreePath,
-        branch: subAgent.branchName || undefined,
-        repoPath: subAgent.repositoryPath,
-      });
-    }
-
-    const shouldShowWorkspaceConstraint = hasWorkspaceSetup && checkWorkspaceAvailability(workspaceRoots);
+    const { parentWorkspaceRoot, shouldShowWorkspaceConstraint } =
+      prepareSubAgentWorkspace(subAgent, orchestratorContext);
     const parentRecursionDepth = orchestratorContext.recursionDepth ?? 0;
     const childRecursionDepth = parentRecursionDepth + 1;
     const maxRecursionDepth = Math.min(
@@ -1187,15 +1204,12 @@ export default class OrchestratorService {
       preserveWorktree,
     );
 
-    const finalMessages = loopResult?.messages || subAgentMessages;
-    const messagesOutput = getLastAssistantText(finalMessages);
-    const telemetryOutput = (telemetry.output || "").trim();
-    subAgent.output = messagesOutput || telemetryOutput;
-    if (!subAgent.output && subAgent.status !== "stopped") {
-      logger.warn(
-        `[Orchestrator] Sub-agent ${subAgent.agentId} completed with empty output. messages=${finalMessages.length}, telemetryOutput=${telemetryOutput.length}chars`,
-      );
-    }
+    const finalMessages = finalizeSubAgentOutput(
+      subAgent,
+      loopResult,
+      subAgentMessages,
+      telemetry,
+    );
     subAgent.toolCalls = telemetry.toolCalls;
     subAgent.messages = finalMessages;
     subAgent.durationMs = Date.now() - subAgent.startedAt;
@@ -1203,6 +1217,47 @@ export default class OrchestratorService {
     await commitAndCollectSubAgentDiff(subAgent);
     await finalizeSubAgentLoopCleanup(subAgent, telemetry, preserveWorktree, orchestratorContext.providerName);
   }
+}
+
+function prepareSubAgentWorkspace(
+  subAgent: SubAgentState,
+  orchestratorContext: OrchestratorContext,
+): { parentWorkspaceRoot: string; shouldShowWorkspaceConstraint: boolean } {
+  const workspaceRoots = ToolOrchestratorService.getWorkspaceRoots();
+  const hasWorkspaceSetup = Array.isArray(workspaceRoots) && workspaceRoots.length > 0;
+  const parentWorkspaceRoot =
+    orchestratorContext.workspaceRoot || (hasWorkspaceSetup ? workspaceRoots[0] : subAgent.repositoryPath);
+
+  if (subAgent.isolated && subAgent.worktreePath) {
+    ToolOrchestratorService._setWorktree(subAgent.subAgentConversationId, {
+      originalRoot: parentWorkspaceRoot,
+      worktreePath: subAgent.worktreePath,
+      branch: subAgent.branchName || undefined,
+      repoPath: subAgent.repositoryPath,
+    });
+  }
+
+  const shouldShowWorkspaceConstraint = hasWorkspaceSetup && checkWorkspaceAvailability(workspaceRoots);
+
+  return { parentWorkspaceRoot, shouldShowWorkspaceConstraint };
+}
+
+function finalizeSubAgentOutput(
+  subAgent: SubAgentState,
+  loopResult: { messages?: ConversationMessage[] } | undefined,
+  fallbackMessages: ConversationMessage[],
+  telemetry: SubAgentTelemetryEmitter,
+): ConversationMessage[] {
+  const finalMessages = loopResult?.messages || fallbackMessages;
+  const messagesOutput = getLastAssistantText(finalMessages);
+  const telemetryOutput = (telemetry.output || "").trim();
+  subAgent.output = messagesOutput || telemetryOutput;
+  if (!subAgent.output && subAgent.status !== "stopped") {
+    logger.warn(
+      `[Orchestrator] Sub-agent ${subAgent.agentId} completed with empty output. messages=${finalMessages.length}, telemetryOutput=${telemetryOutput.length}chars`,
+    );
+  }
+  return finalMessages;
 }
 
 function validateSubAgentSpawnLimits(orchestratorContext: OrchestratorContext): {

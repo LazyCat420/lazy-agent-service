@@ -93,72 +93,17 @@ async function applyActions(
 
   for (const action of actions) {
     try {
-      if (
-        action.type === "merge" &&
-        action.sourceIds?.length &&
-        action.sourceIds.length >= 2 &&
-        action.merged
-      ) {
-        // Collect conversational agent metadata from source memories before deletion
-        let attributionMetadata: Record<string, unknown> = {};
-        if (isConversational && memoryLookup) {
-          const sources = action.sourceIds
-            .map((id: string) => memoryLookup.get(id))
-            .filter(Boolean) as MemoryDoc[];
-
-          if (sources.length > 0) {
-            // All memories in a merge share the same about/source (partitioned)
-            const primary = sources[0];
-            // Collect all unique sources for the mergedSources attribution chain
-            const uniqueSources = new Map<
-              string,
-              { sourceUserId: string; sourceUsername: string }
-            >();
-            for (const source of sources) {
-              if (
-                source.sourceUserId &&
-                !uniqueSources.has(source.sourceUserId)
-              ) {
-                uniqueSources.set(source.sourceUserId, {
-                  sourceUserId: source.sourceUserId,
-                  sourceUsername: source.sourceUsername || "",
-                });
-              }
-            }
-            attributionMetadata = {
-              metadata: {
-                aboutUserId: primary.aboutUserId,
-                aboutUsername: primary.aboutUsername,
-                sourceUserId: primary.sourceUserId,
-                sourceUsername: primary.sourceUsername,
-                guildId: primary.guildId,
-                mergedSources: [...uniqueSources.values()],
-              },
-            };
-          }
-        }
-
-        // Delete source memories
-        for (const id of action.sourceIds) {
-          await MemoryService.remove(id);
-        }
-        // Store consolidated memory
-        await MemoryService.store({
+      if (isMergeAction(action)) {
+        results.merged += await applyMergeAction({
+          action,
           agent,
+          isConversational,
           project,
-          username: username || "system",
-          type: action.merged.type || (isConversational ? "other" : "project"),
-          title: action.merged.title || null,
-          content: action.merged.content,
-          conversationId: null,
-          traceId: traceId || undefined,
-          endpoint: endpoint || undefined,
-          ...attributionMetadata,
+          username,
+          traceId,
+          endpoint,
+          memoryLookup,
         });
-        results.merged += action.sourceIds.length;
-        logger.info(
-          `[MemoryConsolidation] Merged ${action.sourceIds.length} → "${action.merged.title || action.merged.content?.substring(0, 60)}" (${action.reason || ""})`,
-        );
       } else if (action.type === "delete" && action.id) {
         await MemoryService.remove(action.id);
         results.deleted++;
@@ -174,6 +119,118 @@ async function applyActions(
     }
   }
   return results;
+}
+
+type MergeableAction = ConsolidationAction & {
+  sourceIds: string[];
+  merged: { type: string; title?: string; content: string };
+};
+
+function isMergeAction(action: ConsolidationAction): action is MergeableAction {
+  return (
+    action.type === "merge" &&
+    !!action.sourceIds?.length &&
+    action.sourceIds.length >= 2 &&
+    !!action.merged
+  );
+}
+
+interface MergeActionParams {
+  action: MergeableAction;
+  agent: string;
+  isConversational: boolean;
+  project: string | null;
+  username: string;
+  traceId?: string | null;
+  endpoint?: string | null;
+  memoryLookup?: Map<string, MemoryDoc>;
+}
+
+function buildMergeAttributionMetadata(
+  action: MergeableAction,
+  isConversational: boolean,
+  memoryLookup: Map<string, MemoryDoc> | undefined,
+): Record<string, unknown> {
+  let attributionMetadata: Record<string, unknown> = {};
+  if (isConversational && memoryLookup) {
+    const sources = action.sourceIds
+      .map((id: string) => memoryLookup.get(id))
+      .filter(Boolean) as MemoryDoc[];
+
+    if (sources.length > 0) {
+      // All memories in a merge share the same about/source (partitioned)
+      const primary = sources[0];
+      // Collect all unique sources for the mergedSources attribution chain
+      const uniqueSources = new Map<
+        string,
+        { sourceUserId: string; sourceUsername: string }
+      >();
+      for (const source of sources) {
+        if (
+          source.sourceUserId &&
+          !uniqueSources.has(source.sourceUserId)
+        ) {
+          uniqueSources.set(source.sourceUserId, {
+            sourceUserId: source.sourceUserId,
+            sourceUsername: source.sourceUsername || "",
+          });
+        }
+      }
+      attributionMetadata = {
+        metadata: {
+          aboutUserId: primary.aboutUserId,
+          aboutUsername: primary.aboutUsername,
+          sourceUserId: primary.sourceUserId,
+          sourceUsername: primary.sourceUsername,
+          guildId: primary.guildId,
+          mergedSources: [...uniqueSources.values()],
+        },
+      };
+    }
+  }
+  return attributionMetadata;
+}
+
+async function applyMergeAction(params: MergeActionParams): Promise<number> {
+  const {
+    action,
+    agent,
+    isConversational,
+    project,
+    username,
+    traceId,
+    endpoint,
+    memoryLookup,
+  } = params;
+
+  // Collect conversational agent metadata from source memories before deletion
+  const attributionMetadata = buildMergeAttributionMetadata(
+    action,
+    isConversational,
+    memoryLookup,
+  );
+
+  // Delete source memories
+  for (const id of action.sourceIds) {
+    await MemoryService.remove(id);
+  }
+  // Store consolidated memory
+  await MemoryService.store({
+    agent,
+    project,
+    username: username || "system",
+    type: action.merged.type || (isConversational ? "other" : "project"),
+    title: action.merged.title || null,
+    content: action.merged.content,
+    conversationId: null,
+    traceId: traceId || undefined,
+    endpoint: endpoint || undefined,
+    ...attributionMetadata,
+  });
+  logger.info(
+    `[MemoryConsolidation] Merged ${action.sourceIds.length} → "${action.merged.title || action.merged.content?.substring(0, 60)}" (${action.reason || ""})`,
+  );
+  return action.sourceIds.length;
 }
 
 // ─── Single Batch LLM Call ───────────────────────────────────────────────────
@@ -245,6 +302,69 @@ async function processBatch(
   }
 
   // Use real API-reported usage when available; fall back to heuristic
+  const { realUsage, inputTokens, outputTokens } = computeBatchUsage(
+    result,
+    inputText,
+  );
+  logConsolidationCall({
+    llmRequestId,
+    endpoint,
+    project,
+    username,
+    agent,
+    consolidationProvider,
+    consolidationModel,
+    traceId,
+    agentConversationId,
+    aiMessages,
+    result,
+    realUsage,
+    llmSuccess,
+    llmError,
+    llmStart,
+    trigger,
+    batchIndex,
+    totalBatches,
+    clusterCount,
+    staleCount,
+  });
+
+  // Broadcast incremental usage with cost
+  broadcastBatchUsage({
+    broadcast,
+    llmSuccess,
+    consolidationModel,
+    realUsage,
+    inputTokens,
+    outputTokens,
+  });
+
+  if (!llmSuccess || !result?.text) {
+    return [];
+  }
+
+  // Parse response with enhanced diagnostics
+  const parsed = parseJsonFromLargeLanguageModelResponse(result.text) as {
+    actions?: ConsolidationAction[];
+  } | null;
+  if (!parsed) {
+    reportUnparsableResponse(result.text, batchLabel, outputTokens);
+    return [];
+  }
+
+  return parsed.actions || [];
+}
+
+interface BatchUsage {
+  realUsage: Record<string, number> | null;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+function computeBatchUsage(
+  result: { text?: string; usage?: Record<string, number> } | null,
+  inputText: string,
+): BatchUsage {
   const realUsage = result?.usage || null;
   const inputTokens = realUsage
     ? getTotalInputTokens(realUsage)
@@ -254,6 +374,56 @@ async function processBatch(
     : result?.text
       ? estimateTokens(result.text)
       : 0;
+  return { realUsage, inputTokens, outputTokens };
+}
+
+interface ConsolidationCallLogParams {
+  llmRequestId: string;
+  endpoint?: string | null;
+  project: string | null;
+  username: string;
+  agent: string;
+  consolidationProvider: string;
+  consolidationModel: string;
+  traceId?: string | null;
+  agentConversationId?: string | null;
+  aiMessages: ChatMessage[];
+  result: { text?: string; usage?: Record<string, number> } | null;
+  realUsage: Record<string, number> | null;
+  llmSuccess: boolean;
+  llmError: string | null;
+  llmStart: number;
+  trigger: string;
+  batchIndex: number;
+  totalBatches: number;
+  clusterCount: number;
+  staleCount: number;
+}
+
+function logConsolidationCall(params: ConsolidationCallLogParams): void {
+  const {
+    llmRequestId,
+    endpoint,
+    project,
+    username,
+    agent,
+    consolidationProvider,
+    consolidationModel,
+    traceId,
+    agentConversationId,
+    aiMessages,
+    result,
+    realUsage,
+    llmSuccess,
+    llmError,
+    llmStart,
+    trigger,
+    batchIndex,
+    totalBatches,
+    clusterCount,
+    staleCount,
+  } = params;
+
   RequestLogger.logBackgroundLlmCall({
     requestId: llmRequestId,
     endpoint: endpoint || null,
@@ -279,8 +449,27 @@ async function processBatch(
       staleCount,
     },
   });
+}
 
-  // Broadcast incremental usage with cost
+interface BatchUsageBroadcastParams {
+  broadcast?: ((event: Record<string, unknown>) => void) | null;
+  llmSuccess: boolean;
+  consolidationModel: string;
+  realUsage: Record<string, number> | null;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+function broadcastBatchUsage(params: BatchUsageBroadcastParams): void {
+  const {
+    broadcast,
+    llmSuccess,
+    consolidationModel,
+    realUsage,
+    inputTokens,
+    outputTokens,
+  } = params;
+
   if (typeof broadcast === "function" && llmSuccess) {
     try {
       const consolidatePricing = getPricing(TYPES.TEXT, TYPES.TEXT)[
@@ -306,29 +495,22 @@ async function processBatch(
       /* SSE channel may be closed */
     }
   }
+}
 
-  if (!llmSuccess || !result?.text) {
-    return [];
-  }
-
-  // Parse response with enhanced diagnostics
-  const parsed = parseJsonFromLargeLanguageModelResponse(result.text) as {
-    actions?: ConsolidationAction[];
-  } | null;
-  if (!parsed) {
-    const responseLength = result.text?.length || 0;
-    const snippet = result.text?.substring(0, 300) || "(empty)";
-    const tail =
-      responseLength > 300 ? result.text.substring(responseLength - 200) : "";
-    logger.warn(
-      `[MemoryConsolidation] ${batchLabel} Failed to parse LLM response ` +
-        `(${responseLength} chars, ~${outputTokens} tokens). ` +
-        `Head: ${snippet}${tail ? `\n  Tail: ${tail}` : ""}`,
-    );
-    return [];
-  }
-
-  return parsed.actions || [];
+function reportUnparsableResponse(
+  resultText: string,
+  batchLabel: string,
+  outputTokens: number,
+): void {
+  const responseLength = resultText.length || 0;
+  const snippet = resultText.substring(0, 300) || "(empty)";
+  const tail =
+    responseLength > 300 ? resultText.substring(responseLength - 200) : "";
+  logger.warn(
+    `[MemoryConsolidation] ${batchLabel} Failed to parse LLM response ` +
+      `(${responseLength} chars, ~${outputTokens} tokens). ` +
+      `Head: ${snippet}${tail ? `\n  Tail: ${tail}` : ""}`,
+  );
 }
 
 // ─── Candidate Collection ────────────────────────────────────────────────────

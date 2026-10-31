@@ -66,11 +66,16 @@ function isForcedFinalTurn(messages: any[], tools: unknown, toolChoice: unknown)
 export const openingStackLine = (stack: string[]) => "Usual opening bundle for this role (learned from past runs): " +
   stack.join(", ") + ". They are keyed by the ticker; when you need them, call them together in your first response.";
 
-export function applyTradingToolProtocol(body: Record<string, any>, allowedTools?: string[], openingStack: string[] = []): {
-  body: Record<string, any>; removedTools: number; correctedAcknowledgements: number; deniedTools: string[];
-  finalTurnDirected: boolean;
-} {
-  const allowed = allowedTools ? new Set(allowedTools.map(stripMcpPrefix)) : null;
+interface TradingToolsSelection {
+  tools: any;
+  removedTools: number;
+  deniedTools: string[];
+}
+
+function buildTradingTools(
+  body: Record<string, any>,
+  allowed: Set<string> | null,
+): TradingToolsSelection {
   const deniedTools: string[] = [];
   const tools = Array.isArray(body.tools) ? body.tools.filter((t: any) => {
     const name = t.function?.name;
@@ -83,17 +88,29 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
     return true;
   }) : body.tools;
   const removedTools = Array.isArray(body.tools) ? body.tools.length - tools.length : 0;
+  return { tools, removedTools, deniedTools };
+}
+
+function buildTradingHint(
+  hintEnabled: boolean,
+  callable: Set<string>,
+  stack: string[],
+): string {
+  const lines = [hintEnabled && callable.size > 1 ? PARALLEL_TOOL_HINT : "", stack.length > 1 ? openingStackLine(stack) : ""]
+    .filter(Boolean);
+  return lines.length ? "\n\n" + lines.join("\n") : "";
+}
+
+function rewriteTradingMessages(
+  messages: any[],
+  protocolText: string,
+  hint: string,
+): { messages: any[]; correctedAcknowledgements: number } {
   const thinkIds = new Set<string>();
   let correctedAcknowledgements = 0;
   let injected = false;
-  const hintEnabled = (process.env.TRADING_PARALLEL_TOOL_HINT || "true").toLowerCase() !== "false";
-  const callable = new Set(Array.isArray(tools)
-    ? tools.map((t: { function?: { name?: unknown } }) => stripMcpPrefix(String(t.function?.name))) : []);
-  const stack = openingStack.filter((t) => callable.has(stripMcpPrefix(t)));
-  const lines = [hintEnabled && callable.size > 1 ? PARALLEL_TOOL_HINT : "", stack.length > 1 ? openingStackLine(stack) : ""]
-    .filter(Boolean);
-  const hint = lines.length ? "\n\n" + lines.join("\n") : "";
-  const messages = (body.messages || []).map((m: any) => {
+
+  const rewrittenMessages = messages.map((m: any) => {
     if (m.role === "assistant") for (const call of m.tool_calls || []) {
       if (isThink(call.function?.name) && typeof call.id === "string") thinkIds.add(call.id);
     }
@@ -103,17 +120,22 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
     }
     if (!injected && m.role === "system" && typeof m.content === "string") {
       injected = true;
-      return { ...m, content: protocol + "\n\n" + m.content + hint };
+      return { ...m, content: protocolText + "\n\n" + m.content + hint };
     }
     return m;
   });
-  if (!injected) messages.unshift({ role: "system", content: protocol + hint });
-  const finalTurnDirected = isForcedFinalTurn(messages, tools, body.tool_choice);
-  if (finalTurnDirected) {
-    const last = messages[messages.length - 1];
-    messages[messages.length - 1] = { ...last, content: last.content + "\n" + FINAL_TURN_DIRECTIVE };
-  }
-  const result: Record<string, any> = { ...body, messages, ...(Array.isArray(tools) ? { tools } : {}) };
+  if (!injected) rewrittenMessages.unshift({ role: "system", content: protocolText + hint });
+
+  return { messages: rewrittenMessages, correctedAcknowledgements };
+}
+
+function normalizeTradingToolChoice(
+  body: Record<string, any>,
+  result: Record<string, any>,
+  tools: any,
+  removedTools: number,
+  deniedTools: string[],
+): void {
   if (isThink(body.tool_choice?.function?.name) || deniedTools.includes(body.tool_choice?.function?.name)) result.tool_choice = tools?.length ? "auto" : "none";
   if (removedTools && !tools.length && body.tool_choice === "required") result.tool_choice = "none";
   // OpenAI-compatible providers reject tools:[] before inference. A tool-less
@@ -122,5 +144,26 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
     delete result.tools;
     delete result.tool_choice;
   }
+}
+
+export function applyTradingToolProtocol(body: Record<string, any>, allowedTools?: string[], openingStack: string[] = []): {
+  body: Record<string, any>; removedTools: number; correctedAcknowledgements: number; deniedTools: string[];
+  finalTurnDirected: boolean;
+} {
+  const allowed = allowedTools ? new Set(allowedTools.map(stripMcpPrefix)) : null;
+  const { tools, removedTools, deniedTools } = buildTradingTools(body, allowed);
+  const hintEnabled = (process.env.TRADING_PARALLEL_TOOL_HINT || "true").toLowerCase() !== "false";
+  const callable = new Set(Array.isArray(tools)
+    ? tools.map((t: { function?: { name?: unknown } }) => stripMcpPrefix(String(t.function?.name))) : []);
+  const stack = openingStack.filter((t) => callable.has(stripMcpPrefix(t)));
+  const hint = buildTradingHint(hintEnabled, callable, stack);
+  const { messages, correctedAcknowledgements } = rewriteTradingMessages(body.messages || [], protocol, hint);
+  const finalTurnDirected = isForcedFinalTurn(messages, tools, body.tool_choice);
+  if (finalTurnDirected) {
+    const last = messages[messages.length - 1];
+    messages[messages.length - 1] = { ...last, content: last.content + "\n" + FINAL_TURN_DIRECTIVE };
+  }
+  const result: Record<string, any> = { ...body, messages, ...(Array.isArray(tools) ? { tools } : {}) };
+  normalizeTradingToolChoice(body, result, tools, removedTools, deniedTools);
   return { body: result, removedTools, correctedAcknowledgements, deniedTools, finalTurnDirected };
 }

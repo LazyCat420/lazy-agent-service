@@ -209,6 +209,80 @@ async function forwardToHtmlNotes(
   }
 }
 
+interface StrainRequest {
+  url: string;
+  init?: RequestInit;
+}
+
+function buildStrainReadRequest(
+  tName: string,
+  args: Record<string, unknown>,
+  baseUrl: string,
+): StrainRequest | null {
+  const name = encodeURIComponent(String(args.strain_name ?? ""));
+
+  switch (tName) {
+    case "strain_search": {
+      const params = new URLSearchParams({
+        search: String(args.query ?? ""),
+        limit: String(args.limit ?? 20),
+      });
+      if (args.complete_only) params.set("complete_only", "true");
+      return { url: `${baseUrl}/api/strains?${params}` };
+    }
+    case "strain_detail": {
+      const params = new URLSearchParams({
+        include_observations: String(args.include_observations ?? false),
+      });
+      return { url: `${baseUrl}/api/strains/${name}/detail?${params}` };
+    }
+    case "strain_terpene_profile":
+      return { url: `${baseUrl}/api/strains/${name}/terpene-profile` };
+    case "strain_forum_posts": {
+      const params = new URLSearchParams({ limit: String(args.limit ?? 25) });
+      if (args.source) params.set("source", String(args.source));
+      return { url: `${baseUrl}/api/strains/${name}/observations?${params}` };
+    }
+    case "strain_images": {
+      const params = new URLSearchParams({ limit: String(args.limit ?? 20) });
+      return { url: `${baseUrl}/api/strains/${name}/images?${params}` };
+    }
+    case "strain_neighbors": {
+      const params = new URLSearchParams({ k: String(args.k ?? 10) });
+      return { url: `${baseUrl}/api/strains/${name}/neighbors?${params}` };
+    }
+    default:
+      return null;
+  }
+}
+
+function buildStrainJobRequest(
+  tName: string,
+  args: Record<string, unknown>,
+  baseUrl: string,
+): StrainRequest | null {
+  if (tName === "strain_import") {
+    return {
+      url: `${baseUrl}/api/strains/import`,
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: String(args.strain_name ?? ""),
+          force: Boolean(args.force ?? false),
+          stream: false, // return a job_id; do not hold the tool call open for minutes
+        }),
+      },
+    };
+  }
+  if (tName === "strain_import_status") {
+    return {
+      url: `${baseUrl}/api/import-jobs/${encodeURIComponent(String(args.job_id ?? ""))}`,
+    };
+  }
+  return null;
+}
+
 /**
  * Route a local-catalog tool call to its executor and return the result.
  * Never throws for widget/html-notes routing errors (returns {error} objects);
@@ -230,71 +304,22 @@ async function routeStrainTool(
   args: Record<string, unknown>
 ): Promise<unknown> {
   const baseUrl = CONFIG.TREESEARCH_SERVICE_URL;
-  const name = () => encodeURIComponent(String(args.strain_name ?? ""));
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CONFIG.EXECUTION_TIMEOUT_MS);
 
   try {
-    let response: globalThis.Response;
+    const request = buildStrainJobRequest(tName, args, baseUrl)
+      ?? buildStrainReadRequest(tName, args, baseUrl);
 
-    switch (tName) {
-      case "strain_search": {
-        const params = new URLSearchParams({
-          search: String(args.query ?? ""),
-          limit: String(args.limit ?? 20),
-        });
-        if (args.complete_only) params.set("complete_only", "true");
-        response = await fetch(`${baseUrl}/api/strains?${params}`, { signal: controller.signal });
-        break;
-      }
-      case "strain_detail": {
-        const params = new URLSearchParams({
-          include_observations: String(args.include_observations ?? false),
-        });
-        response = await fetch(`${baseUrl}/api/strains/${name()}/detail?${params}`, { signal: controller.signal });
-        break;
-      }
-      case "strain_terpene_profile":
-        response = await fetch(`${baseUrl}/api/strains/${name()}/terpene-profile`, { signal: controller.signal });
-        break;
-      case "strain_forum_posts": {
-        const params = new URLSearchParams({ limit: String(args.limit ?? 25) });
-        if (args.source) params.set("source", String(args.source));
-        response = await fetch(`${baseUrl}/api/strains/${name()}/observations?${params}`, { signal: controller.signal });
-        break;
-      }
-      case "strain_images": {
-        const params = new URLSearchParams({ limit: String(args.limit ?? 20) });
-        response = await fetch(`${baseUrl}/api/strains/${name()}/images?${params}`, { signal: controller.signal });
-        break;
-      }
-      case "strain_neighbors": {
-        const params = new URLSearchParams({ k: String(args.k ?? 10) });
-        response = await fetch(`${baseUrl}/api/strains/${name()}/neighbors?${params}`, { signal: controller.signal });
-        break;
-      }
-      case "strain_import":
-        response = await fetch(`${baseUrl}/api/strains/import`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: String(args.strain_name ?? ""),
-            force: Boolean(args.force ?? false),
-            stream: false, // return a job_id; do not hold the tool call open for minutes
-          }),
-          signal: controller.signal,
-        });
-        break;
-      case "strain_import_status":
-        response = await fetch(
-          `${baseUrl}/api/import-jobs/${encodeURIComponent(String(args.job_id ?? ""))}`,
-          { signal: controller.signal }
-        );
-        break;
-      default:
-        return { error: `Unknown strain tool: ${tName}`, is_error: true };
+    if (!request) {
+      return { error: `Unknown strain tool: ${tName}`, is_error: true };
     }
+
+    const response = await fetch(request.url, {
+      ...request.init,
+      signal: controller.signal,
+    });
 
     const body = await response.text();
     if (!response.ok) {

@@ -21,6 +21,40 @@ const DEFAULT_BRANCH_FACTOR = 3;
 const MAXIMUM_EVALUATION_CHARACTERS = 100_000;
 const DEFAULT_EXPLORATION_WEIGHT = 1.41;
 
+export interface MCTSConfig {
+  branchFactor: number;
+  maximumDepth: number;
+  explorationWeight: number;
+  searchIterations: number;
+}
+
+function resolveMCTSConfig(
+  topologyConfig: TopologyConfig | undefined,
+  memberCount: number,
+): MCTSConfig {
+  const branchFactor = Math.min(
+    Math.max(
+      1,
+      Number(topologyConfig?.branchFactor) || DEFAULT_BRANCH_FACTOR,
+    ),
+    Math.max(memberCount, 2),
+  );
+  const maximumDepth = Math.max(
+    1,
+    Number(topologyConfig?.maxDepth) || DEFAULT_MAXIMUM_DEPTH,
+  );
+  const explorationWeight = Math.max(
+    0,
+    Number(topologyConfig?.explorationWeight) || DEFAULT_EXPLORATION_WEIGHT,
+  );
+  const searchIterations = Math.max(
+    1,
+    Number(topologyConfig?.searchIterations) || maximumDepth,
+  );
+
+  return { branchFactor, maximumDepth, explorationWeight, searchIterations };
+}
+
 export interface MCTSTreeNode {
   nodeIndex: number;
   depth: number;
@@ -587,25 +621,8 @@ export class MCTSRouter implements TopologyRouter {
   ): Promise<(SubAgentResult | { error: string })[]> {
     const { providerName } = orchestratorContext;
     const originalTask = members[0]?.prompt || "";
-    const branchFactor = Math.min(
-      Math.max(
-        1,
-        Number(topologyConfig?.branchFactor) || DEFAULT_BRANCH_FACTOR,
-      ),
-      Math.max(members.length, 2),
-    );
-    const maximumDepth = Math.max(
-      1,
-      Number(topologyConfig?.maxDepth) || DEFAULT_MAXIMUM_DEPTH,
-    );
-    const explorationWeight = Math.max(
-      0,
-      Number(topologyConfig?.explorationWeight) || DEFAULT_EXPLORATION_WEIGHT,
-    );
-    const searchIterations = Math.max(
-      1,
-      Number(topologyConfig?.searchIterations) || maximumDepth,
-    );
+    const { branchFactor, maximumDepth, explorationWeight, searchIterations } =
+      resolveMCTSConfig(topologyConfig, members.length);
 
     logger.info(
       `[MCTSRouter] Starting MCTS search for team "${teamName}" ` +

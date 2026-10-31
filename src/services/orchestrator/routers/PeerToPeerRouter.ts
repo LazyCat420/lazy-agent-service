@@ -105,6 +105,218 @@ function isStallResponse(
   return isShortResponse && hasNoToolUsage;
 }
 
+interface TurnSpawnParams {
+  member: TeamMember;
+  memberIndex: number;
+  speakerName: string;
+  promptHistory: string;
+  isFirstTurnForMember: boolean;
+  turnIndex: number;
+  currentRound: number;
+  totalRoundsCount: number;
+  memberCount: number;
+  orchestratorContext: OrchestratorContext;
+  spawnSubAgent: (
+    assignment: OrchestratorSpawnParams,
+  ) => Promise<SubAgentResult | { error: string }>;
+  continueSubAgent?: ContinueSubAgentCallback;
+  agentIdsByMemberIndex: Map<number, string>;
+}
+
+async function runTurnSpawn(
+  params: TurnSpawnParams,
+): Promise<SubAgentResult | { error: string }> {
+  const {
+    member,
+    memberIndex,
+    speakerName,
+    promptHistory,
+    isFirstTurnForMember,
+    turnIndex,
+    currentRound,
+    totalRoundsCount,
+    memberCount,
+    orchestratorContext,
+    spawnSubAgent,
+    continueSubAgent,
+    agentIdsByMemberIndex,
+  } = params;
+  const { providerName, resolvedModel } = orchestratorContext;
+
+  if (isFirstTurnForMember) {
+    // ── First turn: Spawn the agent with preserveWorktree so the worktree
+    // stays alive for subsequent continuation turns.
+    const resolvedSiblings = await resolveSiblingInstances(
+      { providerName, resolvedModel },
+      "PeerToPeerRouter",
+    );
+    const { assignedProvider, assignedModel } = selectInstanceForMember(
+      member,
+      resolvedSiblings,
+      { providerName, resolvedModel },
+    );
+
+    const assignment: OrchestratorSpawnParams = {
+      description: `${member.description} (Turn ${turnIndex + 1})`,
+      prompt: promptHistory,
+      files: member.files,
+      model: member.model,
+      agent: member.agent,
+      assignedProvider,
+      assignedModel,
+      agentIndex: memberIndex,
+      teamSize: memberCount,
+      round: currentRound,
+      totalRounds: totalRoundsCount,
+      orchestratorContext,
+      preserveWorktree: true,
+    };
+
+    const spawnResult = await spawnSubAgent(assignment);
+
+    // Register the agentId so subsequent turns reuse this agent
+    if (!("error" in spawnResult)) {
+      agentIdsByMemberIndex.set(memberIndex, spawnResult.agent_id);
+    }
+
+    return spawnResult;
+  }
+
+  // ── Subsequent turn: Continue the existing agent session.
+  // The agent retains its conversation history, worktree state, and tool context.
+  const existingAgentId = agentIdsByMemberIndex.get(memberIndex)!;
+
+  if (!continueSubAgent) {
+    logger.error(
+      `[PeerToPeerRouter] continueSubAgent callback not provided — cannot reuse session for "${speakerName}"`,
+    );
+    return {
+      error:
+        "continueSubAgent callback not available for session reuse",
+    };
+  }
+
+  return continueSubAgent(
+    existingAgentId,
+    promptHistory,
+    orchestratorContext,
+    currentRound,
+  );
+}
+
+interface TurnMergeParams {
+  spawnResult: SubAgentResult;
+  member: TeamMember;
+  turnIndex: number;
+  speakerName: string;
+  orchestratorContext: OrchestratorContext;
+}
+
+async function mergeTurnWorktree(
+  params: TurnMergeParams,
+): Promise<string | null> {
+  const { spawnResult, member, turnIndex, speakerName, orchestratorContext } =
+    params;
+
+  const hasFileChanges =
+    spawnResult.status === "completed" &&
+    spawnResult.agent_id &&
+    spawnResult.diff;
+
+  if (!hasFileChanges) {
+    if (spawnResult.status === "completed") {
+      logger.info(
+        `[PeerToPeerRouter] No file changes from speaker "${speakerName}" — skipping merge step`,
+      );
+    }
+    return null;
+  }
+
+  const subAgentId = spawnResult.agent_id!;
+  const branchName = `orchestrator/${subAgentId}`;
+  const workspaceRoot = GitWorktreeHelper.getDefaultWorkspaceRoot(
+    orchestratorContext.workspaceRoot ?? undefined,
+  );
+  const repositoryPath = GitWorktreeHelper.resolveRepositoryPath(
+    workspaceRoot,
+    member.files || [],
+  );
+
+  logger.info(
+    `[PeerToPeerRouter] Merging branch ${branchName} back into main repo`,
+  );
+  const mergeResult = await GitWorktreeHelper.mergeWorktree(
+    repositoryPath,
+    branchName,
+    `chore(mesh): merge turn ${turnIndex + 1} from ${speakerName}`,
+  );
+
+  if (mergeResult.error) {
+    const errorMessage = `Failed to merge branch for ${subAgentId}: ${mergeResult.error}`;
+    logger.error(`[PeerToPeerRouter] ${errorMessage}`);
+    return errorMessage;
+  }
+
+  return null;
+}
+
+interface TurnOutputParams {
+  spawnResult: SubAgentResult;
+  speakerName: string;
+  sharedDiscussion: string[];
+  consecutiveStallCount: number;
+  maximumConsecutiveStalls: number;
+}
+
+interface TurnOutputOutcome {
+  stop: boolean;
+  consecutiveStallCount: number;
+}
+
+function recordTurnOutput(params: TurnOutputParams): TurnOutputOutcome {
+  const {
+    spawnResult,
+    speakerName,
+    sharedDiscussion,
+    consecutiveStallCount,
+    maximumConsecutiveStalls,
+  } = params;
+
+  const rawResponseText =
+    spawnResult.result ||
+    buildToolCallFallbackSummary(spawnResult) ||
+    spawnResult.summary;
+  const cleanedResponseText =
+    stripEchoedDiscussionMarkers(rawResponseText);
+  sharedDiscussion.push(`[${speakerName}]: ${cleanedResponseText}`);
+
+  // Early exit check: if an agent signs off with [DONE] or all tasks are finished
+  if (rawResponseText.toUpperCase().includes("[DONE]")) {
+    logger.info(
+      `[PeerToPeerRouter] Speaker "${speakerName}" signaled termination ([DONE]). Stopping.`,
+    );
+    return { stop: true, consecutiveStallCount };
+  }
+
+  // Stall detection — short response with no tool usage indicates the agent
+  // had nothing actionable. Consecutive stalls abort the mesh to prevent runaway loops.
+  if (isStallResponse(rawResponseText, spawnResult)) {
+    const nextStallCount = consecutiveStallCount + 1;
+    logger.warn(
+      `[PeerToPeerRouter] Stall detected from "${speakerName}" (${nextStallCount}/${maximumConsecutiveStalls} consecutive stalls)`,
+    );
+    if (nextStallCount >= maximumConsecutiveStalls) {
+      logger.error(
+        `[PeerToPeerRouter] ${maximumConsecutiveStalls} consecutive stall responses detected — aborting mesh to prevent runaway loop`,
+      );
+      return { stop: true, consecutiveStallCount: nextStallCount };
+    }
+    return { stop: false, consecutiveStallCount: nextStallCount };
+  }
+
+  return { stop: false, consecutiveStallCount: 0 };
+}
+
 /**
  * Peer-to-Peer (Mesh) Router — Multi-Agent Debate (MAD)
  *
@@ -125,7 +337,6 @@ export class PeerToPeerRouter implements TopologyRouter {
     continueSubAgent?: ContinueSubAgentCallback,
     topologyConfig?: TopologyConfig,
   ): Promise<(SubAgentResult | { error: string })[]> {
-    const { providerName, resolvedModel } = orchestratorContext;
     logger.info(
       `[PeerToPeerRouter] Starting Peer-to-Peer mesh execution of ${members.length} member(s)...`,
     );
@@ -188,65 +399,21 @@ export class PeerToPeerRouter implements TopologyRouter {
           ? `--- SHARED DISCUSSION BOARD ---\n${sharedDiscussion.join("\n\n")}\n\n--- YOUR TASK (${speakerName}) ---\n${speakerIdentityLine}\n\n${member.prompt}`
           : `${speakerIdentityLine}\n\n${member.prompt}`;
 
-      let spawnResult: SubAgentResult | { error: string };
-
-      if (isFirstTurnForMember) {
-        // ── First turn: Spawn the agent with preserveWorktree so the worktree
-        // stays alive for subsequent continuation turns.
-        const resolvedSiblings = await resolveSiblingInstances(
-          { providerName, resolvedModel },
-          "PeerToPeerRouter",
-        );
-        const { assignedProvider, assignedModel } = selectInstanceForMember(
-          member,
-          resolvedSiblings,
-          { providerName, resolvedModel },
-        );
-
-        const assignment: OrchestratorSpawnParams = {
-          description: `${member.description} (Turn ${turnIndex + 1})`,
-          prompt: promptHistory,
-          files: member.files,
-          model: member.model,
-          agent: member.agent,
-          assignedProvider,
-          assignedModel,
-          agentIndex: memberIndex,
-          teamSize: members.length,
-          round: currentRound,
-          totalRounds: totalRoundsCount,
-          orchestratorContext,
-          preserveWorktree: true,
-        };
-
-        spawnResult = await spawnSubAgent(assignment);
-
-        // Register the agentId so subsequent turns reuse this agent
-        if (!("error" in spawnResult)) {
-          agentIdsByMemberIndex.set(memberIndex, spawnResult.agent_id);
-        }
-      } else {
-        // ── Subsequent turn: Continue the existing agent session.
-        // The agent retains its conversation history, worktree state, and tool context.
-        const existingAgentId = agentIdsByMemberIndex.get(memberIndex)!;
-
-        if (!continueSubAgent) {
-          logger.error(
-            `[PeerToPeerRouter] continueSubAgent callback not provided — cannot reuse session for "${speakerName}"`,
-          );
-          spawnResult = {
-            error:
-              "continueSubAgent callback not available for session reuse",
-          };
-        } else {
-          spawnResult = await continueSubAgent(
-            existingAgentId,
-            promptHistory,
-            orchestratorContext,
-            currentRound,
-          );
-        }
-      }
+      const spawnResult = await runTurnSpawn({
+        member,
+        memberIndex,
+        speakerName,
+        promptHistory,
+        isFirstTurnForMember,
+        turnIndex,
+        currentRound,
+        totalRoundsCount,
+        memberCount: members.length,
+        orchestratorContext,
+        spawnSubAgent,
+        continueSubAgent,
+        agentIdsByMemberIndex,
+      });
 
       latestResultByMemberIndex.set(memberIndex, spawnResult);
 
@@ -265,79 +432,36 @@ export class PeerToPeerRouter implements TopologyRouter {
       }
 
       // Merge modifications back so other worktrees see them (only if the agent actually changed files)
-      const hasFileChanges =
-        spawnResult.status === "completed" &&
-        spawnResult.agent_id &&
-        spawnResult.diff;
+      const mergeError = await mergeTurnWorktree({
+        spawnResult,
+        member,
+        turnIndex,
+        speakerName,
+        orchestratorContext,
+      });
 
-      if (hasFileChanges) {
-        const subAgentId = spawnResult.agent_id!;
-        const branchName = `orchestrator/${subAgentId}`;
-        const workspaceRoot = GitWorktreeHelper.getDefaultWorkspaceRoot(
-          orchestratorContext.workspaceRoot ?? undefined,
-        );
-        const repositoryPath = GitWorktreeHelper.resolveRepositoryPath(
-          workspaceRoot,
-          member.files || [],
-        );
-
-        logger.info(
-          `[PeerToPeerRouter] Merging branch ${branchName} back into main repo`,
-        );
-        const mergeResult = await GitWorktreeHelper.mergeWorktree(
-          repositoryPath,
-          branchName,
-          `chore(mesh): merge turn ${turnIndex + 1} from ${speakerName}`,
-        );
-
-        if (mergeResult.error) {
-          const errorMessage = `Failed to merge branch for ${subAgentId}: ${mergeResult.error}`;
-          logger.error(`[PeerToPeerRouter] ${errorMessage}`);
-          return [
-            ...latestResultByMemberIndex.values(),
-            { error: errorMessage },
-          ];
-        }
-      } else if (spawnResult.status === "completed") {
-        logger.info(
-          `[PeerToPeerRouter] No file changes from speaker "${speakerName}" — skipping merge step`,
-        );
+      if (mergeError) {
+        return [
+          ...latestResultByMemberIndex.values(),
+          { error: mergeError },
+        ];
       }
 
       // Append speaker output to shared thread — strip any echoed discussion
       // board markers the sub-agent may have included in its response to keep
       // the shared thread flat and avoid nested board duplication.
-      const rawResponseText =
-        spawnResult.result ||
-        buildToolCallFallbackSummary(spawnResult) ||
-        spawnResult.summary;
-      const cleanedResponseText =
-        stripEchoedDiscussionMarkers(rawResponseText);
-      sharedDiscussion.push(`[${speakerName}]: ${cleanedResponseText}`);
+      const outputOutcome = recordTurnOutput({
+        spawnResult,
+        speakerName,
+        sharedDiscussion,
+        consecutiveStallCount,
+        maximumConsecutiveStalls,
+      });
+      consecutiveStallCount = outputOutcome.consecutiveStallCount;
 
       // Early exit check: if an agent signs off with [DONE] or all tasks are finished
-      if (rawResponseText.toUpperCase().includes("[DONE]")) {
-        logger.info(
-          `[PeerToPeerRouter] Speaker "${speakerName}" signaled termination ([DONE]). Stopping.`,
-        );
+      if (outputOutcome.stop) {
         break;
-      }
-
-      // Stall detection — short response with no tool usage indicates the agent
-      // had nothing actionable. Consecutive stalls abort the mesh to prevent runaway loops.
-      if (isStallResponse(rawResponseText, spawnResult)) {
-        consecutiveStallCount++;
-        logger.warn(
-          `[PeerToPeerRouter] Stall detected from "${speakerName}" (${consecutiveStallCount}/${maximumConsecutiveStalls} consecutive stalls)`,
-        );
-        if (consecutiveStallCount >= maximumConsecutiveStalls) {
-          logger.error(
-            `[PeerToPeerRouter] ${maximumConsecutiveStalls} consecutive stall responses detected — aborting mesh to prevent runaway loop`,
-          );
-          break;
-        }
-      } else {
-        consecutiveStallCount = 0;
       }
     }
 
