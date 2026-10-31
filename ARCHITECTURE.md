@@ -159,8 +159,8 @@ takes ~35 s on `main`. Reports land in `.checks/quality-<date>/`.
 
 | gate | command | threshold |
 |---|---|---|
-| McCabe complexity (ESLint) | `npm run lint` | warn at **20** per function (ratchet), `max-depth` 5, `max-params` 6, `max-lines-per-function` 150 |
-| CRAP + coverage | `npm run quality:crap` | fails at cx > 30; at most **3** functions over CRAP 60 (ratchet; today only the `src/index.ts` bootstrap) |
+| McCabe complexity (ESLint) | `npm run lint` | **error at 20** per function, `max-depth` 5 (warn), `max-params` 6 (warn), `max-lines-per-function` 150 (warn) |
+| CRAP + coverage | `npm run quality:crap` | fails at cx > 30; **0** functions over CRAP 60 |
 | Duplication (jscpd) | `npm run quality:dry` | logic duplication ≤ 8 % (declarative tables excluded) |
 | Architecture (dependency-cruiser) | `npm run quality:arch` | 0 errors: services/utils must not import routes |
 | Dead code (knip) | `npm run quality:deadcode` | report only |

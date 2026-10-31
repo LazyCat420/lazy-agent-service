@@ -5,6 +5,66 @@ type: record
 updated: 2026-10-31
 ---
 
+# HANDOFF — CRAP 0, complexity ratchet at error 20, tested boot (2026-10-31)
+
+The quality tail of the 2026-10-29 gates closed. Measured on `main` after the
+batch (`npm run quality:crap`, 5,189 functions):
+
+| metric | 2026-10-29 (`57572df`) | now |
+|---|---|---|
+| CRAP > 60 | 353 | **0** |
+| McCabe > 30 | 0 | **0** (max 20) |
+| ESLint `complexity` | warn 20 | **error 20**, 0 findings |
+| coverage | stmts 47.85 / fn 56.14 | **82.39 / 82.66** (lines 83.53) |
+| duplication (logic) | 2.26 % | **2.14 %** |
+| architecture | 0 errors / 137 warn | 0 errors / 144 warn |
+| tests | 3,306 | **3,344** (241 files) |
+
+**Boot is no longer untestable.** `src/index.ts` was 724 lines and the only
+thing over CRAP 60; it is now 33 lines over three tested modules:
+`src/boot/server.ts` (`createHttpRuntime` — middleware, health, routes, error
+handler, WSS), `src/boot/indexes.ts` (`INDEX_DEFINITIONS`),
+`src/boot/runtime.ts` (`connectDatabases`, `ensureCollectionIndexes`,
+`clearStaleGenerationFlags`, `loadCustomAgents`, `consolidateAllProjects`,
+`runConsolidationSweep`/`runHousekeepingSweep` as single ticks plus their
+timer wrappers, table-driven `startDaemons`, `initMinio`, `startRuntime`,
+`logStartupBanner`, `onListening`). Every dependency is injected, so
+`src/boot/__tests__/runtime.test.ts` drives behaviour with fakes and no
+timers (24 tests). `PlatformRoutesTradingDb.test.ts` used to grep `index.ts`
+source text for boot order; it now calls `connectDatabases` with fakes.
+
+**Complexity.** 95 functions sat at cx 21–53. Five agents decomposed them in
+disjoint file groups — utils/providers/core, harnesses, orchestrator,
+routes/request-logger, remaining services — by pure in-file helper extraction
+(no exported signature, log text, prompt text or side-effect order changed),
+then the two functions the inventory missed (`RuntimeClient.readEvents` 24 →
+`extractDataPayload`/`isValidRunEvent`; `authMiddleware` 22 →
+`resolveProject`/`resolveClientIp`/`applyToRequestContext`). `RequestLogger.log`
+went 53 → 3; `ConfigRoutes` persona list 38 → 2; `ToolOrchestratorService`
+`executeToolStreaming` 36 → 7. The rule is now `["error", 20]`.
+
+**Coverage fix for the last CRAP offender:** the extraction left
+`emitRetrySpans` (cx 9, coverage 0) at CRAP 90 — the only failure.
+`ToolRetryInterceptorSpans.test.ts` drives `buildToolRetryGuidance` with a
+stopped `TraceExporter` and asserts the emitted span (name, kind, status,
+trace/run/parent ids, attributes), the circuit-breaker case (no span) and the
+success case (no span).
+
+**Verified:** `npm run verify` exit 0 (241 files / 3,344 tests, 0 lint errors,
+70 warnings); `npm run quality:crap` PASS (cx>30 0, CRAP>60 0); dry 2.138 %;
+arch 0 errors; prompt budget PASS (compact 22.6 % of full).
+Live boot on `8eed5ac`: indexes 48/48, AutoDream 24 h, housekeeping boot +
+6 h schedule, banner on port 7778, `/health` 200, vLLM shims (`jetson`,
+`gold-spark`, `jetson-2`) responding, `nemotron35` chat completing and
+releasing the GPU lock.
+
+**Next:** real `no-circular` cycles (144 warnings) then make that rule an
+error; knip exports/types against `CONTRACT_OWNERSHIP.md`; per-directory
+coverage floors; `max-depth`/`max-params`/`max-lines-per-function` still warn —
+ratchet those the same way when their counts reach 0.
+
+---
+
 # HANDOFF — `scrape_url` no longer advertises a file it cannot read (2026-10-31)
 
 Measured after `cc3308a` (31 scrape_url calls, 15 failed): the malformed bucket

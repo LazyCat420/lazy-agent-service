@@ -1,5 +1,24 @@
 import type { CreateRunRequest, RunEvent, RunResult } from "../types/run.ts";
 
+/** Concatenate the `data:` lines of one SSE block into its JSON payload. */
+function extractDataPayload(block: string): string {
+  return block
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).replace(/^ /, ""))
+    .join("\n");
+}
+
+/** A well-formed event has string id/run_id/type, a parseable timestamp, and an object payload. */
+function isValidRunEvent(event: RunEvent): boolean {
+  if (!event || typeof event.id !== "string" || !event.id) return false;
+  if (typeof event.run_id !== "string" || !event.run_id) return false;
+  if (typeof event.type !== "string") return false;
+  if (typeof event.timestamp !== "string") return false;
+  if (!Number.isFinite(Date.parse(event.timestamp))) return false;
+  return !!event.data && typeof event.data === "object" && !Array.isArray(event.data);
+}
+
 /** Transport only: applications execute local tools and submit observations; no reasoning loop. */
 export class RuntimeClient {
   constructor(private baseUrl: string, private headers: Record<string, string> = {}) {
@@ -38,11 +57,11 @@ export class RuntimeClient {
         while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
           const block = buffer.slice(0, boundary.index);
           buffer = buffer.slice(boundary.index + boundary[0].length);
-          const payload = block.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).replace(/^ /, "")).join("\n");
+          const payload = extractDataPayload(block);
           if (!payload) continue;
           if (payload === "[DONE]") throw new Error("Runtime stream ended without a terminal outcome");
           const event = JSON.parse(payload) as RunEvent;
-          if (!event || !event.id || typeof event.id !== "string" || !event.run_id || typeof event.run_id !== "string" || typeof event.type !== "string" || typeof event.timestamp !== "string" || !Number.isFinite(Date.parse(event.timestamp)) || !event.data || typeof event.data !== "object" || Array.isArray(event.data)) throw new Error("Invalid runtime event");
+          if (!isValidRunEvent(event)) throw new Error("Invalid runtime event");
           if (runId && event.run_id !== runId) throw new Error("Runtime event belongs to another run");
           runId = event.run_id;
           if (seen.has(event.id)) continue;

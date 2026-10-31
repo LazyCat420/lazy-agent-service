@@ -1,0 +1,89 @@
+{
+  "generatedAt": "2026-10-31T05:22:44.239Z",
+  "maxCompactRatio": 0.5,
+  "maxDescriptionChars": 600,
+  "maxFullTokens": 15000,
+  "rows": [
+    {
+      "scope": "html-notes",
+      "tools": 26,
+      "full": 5844,
+      "summary": 803,
+      "compact": 1033
+    },
+    {
+      "scope": "shared",
+      "tools": 2,
+      "full": 773,
+      "summary": 45,
+      "compact": 72
+    },
+    {
+      "scope": "trading",
+      "tools": 41,
+      "full": 5475,
+      "summary": 1183,
+      "compact": 1527
+    },
+    {
+      "scope": "treesearch",
+      "tools": 8,
+      "full": 840,
+      "summary": 226,
+      "compact": 287
+    },
+    {
+      "scope": "ALL",
+      "tools": 77,
+      "full": 12932,
+      "summary": 2256,
+      "compact": 2918
+    }
+  ],
+  "overlong": [
+    {
+      "name": "canvas_add_widget",
+      "chars": 6862
+    },
+    {
+      "name": "canvas_modify_dom",
+      "chars": 987
+    },
+    {
+      "name": "html_notes_app_action",
+      "chars": 809
+    },
+    {
+      "name": "html_notes_news",
+      "chars": 656
+    },
+    {
+      "name": "html_notes_stock_news",
+      "chars": 901
+    },
+    {
+      "name": "news_search",
+      "chars": 1343
+    },
+    {
+      "name": "run_equation",
+      "chars": 867
+    },
+    {
+      "name": "schedule_research",
+      "chars": 793
+    },
+    {
+      "name": "screener_query",
+      "chars": 1422
+    },
+    {
+      "name": "watch_ticker",
+      "chars": 980
+    }
+  ],
+  "warnings": [
+    "10 description(s) exceed 600 chars: canvas_add_widget (6862), canvas_modify_dom (987), html_notes_app_action (809), html_notes_news (656), html_notes_stock_news (901)"
+  ],
+  "failures": []
+}

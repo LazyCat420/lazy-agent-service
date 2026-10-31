@@ -8,14 +8,14 @@ import { createServiceEslintConfig } from "@rodrigo-barraza/utilities-library/es
  * Local quality rules layered on top of the shared service config.
  * The shared config (utilities-library) ships style rules only; these add the
  * maintainability ratchets: McCabe complexity, nesting depth, params and
- * function length. Thresholds start at the current worst offender (cx 30) and
- * are ratcheted down as Phase 2 decomposition lands.
+ * function length. Complexity is enforced at 20 (error); the other three are
+ * still warnings on the way to their own ratchet.
  */
 const qualityRules = {
   files: ["src/**/*.ts"],
   ignores: ["src/**/__tests__/**"],
   rules: {
-    complexity: ["warn", 20],
+    complexity: ["error", 20],
     "max-depth": ["warn", 5],
     "max-params": ["warn", 6],
     "max-lines-per-function": ["warn", { max: 150, skipBlankLines: true, skipComments: true }],

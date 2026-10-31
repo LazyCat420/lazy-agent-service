@@ -117,8 +117,8 @@ scanner, so the quality gate lives in CI instead of a second local hook.
 
 | gate | threshold | blocks? |
 |---|---|---|
-| `npm run lint` | complexity warn **20**, depth 5, params 6, function lines 150 | warnings only (97 complexity warnings today) |
-| `npm run quality:crap` | 0 functions over cx 30; at most **3** functions over CRAP 60 (ratchet; the `src/index.ts` bootstrap only) | yes |
+| `npm run lint` | complexity **error 20**, depth 5, params 6, function lines 150 | yes (0 findings today) |
+| `npm run quality:crap` | 0 functions over cx 30; **0** functions over CRAP 60 | yes |
 | `npm run quality:dry` | logic duplication ≤ 8 % (declarative tables excluded) | yes |
 | `npm run quality:arch` | 0 dependency errors | yes |
 | `npm run quality:prompt` | compact ≤ 50 % of full, full ≤ 15,000 tokens | yes |
@@ -130,13 +130,13 @@ does not run `prettier --check`: the repo has never been Prettier-formatted
 
 ## Remaining (ratchet plan)
 
-1. **0 functions over McCabe 30; 3 over CRAP 60** (down from 353). Two
-   coverage waves (353 → 176 → 3) took statements from 47.85 % to 81.71 % and
-   functions from 56.14 % to 81.85 %; the ceiling is now 3. The three left are
-   the `src/index.ts` bootstrap (boot IIFE, 24 h interval, `listen` callback),
-   covered only by the live deploy. Next: extract them into an injectable
-   `bootstrap()` so the gate can be 0, then tighten the ESLint
-   `complexity` rule from warn to **error at 20** (97 functions sit at 21–30).
+1. **0 functions over McCabe 30; 0 over CRAP 60 — done 2026-10-31.** Two
+   coverage waves took statements from 47.85 % to 82.4 % (functions 82.7 %).
+   The last three CRAP offenders were the `src/index.ts` bootstrap; it is now
+   `src/boot/{server,indexes,runtime}.ts` (24 tests, `index.ts` is 33 lines).
+   Then all 95 functions at cx 21–53 were decomposed by five agents in
+   disjoint file groups, and the ESLint `complexity` rule moved from warn to
+   **error at 20** (0 findings across `src`).
 2. 136 `no-circular` warnings: fix the real cycles, then make the rule an
    error; barrel-only cycles get an allowlist.
 3. 234 knip findings: delete unused exports/types in a dedicated batch and add
