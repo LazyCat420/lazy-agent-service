@@ -89,6 +89,121 @@ export function emitPostExecutionStatus(
   }
 }
 
+/** Upload raw audio carried by a tool result and emit the audio event. */
+async function uploadAudioResult(
+  audioResult: { data: string; mimeType?: string },
+  resultObject: ToolResultPayload | null,
+  emit: EmitFunction,
+): Promise<void> {
+  const mimeType = audioResult.mimeType || "audio/wav";
+  const dataUrl = `data:${mimeType};base64,${audioResult.data}`;
+  try {
+    const uploadResult = await FileService.uploadFile(
+      dataUrl,
+      FILE_CATEGORIES.GENERATIONS,
+    );
+    if (resultObject) {
+      resultObject.audioRef = uploadResult.ref;
+      delete resultObject.audio;
+    }
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.AUDIO,
+      data: uploadResult.ref,
+      mimeType,
+      minioRef: uploadResult.ref,
+    });
+  } catch (uploadError) {
+    logger.error(`[PostExecutionEmitter] Failed to upload audio:`, uploadError);
+  }
+}
+
+/** Emit the tool-execution event for one tool call. */
+function emitToolExecutionEvent(
+  toolCall: ToolCall,
+  toolResult: ToolResult | undefined,
+  resultObject: ToolResultPayload | null,
+  hasError: boolean,
+  emit: EmitFunction,
+): void {
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.TOOL_EXECUTION,
+    tool: {
+      name: toolCall.name,
+      args: toolCall.args || {},
+      id: toolCall.id,
+      responsesItemId: toolCall.responsesItemId,
+      result: resultObject,
+      durationMs: toolResult?.durationMs,
+    },
+    status: hasError ? "error" : "done",
+  });
+}
+
+/** Webhook fields derived from the request context. */
+function buildWebhookActorFields(context?: AgenticContext) {
+  return {
+    agent: context?.agent || null,
+    conversationId: context?.conversationId || null,
+    agentConversationId: context?.agentConversationId || null,
+    project: context?.project || null,
+    username: context?.username || null,
+    provider: context?.providerName || null,
+    model: context?.resolvedModel || null,
+  };
+}
+
+/** Emit the tool_call.completed webhook for one tool call. */
+function emitToolCompletedWebhook(
+  toolCall: ToolCall,
+  toolResult: ToolResult | undefined,
+  resultObject: ToolResultPayload | null,
+  hasError: boolean,
+  context?: AgenticContext,
+): void {
+  WebhookEventBus.emit("request.tool_call.completed", {
+    requestId: context?.requestId || null,
+    toolName: toolCall.name,
+    toolEmoji: ToolOrchestratorService.getToolEmoji(toolCall.name),
+    toolCallId: toolCall.id,
+    toolResult: resultObject,
+    durationMs: toolResult?.durationMs || null,
+    status: hasError ? "error" : "done",
+    ...buildWebhookActorFields(context),
+  });
+}
+
+/** Record a screenshot reference on both the state and the pass. */
+function recordScreenshot(
+  screenshotRef: unknown,
+  state: AgenticLoopState,
+  pass: PassState,
+): void {
+  state.streamedImages.push(screenshotRef as string);
+  pass.streamedImages.push(screenshotRef as string);
+}
+
+/** Record an image produced by a tool and emit the image event. */
+function recordAndEmitImage(
+  imageResult: { data: string; mimeType?: string; minioRef?: string },
+  resultObject: ToolResultPayload | null,
+  state: AgenticLoopState,
+  pass: PassState,
+  emit: EmitFunction,
+): void {
+  const toolImgRef =
+    imageResult.minioRef ||
+    `data:${imageResult.mimeType};base64,${imageResult.data}`;
+  state.streamedImages.push(toolImgRef);
+  pass.streamedImages.push(toolImgRef);
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.IMAGE,
+    data: imageResult.data,
+    mimeType: imageResult.mimeType,
+    minioRef: imageResult.minioRef,
+  });
+  if (resultObject) delete resultObject.image;
+}
+
 /** Process tool results for image/screenshot side-effects. */
 export async function processToolResultMedia(
   toolCalls: ToolCall[],
@@ -110,80 +225,19 @@ export async function processToolResultMedia(
     // Check if result has raw audio data, upload it if so
     const audioResult = resultObject?.audio;
     if (audioResult?.data) {
-      const mimeType = audioResult.mimeType || "audio/wav";
-      const dataUrl = `data:${mimeType};base64,${audioResult.data}`;
-      try {
-        const uploadResult = await FileService.uploadFile(
-          dataUrl,
-          FILE_CATEGORIES.GENERATIONS,
-        );
-        if (resultObject) {
-          resultObject.audioRef = uploadResult.ref;
-          delete resultObject.audio;
-        }
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.AUDIO,
-          data: uploadResult.ref,
-          mimeType,
-          minioRef: uploadResult.ref,
-        });
-      } catch (uploadError) {
-        logger.error(
-          `[PostExecutionEmitter] Failed to upload audio:`,
-          uploadError,
-        );
-      }
+      await uploadAudioResult(audioResult, resultObject, emit);
     }
 
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.TOOL_EXECUTION,
-      tool: {
-        name: toolCall.name,
-        args: toolCall.args || {},
-        id: toolCall.id,
-        responsesItemId: toolCall.responsesItemId,
-        result: resultObject,
-        durationMs: toolResult?.durationMs,
-      },
-      status: hasError ? "error" : "done",
-    });
-
-    WebhookEventBus.emit("request.tool_call.completed", {
-      requestId: context?.requestId || null,
-      toolName: toolCall.name,
-      toolEmoji: ToolOrchestratorService.getToolEmoji(toolCall.name),
-      toolCallId: toolCall.id,
-      toolResult: resultObject,
-      durationMs: toolResult?.durationMs || null,
-      status: hasError ? "error" : "done",
-      agent: context?.agent || null,
-      conversationId: context?.conversationId || null,
-      agentConversationId: context?.agentConversationId || null,
-      project: context?.project || null,
-      username: context?.username || null,
-      provider: context?.providerName || null,
-      model: context?.resolvedModel || null,
-    });
+    emitToolExecutionEvent(toolCall, toolResult, resultObject, hasError, emit);
+    emitToolCompletedWebhook(toolCall, toolResult, resultObject, hasError, context);
 
     if (resultObject?.screenshotRef) {
-      state.streamedImages.push(resultObject.screenshotRef as string);
-      pass.streamedImages.push(resultObject.screenshotRef as string);
+      recordScreenshot(resultObject.screenshotRef, state, pass);
     }
 
     const imageResult = resultObject?.image;
     if (imageResult?.data) {
-      const toolImgRef =
-        imageResult.minioRef ||
-        `data:${imageResult.mimeType};base64,${imageResult.data}`;
-      state.streamedImages.push(toolImgRef);
-      pass.streamedImages.push(toolImgRef);
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.IMAGE,
-        data: imageResult.data,
-        mimeType: imageResult.mimeType,
-        minioRef: imageResult.minioRef,
-      });
-      if (resultObject) delete resultObject.image;
+      recordAndEmitImage(imageResult, resultObject, state, pass, emit);
     }
   }
 }

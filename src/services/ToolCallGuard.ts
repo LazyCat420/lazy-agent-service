@@ -231,6 +231,32 @@ export interface GuardedRunOptions<T> {
   run: () => Promise<T>;
 }
 
+/** Emit a trace span for a non-allow guard decision (non-blocking). */
+function emitGuardDecisionSpan(
+  toolName: string,
+  decision: RepeatDecision,
+): void {
+  try {
+    const activeCtx = TraceContext.get();
+    const guardSpan = new Span({
+      trace_id: activeCtx?.trace_id || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+      parent_span_id: activeCtx?.current_span_id || activeCtx?.currentSpan?.span_id || null,
+      run_id: activeCtx?.run_id || "guard_run",
+      name: `tool_guard:${toolName}`,
+      kind: "tool_guard",
+      attributes: {
+        tool_name: toolName,
+        guard_decision: decision.verdict,
+        repeat_count: decision.count,
+      },
+    });
+    guardSpan.end(decision.verdict === "refuse" ? "ERROR" : "OK", decision.verdict === "refuse" ? `Repeated ${decision.count} times` : undefined);
+    TraceExporter.getGlobalInstance().enqueueSpan(guardSpan.toJSON());
+  } catch {
+    // non-blocking
+  }
+}
+
 /**
  * Run `run()` under all three layers. Returns the shared promise for any
  * identical call already in flight.
@@ -254,25 +280,7 @@ export function guardedRun<T>(opts: GuardedRunOptions<T>): Promise<T | Record<st
   //    an in-flight call is one call, not a repeat.
   const decision = opts.repeatGuard === false ? { verdict: "allow" as const, count: 0 } : recordAttempt(toolName, key, scope);
   if (decision.verdict !== "allow") {
-    try {
-      const activeCtx = TraceContext.get();
-      const guardSpan = new Span({
-        trace_id: activeCtx?.trace_id || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
-        parent_span_id: activeCtx?.current_span_id || activeCtx?.currentSpan?.span_id || null,
-        run_id: activeCtx?.run_id || "guard_run",
-        name: `tool_guard:${toolName}`,
-        kind: "tool_guard",
-        attributes: {
-          tool_name: toolName,
-          guard_decision: decision.verdict,
-          repeat_count: decision.count,
-        },
-      });
-      guardSpan.end(decision.verdict === "refuse" ? "ERROR" : "OK", decision.verdict === "refuse" ? `Repeated ${decision.count} times` : undefined);
-      TraceExporter.getGlobalInstance().enqueueSpan(guardSpan.toJSON());
-    } catch {
-      // non-blocking
-    }
+    emitGuardDecisionSpan(toolName, decision);
 
     const hit = cached?.();
     if (hit !== undefined) {

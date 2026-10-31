@@ -1,5 +1,6 @@
 import BaseAgenticHarness from "./BaseAgenticHarness.ts";
 import type { AgenticContext } from "./types.ts";
+import type AgentHooks from "../AgentHooks.ts";
 import { runTreeOfThoughts } from "./strategies/TreeOfThoughtsStrategy.ts";
 import { runGraphOfThoughts } from "./strategies/GraphOfThoughtsStrategy.ts";
 import logger from "../../utils/logger.ts";
@@ -812,6 +813,166 @@ async function runPostLoopReActRecovery(
   }
 }
 
+/** Resolve the client's iteration budget into the loop's effective maximum. */
+function resolveReActMaxIterations(
+  clientMaxIterations: number | undefined,
+): number {
+  if (clientMaxIterations === 0) return Infinity;
+  if (clientMaxIterations) {
+    return Math.min(100, Math.max(1, clientMaxIterations));
+  }
+  return MAX_TOOL_ITERATIONS;
+}
+
+interface ReActIterationParams {
+  harness: ReActHarness;
+  context: AgenticContext;
+  state: AgenticLoopState;
+  currentMessages: ConversationMessage[];
+  hooks: AgentHooks;
+  repetitionState: { lastSignature: string | null; repeatedCount: number };
+  stuckDetector: StuckDetector;
+  recoveryCounters: { truncationCount: number; emptyOutputCount: number };
+  maxIterations: number;
+}
+
+interface ReActIterationOutcome {
+  messages: ConversationMessage[];
+  action: "continue" | "break" | "return";
+  cleanTextBreak: boolean;
+}
+
+/** Run a single ReAct iteration and report what the loop should do next. */
+async function runReActIteration(
+  params: ReActIterationParams,
+): Promise<ReActIterationOutcome> {
+  const {
+    harness,
+    context,
+    state,
+    hooks,
+    repetitionState,
+    stuckDetector,
+    recoveryCounters,
+  } = params;
+  const { options, agentConversationId, emit, signal } = context;
+  let currentMessages = params.currentMessages;
+
+  state.iterations++;
+
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.ITERATION_PROGRESS,
+    iteration: state.iterations,
+    maxIterations: params.maxIterations,
+  });
+
+  await maybeInjectSystemReminder(currentMessages, state, context);
+
+  if (state.iterations === 1) {
+    await runReActFirstIterationHooks(harness, currentMessages, hooks);
+  }
+
+  const { passOptions, allowedToolNames } = buildReActPassOptions(harness);
+
+  const steering = context.runtimeSteering;
+  if (steering?.length) {
+    currentMessages.push(
+      ...steering.splice(0).map((content) => ({ role: "user", content: `Updated user instruction: ${content}` })),
+    );
+  }
+
+  const pressureResult = await manageContextPressure(currentMessages, context, state, "ReActHarness");
+  currentMessages = harness.enforceContextWindow(pressureResult.messages, harness["tools"].finalTools.length);
+
+  const pass = harness.createPassState(passOptions);
+  const requestIdBase = context.requestId || agentConversationId || crypto.randomUUID();
+  const passRequestId = `${requestIdBase}-iter-${state.iterations}`;
+  pass.requestId = passRequestId;
+  harness.registerTrackerRequest(passRequestId);
+
+  const streamOutcome = await streamReActPassWithOverflowRetry(
+    harness,
+    currentMessages,
+    passOptions,
+    pass,
+    allowedToolNames,
+  );
+  currentMessages = streamOutcome.messages;
+  const stream = streamOutcome.stream;
+
+  if (context.finalizeRequested) {
+    return { messages: currentMessages, action: "break", cleanTextBreak: false };
+  }
+
+  if (stream === null) {
+    logger.warn(
+      `[ReActHarness] Context exhaustion guard fired on iteration ${state.iterations} — skipping provider call, triggering exhaustion recovery.`,
+    );
+    injectErrorAsConversationMessage(
+      currentMessages,
+      `Context window exhausted on iteration ${state.iterations}: the remaining output token budget is too small to produce a complete response. The conversation history has consumed nearly the entire context window.`,
+      context,
+    );
+    state.conversationOutcome = "exhausted";
+    harness.logIteration(pass, currentMessages);
+    return { messages: currentMessages, action: "break", cleanTextBreak: false };
+  }
+
+  await harness.consumeStream(stream, pass, allowedToolNames);
+
+  finalizePassTracker(pass, passRequestId);
+  logKVCacheHitRate(pass.usage, state.iterations, "ReActHarness");
+  harness.emitGenerationProgress();
+  if (signal?.aborted) {
+    return { messages: currentMessages, action: "break", cleanTextBreak: false };
+  }
+  harness.emitUsageUpdate();
+
+  if (
+    await checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId, {
+      signal: context.signal,
+      pauseTimeoutMs: options.budgetPauseTimeoutMs,
+    })
+  ) {
+    return { messages: currentMessages, action: "break", cleanTextBreak: false };
+  }
+
+  if (pass.pendingToolCalls.length > 0) {
+    const toolTurn = await executeReActToolTurn(
+      harness,
+      pass,
+      currentMessages,
+      hooks,
+      repetitionState,
+      stuckDetector,
+    );
+    currentMessages = toolTurn.messages;
+    if (toolTurn.action === "return") {
+      return { messages: currentMessages, action: "return", cleanTextBreak: false };
+    }
+    if (toolTurn.action === "break") {
+      return { messages: currentMessages, action: "break", cleanTextBreak: false };
+    }
+    return { messages: currentMessages, action: "continue", cleanTextBreak: false };
+  }
+
+  const nonToolAction = handleReActNonToolTurn(
+    harness,
+    pass,
+    currentMessages,
+    stuckDetector,
+    recoveryCounters,
+  );
+  if (nonToolAction === "continue") {
+    return { messages: currentMessages, action: "continue", cleanTextBreak: false };
+  }
+  if (nonToolAction === "clean_break") {
+    return { messages: currentMessages, action: "break", cleanTextBreak: true };
+  }
+  return { messages: currentMessages, action: "break", cleanTextBreak: false };
+}
+
 export default class ReActHarness extends BaseAgenticHarness {
   static id = "standard";
   static label = "ReAct Loop";
@@ -831,15 +992,9 @@ export default class ReActHarness extends BaseAgenticHarness {
 
     const context = this.context;
     const state = this.state;
-    const { options, agentConversationId, workspaceRoot, emit, signal } = context;
+    const { options, agentConversationId, workspaceRoot, emit } = context;
 
-    const clientMaxIterations = options.maxIterations;
-    const resolvedMaxIterations =
-      clientMaxIterations === 0
-        ? Infinity
-        : clientMaxIterations
-          ? Math.min(100, Math.max(1, clientMaxIterations))
-          : MAX_TOOL_ITERATIONS;
+    const resolvedMaxIterations = resolveReActMaxIterations(options.maxIterations);
 
     let currentMessages: ConversationMessage[] = [...context.messages];
     const recoveryCounters = { truncationCount: 0, emptyOutputCount: 0 };
@@ -860,107 +1015,22 @@ export default class ReActHarness extends BaseAgenticHarness {
     try {
       while (state.iterations < resolvedMaxIterations) {
         if (context.finalizeRequested) break;
-        state.iterations++;
 
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.STATUS,
-          message: STATUS_MESSAGES.ITERATION_PROGRESS,
-          iteration: state.iterations,
-          maxIterations: resolvedMaxIterations,
-        });
-
-        await maybeInjectSystemReminder(currentMessages, state, context);
-
-        if (state.iterations === 1) {
-          await runReActFirstIterationHooks(this, currentMessages, hooks);
-        }
-
-        const { passOptions, allowedToolNames } = buildReActPassOptions(this);
-
-        const steering = (context as any).runtimeSteering as string[] | undefined;
-        if (steering?.length) {
-          currentMessages.push(
-            ...steering.splice(0).map((content) => ({ role: "user", content: `Updated user instruction: ${content}` })),
-          );
-        }
-
-        const pressureResult = await manageContextPressure(currentMessages, context, state, "ReActHarness");
-        currentMessages = this.enforceContextWindow(pressureResult.messages, this.tools.finalTools.length);
-
-        const pass = this.createPassState(passOptions);
-        const requestIdBase = context.requestId || agentConversationId || crypto.randomUUID();
-        const passRequestId = `${requestIdBase}-iter-${state.iterations}`;
-        pass.requestId = passRequestId;
-        this.registerTrackerRequest(passRequestId);
-
-        const streamOutcome = await streamReActPassWithOverflowRetry(
-          this,
+        const outcome = await runReActIteration({
+          harness: this,
+          context,
+          state,
           currentMessages,
-          passOptions,
-          pass,
-          allowedToolNames,
-        );
-        currentMessages = streamOutcome.messages;
-        const stream = streamOutcome.stream;
-
-        if (context.finalizeRequested) break;
-
-        if (stream === null) {
-          logger.warn(
-            `[ReActHarness] Context exhaustion guard fired on iteration ${state.iterations} — skipping provider call, triggering exhaustion recovery.`,
-          );
-          injectErrorAsConversationMessage(
-            currentMessages,
-            `Context window exhausted on iteration ${state.iterations}: the remaining output token budget is too small to produce a complete response. The conversation history has consumed nearly the entire context window.`,
-            context,
-          );
-          state.conversationOutcome = "exhausted";
-          this.logIteration(pass, currentMessages);
-          break;
-        }
-
-        await this.consumeStream(stream, pass, allowedToolNames);
-
-        finalizePassTracker(pass, passRequestId);
-        logKVCacheHitRate(pass.usage, state.iterations, "ReActHarness");
-        this.emitGenerationProgress();
-        if (signal?.aborted) break;
-        this.emitUsageUpdate();
-
-        if (
-          await checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId, {
-            signal: context.signal,
-            pauseTimeoutMs: options.budgetPauseTimeoutMs,
-          })
-        ) {
-          break;
-        }
-
-        if (pass.pendingToolCalls.length > 0) {
-          const toolTurn = await executeReActToolTurn(
-            this,
-            pass,
-            currentMessages,
-            hooks,
-            repetitionState,
-            stuckDetector,
-          );
-          currentMessages = toolTurn.messages;
-          if (toolTurn.action === "return") return { messages: currentMessages };
-          if (toolTurn.action === "break") break;
-          continue;
-        }
-
-        const nonToolAction = handleReActNonToolTurn(
-          this,
-          pass,
-          currentMessages,
+          hooks,
+          repetitionState,
           stuckDetector,
           recoveryCounters,
-        );
-        if (nonToolAction === "continue") continue;
-        if (nonToolAction === "clean_break") hasCleanTextBreak = true;
-        break;
+          maxIterations: resolvedMaxIterations,
+        });
+        currentMessages = outcome.messages;
+        if (outcome.action === "return") return { messages: currentMessages };
+        if (outcome.cleanTextBreak) hasCleanTextBreak = true;
+        if (outcome.action === "break") break;
       }
 
       await runPostLoopReActRecovery(this, hasCleanTextBreak, currentMessages);

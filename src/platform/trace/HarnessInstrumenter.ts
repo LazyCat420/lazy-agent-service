@@ -357,6 +357,33 @@ export class HarnessInstrumenter {
     return { delegateSpan, complete, emitJoinSpan };
   }
 
+  /** Resolve trace/run/span ids for a model call. */
+  private static _resolveTraceIds(parentSpan: Span | undefined): {
+    traceId: string;
+    runId: string;
+    parentSpanId: string | null;
+  } {
+    const ctx = TraceContext.get();
+    const traceId = parentSpan?.trace_id || ctx?.trace_id || crypto.randomUUID().replaceAll("-", "").slice(0, 32);
+    const runId = parentSpan?.run_id || ctx?.run_id || "unassigned_run";
+    const parentSpanId = parentSpan?.span_id || ctx?.currentSpan?.span_id || ctx?.parentSpanId || null;
+    return { traceId, runId, parentSpanId };
+  }
+
+  /** Attach token usage from the model response to the span. */
+  private static _recordModelUsage(
+    span: Span,
+    res: { usage?: { prompt_tokens?: number; completion_tokens?: number } } | undefined,
+  ): void {
+    if (res && res.usage) {
+      span.setAttributes({
+        tokens_input: res.usage.prompt_tokens,
+        tokens_output: res.usage.completion_tokens,
+        total_tokens: (res.usage.prompt_tokens || 0) + (res.usage.completion_tokens || 0),
+      });
+    }
+  }
+
   /**
    * Instruments model/LLM generation calls (legacy helper).
    */
@@ -366,10 +393,7 @@ export class HarnessInstrumenter {
     parentSpan: Span | undefined,
     callFn: () => Promise<T & { usage?: { prompt_tokens?: number; completion_tokens?: number } }>
   ): Promise<T> {
-    const ctx = TraceContext.get();
-    const traceId = parentSpan?.trace_id || ctx?.trace_id || crypto.randomUUID().replaceAll("-", "").slice(0, 32);
-    const runId = parentSpan?.run_id || ctx?.run_id || "unassigned_run";
-    const parentSpanId = parentSpan?.span_id || ctx?.currentSpan?.span_id || ctx?.parentSpanId || null;
+    const { traceId, runId, parentSpanId } = this._resolveTraceIds(parentSpan);
 
     const span = new Span({
       trace_id: traceId,
@@ -385,13 +409,7 @@ export class HarnessInstrumenter {
 
     try {
       const res = await callFn();
-      if (res && res.usage) {
-        span.setAttributes({
-          tokens_input: res.usage.prompt_tokens,
-          tokens_output: res.usage.completion_tokens,
-          total_tokens: (res.usage.prompt_tokens || 0) + (res.usage.completion_tokens || 0),
-        });
-      }
+      this._recordModelUsage(span, res);
       span.end("OK");
       TraceExporter.getGlobalInstance().enqueueSpan(span.toJSON());
       return res;

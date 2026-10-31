@@ -11,6 +11,24 @@ export function normalizeEmptyToolContent<T>(result: T): T {
   return result;
 }
 
+/** Pick the most specific error message a tool result carries. */
+function resolveToolErrorMessage(record: Record<string, unknown>): string {
+  if (typeof record.error === "string" && record.error) {
+    return record.error;
+  }
+  if (
+    typeof record.error === "object" &&
+    record.error !== null &&
+    typeof (record.error as Record<string, unknown>).message === "string"
+  ) {
+    return (record.error as Record<string, unknown>).message as string;
+  }
+  if (typeof record.message === "string" && record.message) {
+    return record.message;
+  }
+  return "tool_returned_error";
+}
+
 /** Shared transport/cache failure classification. Empty successful results stay successful. */
 export function classifyToolResult(result: unknown): {
   success: boolean;
@@ -42,20 +60,5 @@ export function classifyToolResult(result: unknown): {
     return { success: true };
   }
 
-  let errorMessage: string;
-  if (typeof record.error === "string" && record.error) {
-    errorMessage = record.error;
-  } else if (
-    typeof record.error === "object" &&
-    record.error !== null &&
-    typeof (record.error as Record<string, unknown>).message === "string"
-  ) {
-    errorMessage = (record.error as Record<string, unknown>).message as string;
-  } else if (typeof record.message === "string" && record.message) {
-    errorMessage = record.message;
-  } else {
-    errorMessage = "tool_returned_error";
-  }
-
-  return { success: false, errorMessage };
+  return { success: false, errorMessage: resolveToolErrorMessage(record) };
 }

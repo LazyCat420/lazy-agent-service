@@ -740,19 +740,9 @@ export default class BaseAgenticHarness {
   // ── Stream consumption ────────────────────────────────────
 
   /**
-   * Consume an LLM stream, routing each chunk through `processStreamChunk`.
-   * Handles abort signals and stream teardown.
-   *
-   * Accepts `null` (from the context exhaustion guard in
-   * `createProviderStream`) as a no-op — the pass ends with empty output
-   * and each harness's empty-output/exhaustion handling takes over.
+   * Resolve the span for this model call, clearing the pending one.
    */
-  public async consumeStream(
-    stream: AsyncIterable<unknown> | null,
-    pass: PassState,
-    allowedToolNames: Set<string>,
-  ): Promise<void> {
-    if (stream === null) return;
+  private _resolveModelSpan(): Span {
     const activeCtx = TraceContext.get();
     const parentSpan = (this.context as any).rootSpan;
     const modelSpan = this._activeModelSpan || new Span({
@@ -767,6 +757,36 @@ export default class BaseAgenticHarness {
       },
     });
     this._activeModelSpan = null;
+    return modelSpan;
+  }
+
+  /** Attach token usage to the model span when the pass reported it. */
+  private _recordModelSpanUsage(modelSpan: Span, pass: PassState): void {
+    if (pass.usageReported) {
+      modelSpan.setAttributes({
+        tokens_input: pass.usage.inputTokens,
+        tokens_output: pass.usage.outputTokens,
+        tokens_cache: pass.usage.cacheReadInputTokens,
+        total_tokens: (pass.usage.totalTokens ?? ((pass.usage.inputTokens || 0) + (pass.usage.outputTokens || 0))),
+      });
+    }
+  }
+
+  /**
+   * Consume an LLM stream, routing each chunk through `processStreamChunk`.
+   * Handles abort signals and stream teardown.
+   *
+   * Accepts `null` (from the context exhaustion guard in
+   * `createProviderStream`) as a no-op — the pass ends with empty output
+   * and each harness's empty-output/exhaustion handling takes over.
+   */
+  public async consumeStream(
+    stream: AsyncIterable<unknown> | null,
+    pass: PassState,
+    allowedToolNames: Set<string>,
+  ): Promise<void> {
+    if (stream === null) return;
+    const modelSpan = this._resolveModelSpan();
 
     // Stall watchdog (ported from prism-service): a provider that produces
     // no chunk for STREAM_IDLE_TIMEOUT_MILLISECONDS aborts the pass instead
@@ -793,14 +813,7 @@ export default class BaseAgenticHarness {
           break;
         }
       }
-      if (pass.usageReported) {
-        modelSpan.setAttributes({
-          tokens_input: pass.usage.inputTokens,
-          tokens_output: pass.usage.outputTokens,
-          tokens_cache: pass.usage.cacheReadInputTokens,
-          total_tokens: (pass.usage.totalTokens ?? ((pass.usage.inputTokens || 0) + (pass.usage.outputTokens || 0))),
-        });
-      }
+      this._recordModelSpanUsage(modelSpan, pass);
       modelSpan.end("OK");
       TraceExporter.getGlobalInstance().enqueueSpan(modelSpan.toJSON());
     } catch (err: unknown) {
@@ -1148,17 +1161,45 @@ export default class BaseAgenticHarness {
     return { action: "continue" };
   }
 
-  processStreamChunk(
-    chunk: unknown,
+  /** Handle a toolCallStart chunk: record timing and announce the tool. */
+  private _handleToolCallStartChunk(
+    streamChunk: StreamChunk,
     pass: PassState,
-    allowedToolNames: Set<string>,
-  ): ChunkAction | Promise<ChunkAction> {
-    const { emit, signal } = this.context;
-    const state = this.state;
-    const streamChunk = chunk as StreamChunk;
+  ): ChunkAction {
+    const { emit } = this.context;
+    this._recordFirstToken(pass);
+    this._recordTiming(pass);
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.TOOL_EXECUTION,
+      tool: { name: streamChunk.name || "", args: {}, id: streamChunk.id || "" },
+      status: "streaming",
+    });
+    this.maybeEmitProgress();
+    return { action: "continue" };
+  }
 
-    if (signal?.aborted) return { action: "break" };
-    if (streamChunk?.type === "usage") return this._handleUsageStreamChunk(streamChunk, pass);
+  /** Handle a toolCallDelta chunk: record timing and character progress. */
+  private _handleToolCallDeltaChunk(
+    streamChunk: StreamChunk,
+    pass: PassState,
+  ): ChunkAction {
+    const state = this.state;
+    this._recordFirstToken(pass);
+    this._recordTiming(pass);
+    state.overallOutputCharacters += streamChunk.characters as number;
+    if (pass.requestId) {
+      ConversationGenerationTracker.recordChunkTiming(pass.requestId, streamChunk.characters as number);
+    }
+    this.maybeEmitProgress();
+    return { action: "continue" };
+  }
+
+  /** Handle rateLimits/stopReason/thinking_signature chunks; null otherwise. */
+  private _handleSimpleStreamChunk(
+    streamChunk: StreamChunk,
+    pass: PassState,
+  ): ChunkAction | null {
+    const state = this.state;
     if (streamChunk?.type === "rateLimits") {
       state.lastRateLimits = streamChunk.rateLimits || null;
       return { action: "continue" };
@@ -1167,31 +1208,33 @@ export default class BaseAgenticHarness {
       pass.stopReason = (streamChunk.stopReason as string) || undefined;
       return { action: "continue" };
     }
-    if (streamChunk?.type === "thinking") return this._handleThinkingStreamChunk(streamChunk, pass);
     if (streamChunk?.type === "thinking_signature") {
       pass.thinkingSignature = streamChunk.signature || "";
       return { action: "continue" };
     }
+    return null;
+  }
+
+  processStreamChunk(
+    chunk: unknown,
+    pass: PassState,
+    allowedToolNames: Set<string>,
+  ): ChunkAction | Promise<ChunkAction> {
+    const { signal } = this.context;
+    const streamChunk = chunk as StreamChunk;
+
+    if (signal?.aborted) return { action: "break" };
+    if (streamChunk?.type === "usage") return this._handleUsageStreamChunk(streamChunk, pass);
+
+    const simpleChunkAction = this._handleSimpleStreamChunk(streamChunk, pass);
+    if (simpleChunkAction) return simpleChunkAction;
+
+    if (streamChunk?.type === "thinking") return this._handleThinkingStreamChunk(streamChunk, pass);
     if (streamChunk?.type === "toolCallStart") {
-      this._recordFirstToken(pass);
-      this._recordTiming(pass);
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.TOOL_EXECUTION,
-        tool: { name: streamChunk.name || "", args: {}, id: streamChunk.id || "" },
-        status: "streaming",
-      });
-      this.maybeEmitProgress();
-      return { action: "continue" };
+      return this._handleToolCallStartChunk(streamChunk, pass);
     }
     if (streamChunk?.type === "toolCallDelta") {
-      this._recordFirstToken(pass);
-      this._recordTiming(pass);
-      state.overallOutputCharacters += streamChunk.characters as number;
-      if (pass.requestId) {
-        ConversationGenerationTracker.recordChunkTiming(pass.requestId, streamChunk.characters as number);
-      }
-      this.maybeEmitProgress();
-      return { action: "continue" };
+      return this._handleToolCallDeltaChunk(streamChunk, pass);
     }
     if (streamChunk?.type === "toolCall") {
       return this._handleToolCallStreamChunk(streamChunk, pass, allowedToolNames);

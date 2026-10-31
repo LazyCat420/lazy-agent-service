@@ -103,6 +103,126 @@ export function blockUnauthorizedToolCalls(
   return { allBlocked: false };
 }
 
+/** Build the authorization input for the exit_plan_mode approval request. */
+function buildExitPlanAuthorizationInput(
+  exitPlanToolCall: ToolCall,
+  planText: string,
+  planSteps: string[],
+  options: AgenticOptions,
+): AuthorizationInput {
+  return {
+    name: TOOL_NAMES.EXIT_PLAN_MODE,
+    args: { plan: planText, steps: planSteps },
+    isAllowListed: exitPlanToolCall.isUnauthorized !== true,
+    policies: options.policies ?? [],
+    autoApprove: options.autoApprove === true,
+    unattended: options.unattended === true,
+    isApprovalRequest: true,
+  };
+}
+
+/** Ask the user for plan approval, honouring an answer stored before a restart. */
+async function resolvePlanApprovalByAsking(
+  conversationId: string,
+  planText: string,
+  planSteps: string[],
+): Promise<boolean> {
+  // A decision the user posted for this very plan while no turn ran (a
+  // restart killed the turn that proposed it) is taken instead of asking again.
+  const storedPlan = (await pendingApprovalStore.listUndelivered(conversationId, "plan")).find(
+    (record) => record.args.plan === planText,
+  );
+  const takenStored = storedPlan ? await pendingApprovalStore.markDelivered(storedPlan.id) : false;
+  if (!takenStored) {
+    // Record the plan durably before waiting on its card (restart-safe, exactly-once).
+    await pendingApprovalStore.cancelPending(conversationId, "superseded", ["plan"]);
+    const batchId = randomUUID();
+    await pendingApprovalStore.create([
+      {
+        kind: "plan",
+        conversationId,
+        batchId,
+        itemId: `plan-${batchId}`,
+        position: 0,
+        name: TOOL_NAMES.EXIT_PLAN_MODE,
+        args: { plan: planText, steps: planSteps },
+        argsSchema: null,
+      },
+    ]);
+  }
+  return takenStored
+    ? storedPlan?.decision?.decision === "allow"
+    : await new Promise<boolean>((resolve) => {
+      const timeoutId = setTimeout(() => {
+        pendingApprovals.delete(conversationId);
+        void pendingApprovalStore.cancelPending(conversationId, "timeout", ["plan"]);
+        resolve(false);
+      }, PLAN_APPROVAL_TIMEOUT_MS);
+
+      const existingApproval = pendingApprovals.get(conversationId);
+      if (existingApproval) {
+        existingApproval.resolve(false as never);
+        pendingApprovals.delete(conversationId);
+      }
+
+      pendingApprovals.set(conversationId, {
+        resolve: (value: boolean) => {
+          clearTimeout(timeoutId);
+          pendingApprovals.delete(conversationId);
+          resolve(value);
+        },
+        type: "plan",
+      });
+    });
+}
+
+/** Emit the rejection status and the done event for a refused plan. */
+function emitPlanRejection(
+  context: AgenticContext,
+  state: AgenticLoopState,
+  emit: EmitFunction,
+  options: AgenticOptions,
+): void {
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: PromptLocaleService.get((options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(), "harness.planningMode.rejectionStatus"),
+  });
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.DONE,
+    usage: state.overallUsage,
+    totalTime:
+      (performance.now() - (context.requestStart ?? performance.now())) /
+      1000,
+  });
+}
+
+/** Inject the approved plan text into the exit_plan_mode tool result. */
+function injectApprovedPlanResult(
+  exitResult: ToolResult,
+  planText: string,
+  options: AgenticOptions,
+): void {
+  exitResult.result = {
+    isApproved: true,
+    message: `${PromptLocaleService.get((options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(), "harness.planningMode.approvalResult")}\n\n${planText}`,
+  };
+}
+
+/** Reset plan-mode state and emit the exited status. */
+function exitPlanModeState(
+  state: AgenticLoopState,
+  currentMessages: ConversationMessage[],
+  emit: EmitFunction,
+): void {
+  state.planModeActive = false;
+  state.planModeText = "";
+  PlanningModeService.stripPlanningInstruction(currentMessages);
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.PLAN_MODE_EXITED,
+  });
+}
+
 /**
  * Handle the exit_plan_mode tool call: emit the plan proposal,
  * wait for user approval, and transition out of plan mode.
@@ -129,15 +249,12 @@ export async function handleExitPlanMode(
       result.id === exitPlanToolCall.id ||
       result.name === TOOL_NAMES.EXIT_PLAN_MODE,
   );
-  const authorizationInput: AuthorizationInput = {
-    name: TOOL_NAMES.EXIT_PLAN_MODE,
-    args: { plan: planText, steps: planSteps },
-    isAllowListed: exitPlanToolCall.isUnauthorized !== true,
-    policies: options.policies ?? [],
-    autoApprove: options.autoApprove === true,
-    unattended: options.unattended === true,
-    isApprovalRequest: true,
-  };
+  const authorizationInput = buildExitPlanAuthorizationInput(
+    exitPlanToolCall,
+    planText,
+    planSteps,
+    options,
+  );
   const gateDenial = isDeniedToolResult(exitResult?.result) ? exitResult.result : null;
   const decision = decideToolCall(authorizationInput);
 
@@ -159,53 +276,11 @@ export async function handleExitPlanMode(
       `[PlanningMode] Plan ${planApproved ? "approved" : "rejected"} without asking: ${gateDenial?.message ?? decision.reason}`,
     );
   } else {
-    // A decision the user posted for this very plan while no turn ran (a
-    // restart killed the turn that proposed it) is taken instead of asking again.
-    const storedPlan = (await pendingApprovalStore.listUndelivered(conversationId, "plan")).find(
-      (record) => record.args.plan === planText,
+    const answeredYes = await resolvePlanApprovalByAsking(
+      conversationId,
+      planText,
+      planSteps,
     );
-    const takenStored = storedPlan ? await pendingApprovalStore.markDelivered(storedPlan.id) : false;
-    if (!takenStored) {
-      // Record the plan durably before waiting on its card (restart-safe, exactly-once).
-      await pendingApprovalStore.cancelPending(conversationId, "superseded", ["plan"]);
-      const batchId = randomUUID();
-      await pendingApprovalStore.create([
-        {
-          kind: "plan",
-          conversationId,
-          batchId,
-          itemId: `plan-${batchId}`,
-          position: 0,
-          name: TOOL_NAMES.EXIT_PLAN_MODE,
-          args: { plan: planText, steps: planSteps },
-          argsSchema: null,
-        },
-      ]);
-    }
-    const answeredYes = takenStored
-      ? storedPlan?.decision?.decision === "allow"
-      : await new Promise<boolean>((resolve) => {
-      const timeoutId = setTimeout(() => {
-        pendingApprovals.delete(conversationId);
-        void pendingApprovalStore.cancelPending(conversationId, "timeout", ["plan"]);
-        resolve(false);
-      }, PLAN_APPROVAL_TIMEOUT_MS);
-
-      const existingApproval = pendingApprovals.get(conversationId);
-      if (existingApproval) {
-        existingApproval.resolve(false as never);
-        pendingApprovals.delete(conversationId);
-      }
-
-      pendingApprovals.set(conversationId, {
-        resolve: (value: boolean) => {
-          clearTimeout(timeoutId);
-          pendingApprovals.delete(conversationId);
-          resolve(value);
-        },
-        type: "plan",
-      });
-    });
     planApproved =
       decideToolCall({
         ...authorizationInput,
@@ -214,35 +289,16 @@ export async function handleExitPlanMode(
   }
 
   if (!planApproved || signal?.aborted) {
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.STATUS,
-      message: PromptLocaleService.get((options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(), "harness.planningMode.rejectionStatus"),
-    });
-    emit({
-      type: SERVER_SENT_EVENT_TYPES.DONE,
-      usage: state.overallUsage,
-      totalTime:
-        (performance.now() - (context.requestStart ?? performance.now())) /
-        1000,
-    });
+    emitPlanRejection(context, state, emit, options);
     return { shouldContinueLoop: false };
   }
 
   // Inject approved plan text into the exit_plan_mode result
   if (exitResult) {
-    exitResult.result = {
-      isApproved: true,
-      message: `${PromptLocaleService.get((options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(), "harness.planningMode.approvalResult")}\n\n${planText}`,
-    };
+    injectApprovedPlanResult(exitResult, planText, options);
   }
 
-  state.planModeActive = false;
-  state.planModeText = "";
-  PlanningModeService.stripPlanningInstruction(currentMessages);
-  emit({
-    type: SERVER_SENT_EVENT_TYPES.STATUS,
-    message: STATUS_MESSAGES.PLAN_MODE_EXITED,
-  });
+  exitPlanModeState(state, currentMessages, emit);
 
   return { shouldContinueLoop: true };
 }
@@ -271,6 +327,131 @@ export async function checkForPlanModeEntry(
 }
 
 const MAX_PLANNING_ITERATIONS = 10;
+
+/** Push an assistant message carrying the pass's text/thinking. */
+function pushPlanningAssistantTurn(
+  currentMessages: ConversationMessage[],
+  pass: PassState,
+): void {
+  currentMessages.push({
+    role: "assistant",
+    content: pass.streamedText,
+    ...(pass.streamedThinking.trim() && {
+      thinking: pass.streamedThinking.trim(),
+    }),
+    ...(pass.thinkingSignature && {
+      thinkingSignature: pass.thinkingSignature,
+    }),
+  });
+}
+
+/** Run one planning-phase model pass and record its tracker/finalization. */
+async function runPlanningModelPass(
+  harness: BaseAgenticHarness,
+  currentMessages: ConversationMessage[],
+  planPassOptions: AgenticOptions,
+  allowedPlanToolNames: Set<string>,
+  planningIteration: number,
+  context: AgenticContext,
+): Promise<PassState> {
+  const pass = harness.createPassState(planPassOptions);
+  const requestIdBase =
+    context.requestId || context.agentConversationId || randomUUID();
+  const passRequestId = `${requestIdBase}-plan-${planningIteration}`;
+  pass.requestId = passRequestId;
+  harness.registerTrackerRequest(passRequestId);
+
+  const stream = await harness.createProviderStream(currentMessages, planPassOptions);
+  await harness.consumeStream(stream, pass, allowedPlanToolNames);
+
+  finalizePassTracker(pass, passRequestId);
+  harness.logIteration(pass, currentMessages);
+  harness.emitGenerationProgress();
+  harness.emitUsageUpdate();
+  return pass;
+}
+
+interface PlanningExitParams {
+  harness: BaseAgenticHarness;
+  pass: PassState;
+  exitPlanToolCall: ToolCall;
+  currentMessages: ConversationMessage[];
+  context: AgenticContext;
+  state: AgenticLoopState;
+  label: string;
+}
+
+/** Handle an exit_plan_mode call during the planning phase. */
+async function approvePlanningExit(
+  params: PlanningExitParams,
+): Promise<boolean> {
+  const { harness, pass, exitPlanToolCall, currentMessages, context, state, label } = params;
+  const results: ToolResult[] = [
+    {
+      name: exitPlanToolCall.name,
+      id: exitPlanToolCall.id || "",
+      result: {},
+    },
+  ];
+
+  const { shouldContinueLoop } = await handleExitPlanMode(
+    exitPlanToolCall,
+    pass,
+    results,
+    currentMessages,
+    context,
+    state,
+  );
+
+  if (!shouldContinueLoop) return false;
+
+  currentMessages.push({
+    role: "assistant",
+    content: pass.streamedText || "",
+    ...(pass.streamedThinking.trim() && {
+      thinking: pass.streamedThinking.trim(),
+    }),
+    ...(pass.thinkingSignature && {
+      thinkingSignature: pass.thinkingSignature,
+    }),
+    toolCalls: [
+      {
+        id: exitPlanToolCall.id || null,
+        name: exitPlanToolCall.name,
+        args: exitPlanToolCall.args,
+        result: results[0].result,
+      },
+    ],
+  });
+
+  logger.info(
+    `[${label}] Plan approved — entering the branching loop with ${harness["tools"].finalTools.length} tool(s).`,
+  );
+  return true;
+}
+
+/** Block and report unauthorized tool calls during the planning phase. */
+function blockPlanningToolCalls(
+  currentMessages: ConversationMessage[],
+  pass: PassState,
+  options: AgenticOptions,
+  unauthorizedCalls: ToolCall[],
+  label: string,
+): void {
+  const blockedNames = unauthorizedCalls
+    .map((toolCall) => toolCall.name)
+    .join(", ");
+  logger.warn(
+    `[${label}] Planning phase: blocked ${unauthorizedCalls.length} unauthorized tool call(s): [${blockedNames}]`,
+  );
+  if (pass.streamedText) {
+    pushPlanningAssistantTurn(currentMessages, pass);
+  }
+  currentMessages.push({
+    role: "system",
+    content: PromptLocaleService.get((options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(), "harness.planningMode.blocked", { blockedNames }),
+  });
+}
 
 /**
  * Pre-loop planning phase shared by the branching strategies (Tree of
@@ -311,20 +492,14 @@ export async function runPlanningPhase(
 
     if (signal?.aborted) return { planApproved: false };
 
-    const pass = harness.createPassState(planPassOptions);
-    const requestIdBase =
-      context.requestId || context.agentConversationId || randomUUID();
-    const passRequestId = `${requestIdBase}-plan-${planningIteration}`;
-    pass.requestId = passRequestId;
-    harness.registerTrackerRequest(passRequestId);
-
-    const stream = await harness.createProviderStream(currentMessages, planPassOptions);
-    await harness.consumeStream(stream, pass, allowedPlanToolNames);
-
-    finalizePassTracker(pass, passRequestId);
-    harness.logIteration(pass, currentMessages);
-    harness.emitGenerationProgress();
-    harness.emitUsageUpdate();
+    const pass = await runPlanningModelPass(
+      harness,
+      currentMessages,
+      planPassOptions,
+      allowedPlanToolNames,
+      planningIteration,
+      context,
+    );
 
     if (signal?.aborted) return { planApproved: false };
 
@@ -333,90 +508,28 @@ export async function runPlanningPhase(
     );
 
     if (exitPlanToolCall) {
-      const results: ToolResult[] = [
-        {
-          name: exitPlanToolCall.name,
-          id: exitPlanToolCall.id || "",
-          result: {},
-        },
-      ];
-
-      const { shouldContinueLoop } = await handleExitPlanMode(
-        exitPlanToolCall,
+      const planApproved = await approvePlanningExit({
+        harness,
         pass,
-        results,
+        exitPlanToolCall,
         currentMessages,
         context,
         state,
-      );
-
-      if (!shouldContinueLoop) return { planApproved: false };
-
-      currentMessages.push({
-        role: "assistant",
-        content: pass.streamedText || "",
-        ...(pass.streamedThinking.trim() && {
-          thinking: pass.streamedThinking.trim(),
-        }),
-        ...(pass.thinkingSignature && {
-          thinkingSignature: pass.thinkingSignature,
-        }),
-        toolCalls: [
-          {
-            id: exitPlanToolCall.id || null,
-            name: exitPlanToolCall.name,
-            args: exitPlanToolCall.args,
-            result: results[0].result,
-          },
-        ],
+        label,
       });
-
-      logger.info(
-        `[${label}] Plan approved — entering the branching loop with ${tools.finalTools.length} tool(s).`,
-      );
-      return { planApproved: true };
+      return { planApproved };
     }
 
     const unauthorizedCalls = pass.pendingToolCalls.filter(
       (toolCall) => toolCall.name !== TOOL_NAMES.EXIT_PLAN_MODE,
     );
     if (unauthorizedCalls.length > 0) {
-      const blockedNames = unauthorizedCalls
-        .map((toolCall) => toolCall.name)
-        .join(", ");
-      logger.warn(
-        `[${label}] Planning phase: blocked ${unauthorizedCalls.length} unauthorized tool call(s): [${blockedNames}]`,
-      );
-      if (pass.streamedText) {
-        currentMessages.push({
-          role: "assistant",
-          content: pass.streamedText,
-          ...(pass.streamedThinking.trim() && {
-            thinking: pass.streamedThinking.trim(),
-          }),
-          ...(pass.thinkingSignature && {
-            thinkingSignature: pass.thinkingSignature,
-          }),
-        });
-      }
-      currentMessages.push({
-        role: "system",
-        content: PromptLocaleService.get((options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale(), "harness.planningMode.blocked", { blockedNames }),
-      });
+      blockPlanningToolCalls(currentMessages, pass, options, unauthorizedCalls, label);
       continue;
     }
 
     if (pass.streamedText || pass.streamedThinking.trim()) {
-      currentMessages.push({
-        role: "assistant",
-        content: pass.streamedText,
-        ...(pass.streamedThinking.trim() && {
-          thinking: pass.streamedThinking.trim(),
-        }),
-        ...(pass.thinkingSignature && {
-          thinkingSignature: pass.thinkingSignature,
-        }),
-      });
+      pushPlanningAssistantTurn(currentMessages, pass);
       continue;
     }
 

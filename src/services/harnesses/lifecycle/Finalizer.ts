@@ -727,6 +727,120 @@ function buildOptionalDisplayFragments(
   };
 }
 
+interface GenerationSettingsPayload {
+  temperature: number | undefined;
+  maxTokens: number | undefined;
+  thinkingEnabled: boolean;
+  reasoningEffort?: string;
+  thinkingBudget?: number;
+}
+
+interface DisplayFragmentsPayload {
+  contentSegments?: unknown[];
+  textFragments?: unknown[];
+  thinkingFragments?: unknown[];
+}
+
+interface AssistantPayloadFields {
+  text: string | null;
+  thinking: string | null | undefined;
+  thinkingSignature: string | null | undefined;
+  images: string[];
+  audioReference: string | null | undefined;
+  toolCalls: ToolCallPayload[];
+  resolvedModel: string;
+  providerName: string;
+  usage: TokenUsage | null | undefined;
+  roundedTotalTime: number | null;
+  tokensPerSecond: number | null | undefined;
+  estimatedCost: number | null | undefined;
+  generationSettings: GenerationSettingsPayload;
+}
+
+/** Build the assistant message appended after override messages. */
+function buildOverrideAssistantPayload(
+  fields: AssistantPayloadFields & {
+    hasIntermediateToolMessages: boolean;
+    displayFragments: DisplayFragmentsPayload;
+  },
+): MessagePayload {
+  const {
+    text,
+    thinking,
+    thinkingSignature,
+    images,
+    audioReference,
+    toolCalls,
+    resolvedModel,
+    providerName,
+    usage,
+    roundedTotalTime,
+    tokensPerSecond,
+    estimatedCost,
+    generationSettings,
+    hasIntermediateToolMessages,
+    displayFragments,
+  } = fields;
+
+  return {
+    role: "assistant",
+    content: text,
+    ...(thinking && { thinking }),
+    ...(thinkingSignature && { thinkingSignature }),
+    ...(images.length > 0 && { images }),
+    ...(audioReference && { audio: audioReference }),
+    ...(!hasIntermediateToolMessages && toolCalls.length > 0 && { toolCalls }),
+    model: resolvedModel,
+    provider: providerName,
+    timestamp: new Date().toISOString(),
+    usage: usage || null,
+    totalTime: roundedTotalTime,
+    tokensPerSec: tokensPerSecond,
+    estimatedCost,
+    ...displayFragments,
+    generationSettings,
+  } as MessagePayload;
+}
+
+/** Build the assistant message appended for a plain final turn. */
+function buildFinalAssistantPayload(
+  fields: AssistantPayloadFields,
+): MessagePayload {
+  const {
+    text,
+    thinking,
+    thinkingSignature,
+    images,
+    audioReference,
+    toolCalls,
+    resolvedModel,
+    providerName,
+    usage,
+    roundedTotalTime,
+    tokensPerSecond,
+    estimatedCost,
+    generationSettings,
+  } = fields;
+
+  return {
+    role: "assistant",
+    content: text,
+    ...(thinking && { thinking }),
+    ...(thinkingSignature && { thinkingSignature }),
+    ...(images.length > 0 && { images }),
+    ...(audioReference && { audio: audioReference }),
+    ...(toolCalls.length > 0 && { toolCalls }),
+    model: resolvedModel,
+    provider: providerName,
+    timestamp: new Date().toISOString(),
+    usage: usage || null,
+    totalTime: roundedTotalTime,
+    tokensPerSec: tokensPerSecond,
+    estimatedCost,
+    generationSettings,
+  } as MessagePayload;
+}
+
 /**
  * Standard utility to assemble the messages array to append to the database.
  * Shared between production finalizers and test assertion modules.
@@ -809,24 +923,25 @@ export function assembleMessagesToAppend(options: {
       thinkingFragments,
     );
 
-    messagesToAppend.push({
-      role: "assistant",
-      content: text,
-      ...(finalThinking && { thinking: finalThinking }),
-      ...(thinkingSignature && { thinkingSignature }),
-      ...(images.length > 0 && { images }),
-      ...(audioReference && { audio: audioReference }),
-      ...(!hasIntermediateToolMessages && toolCalls.length > 0 && { toolCalls }),
-      model: resolvedModel,
-      provider: providerName,
-      timestamp: new Date().toISOString(),
-      usage: usage || null,
-      totalTime: roundedTotalTime,
-      tokensPerSec: tokensPerSecond,
-      estimatedCost,
-      ...displayFragments,
-      generationSettings,
-    } as MessagePayload);
+    messagesToAppend.push(
+      buildOverrideAssistantPayload({
+        text,
+        thinking: finalThinking,
+        thinkingSignature,
+        images,
+        audioReference,
+        toolCalls,
+        resolvedModel,
+        providerName,
+        usage,
+        roundedTotalTime,
+        tokensPerSecond,
+        estimatedCost,
+        generationSettings,
+        hasIntermediateToolMessages,
+        displayFragments,
+      }),
+    );
     return messagesToAppend;
   }
 
@@ -838,23 +953,23 @@ export function assembleMessagesToAppend(options: {
       timestamp: userMessage.timestamp || new Date().toISOString(),
     });
   }
-  messagesToAppend.push({
-    role: "assistant",
-    content: text,
-    ...(thinking && { thinking }),
-    ...(thinkingSignature && { thinkingSignature }),
-    ...(images.length > 0 && { images }),
-    ...(audioReference && { audio: audioReference }),
-    ...(toolCalls.length > 0 && { toolCalls }),
-    model: resolvedModel,
-    provider: providerName,
-    timestamp: new Date().toISOString(),
-    usage: usage || null,
-    totalTime: roundedTotalTime,
-    tokensPerSec: tokensPerSecond,
-    estimatedCost,
-    generationSettings,
-  } as MessagePayload);
+  messagesToAppend.push(
+    buildFinalAssistantPayload({
+      text,
+      thinking,
+      thinkingSignature,
+      images,
+      audioReference,
+      toolCalls,
+      resolvedModel,
+      providerName,
+      usage,
+      roundedTotalTime,
+      tokensPerSecond,
+      estimatedCost,
+      generationSettings,
+    }),
+  );
 
   return messagesToAppend;
 }

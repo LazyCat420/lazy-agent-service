@@ -483,48 +483,43 @@ async function reflectAndStoreHarnessExperience(
   };
 }
 
-/**
- * Run one task: base rollouts → recursion → select → reflect → library. `execute` and
- * `propose` are injectable for tests; the route uses the real ones.
- */
-export async function runHarness2(
+interface Harness2Runtime {
+  signal?: AbortSignal;
+  execute: Executor;
+  propose: Proposer;
+  budget: number;
+}
+
+/** Resolve the injectable executor/proposer and the mission char budget. */
+function resolveHarness2Runtime(
   req: Harness2Request,
-  deps: { execute?: Executor; propose?: Proposer; signal?: AbortSignal } & Pick<RecursionDeps, "transportBackoffMs" | "missionCharBudget"> = {},
-): Promise<Harness2Result> {
-  const k = req.k ?? 1;
-  const pool = req.selectionPool ?? "finals";
-  const bp: BenchPrompts = { ...req.bench, work: req.bench?.work || req.task };
+  deps: { execute?: Executor; propose?: Proposer; signal?: AbortSignal } & Pick<RecursionDeps, "transportBackoffMs" | "missionCharBudget">,
+): Harness2Runtime {
   const signal = deps.signal;
   const execute = deps.execute ?? makeExecutor(req, { signal });
   const propose =
     deps.propose ?? makeProposer(req.improver ?? DEFAULT_IMPROVER, { signal });
-  const errors: string[] = [];
-  const library = new Library(req.domain, req.libraryRoot);
-  const { libraryEntriesBefore, libraryText } = loadHarnessLibraryContext(
-    library,
-    req.taskId,
-    errors,
-  );
   const budget =
     deps.missionCharBudget ??
     (Number(process.env.HARNESS2_MISSION_CHAR_BUDGET) ||
       DEFAULT_MISSION_CHAR_BUDGET);
-  const recDeps: RecursionDeps = {
-    bp,
-    execute,
-    propose,
-    baseTree: req.baseTree,
-    libraryText,
-    width: req.width ?? 2,
-    transportBackoffMs: deps.transportBackoffMs,
-    missionCharBudget: budget,
-  };
-  const finish = (
-    status: Harness2Status,
-    result: ModeResult,
-    selection: Selection,
-    rest: Partial<Harness2Result> = {},
-  ): Harness2Result => ({
+  return { signal, execute, propose, budget };
+}
+
+interface Harness2ResultParams {
+  req: Harness2Request;
+  status: Harness2Status;
+  result: ModeResult;
+  selection: Selection;
+  errors: string[];
+  libraryEntriesBefore: number;
+  rest?: Partial<Harness2Result>;
+}
+
+/** Assemble the run result from the default fields plus per-path overrides. */
+function buildHarness2Result(params: Harness2ResultParams): Harness2Result {
+  const { req, status, result, selection, errors, libraryEntriesBefore, rest = {} } = params;
+  return {
     taskId: req.taskId,
     domain: req.domain,
     status,
@@ -539,10 +534,16 @@ export async function runHarness2(
     libraryEntry: null,
     libraryEntriesBefore,
     ...rest,
-  });
+  };
+}
 
-  const base = await rollBase(recDeps, k);
-  const emptyResult = (): ModeResult => ({
+/** Empty mode result for runs that stop before selection. */
+function buildEmptyResult(
+  req: Harness2Request,
+  base: RunView[],
+  k: number,
+): ModeResult {
+  return {
     mode: req.mode === "sequential" ? "seq" : "agg",
     k,
     stages: [],
@@ -551,8 +552,12 @@ export async function runHarness2(
     finals: [],
     ledger: base.map((b) => b.label),
     similarity: null,
-  });
-  const noSelection: Selection = {
+  };
+}
+
+/** Selection placeholder for runs that stop before selection. */
+function createNoSelection(pool: SelectionPool): Selection {
+  return {
     ok: false,
     chosenLabel: "",
     why: "",
@@ -561,20 +566,68 @@ export async function runHarness2(
     trivial: false,
     fallback: false,
   };
+}
+
+/**
+ * Run one task: base rollouts → recursion → select → reflect → library. `execute` and
+ * `propose` are injectable for tests; the route uses the real ones.
+ */
+export async function runHarness2(
+  req: Harness2Request,
+  deps: { execute?: Executor; propose?: Proposer; signal?: AbortSignal } & Pick<RecursionDeps, "transportBackoffMs" | "missionCharBudget"> = {},
+): Promise<Harness2Result> {
+  const k = req.k ?? 1;
+  const pool = req.selectionPool ?? "finals";
+  const bp: BenchPrompts = { ...req.bench, work: req.bench?.work || req.task };
+  const { signal, execute, propose, budget } = resolveHarness2Runtime(req, deps);
+  const errors: string[] = [];
+  const library = new Library(req.domain, req.libraryRoot);
+  const { libraryEntriesBefore, libraryText } = loadHarnessLibraryContext(
+    library,
+    req.taskId,
+    errors,
+  );
+  const recDeps: RecursionDeps = {
+    bp,
+    execute,
+    propose,
+    baseTree: req.baseTree,
+    libraryText,
+    width: req.width ?? 2,
+    transportBackoffMs: deps.transportBackoffMs,
+    missionCharBudget: budget,
+  };
+
+  const base = await rollBase(recDeps, k);
+  const noSelection = createNoSelection(pool);
   if (signal?.aborted) {
     errors.push("cancelled after the base rollouts");
-    return finish("cancelled", emptyResult(), {
-      ...noSelection,
-      error: "cancelled",
+    return buildHarness2Result({
+      req,
+      status: "cancelled",
+      result: buildEmptyResult(req, base, k),
+      selection: {
+        ...noSelection,
+        error: "cancelled",
+      },
+      errors,
+      libraryEntriesBefore,
     });
   }
   if (!base.some((b) => b.ok)) {
     errors.push(
       `no base rollout produced anything: ${base.map((b) => `${b.label}: ${b.error || "failed"}`).join("; ")}`,
     );
-    return finish("base-failed", emptyResult(), {
-      ...noSelection,
-      error: "base-failed",
+    return buildHarness2Result({
+      req,
+      status: "base-failed",
+      result: buildEmptyResult(req, base, k),
+      selection: {
+        ...noSelection,
+        error: "base-failed",
+      },
+      errors,
+      libraryEntriesBefore,
     });
   }
 
@@ -586,7 +639,14 @@ export async function runHarness2(
     errors.push(
       "cancelled during the recursion; no selection or reflection ran",
     );
-    return finish("cancelled", result, { ...noSelection, error: "cancelled" });
+    return buildHarness2Result({
+      req,
+      status: "cancelled",
+      result,
+      selection: { ...noSelection, error: "cancelled" },
+      errors,
+      libraryEntriesBefore,
+    });
   }
   const improverFailed = recordProposerStageFallbacks(result, errors);
   const selection = await selectOutput(bp, result, propose, {
@@ -603,7 +663,15 @@ export async function runHarness2(
     errors,
   );
   if (status !== "ok" || !chosen?.delivered) {
-    return finish(status, result, selection, outcome);
+    return buildHarness2Result({
+      req,
+      status,
+      result,
+      selection,
+      errors,
+      libraryEntriesBefore,
+      rest: outcome,
+    });
   }
 
   const reflected = await reflectAndStoreHarnessExperience(
@@ -619,7 +687,15 @@ export async function runHarness2(
     budget,
     errors,
   );
-  return finish(status, result, selection, { ...outcome, ...reflected });
+  return buildHarness2Result({
+    req,
+    status,
+    result,
+    selection,
+    errors,
+    libraryEntriesBefore,
+    rest: { ...outcome, ...reflected },
+  });
 }
 
 export type { RunView };

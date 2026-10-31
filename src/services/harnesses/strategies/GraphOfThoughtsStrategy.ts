@@ -22,6 +22,7 @@ import type {
   ToolSchema,
   ToolResult,
   PassState,
+  EmitFunction,
 } from "../types.ts";
 import { SERVER_SENT_EVENT_TYPES, STATUS_MESSAGES } from "@rodrigo-barraza/utilities-library/taxonomy";
 import logger from "../../../utils/logger.ts";
@@ -399,20 +400,304 @@ async function handleGoTLoopError(
   throw loopError;
 }
 
+/** Branch count for this GoT iteration. */
+function resolveAdaptiveGoTBranchCount(
+  iteration: number,
+  initialBranchCount: number,
+): number {
+  return iteration === 1
+    ? initialBranchCount
+    : Math.max(2, Math.ceil(initialBranchCount * 0.6));
+}
+
+/** Emit the branch-selected status for this GoT iteration. */
+function emitGoTBranchSelected(
+  scoredBranches: ScoredBranch[],
+  adaptiveBranchCount: number,
+  emit: EmitFunction,
+): void {
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.BRANCH_SELECTED,
+    branchCount: adaptiveBranchCount,
+    scores: scoredBranches.map((branch) => ({
+      index: branch.branchIndex,
+      score: branch.score,
+      criteria: branch.criteriaScores,
+    })),
+    synthesizing: true,
+  });
+}
+
+/** Trigger a proactive backtrack when every branch scored below threshold. */
+function maybeGoTProactiveBacktrack(
+  state: AgenticLoopState,
+  scoredBranches: ScoredBranch[],
+  valueThreshold: number,
+  currentMessages: ConversationMessage[],
+  context: BaseAgenticHarness["context"],
+): boolean {
+  const activeBranches = scoredBranches.filter((branch) => branch.score >= valueThreshold);
+  if (
+    activeBranches.length === 0 &&
+    state.iterations > 1 &&
+    state.proactiveBacktracks < MAX_PROACTIVE_BACKTRACKS
+  ) {
+    handleGoTProactiveBacktrack(
+      state,
+      scoredBranches,
+      valueThreshold,
+      currentMessages,
+      context,
+    );
+    return true;
+  }
+  return false;
+}
+
+/** Pick the branches to synthesize: the qualifying ones, else the best one. */
+function selectBranchesToSynthesize(
+  activeBranches: ScoredBranch[],
+  scoredBranches: ScoredBranch[],
+): ScoredBranch[] {
+  return activeBranches.length > 0 ? activeBranches : [scoredBranches[0]];
+}
+
+/** Synthesize the selected branches and finalize/cost-check the pass. */
+async function runGoTSynthesisPhase(
+  harness: BaseAgenticHarness,
+  branchesToSynthesize: ScoredBranch[],
+  currentMessages: ConversationMessage[],
+  passOptions: IterationPassOptions,
+  allowedToolNames: Set<string>,
+): Promise<{ synthesizedPass: PassState; shouldBreak: boolean }> {
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const { options, emit, signal } = context;
+
+  const synthesizedPass = await synthesizeBranches(
+    harness,
+    branchesToSynthesize,
+    currentMessages,
+    passOptions,
+    allowedToolNames,
+  );
+
+  if (signal?.aborted) return { synthesizedPass, shouldBreak: true };
+
+  finalizeGoTSynthesizedBranches(
+    harness,
+    synthesizedPass,
+    branchesToSynthesize,
+    currentMessages,
+    state,
+  );
+
+  if (
+    await checkCostBudget(
+      state,
+      context.resolvedModel,
+      options.maxCostDollars,
+      emit,
+      context.conversationId,
+      {
+        signal: context.signal,
+        pauseTimeoutMs: options.budgetPauseTimeoutMs,
+      },
+    )
+  ) {
+    return { synthesizedPass, shouldBreak: true };
+  }
+
+  return { synthesizedPass, shouldBreak: false };
+}
+
+interface GoTIterationParams {
+  harness: BaseAgenticHarness;
+  initialBranchCount: number;
+  valueThreshold: number;
+  maxIterations: number;
+  currentMessages: ConversationMessage[];
+  truncationRecoveryCount: number;
+  hooks: AgentHooks;
+}
+
+interface GoTIterationOutcome {
+  messages: ConversationMessage[];
+  action: "continue" | "break" | "return";
+  hasCleanTextBreak: boolean;
+  truncationRecoveryCount: number;
+}
+
+/** Run one Graph-of-Thoughts iteration and report what the loop should do next. */
+async function runGoTIteration(
+  params: GoTIterationParams,
+): Promise<GoTIterationOutcome> {
+  const {
+    harness,
+    initialBranchCount,
+    valueThreshold,
+    maxIterations,
+    truncationRecoveryCount,
+    hooks,
+  } = params;
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const tools = harness["tools"];
+  const { options, project, username, agent, emit } = context;
+  let currentMessages = params.currentMessages;
+
+  state.iterations++;
+
+  const adaptiveBranchCount = resolveAdaptiveGoTBranchCount(
+    state.iterations,
+    initialBranchCount,
+  );
+
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.ITERATION_PROGRESS,
+    iteration: state.iterations,
+    maxIterations,
+    harness: "graph_of_thoughts",
+    branchCount: adaptiveBranchCount,
+  });
+
+  await maybeInjectSystemReminder(currentMessages, state, context);
+
+  const passOptions: IterationPassOptions = {
+    ...options,
+    project,
+    agent,
+    username,
+    tools: tools.finalTools,
+  };
+
+  const pressureResult = await manageContextPressure(
+    currentMessages,
+    context,
+    state,
+    "GraphOfThoughts",
+  );
+  currentMessages = pressureResult.messages;
+  currentMessages = harness.enforceContextWindow(currentMessages, tools.finalTools.length);
+
+  const allowedToolNames = new Set(tools.finalTools.map((tool: ToolSchema) => tool.name));
+
+  const bfsOutcome = await exploreBfsBranches(
+    harness,
+    adaptiveBranchCount,
+    currentMessages,
+    passOptions,
+    allowedToolNames,
+    undefined,
+    undefined,
+    "[GraphOfThoughts]",
+  );
+  if (bfsOutcome.aborted) {
+    return {
+      messages: currentMessages,
+      action: "break",
+      hasCleanTextBreak: false,
+      truncationRecoveryCount,
+    };
+  }
+  const scoredBranches = bfsOutcome.scoredBranches;
+  state.selectedBranchScores.push(scoredBranches[0]?.score ?? 0);
+
+  emitGoTBranchSelected(scoredBranches, adaptiveBranchCount, emit);
+
+  logger.info(
+    `[GraphOfThoughts] Iteration ${state.iterations}: scored ${adaptiveBranchCount} branches — ` +
+      `scores: [${scoredBranches.map((branch) => branch.score.toFixed(1)).join(", ")}]`,
+  );
+
+  if (
+    maybeGoTProactiveBacktrack(
+      state,
+      scoredBranches,
+      valueThreshold,
+      currentMessages,
+      context,
+    )
+  ) {
+    return {
+      messages: currentMessages,
+      action: "continue",
+      hasCleanTextBreak: false,
+      truncationRecoveryCount,
+    };
+  }
+
+  const activeBranches = scoredBranches.filter((branch) => branch.score >= valueThreshold);
+  const branchesToSynthesize = selectBranchesToSynthesize(activeBranches, scoredBranches);
+
+  const { synthesizedPass, shouldBreak } = await runGoTSynthesisPhase(
+    harness,
+    branchesToSynthesize,
+    currentMessages,
+    passOptions,
+    allowedToolNames,
+  );
+
+  if (shouldBreak) {
+    return {
+      messages: currentMessages,
+      action: "break",
+      hasCleanTextBreak: false,
+      truncationRecoveryCount,
+    };
+  }
+
+  if (synthesizedPass.pendingToolCalls.length > 0) {
+    const toolTurn = await handleGoTToolExecution(
+      harness,
+      synthesizedPass,
+      scoredBranches,
+      currentMessages,
+      hooks,
+    );
+    currentMessages = toolTurn.messages;
+    if (toolTurn.earlyReturn) {
+      return {
+        messages: currentMessages,
+        action: "return",
+        hasCleanTextBreak: false,
+        truncationRecoveryCount,
+      };
+    }
+    return {
+      messages: currentMessages,
+      action: "continue",
+      hasCleanTextBreak: false,
+      truncationRecoveryCount,
+    };
+  }
+
+  const noToolOutcome = handleGoTNoToolPass(
+    harness,
+    synthesizedPass,
+    currentMessages,
+    truncationRecoveryCount,
+  );
+
+  return {
+    messages: currentMessages,
+    action: noToolOutcome.shouldBreak ? "break" : "continue",
+    hasCleanTextBreak: noToolOutcome.hasCleanTextBreak,
+    truncationRecoveryCount: noToolOutcome.truncationRecoveryCount,
+  };
+}
+
 export async function runGraphOfThoughts(
   harness: BaseAgenticHarness,
 ): Promise<{ messages: ConversationMessage[] }> {
   const context = harness["context"];
   const state: AgenticLoopState = harness["state"];
-  const tools = harness["tools"];
   const {
     options,
     agentConversationId,
-    project,
-    username,
-    agent,
     workspaceRoot,
-    emit,
     signal,
   } = context;
 
@@ -439,150 +724,20 @@ export async function runGraphOfThoughts(
 
   try {
     while (state.iterations < resolvedMaxIterations) {
-      state.iterations++;
-
-      const adaptiveBranchCount =
-        state.iterations === 1
-          ? initialBranchCount
-          : Math.max(2, Math.ceil(initialBranchCount * 0.6));
-
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.STATUS,
-        message: STATUS_MESSAGES.ITERATION_PROGRESS,
-        iteration: state.iterations,
+      const outcome = await runGoTIteration({
+        harness,
+        initialBranchCount,
+        valueThreshold,
         maxIterations: resolvedMaxIterations,
-        harness: "graph_of_thoughts",
-        branchCount: adaptiveBranchCount,
-      });
-
-      await maybeInjectSystemReminder(currentMessages, state, context);
-
-      const passOptions: IterationPassOptions = {
-        ...options,
-        project,
-        agent,
-        username,
-        tools: tools.finalTools,
-      };
-
-      const pressureResult = await manageContextPressure(
-        currentMessages,
-        context,
-        state,
-        "GraphOfThoughts",
-      );
-      currentMessages = pressureResult.messages;
-      currentMessages = harness.enforceContextWindow(currentMessages, tools.finalTools.length);
-
-      const allowedToolNames = new Set(tools.finalTools.map((tool: ToolSchema) => tool.name));
-
-      const bfsOutcome = await exploreBfsBranches(
-        harness,
-        adaptiveBranchCount,
-        currentMessages,
-        passOptions,
-        allowedToolNames,
-        undefined,
-        undefined,
-        "[GraphOfThoughts]",
-      );
-      if (bfsOutcome.aborted) break;
-      const scoredBranches = bfsOutcome.scoredBranches;
-      state.selectedBranchScores.push(scoredBranches[0]?.score ?? 0);
-
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.STATUS,
-        message: STATUS_MESSAGES.BRANCH_SELECTED,
-        branchCount: adaptiveBranchCount,
-        scores: scoredBranches.map((branch) => ({
-          index: branch.branchIndex,
-          score: branch.score,
-          criteria: branch.criteriaScores,
-        })),
-        synthesizing: true,
-      });
-
-      logger.info(
-        `[GraphOfThoughts] Iteration ${state.iterations}: scored ${adaptiveBranchCount} branches — ` +
-          `scores: [${scoredBranches.map((branch) => branch.score.toFixed(1)).join(", ")}]`,
-      );
-
-      const activeBranches = scoredBranches.filter((branch) => branch.score >= valueThreshold);
-
-      if (
-        activeBranches.length === 0 &&
-        state.iterations > 1 &&
-        state.proactiveBacktracks < MAX_PROACTIVE_BACKTRACKS
-      ) {
-        handleGoTProactiveBacktrack(
-          state,
-          scoredBranches,
-          valueThreshold,
-          currentMessages,
-          context,
-        );
-        continue;
-      }
-
-      const branchesToSynthesize =
-        activeBranches.length > 0 ? activeBranches : [scoredBranches[0]];
-
-      const synthesizedPass = await synthesizeBranches(
-        harness,
-        branchesToSynthesize,
-        currentMessages,
-        passOptions,
-        allowedToolNames,
-      );
-
-      if (signal?.aborted) break;
-
-      finalizeGoTSynthesizedBranches(
-        harness,
-        synthesizedPass,
-        branchesToSynthesize,
-        currentMessages,
-        state,
-      );
-
-      if (
-        await checkCostBudget(
-          state,
-          context.resolvedModel,
-          options.maxCostDollars,
-          emit,
-          context.conversationId,
-          {
-            signal: context.signal,
-            pauseTimeoutMs: options.budgetPauseTimeoutMs,
-          },
-        )
-      ) {
-        break;
-      }
-
-      if (synthesizedPass.pendingToolCalls.length > 0) {
-        const toolTurn = await handleGoTToolExecution(
-          harness,
-          synthesizedPass,
-          scoredBranches,
-          currentMessages,
-          hooks,
-        );
-        currentMessages = toolTurn.messages;
-        if (toolTurn.earlyReturn) return { messages: currentMessages };
-        continue;
-      }
-
-      const noToolOutcome = handleGoTNoToolPass(
-        harness,
-        synthesizedPass,
         currentMessages,
         truncationRecoveryCount,
-      );
-      truncationRecoveryCount = noToolOutcome.truncationRecoveryCount;
-      if (noToolOutcome.hasCleanTextBreak) hasCleanTextBreak = true;
-      if (noToolOutcome.shouldBreak) break;
+        hooks,
+      });
+      currentMessages = outcome.messages;
+      truncationRecoveryCount = outcome.truncationRecoveryCount;
+      if (outcome.hasCleanTextBreak) hasCleanTextBreak = true;
+      if (outcome.action === "return") return { messages: currentMessages };
+      if (outcome.action === "break") break;
     }
 
     if (!hasCleanTextBreak && state.streamedToolCalls.length > 0 && !signal?.aborted) {

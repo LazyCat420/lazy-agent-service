@@ -577,13 +577,334 @@ async function handleToTLoopError(
   throw loopError;
 }
 
+/** Branch count for this ToT iteration. */
+function resolveAdaptiveToTBranchCount(
+  searchStrategy: SearchStrategy,
+  iteration: number,
+  initialBranchCount: number,
+): number {
+  return searchStrategy === "dfs" || iteration === 1
+    ? initialBranchCount
+    : Math.max(1, Math.ceil(initialBranchCount * 0.6));
+}
+
+interface ToTExploreParams {
+  harness: BaseAgenticHarness;
+  searchStrategy: SearchStrategy;
+  adaptiveBranchCount: number;
+  valueThreshold: number;
+  bfsBeamWidth: number;
+  currentMessages: ConversationMessage[];
+  passOptions: IterationPassOptions;
+  allowedToolNames: Set<string>;
+  failedApproachDescriptions: string[];
+}
+
+interface ToTExploreOutcome {
+  scoredBranches: ScoredBranch[];
+  selectedBranch: ScoredBranch;
+  aborted: boolean;
+}
+
+/** Explore this iteration's branches with the configured search strategy. */
+async function exploreToTBranches(
+  params: ToTExploreParams,
+): Promise<ToTExploreOutcome> {
+  const {
+    harness,
+    searchStrategy,
+    adaptiveBranchCount,
+    valueThreshold,
+    bfsBeamWidth,
+    currentMessages,
+    passOptions,
+    allowedToolNames,
+    failedApproachDescriptions,
+  } = params;
+  const state: AgenticLoopState = harness["state"];
+
+  if (searchStrategy === "dfs") {
+    const dfsOutcome = await exploreDfsBranches(
+      harness,
+      adaptiveBranchCount,
+      valueThreshold,
+      currentMessages,
+      passOptions,
+      allowedToolNames,
+      failedApproachDescriptions,
+      "[TreeOfThoughts]",
+    );
+    return {
+      scoredBranches: dfsOutcome.scoredBranches,
+      selectedBranch: dfsOutcome.selectedBranch,
+      aborted: false,
+    };
+  }
+
+  const bfsOutcome = await exploreBfsBranches(
+    harness,
+    adaptiveBranchCount,
+    currentMessages,
+    passOptions,
+    allowedToolNames,
+    failedApproachDescriptions,
+    "bfs",
+    "[TreeOfThoughts]",
+  );
+  if (bfsOutcome.aborted) {
+    return {
+      scoredBranches: bfsOutcome.scoredBranches,
+      selectedBranch: bfsOutcome.selectedBranch,
+      aborted: true,
+    };
+  }
+  const scoredBranches = bfsOutcome.scoredBranches;
+  state.frontierCandidates = scoredBranches.slice(1, bfsBeamWidth).map((branch) => ({
+    pass: branch.pass,
+    score: branch.score,
+    branchIndex: branch.branchIndex,
+    criteriaScores: branch.criteriaScores,
+  }));
+  return {
+    scoredBranches,
+    selectedBranch: bfsOutcome.selectedBranch,
+    aborted: false,
+  };
+}
+
+/** Finalize and log every branch that was not selected this iteration. */
+function finalizeNonSelectedToTBranches(
+  harness: BaseAgenticHarness,
+  scoredBranches: ScoredBranch[],
+  selectedBranch: ScoredBranch,
+  currentMessages: ConversationMessage[],
+): void {
+  for (const branch of scoredBranches) {
+    if (branch !== selectedBranch && branch.pass.requestId) {
+      finalizePassTracker(branch.pass, branch.pass.requestId);
+      harness.logIteration(branch.pass, currentMessages);
+    }
+  }
+}
+
+interface ToTIterationParams {
+  harness: BaseAgenticHarness;
+  searchStrategy: SearchStrategy;
+  initialBranchCount: number;
+  valueThreshold: number;
+  bfsBeamWidth: number;
+  maxIterations: number;
+  currentMessages: ConversationMessage[];
+  failedApproachDescriptions: string[];
+  truncationState: { count: number };
+  hooks: AgentHooks;
+}
+
+interface ToTIterationOutcome {
+  messages: ConversationMessage[];
+  action: "continue" | "break" | "return";
+  cleanTextBreak: boolean;
+  failedApproachDescriptions: string[];
+}
+
+/** Emit the branch-selected status for this ToT iteration. */
+function emitToTBranchSelected(
+  state: AgenticLoopState,
+  selectedBranch: ScoredBranch,
+  scoredBranches: ScoredBranch[],
+  adaptiveBranchCount: number,
+  searchStrategy: SearchStrategy,
+  emit: EmitFunction,
+): void {
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.BRANCH_SELECTED,
+    branchIndex: selectedBranch.branchIndex,
+    score: selectedBranch.score,
+    branchCount: adaptiveBranchCount,
+    criteriaScores: selectedBranch.criteriaScores,
+    searchStrategy,
+    frontierSize: state.frontierCandidates.length,
+    scores: scoredBranches.map((branch) => ({
+      index: branch.branchIndex,
+      score: branch.score,
+      criteria: branch.criteriaScores,
+    })),
+  });
+}
+
+/** Run one Tree-of-Thoughts iteration and report what the loop should do next. */
+async function runToTIteration(
+  params: ToTIterationParams,
+): Promise<ToTIterationOutcome> {
+  const {
+    harness,
+    searchStrategy,
+    initialBranchCount,
+    valueThreshold,
+    bfsBeamWidth,
+    maxIterations,
+    truncationState,
+    hooks,
+  } = params;
+  const context = harness["context"];
+  const state: AgenticLoopState = harness["state"];
+  const tools = harness["tools"];
+  const { options, project, username, agent, emit } = context;
+  let currentMessages = params.currentMessages;
+  let failedApproachDescriptions = params.failedApproachDescriptions;
+
+  state.iterations++;
+  const adaptiveBranchCount = resolveAdaptiveToTBranchCount(
+    searchStrategy,
+    state.iterations,
+    initialBranchCount,
+  );
+
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.STATUS,
+    message: STATUS_MESSAGES.ITERATION_PROGRESS,
+    iteration: state.iterations,
+    maxIterations,
+    harness: "tree_of_thought",
+    searchStrategy,
+    branchCount: adaptiveBranchCount,
+  });
+
+  await maybeInjectSystemReminder(currentMessages, state, context);
+
+  const passOptions: IterationPassOptions = {
+    ...options,
+    project,
+    agent,
+    username,
+    tools: tools.finalTools,
+  };
+
+  const pressureResult = await manageContextPressure(currentMessages, context, state, "TreeOfThoughts");
+  currentMessages = harness.enforceContextWindow(pressureResult.messages, tools.finalTools.length);
+  const allowedToolNames = new Set(tools.finalTools.map((tool: ToolSchema) => tool.name));
+
+  const exploration = await exploreToTBranches({
+    harness,
+    searchStrategy,
+    adaptiveBranchCount,
+    valueThreshold,
+    bfsBeamWidth,
+    currentMessages,
+    passOptions,
+    allowedToolNames,
+    failedApproachDescriptions,
+  });
+  if (exploration.aborted) {
+    return {
+      messages: currentMessages,
+      action: "break",
+      cleanTextBreak: false,
+      failedApproachDescriptions,
+    };
+  }
+  const scoredBranches = exploration.scoredBranches;
+  const selectedBranch = exploration.selectedBranch;
+
+  state.selectedBranchScores.push(selectedBranch.score);
+  state.finalStreamedText = selectedBranch.pass.finalStreamedText;
+  state.streamedThinking = selectedBranch.pass.streamedThinking;
+
+  emitToTBranchSelected(
+    state,
+    selectedBranch,
+    scoredBranches,
+    adaptiveBranchCount,
+    searchStrategy,
+    emit,
+  );
+
+  if (
+    handleProactiveToTBacktrack(
+      selectedBranch,
+      scoredBranches,
+      valueThreshold,
+      state,
+      currentMessages,
+      failedApproachDescriptions,
+      options,
+      emit,
+    )
+  ) {
+    return {
+      messages: currentMessages,
+      action: "continue",
+      cleanTextBreak: false,
+      failedApproachDescriptions,
+    };
+  }
+
+  const selectedPass = selectedBranch.pass;
+  finalizePassTracker(selectedPass, selectedPass.requestId || "");
+  finalizeNonSelectedToTBranches(harness, scoredBranches, selectedBranch, currentMessages);
+
+  logKVCacheHitRate(selectedPass.usage, state.iterations, "TreeOfThoughts");
+  harness.emitGenerationProgress();
+  harness.emitUsageUpdate();
+
+  if (
+    await checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId, {
+      signal: context.signal,
+      pauseTimeoutMs: options.budgetPauseTimeoutMs,
+    })
+  ) {
+    return {
+      messages: currentMessages,
+      action: "break",
+      cleanTextBreak: false,
+      failedApproachDescriptions,
+    };
+  }
+
+  if (selectedPass.pendingToolCalls.length > 0) {
+    const toolTurn = await executeToTToolCalls(
+      harness,
+      selectedBranch,
+      scoredBranches,
+      currentMessages,
+      hooks,
+      searchStrategy,
+      failedApproachDescriptions,
+    );
+    currentMessages = toolTurn.messages;
+    if (toolTurn.clearedFailed) failedApproachDescriptions = [];
+    if (toolTurn.planAborted) {
+      return {
+        messages: currentMessages,
+        action: "return",
+        cleanTextBreak: false,
+        failedApproachDescriptions,
+      };
+    }
+    return {
+      messages: currentMessages,
+      action: "continue",
+      cleanTextBreak: false,
+      failedApproachDescriptions,
+    };
+  }
+
+  const nonToolAction = handleToTNonToolPass(harness, selectedPass, currentMessages, truncationState);
+  return {
+    messages: currentMessages,
+    action: nonToolAction === "continue" ? "continue" : "break",
+    cleanTextBreak: nonToolAction === "clean_break",
+    failedApproachDescriptions,
+  };
+}
+
 export async function runTreeOfThoughts(
   harness: BaseAgenticHarness,
 ): Promise<{ messages: ConversationMessage[] }> {
   const context = harness["context"];
   const state: AgenticLoopState = harness["state"];
-  const tools = harness["tools"];
-  const { options, agentConversationId, project, username, agent, workspaceRoot, emit, signal } = context;
+  const { options, agentConversationId, workspaceRoot, signal } = context;
   const resolvedAgentConversationId = agentConversationId || "";
   const { searchStrategy, initialBranchCount, valueThreshold, bfsBeamWidth, resolvedMaxIterations } =
     resolveToTSearchConfig(options);
@@ -608,150 +929,23 @@ export async function runTreeOfThoughts(
 
   try {
     while (state.iterations < resolvedMaxIterations) {
-      state.iterations++;
-      const adaptiveBranchCount =
-        searchStrategy === "dfs" || state.iterations === 1
-          ? initialBranchCount
-          : Math.max(1, Math.ceil(initialBranchCount * 0.6));
-
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.STATUS,
-        message: STATUS_MESSAGES.ITERATION_PROGRESS,
-        iteration: state.iterations,
+      const outcome = await runToTIteration({
+        harness,
+        searchStrategy,
+        initialBranchCount,
+        valueThreshold,
+        bfsBeamWidth,
         maxIterations: resolvedMaxIterations,
-        harness: "tree_of_thought",
-        searchStrategy,
-        branchCount: adaptiveBranchCount,
+        currentMessages,
+        failedApproachDescriptions,
+        truncationState,
+        hooks,
       });
-
-      await maybeInjectSystemReminder(currentMessages, state, context);
-
-      const passOptions: IterationPassOptions = {
-        ...options,
-        project,
-        agent,
-        username,
-        tools: tools.finalTools,
-      };
-
-      const pressureResult = await manageContextPressure(currentMessages, context, state, "TreeOfThoughts");
-      currentMessages = harness.enforceContextWindow(pressureResult.messages, tools.finalTools.length);
-      const allowedToolNames = new Set(tools.finalTools.map((tool: ToolSchema) => tool.name));
-
-      let scoredBranches: ScoredBranch[];
-      let selectedBranch: ScoredBranch;
-      if (searchStrategy === "dfs") {
-        const dfsOutcome = await exploreDfsBranches(
-          harness,
-          adaptiveBranchCount,
-          valueThreshold,
-          currentMessages,
-          passOptions,
-          allowedToolNames,
-          failedApproachDescriptions,
-          "[TreeOfThoughts]",
-        );
-        scoredBranches = dfsOutcome.scoredBranches;
-        selectedBranch = dfsOutcome.selectedBranch;
-      } else {
-        const bfsOutcome = await exploreBfsBranches(
-          harness,
-          adaptiveBranchCount,
-          currentMessages,
-          passOptions,
-          allowedToolNames,
-          failedApproachDescriptions,
-          "bfs",
-          "[TreeOfThoughts]",
-        );
-        if (bfsOutcome.aborted) break;
-        scoredBranches = bfsOutcome.scoredBranches;
-        selectedBranch = bfsOutcome.selectedBranch;
-        state.frontierCandidates = scoredBranches.slice(1, bfsBeamWidth).map((branch) => ({
-          pass: branch.pass,
-          score: branch.score,
-          branchIndex: branch.branchIndex,
-          criteriaScores: branch.criteriaScores,
-        }));
-      }
-
-      state.selectedBranchScores.push(selectedBranch.score);
-      state.finalStreamedText = selectedBranch.pass.finalStreamedText;
-      state.streamedThinking = selectedBranch.pass.streamedThinking;
-
-      emit({
-        type: SERVER_SENT_EVENT_TYPES.STATUS,
-        message: STATUS_MESSAGES.BRANCH_SELECTED,
-        branchIndex: selectedBranch.branchIndex,
-        score: selectedBranch.score,
-        branchCount: adaptiveBranchCount,
-        criteriaScores: selectedBranch.criteriaScores,
-        searchStrategy,
-        frontierSize: state.frontierCandidates.length,
-        scores: scoredBranches.map((branch) => ({
-          index: branch.branchIndex,
-          score: branch.score,
-          criteria: branch.criteriaScores,
-        })),
-      });
-
-      if (
-        handleProactiveToTBacktrack(
-          selectedBranch,
-          scoredBranches,
-          valueThreshold,
-          state,
-          currentMessages,
-          failedApproachDescriptions,
-          options,
-          emit,
-        )
-      ) {
-        continue;
-      }
-
-      const selectedPass = selectedBranch.pass;
-      finalizePassTracker(selectedPass, selectedPass.requestId || "");
-      for (const branch of scoredBranches) {
-        if (branch !== selectedBranch && branch.pass.requestId) {
-          finalizePassTracker(branch.pass, branch.pass.requestId);
-          harness.logIteration(branch.pass, currentMessages);
-        }
-      }
-
-      logKVCacheHitRate(selectedPass.usage, state.iterations, "TreeOfThoughts");
-      harness.emitGenerationProgress();
-      harness.emitUsageUpdate();
-
-      if (
-        await checkCostBudget(state, context.resolvedModel, options.maxCostDollars, emit, context.conversationId, {
-          signal: context.signal,
-          pauseTimeoutMs: options.budgetPauseTimeoutMs,
-        })
-      ) {
-        break;
-      }
-
-      if (selectedPass.pendingToolCalls.length > 0) {
-        const toolTurn = await executeToTToolCalls(
-          harness,
-          selectedBranch,
-          scoredBranches,
-          currentMessages,
-          hooks,
-          searchStrategy,
-          failedApproachDescriptions,
-        );
-        currentMessages = toolTurn.messages;
-        if (toolTurn.clearedFailed) failedApproachDescriptions = [];
-        if (toolTurn.planAborted) return { messages: currentMessages };
-        continue;
-      }
-
-      const nonToolAction = handleToTNonToolPass(harness, selectedPass, currentMessages, truncationState);
-      if (nonToolAction === "continue") continue;
-      if (nonToolAction === "clean_break") hasCleanTextBreak = true;
-      break;
+      currentMessages = outcome.messages;
+      failedApproachDescriptions = outcome.failedApproachDescriptions;
+      if (outcome.cleanTextBreak) hasCleanTextBreak = true;
+      if (outcome.action === "return") return { messages: currentMessages };
+      if (outcome.action === "break") break;
     }
 
     if (!hasCleanTextBreak && state.streamedToolCalls.length > 0 && !signal?.aborted) {

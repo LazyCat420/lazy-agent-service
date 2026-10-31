@@ -82,18 +82,18 @@ interface QuestionInput {
 
 let questionCounter = 0;
 
-/** Execute the ask_user internal tool; resolves when the user answers. */
-export async function executeAskUser(
-  args: Record<string, unknown>,
-  context: Pick<AgenticContext, "conversationId" | "emit" | "signal">,
-): Promise<Record<string, unknown>> {
-  const questions = Array.isArray(args.questions) ? (args.questions as QuestionInput[]) : [];
-  if (questions.length === 0) {
-    return { error: "The 'questions' array is required and must not be empty" };
-  }
-  if (questions.length > MAX_QUESTIONS) {
-    return { error: `Maximum ${MAX_QUESTIONS} questions per call` };
-  }
+interface NormalizedQuestions {
+  questions: QuestionDefinition[];
+}
+
+interface QuestionNormalizationError {
+  error: string;
+}
+
+/** Validate and normalize the raw questions payload; errors are returned, not thrown. */
+function normalizeQuestions(
+  questions: QuestionInput[],
+): NormalizedQuestions | QuestionNormalizationError {
   const seen = new Set<string>();
   const normalized: QuestionDefinition[] = [];
   for (const input of questions) {
@@ -120,6 +120,26 @@ export async function executeAskUser(
       multiSelect: input.multiSelect === true,
     });
   }
+  return { questions: normalized };
+}
+
+/** Execute the ask_user internal tool; resolves when the user answers. */
+export async function executeAskUser(
+  args: Record<string, unknown>,
+  context: Pick<AgenticContext, "conversationId" | "emit" | "signal">,
+): Promise<Record<string, unknown>> {
+  const questions = Array.isArray(args.questions) ? (args.questions as QuestionInput[]) : [];
+  if (questions.length === 0) {
+    return { error: "The 'questions' array is required and must not be empty" };
+  }
+  if (questions.length > MAX_QUESTIONS) {
+    return { error: `Maximum ${MAX_QUESTIONS} questions per call` };
+  }
+  const normalizedResult = normalizeQuestions(questions);
+  if ("error" in normalizedResult) {
+    return { error: normalizedResult.error };
+  }
+  const normalized = normalizedResult.questions;
 
   const { conversationId, emit, signal } = context;
   if (!conversationId) {

@@ -49,24 +49,13 @@ interface FailedToolCallSummary {
   consecutiveFailureCount: number;
 }
 
-/**
- * Inspect tool results for failures and build structured retry
- * guidance for the model. Returns the system message to inject,
- * or null if no retry guidance is needed.
- *
- * Retry guidance is injected when:
- *   - At least one tool call returned an error
- *   - The tool has NOT yet hit the circuit breaker limit
- *     (once a tool hits MAX_CONSECUTIVE_TOOL_ERRORS, the existing
- *      trackToolErrors handler already emits a skip warning)
- */
-export function buildToolRetryGuidance(
+/** Collect failed tool calls that still deserve retry guidance. */
+function collectFailedToolCalls(
   toolCalls: ToolCall[],
   results: ToolResult[],
   state: AgenticLoopState,
   maxConsecutiveErrors: number,
-  locale?: string,
-): ConversationMessage | null {
+): FailedToolCallSummary[] {
   const failedToolCalls: FailedToolCallSummary[] = [];
 
   for (const toolCall of toolCalls) {
@@ -100,8 +89,11 @@ export function buildToolRetryGuidance(
     });
   }
 
-  if (failedToolCalls.length === 0) return null;
+  return failedToolCalls;
+}
 
+/** Emit one retry span per failed tool call (non-blocking on failure). */
+function emitRetrySpans(failedToolCalls: FailedToolCallSummary[]): void {
   try {
     const activeCtx = TraceContext.get();
     for (const failed of failedToolCalls) {
@@ -126,9 +118,13 @@ export function buildToolRetryGuidance(
   } catch {
     // non-blocking
   }
+}
 
-  const activeLocale = locale || PromptLocaleService.getDefaultLocale();
-
+/** Build the retry guidance system message from the failed calls. */
+function buildRetryGuidanceMessage(
+  failedToolCalls: FailedToolCallSummary[],
+  activeLocale: string,
+): ConversationMessage {
   const retryGuidanceBlocks = failedToolCalls
     .map((failedToolCall) => {
       const argumentSummary = formatArgumentSummary(
@@ -152,13 +148,46 @@ export function buildToolRetryGuidance(
   });
   const analyzeSteps = PromptLocaleService.get(activeLocale, "harness.toolRetryGuidance.analyzeSteps");
 
-  const retryMessage: ConversationMessage = {
+  return {
     role: "system",
     content:
       `${headerText}\n\n` +
       `${retryGuidanceBlocks}\n\n` +
       analyzeSteps,
   };
+}
+
+/**
+ * Inspect tool results for failures and build structured retry
+ * guidance for the model. Returns the system message to inject,
+ * or null if no retry guidance is needed.
+ *
+ * Retry guidance is injected when:
+ *   - At least one tool call returned an error
+ *   - The tool has NOT yet hit the circuit breaker limit
+ *     (once a tool hits MAX_CONSECUTIVE_TOOL_ERRORS, the existing
+ *      trackToolErrors handler already emits a skip warning)
+ */
+export function buildToolRetryGuidance(
+  toolCalls: ToolCall[],
+  results: ToolResult[],
+  state: AgenticLoopState,
+  maxConsecutiveErrors: number,
+  locale?: string,
+): ConversationMessage | null {
+  const failedToolCalls = collectFailedToolCalls(
+    toolCalls,
+    results,
+    state,
+    maxConsecutiveErrors,
+  );
+
+  if (failedToolCalls.length === 0) return null;
+
+  emitRetrySpans(failedToolCalls);
+
+  const activeLocale = locale || PromptLocaleService.getDefaultLocale();
+  const retryMessage = buildRetryGuidanceMessage(failedToolCalls, activeLocale);
 
   logger.info(
     `[ToolRetryInterceptor] Injected structured retry guidance for ${failedToolCalls.length} failed tool call(s): ` +

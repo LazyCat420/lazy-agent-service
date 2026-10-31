@@ -42,6 +42,7 @@ import { handleCodexPlanningResponse } from "./lifecycle/CodexPlanningDetector.t
 import PlanningModeService from "../PlanningModeService.ts";
 import { applyAssembledSystemPrompt } from "./lifecycle/IdentityPrompt.ts";
 
+import type AgentHooks from "../AgentHooks.ts";
 import type {
   ConversationMessage,
   ToolCall,
@@ -60,6 +61,13 @@ interface IterationPassOptions extends AgenticOptions {
 }
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
+
+interface VisionIterationOutcome {
+  messages: ConversationMessage[];
+  action: "continue" | "break" | "return";
+  hasCleanTextBreak: boolean;
+  truncationRecoveryCount: number;
+}
 
 /**
  * VisionLanguageHarness — Reason→Act→Observe tool-use loop with live webcam/video streaming.
@@ -484,13 +492,119 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
     return { shouldBreak: true, hasCleanTextBreak: false, truncationRecoveryCount };
   }
 
+  /** Run one vision iteration and report what the loop should do next. */
+  private async runVisionIteration(
+    currentMessagesIn: ConversationMessage[],
+    hooks: AgentHooks,
+    truncationRecoveryCountIn: number,
+    maxIterations: number,
+  ): Promise<VisionIterationOutcome> {
+    const context = this.context;
+    const state = this.state;
+    const { options, agentConversationId, project, username, agent, emit, signal } =
+      context;
+    const resolvedAgentConversationId = agentConversationId || "";
+    let currentMessages = currentMessagesIn;
+    const truncationRecoveryCount = truncationRecoveryCountIn;
+
+    state.iterations++;
+
+    emit({
+      type: SERVER_SENT_EVENT_TYPES.STATUS,
+      message: STATUS_MESSAGES.ITERATION_PROGRESS,
+      iteration: state.iterations,
+      maxIterations,
+    });
+
+    if (state.iterations === 1) {
+      await this.runFirstIterationSetup(currentMessages, hooks);
+    }
+
+    const passOptions: IterationPassOptions = {
+      ...options,
+      project,
+      agent,
+      username,
+      tools: this.buildPassTools(),
+    };
+    const resolvedPassTools = passOptions.tools || [];
+    const allowedToolNames = new Set(resolvedPassTools.map((tool: ToolSchema) => tool.name));
+
+    const pressureResult = await manageContextPressure(
+      currentMessages,
+      context,
+      state,
+      "VisionLanguageHarness",
+    );
+    currentMessages = pressureResult.messages;
+
+    this.injectLiveVisionFrames(currentMessages, resolvedAgentConversationId);
+
+    currentMessages = this.enforceContextWindow(currentMessages, this.tools.finalTools.length);
+
+    const pass = this.createPassState(passOptions);
+    const requestIdBase =
+      context.requestId || resolvedAgentConversationId || crypto.randomUUID();
+    const passRequestId = `${requestIdBase}-iter-${state.iterations}`;
+    pass.requestId = passRequestId;
+
+    this.registerTrackerRequest(passRequestId);
+
+    const stream = await this.createProviderStream(currentMessages, passOptions);
+    await this.consumeStream(stream, pass, allowedToolNames);
+
+    finalizePassTracker(pass, passRequestId);
+    logKVCacheHitRate(pass.usage, state.iterations, "VisionLanguageHarness");
+    this.emitGenerationProgress();
+
+    if (signal?.aborted) {
+      return {
+        messages: currentMessages,
+        action: "break",
+        hasCleanTextBreak: false,
+        truncationRecoveryCount,
+      };
+    }
+
+    this.emitUsageUpdate();
+
+    if (pass.pendingToolCalls.length > 0) {
+      const toolTurn = await this.handleIterationToolCalls(pass, currentMessages, hooks);
+      currentMessages = toolTurn.messages;
+      if (toolTurn.earlyReturn) {
+        return {
+          messages: currentMessages,
+          action: "return",
+          hasCleanTextBreak: false,
+          truncationRecoveryCount,
+        };
+      }
+      return {
+        messages: currentMessages,
+        action: "continue",
+        hasCleanTextBreak: false,
+        truncationRecoveryCount,
+      };
+    }
+
+    const noToolOutcome = this.handleNoToolPass(
+      pass,
+      currentMessages,
+      truncationRecoveryCount,
+    );
+    return {
+      messages: currentMessages,
+      action: noToolOutcome.shouldBreak ? "break" : "continue",
+      hasCleanTextBreak: noToolOutcome.hasCleanTextBreak,
+      truncationRecoveryCount: noToolOutcome.truncationRecoveryCount,
+    };
+  }
+
   async run(): Promise<{ messages: ConversationMessage[] }> {
     const context = this.context;
     const state = this.state;
-    const { options, agentConversationId, project, username, agent, workspaceRoot, emit, signal } =
-      context;
+    const { options, workspaceRoot, emit, signal } = context;
 
-    const resolvedAgentConversationId = agentConversationId || "";
     const resolvedMaxIterations = this.resolveMaxIterations(options.maxIterations);
 
     let currentMessages: ConversationMessage[] = [...context.messages];
@@ -514,75 +628,17 @@ export default class VisionLanguageHarness extends BaseAgenticHarness {
 
     try {
       while (state.iterations < resolvedMaxIterations) {
-        state.iterations++;
-
-        emit({
-          type: SERVER_SENT_EVENT_TYPES.STATUS,
-          message: STATUS_MESSAGES.ITERATION_PROGRESS,
-          iteration: state.iterations,
-          maxIterations: resolvedMaxIterations,
-        });
-
-        if (state.iterations === 1) {
-          await this.runFirstIterationSetup(currentMessages, hooks);
-        }
-
-        const passOptions: IterationPassOptions = {
-          ...options,
-          project,
-          agent,
-          username,
-          tools: this.buildPassTools(),
-        };
-        const resolvedPassTools = passOptions.tools || [];
-        const allowedToolNames = new Set(resolvedPassTools.map((tool: ToolSchema) => tool.name));
-
-        const pressureResult = await manageContextPressure(
+        const outcome = await this.runVisionIteration(
           currentMessages,
-          context,
-          state,
-          "VisionLanguageHarness",
-        );
-        currentMessages = pressureResult.messages;
-
-        this.injectLiveVisionFrames(currentMessages, resolvedAgentConversationId);
-
-        currentMessages = this.enforceContextWindow(currentMessages, this.tools.finalTools.length);
-
-        const pass = this.createPassState(passOptions);
-        const requestIdBase =
-          context.requestId || resolvedAgentConversationId || crypto.randomUUID();
-        const passRequestId = `${requestIdBase}-iter-${state.iterations}`;
-        pass.requestId = passRequestId;
-
-        this.registerTrackerRequest(passRequestId);
-
-        const stream = await this.createProviderStream(currentMessages, passOptions);
-        await this.consumeStream(stream, pass, allowedToolNames);
-
-        finalizePassTracker(pass, passRequestId);
-        logKVCacheHitRate(pass.usage, state.iterations, "VisionLanguageHarness");
-        this.emitGenerationProgress();
-
-        if (signal?.aborted) break;
-
-        this.emitUsageUpdate();
-
-        if (pass.pendingToolCalls.length > 0) {
-          const toolTurn = await this.handleIterationToolCalls(pass, currentMessages, hooks);
-          currentMessages = toolTurn.messages;
-          if (toolTurn.earlyReturn) return { messages: currentMessages };
-          continue;
-        }
-
-        const noToolOutcome = this.handleNoToolPass(
-          pass,
-          currentMessages,
+          hooks,
           truncationRecoveryCount,
+          resolvedMaxIterations,
         );
-        truncationRecoveryCount = noToolOutcome.truncationRecoveryCount;
-        if (noToolOutcome.hasCleanTextBreak) hasCleanTextBreak = true;
-        if (noToolOutcome.shouldBreak) break;
+        currentMessages = outcome.messages;
+        truncationRecoveryCount = outcome.truncationRecoveryCount;
+        if (outcome.hasCleanTextBreak) hasCleanTextBreak = true;
+        if (outcome.action === "return") return { messages: currentMessages };
+        if (outcome.action === "break") break;
       }
 
       if (!hasCleanTextBreak && state.streamedToolCalls.length > 0 && !signal?.aborted) {
