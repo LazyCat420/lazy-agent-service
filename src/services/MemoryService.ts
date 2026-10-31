@@ -230,6 +230,110 @@ async function extractFactsFromConversation(
   ) as unknown as ExtractedFact[];
 }
 // ─── Unified Memory Service ──────────────────────────────────────────────────
+/** CODING memories only keep the taxonomy types; anything else becomes "project". */
+function resolveMemoryType(
+  agent: string,
+  type: string | undefined,
+): string | undefined {
+  if (agent !== AGENT_IDS.CODING) return type;
+  return CODING_MEMORY_TYPES.includes(type as string) ? type : "project";
+}
+
+/** Embedding call options for a store: only the identifiers the caller supplied. */
+function buildMemoryEmbedOptions(params: {
+  project?: string | null;
+  conversationId?: string | null;
+  traceId?: string;
+  agentConversationId?: string;
+  endpoint?: string;
+  agent?: string;
+  username?: string | null;
+}): EmbedOptions {
+  const { project, conversationId, traceId, agentConversationId, endpoint, agent, username } = params;
+  const embedOpts: EmbedOptions = { project };
+  if (conversationId) embedOpts.conversationId = conversationId;
+  if (traceId) embedOpts.traceId = traceId;
+  if (agentConversationId) embedOpts.agentConversationId = agentConversationId;
+  if (endpoint) embedOpts.endpoint = endpoint;
+  if (agent) embedOpts.agent = agent;
+  if (username) embedOpts.username = username;
+  return embedOpts;
+}
+
+/** Dedup filter: the same agent, plus any scope the caller supplied. */
+function buildMemoryDedupFilter(
+  agent: string,
+  project: string | null | undefined,
+  metadata: Record<string, unknown>,
+): Record<string, unknown> {
+  const dedupFilter: Record<string, unknown> = { agent };
+  if (project) dedupFilter.project = project;
+  if (metadata.guildId) dedupFilter.guildId = metadata.guildId;
+  if (metadata.aboutUserId) dedupFilter.aboutUserId = metadata.aboutUserId;
+  return dedupFilter;
+}
+
+interface StoredMemoryDocument {
+  [key: string]: unknown;
+  id: string;
+  agent: string;
+  project: string | null;
+  username: string | null;
+  type: string;
+  title: string | null;
+  content: string;
+  semanticEmbedding: IndexedEmbedding;
+  conversationId: string | null;
+  agentConversationId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The stored memory document: agent metadata first, core fields win. */
+function buildMemoryDocument(params: {
+  agent: string;
+  project?: string | null;
+  username?: string | null;
+  type?: string;
+  title?: string | null;
+  content: string;
+  semanticEmbedding: IndexedEmbedding;
+  metadata: Record<string, unknown>;
+  conversationId?: string | null;
+  agentConversationId?: string;
+}): StoredMemoryDocument {
+  const {
+    agent,
+    project,
+    username,
+    type,
+    title,
+    content,
+    semanticEmbedding,
+    metadata,
+    conversationId,
+    agentConversationId,
+  } = params;
+  const now = new Date().toISOString();
+  return {
+    // Spread agent-specific metadata first — core fields below take precedence
+    // to prevent accidental overwrites of id, agent, embedding, etc.
+    ...metadata,
+    id: crypto.randomUUID(),
+    agent,
+    project: project || null,
+    username: username || null,
+    type: type || "other",
+    title: title || null,
+    content,
+    semanticEmbedding,
+    conversationId: conversationId || null,
+    agentConversationId: agentConversationId || null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 /**
  * MemoryService — unified, agent-scoped memory system.
  *
@@ -260,27 +364,24 @@ const MemoryService = {
       throw new Error("MemoryService.store requires an agent identifier");
     if (!content) throw new Error("MemoryService.store requires content");
     // Validate type for CODING agent
-    if (agent === AGENT_IDS.CODING) {
-      type = CODING_MEMORY_TYPES.includes(type as string) ? type : "project";
-    }
+    type = resolveMemoryType(agent, type);
     const collection = MongoWrapper.getCollection(MONGO_DB_NAME, COLLECTION);
     const embedText = title ? `${title}: ${content}` : content;
     // Generate embedding if not provided
     if (!semanticEmbedding) {
-      const embedOpts: EmbedOptions = { project };
-      if (conversationId) embedOpts.conversationId = conversationId;
-      if (traceId) embedOpts.traceId = traceId;
-      if (agentConversationId) embedOpts.agentConversationId = agentConversationId;
-      if (endpoint) embedOpts.endpoint = endpoint;
-      if (agent) embedOpts.agent = agent;
-      if (username) embedOpts.username = username;
+      const embedOpts = buildMemoryEmbedOptions({
+        project,
+        conversationId,
+        traceId,
+        agentConversationId,
+        endpoint,
+        agent,
+        username,
+      });
       semanticEmbedding = indexedEmbedding(await generateEmbedding(embedText, embedOpts));
     }
     // Duplicate detection — compare against existing memories for the same agent
-    const dedupFilter: Record<string, unknown> = { agent };
-    if (project) dedupFilter.project = project;
-    if (metadata.guildId) dedupFilter.guildId = metadata.guildId;
-    if (metadata.aboutUserId) dedupFilter.aboutUserId = metadata.aboutUserId;
+    const dedupFilter = buildMemoryDedupFilter(agent, project, metadata);
     const existing = await collection
       .find(dedupFilter)
       .project({ semanticEmbedding: 1 })
@@ -303,24 +404,18 @@ const MemoryService = {
       );
       return null;
     }
-    const now = new Date().toISOString();
-    const memory = {
-      // Spread agent-specific metadata first — core fields below take precedence
-      // to prevent accidental overwrites of id, agent, embedding, etc.
-      ...metadata,
-      id: crypto.randomUUID(),
+    const memory = buildMemoryDocument({
       agent,
-      project: project || null,
-      username: username || null,
-      type: type || "other",
-      title: title || null,
+      project,
+      username,
+      type,
+      title,
       content,
       semanticEmbedding,
-      conversationId: conversationId || null,
-      agentConversationId: agentConversationId || null,
-      createdAt: now,
-      updatedAt: now,
-    };
+      metadata,
+      conversationId,
+      agentConversationId,
+    });
     await collection.insertOne(memory);
     logger.info(
       `[MemoryService] Stored [${agent}/${memory.type}] "${(title || content).substring(0, 60)}"`,

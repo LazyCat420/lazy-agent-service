@@ -53,6 +53,105 @@ const WATCHED_COLLECTIONS = [
   COLLECTIONS.REQUESTS,
 ];
 
+/** isGenerating state for a conversation change, from the update or the full doc. */
+function resolveIsGenerating(
+  updateDescription: { updatedFields?: Record<string, unknown> } | null,
+  fullDocument: Record<string, unknown> | null,
+): boolean | undefined {
+  if (updateDescription?.updatedFields?.isGenerating !== undefined) {
+    return updateDescription.updatedFields.isGenerating as boolean;
+  }
+  if (fullDocument?.isGenerating !== undefined) {
+    return fullDocument.isGenerating as boolean;
+  }
+  return undefined;
+}
+
+/** Requests carry the owning conversation ids so the client can walk the hierarchy. */
+function enrichRequestIds(
+  payload: ChangeStreamEventPayload,
+  collectionName: string,
+  fullDocument: Record<string, unknown> | null,
+): void {
+  if (
+    collectionName === COLLECTIONS.REQUESTS &&
+    fullDocument?.conversationId
+  ) {
+    payload.conversationId = fullDocument.conversationId as string;
+  }
+
+  // Enrich requests with parentAgentConversationId so the client can
+  // match sub-agent request events by walking up the agent hierarchy.
+  if (
+    collectionName === COLLECTIONS.REQUESTS &&
+    fullDocument?.parentAgentConversationId
+  ) {
+    payload.parentAgentConversationId = fullDocument.parentAgentConversationId as string;
+  }
+}
+
+/** Payload for one change event, enriched with the state the client cares about. */
+function buildChangeStreamPayload(
+  collectionName: string,
+  event: ChangeStreamDocument,
+): ChangeStreamEventPayload {
+  const documentKey =
+    "documentKey" in event
+      ? (event.documentKey as Record<string, unknown>)
+      : undefined;
+  const fullDocument =
+    "fullDocument" in event
+      ? (event.fullDocument as Record<string, unknown> | null)
+      : null;
+  const updateDescription =
+    "updateDescription" in event
+      ? (event.updateDescription as {
+          updatedFields?: Record<string, unknown>;
+        } | null)
+      : null;
+
+  const payload: ChangeStreamEventPayload = {
+    collection: collectionName,
+    operationType: event.operationType,
+    documentId: documentKey?._id?.toString() || null,
+    // For inserts/updates, include the document ID field if available
+    id: (fullDocument?.id as string) || null,
+    updatedFields: updateDescription?.updatedFields
+      ? Object.keys(updateDescription.updatedFields)
+      : null,
+    timestamp: new Date().toISOString(),
+  };
+
+  // Enrich with isGenerating state for conversations
+  if (
+    collectionName === COLLECTIONS.MODEL_CONVERSATIONS ||
+    collectionName === COLLECTIONS.AGENT_CONVERSATIONS
+  ) {
+    const isGenerating = resolveIsGenerating(updateDescription, fullDocument);
+    if (isGenerating !== undefined) payload.isGenerating = isGenerating;
+  }
+
+  enrichRequestIds(payload, collectionName, fullDocument);
+
+  return payload;
+}
+
+/** Broadcast one change event to every registered listener. */
+function broadcastChangeStreamEvent(
+  collectionName: string,
+  event: ChangeStreamDocument,
+): void {
+  const payload = buildChangeStreamPayload(collectionName, event);
+  // Broadcast to all registered listeners
+  for (const listener of listeners) {
+    try {
+      listener(payload);
+    } catch (error: unknown) {
+      logger.error(`ChangeStream listener error: ${errorMessage(error)}`);
+    }
+  }
+}
+
 /**
  * Attempt to open a Change Stream on a single collection.
  * Returns the stream if successful, null otherwise.
@@ -63,70 +162,7 @@ function openStream(db: Db, collectionName: string) {
     const stream = collection.watch([], { fullDocument: "updateLookup" });
 
     stream.on("change", (event: ChangeStreamDocument) => {
-      const documentKey =
-        "documentKey" in event
-          ? (event.documentKey as Record<string, unknown>)
-          : undefined;
-      const fullDocument =
-        "fullDocument" in event
-          ? (event.fullDocument as Record<string, unknown> | null)
-          : null;
-      const updateDescription =
-        "updateDescription" in event
-          ? (event.updateDescription as {
-              updatedFields?: Record<string, unknown>;
-            } | null)
-          : null;
-
-      const payload: ChangeStreamEventPayload = {
-        collection: collectionName,
-        operationType: event.operationType,
-        documentId: documentKey?._id?.toString() || null,
-        // For inserts/updates, include the document ID field if available
-        id: (fullDocument?.id as string) || null,
-        updatedFields: updateDescription?.updatedFields
-          ? Object.keys(updateDescription.updatedFields)
-          : null,
-        timestamp: new Date().toISOString(),
-      };
-
-      // Enrich with isGenerating state for conversations
-      if (
-        collectionName === COLLECTIONS.MODEL_CONVERSATIONS ||
-        collectionName === COLLECTIONS.AGENT_CONVERSATIONS
-      ) {
-        if (updateDescription?.updatedFields?.isGenerating !== undefined) {
-          payload.isGenerating = updateDescription.updatedFields
-            .isGenerating as boolean;
-        } else if (fullDocument?.isGenerating !== undefined) {
-          payload.isGenerating = fullDocument.isGenerating as boolean;
-        }
-      }
-
-      if (
-        collectionName === COLLECTIONS.REQUESTS &&
-        fullDocument?.conversationId
-      ) {
-        payload.conversationId = fullDocument.conversationId as string;
-      }
-
-      // Enrich requests with parentAgentConversationId so the client can
-      // match sub-agent request events by walking up the agent hierarchy.
-      if (
-        collectionName === COLLECTIONS.REQUESTS &&
-        fullDocument?.parentAgentConversationId
-      ) {
-        payload.parentAgentConversationId = fullDocument.parentAgentConversationId as string;
-      }
-
-      // Broadcast to all registered listeners
-      for (const listener of listeners) {
-        try {
-          listener(payload);
-        } catch (error: unknown) {
-          logger.error(`ChangeStream listener error: ${errorMessage(error)}`);
-        }
-      }
+      broadcastChangeStreamEvent(collectionName, event);
     });
 
     stream.on("error", (error: Error) => {

@@ -10,6 +10,56 @@ function getCollection() {
   return MongoWrapper.getCollection(MONGO_DB_NAME, COLLECTIONS.CUSTOM_AGENTS);
 }
 
+/** A string field, or the fallback when the caller did not supply one. */
+function textOrFallback(value: unknown, fallback: string): string {
+  return (value as string) || fallback;
+}
+
+/** availableTools, else enabledTools, else []. */
+function pickAvailableTools(data: Record<string, unknown>): unknown[] {
+  if (Array.isArray(data.availableTools)) return data.availableTools;
+  return Array.isArray(data.enabledTools) ? data.enabledTools : [];
+}
+
+/** Platform rules object, or {} when it is not a non-null object. */
+function pickPlatformRules(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/** The document a create call inserts, with defaults for everything optional. */
+function buildCustomAgentDocument(
+  data: Record<string, unknown>,
+  agentId: string,
+): Record<string, unknown> {
+  return {
+    name: data.name,
+    agentId,
+    type: textOrFallback(data.type, ""),
+    description: textOrFallback(data.description, ""),
+    project: textOrFallback(data.project, "coding"),
+    icon: textOrFallback(data.icon, ""),
+    avatar: textOrFallback(data.avatar, ""),
+    color: textOrFallback(data.color, ""),
+    backgroundImage: textOrFallback(data.backgroundImage, ""),
+    identity: textOrFallback(data.identity, ""),
+    guidelines: textOrFallback(data.guidelines, ""),
+    toolPolicy: textOrFallback(data.toolPolicy, ""),
+    availableTools: pickAvailableTools(data),
+    enabledByDefaultTools: Array.isArray(data.enabledByDefaultTools)
+      ? data.enabledByDefaultTools
+      : [],
+    policies: Array.isArray(data.policies) ? data.policies : [],
+    platformRules: pickPlatformRules(data.platformRules),
+    hasSomaticState: data.hasSomaticState || false,
+    usesDirectoryTree: data.usesDirectoryTree || false,
+    usesCodingGuidelines: data.usesCodingGuidelines || false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 const CustomAgentService = {
   async list() {
     const collection = getCollection();
@@ -38,38 +88,7 @@ const CustomAgentService = {
       throw new Error(`Agent with name "${data.name}" already exists`);
     }
 
-    const document = {
-      name: data.name,
-      agentId,
-      type: data.type || "",
-      description: data.description || "",
-      project: data.project || "coding",
-      icon: data.icon || "",
-      avatar: data.avatar || "",
-      color: data.color || "",
-      backgroundImage: data.backgroundImage || "",
-      identity: data.identity || "",
-      guidelines: data.guidelines || "",
-      toolPolicy: data.toolPolicy || "",
-      availableTools: Array.isArray(data.availableTools)
-        ? data.availableTools
-        : Array.isArray(data.enabledTools)
-          ? data.enabledTools
-          : [],
-      enabledByDefaultTools: Array.isArray(data.enabledByDefaultTools)
-        ? data.enabledByDefaultTools
-        : [],
-      policies: Array.isArray(data.policies) ? data.policies : [],
-      platformRules:
-        typeof data.platformRules === "object" && data.platformRules !== null
-          ? data.platformRules
-          : {},
-      hasSomaticState: data.hasSomaticState || false,
-      usesDirectoryTree: data.usesDirectoryTree || false,
-      usesCodingGuidelines: data.usesCodingGuidelines || false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    const document = buildCustomAgentDocument(data, agentId);
 
     const result = await collection.insertOne(document);
     logger.info(

@@ -389,17 +389,9 @@ const ConversationService: ConversationServiceInterface = {
       if (request.model) models.add(request.model);
       if (request.operation) operations.add(request.operation);
       // Merge modalities
-      if (request.modalities) {
-        for (const [k, value] of Object.entries(request.modalities)) {
-          if (value) mergedModalities[k] = true;
-        }
-      }
+      mergeRequestModalities(request.modalities, mergedModalities);
       // Count tool usage
-      if (request.toolApiNames && request.toolApiNames.length > 0) {
-        for (const name of request.toolApiNames) {
-          toolCounts[name] = (toolCounts[name] || 0) + 1;
-        }
-      }
+      countRequestToolUsage(request.toolApiNames, toolCounts);
       if (request.success === false) {
         requestErrorCount++;
       }
@@ -477,6 +469,68 @@ export default ConversationService;
 
 const stringify = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value ?? null));
 
+/** Merge one request's modality flags into the conversation-wide map. */
+function mergeRequestModalities(
+  modalities: Record<string, unknown> | null | undefined,
+  mergedModalities: Record<string, boolean>,
+): void {
+  if (modalities) {
+    for (const [k, value] of Object.entries(modalities)) {
+      if (value) mergedModalities[k] = true;
+    }
+  }
+}
+
+/** Count one request's tool invocations into the conversation-wide tally. */
+function countRequestToolUsage(
+  toolApiNames: string[] | null | undefined,
+  toolCounts: Record<string, number>,
+): void {
+  if (toolApiNames && toolApiNames.length > 0) {
+    for (const name of toolApiNames) {
+      toolCounts[name] = (toolCounts[name] || 0) + 1;
+    }
+  }
+}
+
+interface ResumeToolCallPair {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  result: unknown;
+}
+
+/** Valid assistant tool calls as resume pairs; the fallback id keeps `outLength` stable. */
+function buildResumeToolCallPairs(
+  calls: Array<Record<string, unknown>>,
+  outLength: number,
+): ResumeToolCallPair[] {
+  return calls
+    .filter((call) => typeof call?.name === "string")
+    .map((call, index) => ({
+      id: typeof call.id === "string" && call.id ? call.id : `resume_${outLength}_${index}`,
+      name: call.name as string,
+      args: (call.args && typeof call.args === "object" ? call.args : {}) as Record<string, unknown>,
+      result: call.result,
+    }));
+}
+
+/** Emit one tool message per call, reusing the stored result when there is one. */
+function pushResumeToolResults(
+  out: ResumeMessage[],
+  pairs: ResumeToolCallPair[],
+  storedToolResults: Map<string, string>,
+): void {
+  for (const pair of pairs) {
+    const stored = storedToolResults.get(pair.id);
+    out.push({
+      role: "tool",
+      tool_call_id: pair.id,
+      content: stored ?? (pair.result === undefined || pair.result === null ? "[result not recorded]" : stringify(pair.result)),
+    });
+  }
+}
+
 /** Stored messages → resume messages with intact call/result pairs (exported for tests). */
 export function buildResumeMessages(stored: ChatMessage[]): ResumeMessage[] {
   const out: ResumeMessage[] = [];
@@ -494,26 +548,13 @@ export function buildResumeMessages(stored: ChatMessage[]): ResumeMessage[] {
     if (role === "tool") continue; // re-emitted right after its call below
     const calls = Array.isArray(record.toolCalls) ? (record.toolCalls as Array<Record<string, unknown>>) : [];
     if (role === "assistant" && calls.length > 0) {
-      const pairs = calls
-        .filter((call) => typeof call?.name === "string")
-        .map((call, index) => ({
-          id: typeof call.id === "string" && call.id ? call.id : `resume_${out.length}_${index}`,
-          name: call.name as string,
-          args: (call.args && typeof call.args === "object" ? call.args : {}) as Record<string, unknown>,
-          result: call.result,
-        }));
+      const pairs = buildResumeToolCallPairs(calls, out.length);
       if (pairs.length === 0) {
         if (content) out.push({ role, content });
         continue;
       }
       out.push({ role, content, toolCalls: pairs.map(({ id, name, args }) => ({ id, name, args })) });
-      for (const pair of pairs) {
-        out.push({
-          role: "tool",
-          tool_call_id: pair.id,
-          content: storedToolResults.get(pair.id) ?? (pair.result === undefined || pair.result === null ? "[result not recorded]" : stringify(pair.result)),
-        });
-      }
+      pushResumeToolResults(out, pairs, storedToolResults);
       continue;
     }
     if ((role === "system" || role === "user" || role === "assistant") && content) out.push({ role, content });

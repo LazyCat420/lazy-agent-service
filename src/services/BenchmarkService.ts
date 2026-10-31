@@ -473,6 +473,50 @@ function buildFailedBenchmarkModelResult(
   };
 }
 
+/** The result row for a run that produced a response. */
+function buildCompletedBenchmarkModelResult(
+  model: ModelEntry,
+  configFlags: { thinkingEnabled: boolean; toolsEnabled: boolean; agent?: string },
+  run: {
+    text: string;
+    thinkingText: string;
+    toolCalls: ToolCallResult[];
+    passed: boolean;
+    matchMode: string;
+    turnCount: number;
+    latency: number;
+    doneEvent: BenchmarkEvent;
+  },
+): ModelResult {
+  const {
+    text,
+    thinkingText,
+    toolCalls,
+    passed,
+    matchMode,
+    turnCount,
+    latency,
+    doneEvent,
+  } = run;
+  return {
+    provider: model.provider,
+    model: model.model,
+    label: model.label,
+    ...configFlags,
+    response: text || null,
+    thinking: thinkingText || null,
+    toolCalls: toolCalls.length > 0 ? toolCalls : null,
+    passed,
+    matchMode,
+    turnCount,
+    latency: roundMilliseconds(latency),
+    usage: (doneEvent.usage as Record<string, number>) || null,
+    estimatedCost: (doneEvent.estimatedCost as number) ?? null,
+    error: null,
+    completedAt: new Date().toISOString(),
+  };
+}
+
 // ─── Run a single model against a benchmark prompt ──────────
 export async function runSingleModel(
   benchmark: BenchmarkDoc,
@@ -562,7 +606,6 @@ export async function runSingleModel(
       .map((e) => e.content)
       .join("");
     const toolCalls = extractBenchmarkToolCalls(events);
-    const toolCallsResult = toolCalls.length > 0 ? toolCalls : null;
     const turnCount = events.filter((e) => e.type === "done").length || 1;
     const passed = evaluateBenchmarkModeResult(
       benchmark,
@@ -572,23 +615,16 @@ export async function runSingleModel(
       turnCount,
     );
 
-    return {
-      provider: model.provider,
-      model: model.model,
-      label: model.label,
-      ...configFlags,
-      response: text || null,
-      thinking: thinkingText || null,
-      toolCalls: toolCallsResult,
+    return buildCompletedBenchmarkModelResult(model, configFlags, {
+      text,
+      thinkingText,
+      toolCalls,
       passed,
       matchMode,
       turnCount,
-      latency: roundMilliseconds(latency),
-      usage: (doneEvent.usage as Record<string, number>) || null,
-      estimatedCost: (doneEvent.estimatedCost as number) ?? null,
-      error: null,
-      completedAt: new Date().toISOString(),
-    };
+      latency,
+      doneEvent,
+    });
   } catch (error: unknown) {
     const latency = (performance.now() - start) / 1000;
     logger.error(

@@ -377,6 +377,37 @@ function createTransport(
   throw new Error(`Unsupported MCP transport: ${config.transport}`);
 }
 
+/** Text blocks of an MCP result, in order. */
+function mcpTextBlocks(content: MCPContentBlock[]): string[] {
+  return content.filter((item) => item.type === "text").map((item) => item.text || "");
+}
+
+/** The error text of an MCP result, or a generic message when it carried none. */
+function mcpErrorText(content: MCPContentBlock[]): string {
+  return (
+    content
+      .filter((item) => item.type === "text")
+      .map((item) => item.text)
+      .join("\n") || "MCP tool returned an error"
+  );
+}
+
+/** A single text block, parsed when it is a JSON object and capped for the model. */
+function capSingleTextResult(text: string, capTokens: number): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return capMcpToolResult(parsed as Record<string, unknown>, capTokens);
+    }
+    // An array or scalar is returned as it is, unless it is over the cap.
+    const capped = capMcpToolResult({ result: text }, capTokens);
+    return "outputCapped" in capped ? capped : (parsed as Record<string, unknown>);
+  } catch {
+    /* plain text */
+  }
+  return capMcpToolResult({ result: text }, capTokens);
+}
+
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 const MCPClientService = {
@@ -675,36 +706,18 @@ const MCPClientService = {
       // MCP returns { content: [{ type: "text", text: "..." }, ...], isError? }
       const content = (result.content || []) as MCPContentBlock[];
       if (result.isError) {
-        const errorText =
-          content
-            .filter((item) => item.type === "text")
-            .map((item) => item.text)
-            .join("\n") || "MCP tool returned an error";
-        return { error: errorText };
+        return { error: mcpErrorText(content) };
       }
 
       // Flatten content to a usable format
-      const textParts = content
-        .filter((item) => item.type === "text")
-        .map((item) => item.text || "");
+      const textParts = mcpTextBlocks(content);
 
       // If there's only one text part, return it directly for cleaner output
       // (many MCP tools return JSON as text). The size cap applies to the
       // result as the model will see it.
       const capTokens = resolveOutputCapTokens(conn.config, toolName);
       if (textParts.length === 1) {
-        try {
-          const parsed: unknown = JSON.parse(textParts[0]);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            return capMcpToolResult(parsed as Record<string, unknown>, capTokens);
-          }
-          // An array or scalar is returned as it is, unless it is over the cap.
-          const capped = capMcpToolResult({ result: textParts[0] }, capTokens);
-          return "outputCapped" in capped ? capped : (parsed as Record<string, unknown>);
-        } catch {
-          /* plain text */
-        }
-        return capMcpToolResult({ result: textParts[0] }, capTokens);
+        return capSingleTextResult(textParts[0], capTokens);
       }
 
       return capMcpToolResult({ result: textParts.join("\n") }, capTokens);

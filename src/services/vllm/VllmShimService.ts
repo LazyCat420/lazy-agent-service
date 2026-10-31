@@ -200,6 +200,13 @@ export class UpstreamSemaphore {
   }
 }
 
+/** One OpenAI-shaped tool call rebuilt from a DeepSeek DSML block. */
+interface DsmlToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
 export class VllmShimService {
   /**
    * Mirror Qwen's enable_thinking onto DeepSeek's thinking key.
@@ -242,77 +249,90 @@ export class VllmShimService {
 
     let modified = false;
     const choices = response.choices.map((choice: any) => {
-      const msg = choice?.message;
-      if (!msg || typeof msg.content !== "string") {
-        return choice;
-      }
+      const normalized = VllmShimService.normalizeToolCallChoice(choice);
+      if (normalized.modified) modified = true;
+      return normalized.choice;
+    });
 
-      // If tool_calls already exists and is non-empty, do not overwrite.
-      if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
-        return choice;
-      }
+    return modified ? ({ ...response, choices } as T) : response;
+  }
 
-      const content: string = msg.content;
-      if (!VllmShimService.DEEPSEEK_TOOL_CALLS_HEADER_RE.test(content) && !content.includes("tool_call")) {
-        return choice;
-      }
+  /** Normalize one choice's DSML content; `modified` says whether it changed. */
+  private static normalizeToolCallChoice(
+    choice: any,
+  ): { choice: any; modified: boolean } {
+    const msg = choice?.message;
+    if (!msg || typeof msg.content !== "string") {
+      return { choice, modified: false };
+    }
 
-      const toolCalls: Array<{
-        id: string;
-        type: "function";
-        function: { name: string; arguments: string };
-      }> = [];
+    // If tool_calls already exists and is non-empty, do not overwrite.
+    if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      return { choice, modified: false };
+    }
 
-      let match: RegExpExecArray | null;
-      VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.lastIndex = 0;
-      while ((match = VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.exec(content)) !== null) {
-        let rawCall = match[1].trim();
-        // Strip markdown fences if present (e.g. ```json ... ```)
-        if (rawCall.startsWith("```")) {
-          rawCall = rawCall.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-        }
+    const content: string = msg.content;
+    if (!VllmShimService.DEEPSEEK_TOOL_CALLS_HEADER_RE.test(content) && !content.includes("tool_call")) {
+      return { choice, modified: false };
+    }
 
-        try {
-          const parsed = JSON.parse(rawCall);
-          const toolName = parsed.name || parsed.function?.name || parsed.tool_name;
-          const toolArgs = parsed.arguments ?? parsed.parameters ?? parsed.args ?? {};
-          if (toolName) {
-            toolCalls.push({
-              id: `call_${Math.random().toString(36).slice(2, 11)}`,
-              type: "function",
-              function: {
-                name: String(toolName),
-                arguments: typeof toolArgs === "string" ? toolArgs : JSON.stringify(toolArgs),
-              },
-            });
-          }
-        } catch (err: any) {
-          logger.warn(`[VllmShim] Failed to parse DeepSeek DSML tool call: ${err.message}. Raw: ${rawCall}`);
-        }
-      }
+    const toolCalls = VllmShimService.extractDsmlToolCalls(content);
+    if (toolCalls.length === 0) {
+      return { choice, modified: false };
+    }
 
-      if (toolCalls.length === 0) {
-        return choice;
-      }
+    // Clean content by removing <｜tool calls｜> and all <｜tool_call｜>...<｜end of tool call｜> blocks
+    const cleanedContent = content
+      .replace(/<[｜|]tool calls[｜|]>/gi, "")
+      .replace(VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE, "")
+      .trim();
 
-      modified = true;
-      // Clean content by removing <｜tool calls｜> and all <｜tool_call｜>...<｜end of tool call｜> blocks
-      const cleanedContent = content
-        .replace(/<[｜|]tool calls[｜|]>/gi, "")
-        .replace(VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE, "")
-        .trim();
-
-      return {
+    return {
+      choice: {
         ...choice,
         message: {
           ...msg,
           content: cleanedContent.length > 0 ? cleanedContent : null,
           tool_calls: toolCalls,
         },
-      };
-    });
+      },
+      modified: true,
+    };
+  }
 
-    return modified ? ({ ...response, choices } as T) : response;
+  /** Parse DeepSeek DSML tool-call blocks out of message content. */
+  private static extractDsmlToolCalls(content: string): DsmlToolCall[] {
+    const toolCalls: DsmlToolCall[] = [];
+
+    let match: RegExpExecArray | null;
+    VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.lastIndex = 0;
+    while ((match = VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.exec(content)) !== null) {
+      let rawCall = match[1].trim();
+      // Strip markdown fences if present (e.g. ```json ... ```)
+      if (rawCall.startsWith("```")) {
+        rawCall = rawCall.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+      }
+
+      try {
+        const parsed = JSON.parse(rawCall);
+        const toolName = parsed.name || parsed.function?.name || parsed.tool_name;
+        const toolArgs = parsed.arguments ?? parsed.parameters ?? parsed.args ?? {};
+        if (toolName) {
+          toolCalls.push({
+            id: `call_${Math.random().toString(36).slice(2, 11)}`,
+            type: "function",
+            function: {
+              name: String(toolName),
+              arguments: typeof toolArgs === "string" ? toolArgs : JSON.stringify(toolArgs),
+            },
+          });
+        }
+      } catch (err: any) {
+        logger.warn(`[VllmShim] Failed to parse DeepSeek DSML tool call: ${err.message}. Raw: ${rawCall}`);
+      }
+    }
+
+    return toolCalls;
   }
 
   /**

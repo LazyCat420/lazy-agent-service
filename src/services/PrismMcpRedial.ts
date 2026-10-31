@@ -280,23 +280,11 @@ export class PrismMcpRedialer {
     if (this.busy) return { action: "skipped", reason: "previous check still running" };
     this.busy = true;
     try {
-      let servers: unknown;
-      try {
-        const response = await this.fetchImpl(`${this.config.url}/mcp-servers`, {
-          headers: this.headers(),
-          signal: AbortSignal.timeout(this.config.requestTimeoutMs),
-        });
-        if (!response.ok) {
-          const reason = `GET /mcp-servers answered HTTP ${response.status}`;
-          this.log.warn(`${LOG_PREFIX} status check skipped: ${reason}`);
-          return { action: "skipped", reason };
-        }
-        servers = await response.json();
-      } catch (error: unknown) {
-        const reason = `prism unreachable: ${describeError(error)}`;
-        this.log.warn(`${LOG_PREFIX} status check skipped: ${reason}`);
-        return { action: "skipped", reason };
+      const listed = await this.fetchServerList();
+      if ("reason" in listed) {
+        return { action: "skipped", reason: listed.reason };
       }
+      const servers = listed.servers;
 
       if (!Array.isArray(servers)) {
         const reason = "GET /mcp-servers did not return a list";
@@ -327,48 +315,18 @@ export class PrismMcpRedialer {
       const verifyingStaleRedial = this.verifyAfterStaleRedial;
       this.verifyAfterStaleRedial = false;
 
-      let reason: string | null = null;
-      let staleEntry = false;
-      if (server.connected !== true) {
-        reason = "prism reports connected:false";
-      } else if (this.config.clientName && this.countLocal) {
-        let local: number | null = null;
-        try {
-          local = this.countLocal(this.config.clientName);
-        } catch (error: unknown) {
-          this.log.warn(`${LOG_PREFIX} local session count failed: ${describeError(error)}`);
-        }
-        if (local === 0 && verifyingStaleRedial && !this.warnedStaleRuleUnreliable) {
-          this.warnedStaleRuleUnreliable = true;
-          this.log.warn(STALE_RULE_UNRELIABLE_WARNING);
-        }
-        if (local === 0) {
-          staleEntry = true;
-          reason =
-            `prism reports connected:true but this service holds no live MCP session ` +
-            `from client "${this.config.clientName}" (stale entry in prism's connection map)`;
-        }
-      }
+      const down = this.resolveDownReason(server, verifyingStaleRedial);
 
-      if (!reason) {
+      if (!down.reason) {
         const toolCount = typeof server.toolCount === "number" ? server.toolCount : 0;
         return { action: "healthy", toolCount };
       }
-      if (staleEntry) {
-        const now = this.now();
-        const sinceLast = this.lastStaleRedialAt === null ? Infinity : now - this.lastStaleRedialAt;
-        if (sinceLast < this.config.staleRedialMinMs) {
-          const skip =
-            `stale-entry re-dial suppressed: last one ${Math.round(sinceLast / 1000)}s ago, ` +
-            `minimum gap ${Math.round(this.config.staleRedialMinMs / 1000)}s (PRISM_MCP_STALE_REDIAL_MIN_MS)`;
-          this.log.info(`${LOG_PREFIX} ${skip}`);
-          return { action: "skipped", reason: skip };
-        }
-        this.lastStaleRedialAt = now;
-        this.verifyAfterStaleRedial = true;
+      if (down.staleEntry) {
+        const suppressed = this.suppressOrRecordStaleRedial();
+        if (suppressed) return suppressed;
       }
-      const dial = await this.dial(reason);
-      return { action: "redialed", reason, dial };
+      const dial = await this.dial(down.reason);
+      return { action: "redialed", reason: down.reason, dial };
     } catch (error: unknown) {
       const reason = `unexpected error: ${describeError(error)}`;
       this.log.error(`${LOG_PREFIX} ${reason}`);
@@ -376,6 +334,74 @@ export class PrismMcpRedialer {
     } finally {
       this.busy = false;
     }
+  }
+
+  /** GET /mcp-servers; a failure is reported, never thrown. */
+  private async fetchServerList(): Promise<
+    { ok: true; servers: unknown } | { ok: false; reason: string }
+  > {
+    try {
+      const response = await this.fetchImpl(`${this.config.url}/mcp-servers`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+      });
+      if (!response.ok) {
+        const reason = `GET /mcp-servers answered HTTP ${response.status}`;
+        this.log.warn(`${LOG_PREFIX} status check skipped: ${reason}`);
+        return { ok: false, reason };
+      }
+      return { ok: true, servers: await response.json() };
+    } catch (error: unknown) {
+      const reason = `prism unreachable: ${describeError(error)}`;
+      this.log.warn(`${LOG_PREFIX} status check skipped: ${reason}`);
+      return { ok: false, reason };
+    }
+  }
+
+  /** Why prism's view of the link looks down, and whether it is a stale entry. */
+  private resolveDownReason(
+    server: Record<string, unknown>,
+    verifyingStaleRedial: boolean,
+  ): { reason: string | null; staleEntry: boolean } {
+    let reason: string | null = null;
+    let staleEntry = false;
+    if (server.connected !== true) {
+      reason = "prism reports connected:false";
+    } else if (this.config.clientName && this.countLocal) {
+      let local: number | null = null;
+      try {
+        local = this.countLocal(this.config.clientName);
+      } catch (error: unknown) {
+        this.log.warn(`${LOG_PREFIX} local session count failed: ${describeError(error)}`);
+      }
+      if (local === 0 && verifyingStaleRedial && !this.warnedStaleRuleUnreliable) {
+        this.warnedStaleRuleUnreliable = true;
+        this.log.warn(STALE_RULE_UNRELIABLE_WARNING);
+      }
+      if (local === 0) {
+        staleEntry = true;
+        reason =
+          `prism reports connected:true but this service holds no live MCP session ` +
+          `from client "${this.config.clientName}" (stale entry in prism's connection map)`;
+      }
+    }
+    return { reason, staleEntry };
+  }
+
+  /** Record a stale-entry re-dial, unless the minimum gap has not elapsed. */
+  private suppressOrRecordStaleRedial(): CheckOutcome | null {
+    const now = this.now();
+    const sinceLast = this.lastStaleRedialAt === null ? Infinity : now - this.lastStaleRedialAt;
+    if (sinceLast < this.config.staleRedialMinMs) {
+      const skip =
+        `stale-entry re-dial suppressed: last one ${Math.round(sinceLast / 1000)}s ago, ` +
+        `minimum gap ${Math.round(this.config.staleRedialMinMs / 1000)}s (PRISM_MCP_STALE_REDIAL_MIN_MS)`;
+      this.log.info(`${LOG_PREFIX} ${skip}`);
+      return { action: "skipped", reason: skip };
+    }
+    this.lastStaleRedialAt = now;
+    this.verifyAfterStaleRedial = true;
+    return null;
   }
 }
 

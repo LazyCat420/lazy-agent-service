@@ -295,6 +295,35 @@ function categoryOf(feed: string): string {
  * the honest signal for "is this a top story": one desk can lead with anything,
  * but three leading with the same event is the day's news.
  */
+/** A merged story plus the bookkeeping ranking needs. */
+type RankedCandidate = EditorialItem & { rooms: Set<string>; tokens: Set<string> };
+
+/** Fold one confirming row into an already-known story. */
+function mergeIntoKnownStory(
+  hit: RankedCandidate,
+  feed: string,
+  item: EditorialItem,
+): void {
+  hit.rooms.add(newsroomOf(feed));
+  // A publisher feed carries a real URL and a real photo; a Google row does
+  // not. Whichever arrived first, the article wins over the redirect.
+  if (hit.stub && !item.stub) {
+    hit.url = item.url;
+    hit.image = item.image || hit.image;
+    hit.snippet = item.snippet || hit.snippet;
+    hit.source = item.source || hit.source;
+    hit.stub = false;
+  } else if (!hit.image && item.image) {
+    hit.image = item.image;
+  }
+  if (!hit.snippet && item.snippet) hit.snippet = item.snippet;
+  // First SECTION to carry it names it; a publisher front page has none.
+  const cat = categoryOf(feed);
+  if (cat && cat !== "top" && (!hit.category || hit.category === "top")) {
+    hit.category = cat;
+  }
+}
+
 export function mergeAndRank(
   feeds: Record<string, EditorialItem[]>,
   opts: { limit?: number; seedFeeds?: string[] } = {},
@@ -310,7 +339,7 @@ export function mergeAndRank(
   // and the Nepal floods, none of which is business news.
   const seeds = opts.seedFeeds;
   const canSeed = (feed: string) => !seeds || seeds.includes(feed);
-  const merged: Array<EditorialItem & { rooms: Set<string>; tokens: Set<string> }> = [];
+  const merged: RankedCandidate[] = [];
 
   for (const [feed, items] of Object.entries(feeds)) {
     for (const item of items) {
@@ -327,24 +356,7 @@ export function mergeAndRank(
         });
         continue;
       }
-      hit.rooms.add(newsroomOf(feed));
-      // A publisher feed carries a real URL and a real photo; a Google row does
-      // not. Whichever arrived first, the article wins over the redirect.
-      if (hit.stub && !item.stub) {
-        hit.url = item.url;
-        hit.image = item.image || hit.image;
-        hit.snippet = item.snippet || hit.snippet;
-        hit.source = item.source || hit.source;
-        hit.stub = false;
-      } else if (!hit.image && item.image) {
-        hit.image = item.image;
-      }
-      if (!hit.snippet && item.snippet) hit.snippet = item.snippet;
-      // First SECTION to carry it names it; a publisher front page has none.
-      const cat = categoryOf(feed);
-      if (cat && cat !== "top" && (!hit.category || hit.category === "top")) {
-        hit.category = cat;
-      }
+      mergeIntoKnownStory(hit, feed, item);
     }
   }
 

@@ -44,6 +44,45 @@ interface ConversationSettings {
   };
 }
 
+/** Settings-derived values a timer run needs, resolved once. */
+interface TimerTarget {
+  settings: ConversationSettings;
+  providerName: string;
+  resolvedModel: string;
+  agent: string | null;
+  workspaceRoot: string | null;
+}
+
+function resolveTimerTarget(
+  conversation: Record<string, unknown>,
+): TimerTarget {
+  const settings = (conversation.settings || {}) as ConversationSettings;
+  return {
+    settings,
+    providerName: settings.provider || "",
+    resolvedModel: settings.model || "",
+    agent: settings.agent || null,
+    workspaceRoot: settings.workspaceRoot || null,
+  };
+}
+
+/** Loop options for a background timer run, including its tool allow/deny lists. */
+function buildTimerLoopOptions(settings: ConversationSettings) {
+  return {
+    agenticLoopEnabled: true,
+    functionCallingEnabled: true,
+    planFirst: false,
+    autoApprove: true,
+    minContextLength: 120_000,
+    ...(settings.toolConfig?.enabledTools && {
+      enabledTools: settings.toolConfig.enabledTools,
+    }),
+    ...(settings.toolConfig?.disabledTools && {
+      disabledTools: settings.toolConfig.disabledTools,
+    }),
+  };
+}
+
 let tickerInterval: ReturnType<typeof setInterval> | null = null;
 let isTickInProgress = false;
 
@@ -415,11 +454,8 @@ const ConversationTimerService = {
       `[ConversationTimers] Spawning background agent loop for session: ${timer.conversationId}`,
     );
 
-    const settings = (conversation.settings || {}) as ConversationSettings;
-    const providerName = settings.provider || "";
-    const resolvedModel = settings.model || "";
-    const agent = settings.agent || null;
-    const workspaceRoot = settings.workspaceRoot || null;
+    const { settings, providerName, resolvedModel, agent, workspaceRoot } =
+      resolveTimerTarget(conversation);
 
     if (!providerName || !resolvedModel) {
       throw new Error(
@@ -485,19 +521,7 @@ const ConversationTimerService = {
           runtimeToolExecutor: admission.runtimeToolExecutor,
           runId: admission.runId,
         } : {}),
-        options: {
-          agenticLoopEnabled: true,
-          functionCallingEnabled: true,
-          planFirst: false,
-          autoApprove: true,
-          minContextLength: 120_000,
-          ...(settings.toolConfig?.enabledTools && {
-            enabledTools: settings.toolConfig.enabledTools,
-          }),
-          ...(settings.toolConfig?.disabledTools && {
-            disabledTools: settings.toolConfig.disabledTools,
-          }),
-        },
+        options: buildTimerLoopOptions(settings),
         agentConversationId: crypto.randomUUID(),
         conversationId: timer.conversationId,
         userMessage: reminderMessage,

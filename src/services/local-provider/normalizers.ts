@@ -13,6 +13,52 @@ import {
   OpenAICompatRawModel,
 } from "./types.ts";
 
+/** Canonical entry fields for an LM Studio model, before capabilities and metadata. */
+function buildLmStudioEntry(
+  modelKey: string,
+  label: string,
+  isEmbedding: boolean,
+  capabilities: ReturnType<typeof detectCapabilities>,
+): ModelEntry {
+  return {
+    name: modelKey,
+    label,
+    modelType: isEmbedding ? "embed" : "conversation",
+    inputTypes: isEmbedding ? [TYPES.TEXT] : capabilities.inputTypes,
+    outputTypes: isEmbedding ? [TYPES.EMBEDDING] : capabilities.outputTypes,
+    supportsSystemPrompt: !isEmbedding,
+    streaming: !isEmbedding,
+    defaultTemperature: isEmbedding ? undefined : 0.7,
+    pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+  };
+}
+
+/** Capability flags (LLM only). */
+function applyLmStudioCapabilities(
+  entry: ModelEntry,
+  capabilities: ReturnType<typeof detectCapabilities>,
+  isEmbedding: boolean,
+): void {
+  if (isEmbedding) return;
+  if (capabilities.tools.length > 0) entry.tools = capabilities.tools;
+  if (capabilities.thinking) entry.thinking = true;
+  if (capabilities.vision) entry.vision = true;
+}
+
+/** Size, quantization and architecture metadata LM Studio reports for the file. */
+function applyLmStudioMetadata(entry: ModelEntry, raw: LmStudioRawModel): void {
+  if (raw.max_context_length) entry.contextLength = raw.max_context_length;
+  if (raw.size_bytes) entry.size = formatBytes(raw.size_bytes);
+  if (raw.params_string) entry.params = raw.params_string;
+  if (raw.quantization?.name) entry.quantization = raw.quantization.name;
+  if (raw.quantization?.bits_per_weight != null)
+    entry.bitsPerWeight = raw.quantization.bits_per_weight;
+  if (raw.architecture) entry.architecture = raw.architecture;
+  if (raw.publisher) entry.publisher = raw.publisher;
+  if (raw.loaded_instances && raw.loaded_instances.length > 0)
+    entry.loaded = true;
+}
+
 /**
  * Normalize an LM Studio model into a canonical model entry.
  * LM Studio's /api/v1/models returns rich metadata including
@@ -29,36 +75,13 @@ export function normalizeLmStudioModel(raw: LmStudioRawModel): ModelEntry {
 
   const isEmbedding = raw.type === "embedding";
 
-  const entry: ModelEntry = {
-    name: modelKey,
-    label,
-    modelType: isEmbedding ? "embed" : "conversation",
-    inputTypes: isEmbedding ? [TYPES.TEXT] : capabilities.inputTypes,
-    outputTypes: isEmbedding ? [TYPES.EMBEDDING] : capabilities.outputTypes,
-    supportsSystemPrompt: !isEmbedding,
-    streaming: !isEmbedding,
-    defaultTemperature: isEmbedding ? undefined : 0.7,
-    pricing: { inputPerMillion: 0, outputPerMillion: 0 },
-  };
+  const entry = buildLmStudioEntry(modelKey, label, isEmbedding, capabilities);
 
   // Capability flags (LLM only)
-  if (!isEmbedding) {
-    if (capabilities.tools.length > 0) entry.tools = capabilities.tools;
-    if (capabilities.thinking) entry.thinking = true;
-    if (capabilities.vision) entry.vision = true;
-  }
+  applyLmStudioCapabilities(entry, capabilities, isEmbedding);
 
   // Metadata from LM Studio API
-  if (raw.max_context_length) entry.contextLength = raw.max_context_length;
-  if (raw.size_bytes) entry.size = formatBytes(raw.size_bytes);
-  if (raw.params_string) entry.params = raw.params_string;
-  if (raw.quantization?.name) entry.quantization = raw.quantization.name;
-  if (raw.quantization?.bits_per_weight != null)
-    entry.bitsPerWeight = raw.quantization.bits_per_weight;
-  if (raw.architecture) entry.architecture = raw.architecture;
-  if (raw.publisher) entry.publisher = raw.publisher;
-  if (raw.loaded_instances && raw.loaded_instances.length > 0)
-    entry.loaded = true;
+  applyLmStudioMetadata(entry, raw);
 
   // Preserve raw for VRAM estimation
   entry._raw = raw;

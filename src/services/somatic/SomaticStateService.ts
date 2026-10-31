@@ -406,6 +406,63 @@ function extractEmotionFromResponse(
   return "neutral";
 }
 
+/** Everything one emotion-analysis background call row needs. */
+interface EmotionAnalysisLogParams {
+  requestId: string;
+  agentId: string;
+  text: string;
+  requestContext: EmotionAnalysisContext;
+  providerName: string;
+  modelName: string;
+  aiMessages: { role: string; content: string }[];
+  result: { text: string; usage?: Record<string, unknown> } | undefined;
+  success: boolean;
+  errorMessage: string | null;
+  requestStartMs: number;
+  detectedEmotion: PrimaryEmotion | "neutral";
+}
+
+/** Record the background LLM call for one emotion analysis. */
+function logEmotionAnalysis(params: EmotionAnalysisLogParams): void {
+  const {
+    requestId,
+    agentId,
+    text,
+    requestContext,
+    providerName,
+    modelName,
+    aiMessages,
+    result,
+    success,
+    errorMessage,
+    requestStartMs,
+    detectedEmotion,
+  } = params;
+  RequestLogger.logBackgroundLlmCall({
+    requestId,
+    endpoint: requestContext.endpoint || "/agent",
+    operation: "somatic:emotion-analysis",
+    project: requestContext.project || null,
+    username: requestContext.username || "system",
+    agent: agentId,
+    provider: providerName,
+    model: modelName,
+    traceId: requestContext.traceId || null,
+    agentConversationId: requestContext.agentConversationId || null,
+    aiMessages,
+    resultText: result?.text || null,
+    usage: result?.usage || null,
+    success,
+    errorMessage,
+    requestStartMs,
+    extraRequestPayload: {
+      inputTextLength: text.length,
+      textPreview: text.slice(0, 200),
+    },
+    extraResponsePayload: success ? { detectedEmotion } : undefined,
+  });
+}
+
 async function analyzeEmotionFromText(
   agentId: string,
   text: string,
@@ -448,28 +505,19 @@ async function analyzeEmotionFromText(
     ? extractEmotionFromResponse(result?.text || "")
     : "neutral";
 
-  RequestLogger.logBackgroundLlmCall({
+  logEmotionAnalysis({
     requestId,
-    endpoint: requestContext.endpoint || "/agent",
-    operation: "somatic:emotion-analysis",
-    project: requestContext.project || null,
-    username: requestContext.username || "system",
-    agent: agentId,
-    provider: providerName,
-    model: modelName,
-    traceId: requestContext.traceId || null,
-    agentConversationId: requestContext.agentConversationId || null,
+    agentId,
+    text,
+    requestContext,
+    providerName,
+    modelName,
     aiMessages,
-    resultText: result?.text || null,
-    usage: result?.usage || null,
+    result,
     success,
     errorMessage,
     requestStartMs: requestStart,
-    extraRequestPayload: {
-      inputTextLength: text.length,
-      textPreview: text.slice(0, 200),
-    },
-    extraResponsePayload: success ? { detectedEmotion } : undefined,
+    detectedEmotion,
   });
 
   if (!success) return "neutral";

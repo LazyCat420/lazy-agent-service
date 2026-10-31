@@ -276,6 +276,66 @@ function logEmbeddingRequest(context: EmbeddingLogContext): void {
   });
 }
 
+/** Options and results a batch embed needs for its single request-log row. */
+interface EmbeddingBatchLogParams {
+  options: EmbeddingOptions;
+  source: string;
+  texts: string[];
+  target: Awaited<ReturnType<typeof resolveTarget>>;
+  dimensions: number;
+  inputCharacters: number;
+  approxInputTokens: number;
+  totalSec: number;
+  embeddings: number[][] | undefined;
+  errorMessage: string | null;
+}
+
+/** One request row for a batch embed: counts only, never the texts. */
+function logEmbeddingBatch(params: EmbeddingBatchLogParams): void {
+  const {
+    options,
+    source,
+    texts,
+    target,
+    dimensions,
+    inputCharacters,
+    approxInputTokens,
+    totalSec,
+    embeddings,
+    errorMessage,
+  } = params;
+  logger.request(
+    options.project || "",
+    options.username || "system",
+    options.clientIp || null,
+    `[embed] ${target.providerName} model=${target.resolvedModel} source=${source} batch=${texts.length} — ` +
+      (embeddings ? `dims: ${dimensions}, total: ${totalSec.toFixed(2)}s` : `FAILED: ${errorMessage}`),
+  );
+  RequestLogger.log({
+    requestId: crypto.randomUUID(),
+    endpoint: options.endpoint || null,
+    operation: `${source}:embed-batch`,
+    project: options.project || null,
+    username: options.username || "system",
+    clientIp: options.clientIp || null,
+    agent: options.agent || null,
+    provider: target.providerName,
+    model: target.resolvedModel,
+    traceId: options.traceId || null,
+    success: Boolean(embeddings),
+    errorMessage,
+    estimatedCost: null,
+    inputTokens: approxInputTokens,
+    outputTokens: 0,
+    tokensPerSec: calculateTokensPerSec(approxInputTokens, totalSec),
+    inputCharacters,
+    totalTime: roundMilliseconds(totalSec),
+    modalities: { textIn: true, embeddingOut: true },
+    requestPayload: { source, contentType: "text-batch", count: texts.length, taskType: target.taskType, dimensions },
+    responsePayload: embeddings ? { count: embeddings.length, dimensions } : { error: errorMessage },
+  });
+}
+
 const EmbeddingService = {
   async generate(content: EmbeddingContent, options: EmbeddingOptions = {}) {
     const requestId = crypto.randomUUID();
@@ -366,35 +426,17 @@ const EmbeddingService = {
     } finally {
       const totalSec = (performance.now() - requestStart) / 1000;
       const approxInputTokens = texts.reduce((sum, text) => sum + estimateTokens(text), 0);
-      logger.request(
-        options.project || "",
-        options.username || "system",
-        options.clientIp || null,
-        `[embed] ${target.providerName} model=${target.resolvedModel} source=${source} batch=${texts.length} — ` +
-          (embeddings ? `dims: ${dimensions}, total: ${totalSec.toFixed(2)}s` : `FAILED: ${errorMessage}`),
-      );
-      RequestLogger.log({
-        requestId: crypto.randomUUID(),
-        endpoint: options.endpoint || null,
-        operation: `${source}:embed-batch`,
-        project: options.project || null,
-        username: options.username || "system",
-        clientIp: options.clientIp || null,
-        agent: options.agent || null,
-        provider: target.providerName,
-        model: target.resolvedModel,
-        traceId: options.traceId || null,
-        success: Boolean(embeddings),
-        errorMessage,
-        estimatedCost: null,
-        inputTokens: approxInputTokens,
-        outputTokens: 0,
-        tokensPerSec: calculateTokensPerSec(approxInputTokens, totalSec),
+      logEmbeddingBatch({
+        options,
+        source,
+        texts,
+        target,
+        dimensions,
         inputCharacters,
-        totalTime: roundMilliseconds(totalSec),
-        modalities: { textIn: true, embeddingOut: true },
-        requestPayload: { source, contentType: "text-batch", count: texts.length, taskType: target.taskType, dimensions },
-        responsePayload: embeddings ? { count: embeddings.length, dimensions } : { error: errorMessage },
+        approxInputTokens,
+        totalSec,
+        embeddings,
+        errorMessage,
       });
     }
   },

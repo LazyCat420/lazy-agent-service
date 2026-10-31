@@ -390,6 +390,78 @@ function candidates(now: number): Provider[] {
  * what to fall back to, because the fallback differs per consumer (html-notes
  * still has its Google News RSS path).
  */
+/**
+ * Editorial front pages first for a general ask — they are the honest "top
+ * stories"; the keyed providers stay the fallback. Null means "fall through".
+ */
+async function tryEditorialTopHeadlines(
+  wantTop: boolean,
+  debug: NewsSearchDebug,
+  region: string,
+  section: string,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<NewsSearchResult | null> {
+  if (!wantTop || debug.source === "keyed") return null;
+  try {
+    const ed = await topHeadlines({
+      country: region,
+      category: section,
+      limit,
+      fetcher: (url) => fetchWithSignal(url, signal),
+    });
+    if (ed.items.length) {
+      return { items: ed.items, source: ed.stale ? "editorial:stale" : "editorial" };
+    }
+    logger.warn("[NewsSearch] editorial feeds returned nothing; falling back to keyed providers");
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    logger.warn(`[NewsSearch] editorial path threw, falling back to keyed: ${String(err)}`);
+  }
+  return null;
+}
+
+/** One keyed provider attempt; null means "this provider missed, keep going". */
+async function tryNewsProvider(
+  p: Provider,
+  wantTop: boolean,
+  query: string,
+  limit: number,
+  region: string,
+  signal?: AbortSignal,
+): Promise<NewsSearchResult | null> {
+  const started = Date.now();
+  try {
+    noteUse(p.name, started);
+    const items = wantTop
+      ? await p.top!(limit, p.key()!, region, signal)
+      : await p.fetch(query, limit, p.key()!, region, signal);
+    if (items.length) {
+      logger.info(
+        `[NewsSearch] ${p.name} -> ${items.length} items in ${Date.now() - started}ms ` +
+          `(${items.filter((i) => i.image).length} with images` +
+          `${region ? `, country=${region}` : ", worldwide"})`,
+      );
+      return { items: items.slice(0, limit), source: p.name };
+    }
+    // An empty-but-successful answer is a miss for this topic, not a fault —
+    // no cooldown, just move on.
+    logger.info(
+      `[NewsSearch] ${p.name} returned 0 items for ${wantTop ? "top headlines" : `"${query}"`}`,
+    );
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    // Quota exhaustion and outages look the same from here, and both mean
+    // "stop asking for a while".
+    cooldown.set(p.name, Date.now() + COOLDOWN_MS);
+    logger.warn(
+      `[NewsSearch] ${p.name} ${wantTop ? "top" : "search"} failed ` +
+        `(${Date.now() - started}ms): ${String(err)}`,
+    );
+  }
+  return null;
+}
+
 export async function newsSearch(
   topic: string,
   limit = 6,
@@ -415,23 +487,15 @@ export async function newsSearch(
   // newsrooms while Google's own front page scored 0.75 on the same minute.
   // The keyed providers stay exactly as they are for a TOPIC search, where
   // they are the better instrument, and remain the fallback here.
-  if (wantTop && debug.source !== "keyed") {
-    try {
-      const ed = await topHeadlines({
-        country: region,
-        category: section,
-        limit,
-        fetcher: (url) => fetchWithSignal(url, signal),
-      });
-      if (ed.items.length) {
-        return { items: ed.items, source: ed.stale ? "editorial:stale" : "editorial" };
-      }
-      logger.warn("[NewsSearch] editorial feeds returned nothing; falling back to keyed providers");
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      logger.warn(`[NewsSearch] editorial path threw, falling back to keyed: ${String(err)}`);
-    }
-  }
+  const editorial = await tryEditorialTopHeadlines(
+    wantTop,
+    debug,
+    region,
+    section,
+    limit,
+    signal,
+  );
+  if (editorial) return editorial;
 
   const now = Date.now();
   const usable = candidates(now)
@@ -446,35 +510,8 @@ export async function newsSearch(
   }
 
   for (const p of usable) {
-    const started = Date.now();
-    try {
-      noteUse(p.name, started);
-      const items = wantTop
-        ? await p.top!(limit, p.key()!, region, signal)
-        : await p.fetch(query, limit, p.key()!, region, signal);
-      if (items.length) {
-        logger.info(
-          `[NewsSearch] ${p.name} -> ${items.length} items in ${Date.now() - started}ms ` +
-            `(${items.filter((i) => i.image).length} with images` +
-            `${region ? `, country=${region}` : ", worldwide"})`,
-        );
-        return { items: items.slice(0, limit), source: p.name };
-      }
-      // An empty-but-successful answer is a miss for this topic, not a fault —
-      // no cooldown, just move on.
-      logger.info(
-        `[NewsSearch] ${p.name} returned 0 items for ${wantTop ? "top headlines" : `"${query}"`}`,
-      );
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      // Quota exhaustion and outages look the same from here, and both mean
-      // "stop asking for a while".
-      cooldown.set(p.name, Date.now() + COOLDOWN_MS);
-      logger.warn(
-        `[NewsSearch] ${p.name} ${wantTop ? "top" : "search"} failed ` +
-          `(${Date.now() - started}ms): ${String(err)}`,
-      );
-    }
+    const result = await tryNewsProvider(p, wantTop, query, limit, region, signal);
+    if (result) return result;
   }
 
   logger.warn(

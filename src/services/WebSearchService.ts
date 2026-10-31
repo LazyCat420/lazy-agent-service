@@ -154,6 +154,70 @@ const rateLimited = (deps: WebSearchDeps): WebSearchResult => ({
   error: `Exa's keyless rate limit was hit; searches resume in ${Math.ceil((cooldownUntil - deps.now()) / 1_000)} s`,
 });
 
+/** Pause every caller after a rate-limit answer; the optional warning is the log line. */
+function enterExaCooldown(deps: WebSearchDeps, warnMessage?: string): WebSearchResult {
+  cooldownUntil = deps.now() + COOLDOWN_MS;
+  stats.rateLimited += 1;
+  if (warnMessage) logger.warn(warnMessage);
+  return rateLimited(deps);
+}
+
+/** A JSON-RPC error in Exa's reply: a rate limit pauses, anything else is an error. */
+function interpretExaRpcError(
+  rpcError: { message?: string },
+  deps: WebSearchDeps,
+): WebSearchResult {
+  if (/rate limit|429/i.test(String(rpcError.message))) {
+    return enterExaCooldown(deps);
+  }
+  return { status: "error", provider: "exa", cached: false, results: [], error: `Exa: ${String(rpcError.message ?? "error").slice(0, 200)}` };
+}
+
+/** Turn an Exa HTTP reply into a result, honouring both rate-limit shapes. */
+function interpretExaReply(
+  response: Response,
+  body: string,
+  limit: number,
+  deps: WebSearchDeps,
+): WebSearchResult {
+  if (response.status === 429 || /rate limit/i.test(response.ok ? "" : body)) {
+    return enterExaCooldown(
+      deps,
+      `[WebSearch] Exa rate limit (HTTP ${response.status}); pausing searches for ${COOLDOWN_MS / 1_000} s`,
+    );
+  }
+  if (!response.ok) {
+    return { status: "error", provider: "exa", cached: false, results: [], error: `Exa HTTP ${response.status}: ${body.slice(0, 200)}` };
+  }
+  const message = readMcpMessage(body);
+  const rpcError = message.error as { message?: string } | undefined;
+  if (rpcError) {
+    return interpretExaRpcError(rpcError, deps);
+  }
+  const result = message.result as {
+    content?: { type?: string; text?: string }[];
+    isError?: boolean;
+    _meta?: Record<string, unknown>;
+  } | undefined;
+  const text = (result?.content ?? []).map(part => part?.text ?? "").join("\n---\n");
+  if (result?.isError) {
+    return { status: "error", provider: "exa", cached: false, results: [], error: `Exa: ${text.slice(0, 200)}` };
+  }
+  const results = parseExaText(text).slice(0, limit);
+  // The free tier's limit arrives as a SUCCESSFUL reply: HTTP 200, no
+  // JSON-RPC error, `_meta["ai.exa/rateLimited"]: true` and a "You've hit
+  // Exa's free MCP rate limit" text with no results in it. Read as "ok, 0
+  // results" it skipped the fallback and was cached for 30 minutes, so
+  // html-notes answered "I couldn't find anything" (2026-10-11).
+  if (result?._meta?.["ai.exa/rateLimited"] === true || (!results.length && /rate limit/i.test(text))) {
+    return enterExaCooldown(
+      deps,
+      `[WebSearch] Exa free-tier rate limit (200 + rateLimited); pausing searches for ${COOLDOWN_MS / 1_000} s`,
+    );
+  }
+  return { status: "ok", provider: "exa", cached: false, results };
+}
+
 async function callExa(query: string, limit: number, deps: WebSearchDeps, signal?: AbortSignal): Promise<WebSearchResult> {
   if (deps.now() < cooldownUntil) return rateLimited(deps);
   if (!(await takeSlot(deps))) {
@@ -179,47 +243,7 @@ async function callExa(query: string, limit: number, deps: WebSearchDeps, signal
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
     });
     const body = await response.text();
-    if (response.status === 429 || /rate limit/i.test(response.ok ? "" : body)) {
-      cooldownUntil = deps.now() + COOLDOWN_MS;
-      stats.rateLimited += 1;
-      logger.warn(`[WebSearch] Exa rate limit (HTTP ${response.status}); pausing searches for ${COOLDOWN_MS / 1_000} s`);
-      return rateLimited(deps);
-    }
-    if (!response.ok) {
-      return { status: "error", provider: "exa", cached: false, results: [], error: `Exa HTTP ${response.status}: ${body.slice(0, 200)}` };
-    }
-    const message = readMcpMessage(body);
-    const rpcError = message.error as { message?: string } | undefined;
-    if (rpcError) {
-      if (/rate limit|429/i.test(String(rpcError.message))) {
-        cooldownUntil = deps.now() + COOLDOWN_MS;
-        stats.rateLimited += 1;
-        return rateLimited(deps);
-      }
-      return { status: "error", provider: "exa", cached: false, results: [], error: `Exa: ${String(rpcError.message ?? "error").slice(0, 200)}` };
-    }
-    const result = message.result as {
-      content?: { type?: string; text?: string }[];
-      isError?: boolean;
-      _meta?: Record<string, unknown>;
-    } | undefined;
-    const text = (result?.content ?? []).map(part => part?.text ?? "").join("\n---\n");
-    if (result?.isError) {
-      return { status: "error", provider: "exa", cached: false, results: [], error: `Exa: ${text.slice(0, 200)}` };
-    }
-    const results = parseExaText(text).slice(0, limit);
-    // The free tier's limit arrives as a SUCCESSFUL reply: HTTP 200, no
-    // JSON-RPC error, `_meta["ai.exa/rateLimited"]: true` and a "You've hit
-    // Exa's free MCP rate limit" text with no results in it. Read as "ok, 0
-    // results" it skipped the fallback and was cached for 30 minutes, so
-    // html-notes answered "I couldn't find anything" (2026-10-11).
-    if (result?._meta?.["ai.exa/rateLimited"] === true || (!results.length && /rate limit/i.test(text))) {
-      cooldownUntil = deps.now() + COOLDOWN_MS;
-      stats.rateLimited += 1;
-      logger.warn(`[WebSearch] Exa free-tier rate limit (200 + rateLimited); pausing searches for ${COOLDOWN_MS / 1_000} s`);
-      return rateLimited(deps);
-    }
-    return { status: "ok", provider: "exa", cached: false, results };
+    return interpretExaReply(response, body, limit, deps);
   } catch (error) {
     const name = (error as Error)?.name;
     const reason = name === "TimeoutError" ? `timed out after ${TIMEOUT_MS / 1_000} s` : (error as Error)?.message ?? String(error);

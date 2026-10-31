@@ -29,6 +29,46 @@ import { NORMALIZER_BY_TYPE, HF_ENRICHED_TYPES } from "./normalizers.ts";
 import { estimateVRAM, estimateVRAMForModel } from "./vramEstimation.ts";
 import { InstanceEntry } from "../../types/ProviderTypes.ts";
 
+/** Criteria a model listing may be narrowed by. */
+interface ModelFilter {
+  thinking?: boolean;
+  functionCalling?: boolean;
+  vision?: boolean;
+  video?: boolean;
+  audio?: boolean;
+  modelType?: string;
+  loaded?: boolean;
+  query?: string;
+}
+
+/** Capability flags the caller asked for, all of which the model must carry. */
+function matchesCapabilityFilter(model: ModelEntry, filter: ModelFilter): boolean {
+  if (filter.thinking && !model.thinking) return false;
+  if (filter.functionCalling && !model.tools?.includes("Tool Calling"))
+    return false;
+  if (filter.vision && !model.vision) return false;
+  if (filter.video && !model.inputTypes?.includes(TYPES.VIDEO)) return false;
+  if (filter.audio && !model.inputTypes?.includes(TYPES.AUDIO)) return false;
+  return true;
+}
+
+/** Model type and load state the caller asked for. */
+function matchesTypeAndLoadFilter(model: ModelEntry, filter: ModelFilter): boolean {
+  if (filter.modelType && model.modelType !== filter.modelType) return false;
+  if (filter.loaded === true && !model.loaded) return false;
+  if (filter.loaded === false && model.loaded) return false;
+  return true;
+}
+
+/** Free-text query match against the model's name or label. */
+function matchesQueryFilter(model: ModelEntry, query: string): boolean {
+  const searchQuery = query.toLowerCase();
+  const nameMatch = model.name?.toLowerCase().includes(searchQuery);
+  const labelMatch = model.label?.toLowerCase().includes(searchQuery);
+  if (!nameMatch && !labelMatch) return false;
+  return true;
+}
+
 class LocalProviderGateway {
   constructor() {
     logger.info("[LocalProviderGateway] Initialized");
@@ -285,34 +325,10 @@ class LocalProviderGateway {
    * Check if a model entry matches the given filter criteria.
    * @private
    */
-  _matchesFilter(
-    model: ModelEntry,
-    filter: {
-      thinking?: boolean;
-      functionCalling?: boolean;
-      vision?: boolean;
-      video?: boolean;
-      audio?: boolean;
-      modelType?: string;
-      loaded?: boolean;
-      query?: string;
-    },
-  ): boolean {
-    if (filter.thinking && !model.thinking) return false;
-    if (filter.functionCalling && !model.tools?.includes("Tool Calling"))
-      return false;
-    if (filter.vision && !model.vision) return false;
-    if (filter.video && !model.inputTypes?.includes(TYPES.VIDEO)) return false;
-    if (filter.audio && !model.inputTypes?.includes(TYPES.AUDIO)) return false;
-    if (filter.modelType && model.modelType !== filter.modelType) return false;
-    if (filter.loaded === true && !model.loaded) return false;
-    if (filter.loaded === false && model.loaded) return false;
-    if (filter.query) {
-      const searchQuery = filter.query.toLowerCase();
-      const nameMatch = model.name?.toLowerCase().includes(searchQuery);
-      const labelMatch = model.label?.toLowerCase().includes(searchQuery);
-      if (!nameMatch && !labelMatch) return false;
-    }
+  _matchesFilter(model: ModelEntry, filter: ModelFilter): boolean {
+    if (!matchesCapabilityFilter(model, filter)) return false;
+    if (!matchesTypeAndLoadFilter(model, filter)) return false;
+    if (filter.query && !matchesQueryFilter(model, filter.query)) return false;
     return true;
   }
 

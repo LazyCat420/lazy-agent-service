@@ -200,44 +200,106 @@ export class DynamicModelResolver {
 
     // If requestedProvider is explicitly supplied and online, use it
     if (requestedProvider) {
-      const match = onlineHosts.find((h) => h.instanceId === requestedProvider);
-      if (match) {
-        const hostModels = match.models.map(normalizeLocalModelId);
-        if (normalizedRequestedModel && hostModels.includes(normalizedRequestedModel)) {
-          return { provider: requestedProvider, model: normalizedRequestedModel };
-        }
-        if (hostModels.length > 0) {
-          return {
-            provider: requestedProvider,
-            model: normalizedRequestedModel || hostModels[0],
-          };
-        }
-      }
+      const resolved = this.resolveRequestedProvider(
+        requestedProvider,
+        onlineHosts,
+        normalizedRequestedModel,
+      );
+      if (resolved) return resolved;
     }
 
     // If requestedModel is supplied, find which online host serves it
     if (normalizedRequestedModel) {
-      const match = onlineHosts.find((h) =>
-        h.models.map(normalizeLocalModelId).includes(normalizedRequestedModel),
+      const resolved = this.resolveRequestedModelHost(
+        normalizedRequestedModel,
+        onlineHosts,
       );
-      if (match) {
-        return { provider: match.instanceId, model: normalizedRequestedModel };
-      }
+      if (resolved) return resolved;
     }
 
     // Single-box fallback: If only 1 box is online, it does all jobs
     if (onlineHosts.length === 1) {
-      const single = onlineHosts[0];
-      return {
-        provider: single.instanceId,
-        model:
-          normalizedRequestedModel ||
-          (single.models[0] ? normalizeLocalModelId(single.models[0]) : "default-model"),
-      };
+      return this.resolveSingleHost(onlineHosts, normalizedRequestedModel);
     }
 
     // Role-based tiering when both are online:
     // Light/small roles prefer Jetson (vllm); smart/large roles prefer Gold Spark (vllm-2)
+    const rolePreferred = this.resolveRolePreferredHost(
+      role,
+      onlineHosts,
+      normalizedRequestedModel,
+    );
+    if (rolePreferred) return rolePreferred;
+
+    // Fallback to whichever allowed provider is online
+    const allowed = this.resolveAllowedProvider(
+      allowedProviders,
+      onlineHosts,
+      normalizedRequestedModel,
+    );
+    if (allowed) return allowed;
+
+    // Default fallback
+    return {
+      provider: allowedProviders[0] || "vllm-2",
+      model: normalizedRequestedModel || "default-model",
+    };
+  }
+
+  /** The explicitly requested provider, when it is online and can serve the model. */
+  private static resolveRequestedProvider(
+    requestedProvider: string,
+    onlineHosts: HostModelStatus[],
+    normalizedRequestedModel: string | undefined,
+  ): { provider: string; model: string } | null {
+    const match = onlineHosts.find((h) => h.instanceId === requestedProvider);
+    if (!match) return null;
+    const hostModels = match.models.map(normalizeLocalModelId);
+    if (normalizedRequestedModel && hostModels.includes(normalizedRequestedModel)) {
+      return { provider: requestedProvider, model: normalizedRequestedModel };
+    }
+    if (hostModels.length > 0) {
+      return {
+        provider: requestedProvider,
+        model: normalizedRequestedModel || hostModels[0],
+      };
+    }
+    return null;
+  }
+
+  /** The online host that serves an explicitly requested model. */
+  private static resolveRequestedModelHost(
+    normalizedRequestedModel: string,
+    onlineHosts: HostModelStatus[],
+  ): { provider: string; model: string } | null {
+    const match = onlineHosts.find((h) =>
+      h.models.map(normalizeLocalModelId).includes(normalizedRequestedModel),
+    );
+    return match
+      ? { provider: match.instanceId, model: normalizedRequestedModel }
+      : null;
+  }
+
+  /** Single online box: it does every job. */
+  private static resolveSingleHost(
+    onlineHosts: HostModelStatus[],
+    normalizedRequestedModel: string | undefined,
+  ): { provider: string; model: string } {
+    const single = onlineHosts[0];
+    return {
+      provider: single.instanceId,
+      model:
+        normalizedRequestedModel ||
+        (single.models[0] ? normalizeLocalModelId(single.models[0]) : "default-model"),
+    };
+  }
+
+  /** Light/small roles prefer Jetson (vllm); smart/large roles prefer Gold Spark (vllm-2). */
+  private static resolveRolePreferredHost(
+    role: string,
+    onlineHosts: HostModelStatus[],
+    normalizedRequestedModel: string | undefined,
+  ): { provider: string; model: string } | null {
     const isLightRole = ["junior", "collector", "scout", "summarizer", "bull", "bear"].some((k) =>
       role.toLowerCase().includes(k),
     );
@@ -251,8 +313,15 @@ export class DynamicModelResolver {
           normalizeLocalModelId(preferredHost.models[0]),
       };
     }
+    return null;
+  }
 
-    // Fallback to whichever allowed provider is online
+  /** The first allowed provider that is online with models. */
+  private static resolveAllowedProvider(
+    allowedProviders: string[],
+    onlineHosts: HostModelStatus[],
+    normalizedRequestedModel: string | undefined,
+  ): { provider: string; model: string } | null {
     for (const provId of allowedProviders) {
       const host = onlineHosts.find((h) => h.instanceId === provId);
       if (host && host.models.length > 0) {
@@ -264,12 +333,7 @@ export class DynamicModelResolver {
         };
       }
     }
-
-    // Default fallback
-    return {
-      provider: allowedProviders[0] || "vllm-2",
-      model: normalizedRequestedModel || "default-model",
-    };
+    return null;
   }
 
   /**
