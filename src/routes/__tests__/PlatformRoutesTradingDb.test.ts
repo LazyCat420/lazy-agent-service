@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
-import { TRADING_MONGO_DB } from "../../../config.ts";
+import { MONGO_DB_NAME, TRADING_MONGO_DB } from "../../../config.ts";
+// Loaded at module scope: boot/runtime.ts pulls the provider registry and the
+// MCP redialer, which cost seconds under a full-suite run and would otherwise
+// blow a test's 5s budget on the first dynamic import.
+import { connectDatabases, defaultRuntimeDeps, type RuntimeDeps } from "../../boot/runtime.ts";
 
 /**
  * The /platform endpoints read `tool_usage_stats` out of the TRADING database,
@@ -72,32 +76,47 @@ describe("the /platform endpoints' trading database", () => {
   });
 
   it("is registered at boot, beside the prism one and after it", async () => {
-    const src = await import("node:fs/promises").then((fs) =>
-      fs.readFile(new URL("../../index.ts", import.meta.url), "utf-8"),
-    );
+    const order: string[] = [];
+    // Only createClient is read here; the rest of MongoWrapper is unused.
+    const mongo = { createClient: async (name: string) => void order.push(name) };
+    const base = defaultRuntimeDeps();
+    const deps: RuntimeDeps = {
+      ...base,
+      // The test process has no MONGO_URI; boot only registers the trading
+      // database when one is configured.
+      env: { ...base.env, mongoUri: "mongodb://localhost:27017" },
+      mongo: mongo as RuntimeDeps["mongo"],
+    };
 
-    const prism = src.indexOf("createClient(MONGO_DB_NAME");
-    const trading = src.indexOf("createClient(TRADING_MONGO_DB");
+    await connectDatabases(deps);
 
-    expect(prism).toBeGreaterThan(-1);
-    expect(trading).toBeGreaterThan(-1);
+    expect(order[0]).toBe(MONGO_DB_NAME);
     // ORDER MATTERS: MongoManager takes the FIRST connection as the default for
     // name-less getDb() calls. Registering the trading database first would
     // hand every unnamed prism read the wrong database.
-    expect(trading).toBeGreaterThan(prism);
+    expect(order[1]).toBe(TRADING_MONGO_DB);
   });
 
   it("does not take the process down when the trading database is unreachable", async () => {
-    const src = await import("node:fs/promises").then((fs) =>
-      fs.readFile(new URL("../../index.ts", import.meta.url), "utf-8"),
-    );
-    const at = src.indexOf("createClient(TRADING_MONGO_DB");
-    const window = src.slice(Math.max(0, at - 400), at + 400);
+    const logged: string[] = [];
+    const mongo = {
+      createClient: async (name: string) => {
+        if (name === TRADING_MONGO_DB) throw new Error("unreachable");
+      },
+    };
+    const log = { error: (message: string) => void logged.push(message) };
+    const base = defaultRuntimeDeps();
+    const deps: RuntimeDeps = {
+      ...base,
+      env: { ...base.env, mongoUri: "mongodb://localhost:27017" },
+      mongo: mongo as RuntimeDeps["mongo"],
+      logger: log as RuntimeDeps["logger"],
+    };
 
     // This service is a dashboard over the trading collection, not the cycle.
     // An unreachable trading database must degrade to 503 per request, not
     // abort a boot that every LLM request in the ecosystem goes through.
-    expect(window).toMatch(/try\s*{/);
-    expect(window).toMatch(/catch/);
+    await expect(connectDatabases(deps)).resolves.toBeUndefined();
+    expect(logged.join("\n")).toContain("503");
   });
 });
