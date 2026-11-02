@@ -3,7 +3,7 @@ import { cleanDbName, resolveDbName } from "../config";
 
 describe("db name guard", () => {
   it("rejects stringified-unset and test names", () => {
-    for (const bad of ["undefined", "null", "None", "", " ", "test", undefined]) {
+    for (const bad of ["undefined", "null", "None", "nan", "NaN", "", " ", "test", undefined]) {
       expect(cleanDbName(bad, "prism")).toBe("prism");
     }
     expect(cleanDbName("mydb", "prism")).toBe("mydb");

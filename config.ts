@@ -56,12 +56,19 @@ export const PROVIDER_LLAMA_CPP = parseProviderInstances("PROVIDER_LLAMA_CPP");
 
 // ── MongoDB ────────────────────────────────────────────────────
 export const MONGO_URI = process.env.MONGO_URI;
-const BAD_DB_NAMES = new Set(["", "undefined", "null", "none", "nan", "test"]);
+const BAD_DB_NAMES: Record<string, true> = {
+  "": true,
+  undefined: true,
+  null: true,
+  none: true,
+  nan: true,
+  test: true,
+};
 
 /** Reject stringified-unset values ("undefined", "null") and the stray "test" DB. */
 export function cleanDbName(val: string | undefined | null, fallback: string): string {
   const v = (val ?? "").trim();
-  return BAD_DB_NAMES.has(v.toLowerCase()) ? fallback : v;
+  return BAD_DB_NAMES[v.toLowerCase()] ? fallback : v;
 }
 
 export function resolveDbName(candidates: Array<string | undefined>, fallback: string): string {
