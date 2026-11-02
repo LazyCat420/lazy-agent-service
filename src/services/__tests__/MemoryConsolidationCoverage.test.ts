@@ -99,7 +99,7 @@ const memory = (id: string, overrides: Partial<Memory> = {}): Memory => ({
   id,
   type: "project",
   content: `memory ${id}`,
-  createdAt: "2026-10-01T00:00:00.000Z",
+  createdAt: new Date(Date.now() - 86_400_000).toISOString(),
   ...overrides,
 });
 
