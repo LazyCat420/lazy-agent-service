@@ -9,6 +9,10 @@ export interface CompletionJob {
   createdAt: number;
   /** Growing assistant text while the streamed generation is in flight; omitted once the job completes. */
   partial?: string;
+  /** Growing reasoning/thinking text while the streamed generation is in flight; omitted once the job completes. */
+  reasoning?: string;
+  /** Names of tool calls being assembled while the streamed generation is in flight; omitted once the job completes. */
+  activeTools?: string[];
   response?: { status: number; data?: unknown; errText?: string };
 }
 
@@ -46,19 +50,28 @@ interface CompletionStreamState {
   finishReason: string | null;
   usage?: Record<string, unknown>;
   partial: string;
+  reasoning: string;
   toolCalls: AssembledToolCall[];
 }
 
 function applyToolCallDeltas(
   calls: StreamToolCallDelta[],
   toolCalls: AssembledToolCall[],
-): void {
+): boolean {
+  let updated = false;
   for (const call of calls) {
     const slot = (toolCalls[call.index ?? toolCalls.length] ||= { id: "", type: "function", function: { name: "", arguments: "" } });
     if (call.id) slot.id = call.id;
-    if (call.function?.name) slot.function.name += call.function.name;
-    if (call.function?.arguments) slot.function.arguments += call.function.arguments;
+    if (call.function?.name) { slot.function.name += call.function.name; updated = true; }
+    if (call.function?.arguments) { slot.function.arguments += call.function.arguments; updated = true; }
   }
+  return updated;
+}
+
+function extractReasoningText(delta?: { reasoning?: string | null; reasoning_content?: string | null }): string {
+  if (typeof delta?.reasoning === "string" && delta.reasoning) return delta.reasoning;
+  if (typeof delta?.reasoning_content === "string" && delta.reasoning_content) return delta.reasoning_content;
+  return "";
 }
 
 function applyCompletionChunk(
@@ -73,8 +86,12 @@ function applyCompletionChunk(
   const choice = chunk.choices?.[0];
   if (choice?.finish_reason) state.finishReason = choice.finish_reason;
   const delta = choice?.delta;
-  applyToolCallDeltas(delta?.tool_calls || [], state.toolCalls);
-  if (typeof delta?.content === "string" && delta.content) { state.partial += delta.content; flushPartial(); }
+  const toolsUpdated = applyToolCallDeltas(delta?.tool_calls || [], state.toolCalls);
+  const reasoningChunk = extractReasoningText(delta);
+  if (reasoningChunk) state.reasoning += reasoningChunk;
+  const contentChunk = typeof delta?.content === "string" ? delta.content : "";
+  if (contentChunk) state.partial += contentChunk;
+  if (toolsUpdated || reasoningChunk || contentChunk) flushPartial();
 }
 
 function parseCompletionSseLine(
@@ -98,6 +115,7 @@ function buildCompletionResponse(
 ): CompletionJob["response"] {
   return { status, data: { id: state.id, object: "chat.completion", created: state.created, model: state.model, choices: [{ index: 0, message: {
     role: "assistant", content: state.partial,
+    ...(state.reasoning ? { reasoning: state.reasoning } : {}),
     ...(state.toolCalls.length ? { tool_calls: state.toolCalls.filter(Boolean).map((call, i) => ({ ...call, id: call.id || `call_${jobId}_${i}` })) } : {}),
   }, finish_reason: state.finishReason }], usage: state.usage } };
 }
@@ -106,7 +124,31 @@ function buildCompletionResponse(
 export class ObsidianCompletionJobs {
   private active = new Map<string, CompletionJob>();
   private controllers = new Map<string, AbortController>();
+  private subscribers = new Map<string, Set<(job: CompletionJob) => void>>();
   constructor(private directory = path.join(path.dirname(process.env.RUNTIME_STORE_PATH || path.resolve("data/run_store_durable.json")), "obsidian-completions"), private transport: typeof fetch = fetch) {}
+
+  private notifySubscribers(file: string, job: CompletionJob): void {
+    const listeners = this.subscribers.get(file);
+    if (!listeners) return;
+    for (const listener of listeners) {
+      try { listener(job); } catch { /* ignore disconnected subscriber */ }
+    }
+    if (job.status !== "running") this.subscribers.delete(file);
+  }
+
+  subscribe(scope: string, id: string, listener: (job: CompletionJob) => void): () => void {
+    const file = this.file(scope, id);
+    let set = this.subscribers.get(file);
+    if (!set) {
+      set = new Set();
+      this.subscribers.set(file, set);
+    }
+    set.add(listener);
+    return () => {
+      set?.delete(listener);
+      if (set && set.size === 0) this.subscribers.delete(file);
+    };
+  }
 
   private file(scope: string, id: string) {
     if (!/^[\da-f-]{36}$/i.test(id)) throw new Error("Invalid completion id");
@@ -172,10 +214,15 @@ export class ObsidianCompletionJobs {
       model: "",
       finishReason: null,
       partial: "",
+      reasoning: "",
       toolCalls: [],
     };
     const flushPartial = (force = false) => {
-      job.partial = state.partial; // Always visible in memory for GET; only the disk write is throttled.
+      if (state.partial) job.partial = state.partial; // Always visible in memory for GET; only the disk write is throttled.
+      if (state.reasoning) job.reasoning = state.reasoning;
+      const toolNames = state.toolCalls.map((t) => t?.function?.name).filter((n): n is string => Boolean(n));
+      if (toolNames.length) job.activeTools = toolNames;
+      this.notifySubscribers(file, job);
       const now = Date.now();
       if (!force && now - lastPartialWrite < 1000) return;
       lastPartialWrite = now;
@@ -195,6 +242,7 @@ export class ObsidianCompletionJobs {
         parseCompletionSseLine(line, state, flushPartial);
       }
     }
+    if (buffer.trim()) parseCompletionSseLine(buffer.trim(), state, flushPartial);
     flushPartial(true);
     return buildCompletionResponse(state, response.status, job.id);
   }
@@ -212,6 +260,8 @@ export class ObsidianCompletionJobs {
         job.response = await this.consumeStream(file, job, streamed);
         job.status = "completed";
         delete job.partial; // The final response supersedes the partial text.
+        delete job.reasoning;
+        delete job.activeTools;
       } else {
         // Non-SSE (streaming unsupported or rejected): fall back to the buffered path.
         try { await streamed.arrayBuffer(); } catch { /* drain whatever body arrived */ }
@@ -232,5 +282,6 @@ export class ObsidianCompletionJobs {
       job.status = "failed";
       job.response = { status: 507, errText: "Could not persist the model outcome on the server" };
     }
+    this.notifySubscribers(file, job);
   }
 }

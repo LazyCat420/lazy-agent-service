@@ -1,7 +1,8 @@
 ---
-title: Code Quality Gates — 2026-10-29
+part: Security and operations
 status: in-progress
 updated: 2026-10-29
+type: record
 ---
 
 # Code Quality Gates — CRAP, duplication, architecture, dead code

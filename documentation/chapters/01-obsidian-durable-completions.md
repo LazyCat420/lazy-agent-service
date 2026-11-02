@@ -1,7 +1,7 @@
 ---
 part: Consumer apps
 status: verified
-updated: 2026-10-06
+updated: 2026-11-02
 type: record
 ---
 
@@ -24,3 +24,5 @@ On 2026-10-06 the full suite passed 912 tests and deployment of `main@962a506` c
 On 2026-10-14 the server-side model-call hard timeout was raised from 180 s to 600 s (override with `OBSIDIAN_COMPLETION_TIMEOUT_MS`). It must exceed the plugin's per-job poll window `maxJobPollMs` (default 600 s), which was split from the whole-agent `maxAgentDurationMs` budget in LLMSortObsidian the same day: a single slow generation no longer pauses vault chat after 3 minutes, and the pause message now distinguishes abort (with reason), plugin unload, and per-job timeout (including the job URL).
 
 A live integration check from LLMSortObsidian used the production chat handler, agent loop and task manager with a simulated empty vault and real HTTP requests. Both model race jobs were accepted on the NAS, the client closed, and a new task manager fetched the saved reply into the original inactive conversation exactly once. Another reload produced no duplicate. That check passed in 4,444 ms. Evidence is in `LLMSortObsidian/documentation/artifacts/vault-chat-durable-live-audit.json`; it does not claim interaction with the real Windows Obsidian window.
+
+On 2026-11-02 `ObsidianCompletionJobs.consumeStream` and `GET /obsidian-completions/:id` were upgraded to stream live reasoning (`delta.reasoning` from `nemotron35` on Jetson and `delta.reasoning_content` from `DeepSeek-V4.1-Flash-1017` on Gold Spark) and active tool-call names (`job.activeTools`) alongside `job.partial` while running, flush trailing EOF SSE lines without a final newline, preserve `message.reasoning` in the assembled `chat.completion` response, and support `Accept: text/event-stream` SSE push on `GET /obsidian-completions/:id`.

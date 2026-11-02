@@ -226,13 +226,71 @@ describe("Obsidian completion routes", () => {
     const scope = JSON.stringify(["test-project", "test-user"]);
     await vi.waitFor(() => expect(jobs.get(scope, id)?.status).toBe("completed"));
     // Completed job data is the assembled chat.completion built by consumeStream.
-    const data = jobs.get(scope, id)!.response?.data as { choices: Array<{ finish_reason: string | null; message: { content: string; tool_calls?: unknown[] } }> };
+    const data = jobs.get(scope, id)!.response?.data as { choices: Array<{ finish_reason: string | null; message: { content: string; reasoning?: string; tool_calls?: unknown[] } }> };
     const choice = data.choices[0];
     expect(choice.finish_reason).toBe("tool_calls");
     expect(choice.message.content).toBe("");
+    expect(choice.message.reasoning).toBe("search the web");
     expect(choice.message.tool_calls).toEqual([
       { id: "call_a", type: "function", function: { name: "search_web", arguments: "{\"query\":\"top news\"}" } },
       { id: "call_b", type: "function", function: { name: "search_web", arguments: "{\"query\":\"world news\"}" } },
     ]);
+  });
+
+  it("exposes live reasoning and activeTools while running and streams updates over SSE", async () => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "obsidian-completion-sse-live-"));
+    const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const transport = vi.fn(async () => new Response(new ReadableStream({
+      async start(controller) {
+        const enc = new TextEncoder();
+        await gates[0].promise;
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "chatcmpl-n1", model: "nemotron35", choices: [{ index: 0, delta: { reasoning: "Thinking about leaves..." }, finish_reason: null }] })}\n\n`));
+        await gates[1].promise;
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "chatcmpl-n1", model: "nemotron35", choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "semantic_search_vault", arguments: "{\"query\":\"compost\"}" } }] }, finish_reason: null }] })}\n\n`));
+        await gates[2].promise;
+        // Final chunk intentionally omits trailing newline to verify EOF buffer flush
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "chatcmpl-n1", model: "nemotron35", choices: [{ index: 0, delta: { content: "Mix leaves with soil." }, finish_reason: "stop" }] })}`));
+        controller.close();
+      },
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+    const jobs = new ObsidianCompletionJobs(directory, transport);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.project = "test-project"; req.username = "test-user"; next(); });
+    app.use("/obsidian-completions", createObsidianCompletionRouter(jobs));
+    server = await new Promise<http.Server>((resolve) => { const instance = app.listen(0, "127.0.0.1", () => resolve(instance)); });
+    const address = server.address() as { port: number };
+    const base = `http://127.0.0.1:${address.port}/obsidian-completions`;
+    const id = crypto.randomUUID();
+    const scope = JSON.stringify(["test-project", "test-user"]);
+
+    await fetch(`${base}/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: "http://10.0.0.30:8000/v1", payload: { model: "nemotron35", messages: [{ role: "user", content: "compost" }] } }),
+    });
+
+    const sseRes = await fetch(`${base}/${id}`, { headers: { Accept: "text/event-stream" } });
+    const ssePromise = sseRes.text();
+
+    gates[0].resolve();
+    await vi.waitFor(() => expect(jobs.get(scope, id)?.reasoning).toBe("Thinking about leaves..."));
+
+    gates[1].resolve();
+    await vi.waitFor(() => expect(jobs.get(scope, id)?.activeTools).toEqual(["semantic_search_vault"]));
+
+    gates[2].resolve();
+    await vi.waitFor(() => expect(jobs.get(scope, id)?.status).toBe("completed"));
+
+    const done = jobs.get(scope, id)!;
+    expect(done.reasoning).toBeUndefined();
+    expect(done.activeTools).toBeUndefined();
+    expect(done.partial).toBeUndefined();
+
+    const sseText = await ssePromise;
+    expect(sseText).toContain("Thinking about leaves...");
+    expect(sseText).toContain("semantic_search_vault");
+    expect(sseText).toContain("Mix leaves with soil.");
   });
 });

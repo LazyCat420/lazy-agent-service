@@ -19,8 +19,27 @@ export function createObsidianCompletionRouter(jobs = new ObsidianCompletionJobs
   });
   router.get("/:id", (req, res) => {
     try {
-      const job = jobs.get(JSON.stringify([req.project, req.username]), String(req.params.id));
+      const scope = JSON.stringify([req.project, req.username]);
+      const id = String(req.params.id);
+      const job = jobs.get(scope, id);
       if (!job) return res.status(404).json({ error: "Completion not found" });
+      if ((req.headers.accept || "").includes("text/event-stream")) {
+        res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+        res.flushHeaders?.();
+        res.write(`data: ${JSON.stringify(job)}\n\n`);
+        if (job.status !== "running") return res.end();
+        const unsubscribe = jobs.subscribe(scope, id, (updated) => {
+          res.write(`data: ${JSON.stringify(updated)}\n\n`);
+          if (updated.status !== "running") {
+            unsubscribe();
+            res.end();
+          }
+        });
+        req.on("close", unsubscribe);
+        return;
+      }
       res.json(job);
     } catch { res.status(400).json({ error: "Invalid completion id" }); }
   });
