@@ -312,57 +312,67 @@ const toCoreTools = (context: RunsAdapterContext): CoreTool[] =>
       ),
   }));
 
-export async function runCoreLoopForRun(
-  context: RunsAdapterContext,
-): Promise<{ messages: ChatMessage[]; result: CoreLoopResult }> {
-  // Determine the active turn's starting user message index so historical reasoning
-  // before this run is stripped while active tool-turn reasoning is preserved (H1).
+/**
+ * Build the built-in core-loop hooks shared by the /agent and /runs adapters.
+ * H1: strip historical reasoning before the active user turn (keep active tool-turn reasoning).
+ * H6 / B8: tool-pair-atomic compaction when estimated tokens exceed the budget.
+ * H8: emit a <system-reminder> when tools were dynamically unlocked mid-run.
+ */
+export function buildCoreLoopHooks(
+  messages: ChatMessage[],
+  finalTools: ReadonlyArray<{ name: string; description?: string }>,
+  compactionBudgetTokens: number | undefined,
+  externalHooks?: CoreLoopHooks,
+): CoreLoopHooks {
   let activeTurnStartIndex = 0;
-  for (let i = context.messages.length - 1; i >= 0; i--) {
-    if (context.messages[i]?.role === "user") {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") {
       activeTurnStartIndex = i;
       break;
     }
   }
 
-  let seenToolNames = new Set(
-    context.runtimeTools.finalTools.map((t) => t.name),
-  );
-  const budgetTokens =
-    context.options.compactionBudgetTokens ?? DEFAULT_COMPACT_TOKEN_BUDGET;
+  let seenToolNames = new Set(finalTools.map((t) => t.name));
+  const budgetTokens = compactionBudgetTokens ?? DEFAULT_COMPACT_TOKEN_BUDGET;
 
   const builtInBeforeModelCall = (
     msgs: ChatMessage[],
     step: number,
   ): ChatMessage[] => {
-    // H1: Strip historical reasoning before activeTurnStartIndex; keep active tool-turn reasoning.
     let prepared = stripHistoricalReasoning(msgs, activeTurnStartIndex);
-    // H6 / B8: Tool-pair-atomic compaction when estimated tokens exceed budgetTokens.
     prepared = compactMessages(prepared, { budgetTokens });
-    // H8: Emit a <system-reminder> if tools were dynamically unlocked mid-run.
     if (step > 0) {
-      const deltaReminder = formatToolLoadoutDelta(
-        seenToolNames,
-        context.runtimeTools.finalTools,
-      );
+      const deltaReminder = formatToolLoadoutDelta(seenToolNames, finalTools);
       if (deltaReminder !== null) {
-        seenToolNames = new Set(
-          context.runtimeTools.finalTools.map((t) => t.name),
-        );
+        seenToolNames = new Set(finalTools.map((t) => t.name));
         prepared = [...prepared, { role: "user", content: deltaReminder }];
       }
     }
     return prepared;
   };
 
-  const mergedHooks: CoreLoopHooks = {
+  return {
     beforeModelCall: [
       builtInBeforeModelCall,
-      ...(context.hooks?.beforeModelCall ?? []),
+      ...(externalHooks?.beforeModelCall ?? []),
     ],
-    beforeToolCall: context.hooks?.beforeToolCall,
-    afterToolCall: context.hooks?.afterToolCall,
+    beforeToolCall: externalHooks?.beforeToolCall,
+    afterToolCall: externalHooks?.afterToolCall,
   };
+}
+
+
+export async function runCoreLoopForRun(
+  context: RunsAdapterContext,
+): Promise<{ messages: ChatMessage[]; result: CoreLoopResult }> {
+  // Determine the active turn's starting user message index so historical reasoning
+  // before this run is stripped while active tool-turn reasoning is preserved (H1).
+  const mergedHooks = buildCoreLoopHooks(
+    context.messages,
+    context.runtimeTools.finalTools,
+    context.options.compactionBudgetTokens,
+    context.hooks,
+  );
 
   const generator = runCoreLoop({
     model: coreModelFor(context),

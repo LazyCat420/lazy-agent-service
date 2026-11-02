@@ -1126,12 +1126,44 @@ function buildErrorFallbackSSEUsage(
   return null;
 }
 
+/**
+ * Pump raw SSE lines (newline-split, untrimmed) from a byte reader.
+ * Owns the decoder, line buffer and abort-signal cancellation listener.
+ */
+export async function* streamSSELines(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncGenerator<string, void, unknown> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const abortHandler = () => {
+    reader.cancel().catch(() => {});
+  };
+  if (signal && !signal.aborted) {
+    signal.addEventListener("abort", abortHandler, { once: true });
+  }
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        reader.cancel().catch(() => {});
+        break;
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      yield* lines;
+    }
+  } finally {
+    signal?.removeEventListener("abort", abortHandler);
+  }
+}
+
 export async function* parseSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   options: SSEParseOptions = {},
 ): AsyncGenerator<SSEStreamChunk> {
-  const decoder = new TextDecoder();
-  let buffer = "";
   const suppressThinking = options.thinkingEnabled === false;
   const state: SSEStreamAccumulator = {
     usage: null,
@@ -1147,28 +1179,9 @@ export async function* parseSSEStream(
   };
   let usageYielded = false;
 
-  const abortHandler = () => {
-    reader.cancel().catch(() => {});
-  };
-  if (options.signal && !options.signal.aborted) {
-    options.signal.addEventListener("abort", abortHandler, { once: true });
-  }
   try {
-    while (true) {
-      if (options.signal?.aborted) {
-        reader.cancel().catch(() => {});
-        break;
-      }
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        yield* processSingleSSELine(line, state, options);
-      }
+    for await (const line of streamSSELines(reader, options.signal)) {
+      yield* processSingleSSELine(line, state, options);
     }
 
     yield* finalizeSSEStreamOutput(state, options);
@@ -1182,7 +1195,6 @@ export async function* parseSSEStream(
     }
     throw streamError;
   } finally {
-    options.signal?.removeEventListener("abort", abortHandler);
     if (!usageYielded) {
       usageYielded = true;
       yield { type: "usage", usage: state.usage || EMPTY_USAGE };

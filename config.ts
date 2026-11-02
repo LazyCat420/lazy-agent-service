@@ -56,8 +56,27 @@ export const PROVIDER_LLAMA_CPP = parseProviderInstances("PROVIDER_LLAMA_CPP");
 
 // ── MongoDB ────────────────────────────────────────────────────
 export const MONGO_URI = process.env.MONGO_URI;
-export const MONGO_DB_NAME = process.env.PRISM_SERVICE_MONGO_DB_NAME || process.env.PRISM_MONGO_DB_NAME || process.env.MONGO_DB_NAME || "prism";
-export const TRADING_MONGO_DB = process.env.TRADING_MONGO_DB || "trading_bot";
+const BAD_DB_NAMES = new Set(["", "undefined", "null", "none", "test"]);
+
+/** Reject stringified-unset values ("undefined", "null") and the stray "test" DB. */
+export function cleanDbName(val: string | undefined | null, fallback: string): string {
+  const v = (val ?? "").trim();
+  return BAD_DB_NAMES.has(v.toLowerCase()) ? fallback : v;
+}
+
+export function resolveDbName(candidates: Array<string | undefined>, fallback: string): string {
+  for (const c of candidates) {
+    const v = cleanDbName(c, "");
+    if (v) return v;
+  }
+  return fallback;
+}
+
+export const MONGO_DB_NAME = resolveDbName(
+  [process.env.PRISM_SERVICE_MONGO_DB_NAME, process.env.PRISM_MONGO_DB_NAME, process.env.MONGO_DB_NAME],
+  "prism",
+);
+export const TRADING_MONGO_DB = cleanDbName(process.env.TRADING_MONGO_DB, "trading_bot");
 
 // ── MinIO (Optional — files stored inline in MongoDB if not set) ──
 export const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT;

@@ -38,13 +38,8 @@ import {
 } from "@rodrigo-barraza/utilities-library/taxonomy";
 import { runCoreLoop } from "./CoreLoop.ts";
 import {
-  compactMessages,
-  DEFAULT_COMPACT_TOKEN_BUDGET,
-} from "./MessageCompactor.ts";
-import {
-  formatToolLoadoutDelta,
+  buildCoreLoopHooks,
   shouldSkipTradingLearning,
-  stripHistoricalReasoning,
 } from "./RunsAdapter.ts";
 import type {
   CoreFinalizeReason,
@@ -459,49 +454,12 @@ export interface AgentRouteCoreLoopOutput {
 export async function runCoreLoopForAgent(
   context: AgentRouteAdapterContext,
 ): Promise<AgentRouteCoreLoopOutput> {
-  let activeTurnStartIndex = 0;
-  for (let i = context.messages.length - 1; i >= 0; i--) {
-    if (context.messages[i]?.role === "user") {
-      activeTurnStartIndex = i;
-      break;
-    }
-  }
-
-  let seenToolNames = new Set(
-    context.runtimeTools.finalTools.map((t) => t.name),
+  const mergedHooks = buildCoreLoopHooks(
+    context.messages,
+    context.runtimeTools.finalTools,
+    context.options.compactionBudgetTokens,
+    context.hooks,
   );
-  const budgetTokens =
-    context.options.compactionBudgetTokens ?? DEFAULT_COMPACT_TOKEN_BUDGET;
-
-  const builtInBeforeModelCall = (
-    msgs: ChatMessage[],
-    step: number,
-  ): ChatMessage[] => {
-    let prepared = stripHistoricalReasoning(msgs, activeTurnStartIndex);
-    prepared = compactMessages(prepared, { budgetTokens });
-    if (step > 0) {
-      const deltaReminder = formatToolLoadoutDelta(
-        seenToolNames,
-        context.runtimeTools.finalTools,
-      );
-      if (deltaReminder !== null) {
-        seenToolNames = new Set(
-          context.runtimeTools.finalTools.map((t) => t.name),
-        );
-        prepared = [...prepared, { role: "user", content: deltaReminder }];
-      }
-    }
-    return prepared;
-  };
-
-  const mergedHooks: CoreLoopHooks = {
-    beforeModelCall: [
-      builtInBeforeModelCall,
-      ...(context.hooks?.beforeModelCall ?? []),
-    ],
-    beforeToolCall: context.hooks?.beforeToolCall,
-    afterToolCall: context.hooks?.afterToolCall,
-  };
 
   const executedToolCalls: Array<{
     id: string;

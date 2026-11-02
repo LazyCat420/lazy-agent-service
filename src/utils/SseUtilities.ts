@@ -189,6 +189,34 @@ export interface SseRequestOptions {
   persistOnDisconnect?: boolean;
 }
 
+/** True while the connection is still open and not aborted. */
+export function shouldSendKeepalive(
+  signal: AbortSignal,
+  res: Pick<Response, "destroyed" | "writableEnded">,
+): boolean {
+  return !signal.aborted && !res.destroyed && !res.writableEnded;
+}
+
+/**
+ * Write an SSE comment keepalive and flush it through any compression /
+ * proxy buffer (res.flush, else a socket cork/uncork nudge). Never throws.
+ */
+export function writeSseKeepalive(res: Response): void {
+  try {
+    res.write(": keepalive\n\n");
+    const responseWithFlush = res as Response & { flush?: () => void };
+    if (typeof responseWithFlush.flush === "function") {
+      responseWithFlush.flush();
+    } else if (res.socket && !res.socket.destroyed) {
+      res.socket.uncork?.();
+      res.socket.cork?.();
+      res.socket.uncork?.();
+    }
+  } catch (e) {
+    logger.debug(`[SSE] Failed writing keepalive: ${e}`);
+  }
+}
+
 /**
  * Handle a full SSE streaming request lifecycle.
  * Sets up SSE headers, AbortController(s), runs the handler, and closes.
@@ -263,20 +291,8 @@ export async function handleSseRequest(
   });
 
   const keepAliveInterval = setInterval(() => {
-    if (!connectionController.signal.aborted && !res.destroyed && !res.writableEnded) {
-      try {
-        res.write(": keepalive\n\n");
-        const responseWithFlush = res as Response & { flush?: () => void };
-        if (typeof responseWithFlush.flush === "function") {
-          responseWithFlush.flush();
-        } else if (res.socket && !res.socket.destroyed) {
-          res.socket.uncork?.();
-          res.socket.cork?.();
-          res.socket.uncork?.();
-        }
-      } catch (e) {
-        logger.debug(`[SSE] Failed writing keepalive: ${e}`);
-      }
+    if (shouldSendKeepalive(connectionController.signal, res)) {
+      writeSseKeepalive(res);
     }
   }, 15_000);
 

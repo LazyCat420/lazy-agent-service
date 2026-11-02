@@ -106,3 +106,88 @@ export function buildAdminMatch(
   if (model !== undefined) match.model = model;
   return match;
 }
+
+export interface ConversationTextPipelineOptions {
+  preMatch?: Record<string, unknown>;
+  origin?: string;
+  search?: string;
+  provider?: string;
+  model?: string;
+}
+
+/**
+ * Build the `$unwind messages` text-search aggregation pipeline shared by
+ * `/text` routes. Callers append count / `$skip` / `$limit` stages themselves.
+ */
+export function buildConversationTextPipeline(
+  options: ConversationTextPipelineOptions = {},
+): Record<string, unknown>[] {
+  const { preMatch, origin, search, provider, model } = options;
+  const pipeline: Record<string, unknown>[] = [
+    ...(preMatch && Object.keys(preMatch).length ? [{ $match: preMatch }] : []),
+    { $unwind: "$messages" },
+    {
+      $match: {
+        "messages.content": { $exists: true, $nin: [null, ""] },
+      },
+    },
+    {
+      $project: {
+        convId: "$id",
+        convTitle: "$title",
+        project: 1,
+        username: 1,
+        role: "$messages.role",
+        content: "$messages.content",
+        timestamp: { $ifNull: ["$messages.timestamp", "$updatedAt"] },
+        model: "$messages.model",
+        estimatedCost: "$messages.estimatedCost",
+        images: { $size: { $ifNull: ["$messages.images", []] } },
+      },
+    },
+    { $sort: { timestamp: -1 } },
+  ];
+  if (origin === "user") pipeline.push({ $match: { role: "user" } });
+  else if (origin === "ai") pipeline.push({ $match: { role: "assistant" } });
+  if (search) {
+    pipeline.push({ $match: { content: { $regex: search, $options: "i" } } });
+  }
+  if (provider) {
+    pipeline.push({
+      $match: { model: { $regex: `^${provider}/`, $options: "i" } },
+    });
+  }
+  if (model) pipeline.push({ $match: { model } });
+  return pipeline;
+}
+
+/** One aggregated row from the conversation-text pipeline. */
+export interface ConversationTextRow {
+  convId: string;
+  convTitle?: string;
+  project: string;
+  username: string;
+  role: string;
+  content: string;
+  timestamp: string | Date;
+  model?: string;
+  estimatedCost?: number;
+  images: number;
+}
+
+/** Map one aggregated conversation-text row to the API response shape. */
+export function mapConversationTextItem(item: ConversationTextRow) {
+  return {
+    content: item.content,
+    origin: item.role === "assistant" ? "ai" : "user",
+    role: item.role,
+    convId: item.convId,
+    convTitle: item.convTitle || "Untitled",
+    project: item.project,
+    username: item.username,
+    model: item.model,
+    estimatedCost: item.estimatedCost,
+    hasImages: item.images > 0,
+    timestamp: item.timestamp,
+  };
+}

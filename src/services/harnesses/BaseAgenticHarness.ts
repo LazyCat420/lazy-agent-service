@@ -161,6 +161,102 @@ export default class BaseAgenticHarness {
 
   private static readonly toolDocFormatter = new ToolDocFormatter();
 
+  /** Static + MCP tool schemas with MCP bookkeeping fields stripped. */
+  static buildDynamicCatalog(): Array<{ name: string; [key: string]: unknown }> {
+    return [
+      ...ToolOrchestratorService.getToolSchemas(),
+      ...ToolOrchestratorService.getMCPToolSchemas().map((mcpTool) => {
+        const { _mcpServer, _mcpOriginalName, ...schema } =
+          mcpTool as unknown as Record<string, unknown>;
+        return schema as { name: string; [key: string]: unknown };
+      }),
+    ] as Array<{ name: string; [key: string]: unknown }>;
+  }
+
+  /** Select the tools active for a dynamically-resolved tool set. */
+  static filterToolsForSet<T extends { name: string }>(
+    catalog: T[],
+    dynamicEnabledSet: ReadonlySet<string>,
+    isSubAgent: boolean,
+    hasNativeThinking: boolean,
+  ): T[] {
+    return catalog.filter((tool) => {
+      if (hasNativeThinking && tool.name === TOOL_NAMES.THINK) return false;
+      return (
+        dynamicEnabledSet.has(tool.name) ||
+        tool.name.startsWith("mcp__") ||
+        BaseAgenticHarness.CORE_AGENTIC_SET.has(tool.name) ||
+        (!isSubAgent && BaseAgenticHarness.CORE_ORCHESTRATOR_SET.has(tool.name))
+      );
+    });
+  }
+
+  /** Non-core tools present now but absent from the previous set. */
+  static computeNewlyAddedTools<T extends { name: string }>(
+    filteredTools: T[],
+    previousToolNames: ReadonlySet<string>,
+  ): T[] {
+    return filteredTools.filter(
+      (tool) =>
+        !previousToolNames.has(tool.name) &&
+        !BaseAgenticHarness.CORE_AGENTIC_SET.has(tool.name) &&
+        !BaseAgenticHarness.CORE_ORCHESTRATOR_SET.has(tool.name),
+    );
+  }
+
+  /** Push a `<tool-update>` documentation system message for new tools. */
+  static injectToolDocsAddendum(
+    currentMessages: ConversationMessage[],
+    newToolNames: string[],
+    activeLocale: string,
+  ): void {
+    const addendumDocumentation =
+      BaseAgenticHarness.toolDocFormatter.buildToolDescriptions(
+        newToolNames,
+        undefined,
+        undefined,
+        newToolNames,
+        undefined,
+        undefined,
+        activeLocale,
+      );
+    if (!addendumDocumentation) return;
+
+    const toolNamesList = newToolNames.join(", ");
+    const policyAddendum = getToolPolicyAddendum(newToolNames, activeLocale);
+    const headerText = PromptLocaleService.get(
+      activeLocale,
+      "harness.toolSetUpdated.header",
+      { count: String(newToolNames.length), toolNames: toolNamesList },
+    );
+    const availableText = PromptLocaleService.get(
+      activeLocale,
+      "harness.toolSetUpdated.availableDocumentation",
+    );
+    const guidelinesHeader = PromptLocaleService.get(
+      activeLocale,
+      "harness.toolSetUpdated.usageGuidelines",
+    );
+
+    currentMessages.push({
+      role: "system",
+      content:
+        `<tool-update>\n` +
+        `${headerText}\n\n` +
+        `${availableText}\n\n` +
+        addendumDocumentation +
+        (policyAddendum
+          ? `\n\n${guidelinesHeader}\n\n${policyAddendum}`
+          : "") +
+        `\n</tool-update>`,
+    });
+
+    logger.info(
+      `[BaseAgenticHarness] Injected documentation addendum for ${newToolNames.length} newly activated tools: [${toolNamesList}]` +
+        (policyAddendum ? ` (with policy guidance)` : ""),
+    );
+  }
+
   /**
    * Check ToolContext for a dirty flag set by enable_tools / disable_tools.
    * If set, re-filter `this.tools` from the full schema catalog using the
@@ -195,15 +291,6 @@ export default class BaseAgenticHarness {
       ),
     );
 
-    const allSchemas = [
-      ...ToolOrchestratorService.getToolSchemas(),
-      ...ToolOrchestratorService.getMCPToolSchemas().map((mcpTool) => {
-        const { _mcpServer, _mcpOriginalName, ...schema } =
-          mcpTool as unknown as Record<string, unknown>;
-        return schema as { name: string; [key: string]: unknown };
-      }),
-    ] as Array<{ name: string; [key: string]: unknown }>;
-
     const isSubAgent = !!this.context.parentAgentConversationId;
 
     // When the model has native thinking, the think tool is redundant —
@@ -217,17 +304,11 @@ export default class BaseAgenticHarness {
       this.context.options?.thinkingEnabled as boolean | undefined,
     );
 
-    const filteredTools = allSchemas.filter(
-      (tool) => {
-        if (hasNativeThinking && tool.name === TOOL_NAMES.THINK) return false;
-        return (
-          dynamicEnabledSet.has(tool.name) ||
-          tool.name.startsWith("mcp__") ||
-          BaseAgenticHarness.CORE_AGENTIC_SET.has(tool.name) ||
-          (!isSubAgent &&
-            BaseAgenticHarness.CORE_ORCHESTRATOR_SET.has(tool.name))
-        );
-      },
+    const filteredTools = BaseAgenticHarness.filterToolsForSet(
+      BaseAgenticHarness.buildDynamicCatalog(),
+      dynamicEnabledSet,
+      isSubAgent,
+      hasNativeThinking,
     ) as unknown as ResolvedTools["finalTools"];
 
     this.tools = {
@@ -242,69 +323,20 @@ export default class BaseAgenticHarness {
       dynamicTools: dynamicEnabledArray,
     });
 
-    // Compute newly added tools and inject documentation addendum
-    const newlyAddedToolSchemas = (
-      filteredTools as unknown as Array<{
-        name: string;
-        [key: string]: unknown;
-      }>
-    ).filter(
-      (tool) =>
-        !previousToolNames.has(tool.name) &&
-        !BaseAgenticHarness.CORE_AGENTIC_SET.has(tool.name) &&
-        !BaseAgenticHarness.CORE_ORCHESTRATOR_SET.has(tool.name),
+    const newlyAddedToolSchemas = BaseAgenticHarness.computeNewlyAddedTools(
+      filteredTools as unknown as Array<{ name: string }>,
+      previousToolNames,
     );
 
     if (currentMessages && newlyAddedToolSchemas.length > 0) {
-      const activeLocale = (this.context.options?.locale as string | undefined) || PromptLocaleService.getDefaultLocale();
-      const addendumDocumentation =
-        BaseAgenticHarness.toolDocFormatter.buildToolDescriptions(
-          newlyAddedToolSchemas.map((tool) => tool.name),
-          undefined,
-          undefined,
-          newlyAddedToolSchemas.map((tool) => tool.name),
-          undefined,
-          undefined,
-          activeLocale,
-        );
-
-      if (addendumDocumentation) {
-        const toolNamesList = newlyAddedToolSchemas
-          .map((tool) => tool.name)
-          .join(", ");
-
-        const policyAddendum = getToolPolicyAddendum(
-          newlyAddedToolSchemas.map((tool) => tool.name),
-          activeLocale,
-        );
-
-        const headerText = PromptLocaleService.get(activeLocale, "harness.toolSetUpdated.header", {
-          count: String(newlyAddedToolSchemas.length),
-          toolNames: toolNamesList,
-        });
-        const availableText = PromptLocaleService.get(activeLocale, "harness.toolSetUpdated.availableDocumentation");
-        const guidelinesHeader = PromptLocaleService.get(activeLocale, "harness.toolSetUpdated.usageGuidelines");
-
-        currentMessages.push({
-          role: "system",
-          content:
-            `<tool-update>\n` +
-            `${headerText}\n\n` +
-            `${availableText}\n\n` +
-            addendumDocumentation +
-            (policyAddendum
-              ? `\n\n${guidelinesHeader}\n\n${policyAddendum}`
-              : "") +
-            `\n</tool-update>`,
-        });
-
-        logger.info(
-          `[BaseAgenticHarness] Injected documentation addendum for ${newlyAddedToolSchemas.length} newly activated tools: [${toolNamesList}]` +
-            (policyAddendum
-              ? ` (with policy guidance)`
-              : ""),
-        );
-      }
+      const activeLocale =
+        (this.context.options?.locale as string | undefined) ||
+        PromptLocaleService.getDefaultLocale();
+      BaseAgenticHarness.injectToolDocsAddendum(
+        currentMessages,
+        newlyAddedToolSchemas.map((tool) => tool.name),
+        activeLocale,
+      );
     }
 
     logger.info(

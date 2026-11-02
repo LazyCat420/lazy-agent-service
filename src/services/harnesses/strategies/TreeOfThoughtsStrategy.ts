@@ -46,24 +46,21 @@ import type {
   EmitFunction,
   ValidationFeedback,
 } from "../types.ts";
-import { SERVER_SENT_EVENT_TYPES, STATUS_MESSAGES } from "@rodrigo-barraza/utilities-library/taxonomy";
-import logger from "../../../utils/logger.ts";
-import PromptLocaleService from "../../PromptLocaleService.ts";
-import { createStandardHooks } from "../lifecycle/HookInitializer.ts";
-import { executeToolBatch } from "../lifecycle/ToolExecutor.ts";
 import {
+  SERVER_SENT_EVENT_TYPES,
+  STATUS_MESSAGES,
+  logger,
+  PromptLocaleService,
+  createStandardHooks,
+  executeToolBatch,
   emitPostExecutionStatus,
   processToolResultMedia,
   trackToolErrors,
-} from "../lifecycle/PostExecutionEmitter.ts";
-import { runExhaustionRecoveryPass } from "../lifecycle/ExhaustionRecovery.ts";
-import {
+  runExhaustionRecoveryPass,
   runPlanningPhase,
   checkForPlanModeEntry,
-} from "../lifecycle/PlanModeController.ts";
-import { validateAfterToolExecution } from "../lifecycle/ValidationInterceptor.ts";
-import { buildToolRetryGuidance } from "../lifecycle/ToolRetryInterceptor.ts";
-import {
+  validateAfterToolExecution,
+  buildToolRetryGuidance,
   isOutputTruncated,
   isAtOutputCeiling,
   injectContinuationContext,
@@ -71,15 +68,16 @@ import {
   buildExhaustedRecoveryMessage,
   buildProviderErrorMessage,
   MAX_OUTPUT_TRUNCATION_RECOVERIES,
-} from "../lifecycle/OutputTruncationRecovery.ts";
-import { manageContextPressure } from "../lifecycle/ContextPressureManager.ts";
-import { logKVCacheHitRate } from "../lifecycle/KVCacheReporter.ts";
-import { injectToolDiscoveryNudge } from "../lifecycle/ToolDiscoveryNudge.ts";
-import { finalizePassTracker } from "../lifecycle/TrackerFinalizer.ts";
-import { handleCodexPlanningResponse } from "../lifecycle/CodexPlanningDetector.ts";
-import { maybeInjectSystemReminder, cleanupReminderCache } from "../lifecycle/SystemReminderInjector.ts";
-import { checkCostBudget } from "../lifecycle/CostBudgetEnforcer.ts";
-import { createSandboxCheckpoint } from "../lifecycle/SandboxExecutor.ts";
+  manageContextPressure,
+  logKVCacheHitRate,
+  injectToolDiscoveryNudge,
+  finalizePassTracker,
+  handleCodexPlanningResponse,
+  maybeInjectSystemReminder,
+  cleanupReminderCache,
+  checkCostBudget,
+  createSandboxCheckpoint,
+} from "./prelude.ts";
 import {
   DEFAULT_BFS_BEAM_WIDTH,
   MAX_CONSECUTIVE_TOOL_ERRORS,

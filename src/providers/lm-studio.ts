@@ -45,6 +45,7 @@ import {
   type PreparedMessage,
   type OpenAICompletionResponse,
   prependIdentitySystemMessage,
+  streamSSELines,
 } from "../utils/openai-compat.ts";
 import { ORCHESTRATOR_ONLY_TOOLS } from "../services/OrchestratorPrompt.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
@@ -294,8 +295,6 @@ async function* parseNativeSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   options: ProviderOptions = {},
 ) {
-  const decoder = new TextDecoder();
-  let buffer = "";
   const state: NativeStreamState = {
     usage: null,
     partialOutputCharacters: 0,
@@ -303,35 +302,18 @@ async function* parseNativeSSEStream(
     currentToolCall: null,
   };
   let usageYielded = false;
-  const abortHandler = () => {
-    reader.cancel().catch(() => {});
-  };
-  if (options.signal && !options.signal.aborted) {
-    options.signal.addEventListener("abort", abortHandler, { once: true });
-  }
   try {
-    while (true) {
-      if (options.signal?.aborted) {
-        reader.cancel().catch(() => {});
-        break;
-      }
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data: ")) continue;
-        try {
-          const json = JSON.parse(trimmed.slice(6));
-          const emitted = processNativeSSEEventObject(json, state);
-          if (emitted !== null) {
-            yield emitted;
-          }
-        } catch {
-          // skip malformed JSON
+    for await (const line of streamSSELines(reader, options.signal)) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data: ")) continue;
+      try {
+        const json = JSON.parse(trimmed.slice(6));
+        const emitted = processNativeSSEEventObject(json, state);
+        if (emitted !== null) {
+          yield emitted;
         }
+      } catch {
+        // skip malformed JSON
       }
     }
   } catch (streamError) {
@@ -342,7 +324,6 @@ async function* parseNativeSSEStream(
     }
     throw streamError;
   } finally {
-    options.signal?.removeEventListener("abort", abortHandler);
     if (!usageYielded) {
       usageYielded = true;
       yield {

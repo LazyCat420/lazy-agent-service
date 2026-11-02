@@ -6,7 +6,10 @@ import logger from "../../utils/logger.ts";
 import { getErrorMessage } from "../../utils/ErrorHelpers.ts";
 import {
   applyDateRangeFilter,
+  buildConversationTextPipeline,
+  mapConversationTextItem,
   parsePaginationParams,
+  type ConversationTextRow,
 } from "../../utils/QueryBuilders.ts";
 import requireDb from "../../middleware/RequireDbMiddleware.ts";
 
@@ -393,41 +396,11 @@ router.get(
       if (project) preMatch.project = project;
       applyDateRangeFilter(preMatch, from as string, to as string, "updatedAt");
 
-      const pipeline: Record<string, unknown>[] = [
-        ...(Object.keys(preMatch).length ? [{ $match: preMatch }] : []),
-        { $unwind: "$messages" },
-        {
-          $match: {
-            "messages.content": { $exists: true, $nin: [null, ""] },
-          },
-        },
-        {
-          $project: {
-            convId: "$id",
-            convTitle: "$title",
-            project: 1,
-            username: 1,
-            role: "$messages.role",
-            content: "$messages.content",
-            timestamp: { $ifNull: ["$messages.timestamp", "$updatedAt"] },
-            model: "$messages.model",
-            estimatedCost: "$messages.estimatedCost",
-            images: { $size: { $ifNull: ["$messages.images", []] } },
-          },
-        },
-        { $sort: { timestamp: -1 } },
-      ];
-
-      if (origin === "user") {
-        pipeline.push({ $match: { role: "user" } });
-      } else if (origin === "ai") {
-        pipeline.push({ $match: { role: "assistant" } });
-      }
-      if (search) {
-        pipeline.push({
-          $match: { content: { $regex: search, $options: "i" } },
-        });
-      }
+      const pipeline = buildConversationTextPipeline({
+        preMatch,
+        origin: origin as string | undefined,
+        search: search as string | undefined,
+      });
 
       const countPipeline: Record<string, unknown>[] = [
         ...pipeline,
@@ -446,19 +419,9 @@ router.get(
         .aggregate(pipeline)
         .toArray();
 
-      const data = items.map((item: Record<string, unknown>) => ({
-        content: item.content,
-        origin: item.role === "assistant" ? "ai" : "user",
-        role: item.role,
-        convId: item.convId,
-        convTitle: item.convTitle || "Untitled",
-        project: item.project,
-        username: item.username,
-        model: item.model,
-        estimatedCost: item.estimatedCost,
-        hasImages: (item.images as number) > 0,
-        timestamp: item.timestamp,
-      }));
+      const data = items.map((item) =>
+        mapConversationTextItem(item as unknown as ConversationTextRow),
+      );
 
       res.json({ data, total, page, limit });
     } catch (error: unknown) {
