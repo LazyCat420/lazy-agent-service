@@ -37,7 +37,6 @@ import { normalizeScrapeUrl } from "../utils/ScrapeUrl.ts";
  *                                          UnscrapableDomains refusal and per-run budget
  *   lazy_web_search                      → trading-service bridge, links to unscrapable
  *                                          publishers blanked on the way back
- *   music_player_*                       → music-player HTTP API
  *   *_widget tools                       → validated locally, forwarded to HTML-Notes /internal/execute
  *   html_notes_* / canvas_* → HTML-Notes /internal/execute
  *   everything else                      → trading-service HTTP bridge (/api/v1/agent-tools/execute)
@@ -576,10 +575,6 @@ export async function routeLocalTool(
   const remote = MCPClientService.parseMCPToolName(toolName);
   if (remote && MCPClientService.isConnected(remote.serverName)) {
     return MCPClientService.callTool(remote.serverName, remote.toolName, toolArguments);
-  }
-
-  if (tName.startsWith("music_player_")) {
-    return { error: `Retired tool: ${tName}` };
   }
 
   if (tName.startsWith("strain_")) {

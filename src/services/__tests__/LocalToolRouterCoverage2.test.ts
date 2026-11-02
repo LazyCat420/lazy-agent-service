@@ -499,12 +499,6 @@ describe("routeLocalTool — scrape_url and remote MCP", () => {
     expect(fetchCalls[0].url).toBe("http://trading.test/api/v1/agent-tools/execute");
   });
 
-  it("retires music player tools", async () => {
-    expect(await routeLocalTool("music_player_play", {})).toEqual({
-      error: "Retired tool: music_player_play",
-    });
-  });
-
   it("filters and registers lazy_web_search results", async () => {
     fakes.filterSearchResultLinks.mockReturnValue({ status: "success", links: ["https://x.test"] });
     expect(await routeLocalTool("lazy_web_search", { query: "q" }, { cycleId: "c1" })).toEqual({
