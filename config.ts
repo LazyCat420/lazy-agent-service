@@ -56,7 +56,7 @@ export const PROVIDER_LLAMA_CPP = parseProviderInstances("PROVIDER_LLAMA_CPP");
 
 // ── MongoDB ────────────────────────────────────────────────────
 export const MONGO_URI = process.env.MONGO_URI;
-const BAD_DB_NAMES = new Set(["", "undefined", "null", "none", "test"]);
+const BAD_DB_NAMES = new Set(["", "undefined", "null", "none", "nan", "test"]);
 
 /** Reject stringified-unset values ("undefined", "null") and the stray "test" DB. */
 export function cleanDbName(val: string | undefined | null, fallback: string): string {
