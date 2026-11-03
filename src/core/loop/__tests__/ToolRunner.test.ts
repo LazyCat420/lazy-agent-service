@@ -154,7 +154,7 @@ describe("runToolBatch", () => {
       baseOptions({ tools }),
     );
     expect(results[0].errorCode).toBe("TOOL_BAD_ARGS");
-    expect(results[0].content).toBe('Invalid arguments for "search": "query" must be string; "limit" must be integer; "flag" must be boolean.');
+    expect(results[0].content).toBe('Invalid arguments for "search": "query" must be string (got null); "limit" must be integer (got number 1.5); "flag" must be boolean (got string "yes").');
   });
 
   it("R3: __raw with fenced/trailing-comma JSON repairs and runs", async () => {
