@@ -124,11 +124,12 @@ const coerceStructured = (expected: "array" | "object", value: unknown): unknown
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    parsed = undefined;
+    return expected === "array" ? splitListString(trimmed) : undefined;
   }
   if (typeChecks[expected](parsed)) return parsed;
-  // A scalar that parses as JSON ("7", "true") is still one list item.
-  return expected === "array" ? splitListString(trimmed) : undefined;
+  // A number/boolean string ("7", "true") is one list item, like a bare number; "null" stays rejected.
+  const scalar = typeof parsed === "number" || typeof parsed === "boolean";
+  return expected === "array" && scalar ? [trimmed] : undefined;
 };
 
 const coerceArgs = (
