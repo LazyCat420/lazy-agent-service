@@ -48,14 +48,14 @@ describe("stream retry timing", () => {
       })();
     };
 
-    const start = Date.now();
+    const start = performance.now();
     const stream = streamWithRetries(factory, { label: "vllm" });
     const chunks: unknown[] = [];
     await expect(async () => {
       for await (const chunk of stream) chunks.push(chunk);
     }).rejects.toMatchObject({ statusCode: 502 });
 
-    expect(Date.now() - start).toBeLessThan(2000);
+    expect(performance.now() - start).toBeLessThan(2000);
     expect(createCalls).toBe(1); // zero retries: output already reached the consumer
     expect(chunks.filter((chunk) => typeof chunk === "string")).toContain(
       "probe",
@@ -100,13 +100,13 @@ describe("stream retry timing", () => {
         });
       })();
 
-    const start = Date.now();
+    const start = performance.now();
     const stream = streamWithRetries(factory, { label: "vllm" });
     const text: string[] = [];
     for await (const chunk of stream) {
       if (typeof chunk === "string") text.push(chunk);
     }
-    const elapsed = Date.now() - start;
+    const elapsed = performance.now() - start;
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(text.join("")).toContain("ok");
