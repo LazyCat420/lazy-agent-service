@@ -1257,6 +1257,10 @@ function finalizeStreamResult(
   return state.finalResult || { error: "Stream ended without exit event" };
 }
 
+function contentQualityField(extracted: { contentQuality?: string }): { content_quality?: string } {
+  return extracted.contentQuality ? { content_quality: extracted.contentQuality } : {};
+}
+
 export default class ToolOrchestratorService {
   /**
    * Ensure tool schemas are loaded from tools-api.
@@ -2106,6 +2110,7 @@ export default class ToolOrchestratorService {
       content: extracted.content,
       truncated: extracted.truncated,
       ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
+      ...contentQualityField(extracted),
       cached: extracted.cached,
     };
   }

@@ -185,6 +185,7 @@ export function scrapeRunKey(scope: ScrapeRunScope = {}): string | null {
 const RUN_TTL_MS = 6 * 60 * 60 * 1_000;
 const runs = new Map<string, { count: number; at: number }>();
 const runUrls = new Map<string, { urls: Set<string>; at: number }>();
+const deadUrls = new Map<string, { urls: Map<string, string>; at: number }>();
 
 /**
  * Corporate IR / press-release path patterns that models frequently guess
@@ -350,6 +351,41 @@ export function chargeScrape(url: string, scope: ScrapeRunScope = {}, now = Date
 export function __resetScrapeBudgetForTests(): void {
   runs.clear();
   runUrls.clear();
+  deadUrls.clear();
+}
+
+const PERMANENT_FAILURE_RE = /permanently unavailable/i;
+
+/**
+ * Remember a URL whose scrape failed permanently, so the same run does not ask
+ * again. No-op unless the error says so (404s that may recover are retried).
+ */
+export function recordScrapeOutcome(url: string, error: unknown, scope: ScrapeRunScope = {}, now = Date.now()): void {
+  const key = scrapeRunKey(scope);
+  const message = typeof error === "string" ? error : "";
+  if (!key || !PERMANENT_FAILURE_RE.test(message)) return;
+  const existing = deadUrls.get(key);
+  const urls = existing && now - existing.at <= RUN_TTL_MS ? existing.urls : new Map<string, string>();
+  urls.set(normalizeUrlForRegistry(url), message.slice(0, 160));
+  deadUrls.set(key, { urls, at: now });
+}
+
+/** Refusal for a URL that already failed permanently in this run; costs no budget. */
+export function deadUrlRefusal(url: string, scope: ScrapeRunScope = {}, now = Date.now()): Record<string, unknown> | null {
+  const key = scrapeRunKey(scope);
+  const entry = key ? deadUrls.get(key) : undefined;
+  if (!entry || now - entry.at > RUN_TTL_MS) return null;
+  const prior = entry.urls.get(normalizeUrlForRegistry(url));
+  if (!prior) return null;
+  return {
+    url,
+    content: "",
+    success: false,
+    skipped: "known_dead_url",
+    error:
+      `KNOWN_DEAD_URL: this exact URL already failed earlier in this run (${prior}) and will not recover, so it was not fetched. ` +
+      "Do not retry it; pick a different URL from lazy_web_search results or finish with what you have.",
+  };
 }
 
 /**

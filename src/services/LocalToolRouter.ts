@@ -10,6 +10,8 @@ import { stripMcpPrefix } from "./McpPrefix.ts";
 import MCPClientService from "./MCPClientService.ts";
 import {
   chargeScrape,
+  deadUrlRefusal,
+  recordScrapeOutcome,
   filterSearchResultLinks,
   registerRunUrls,
   registerSearchResultUrls,
@@ -517,6 +519,8 @@ async function routeScrapeUrlTool(
   if (url) {
     const targetRefusal = scrapeTargetGuard(url, context);
     if (targetRefusal) return targetRefusal;
+    const deadRefusal = deadUrlRefusal(url, context);
+    if (deadRefusal) return deadRefusal;
     if (!unscrapableDomainOf(url)) {
       const refusal = chargeScrape(url, context);
       if (refusal) return refusal;
@@ -530,7 +534,10 @@ async function routeScrapeUrlTool(
   const result = await ToolOrchestratorService.executeWebExtract(normalized);
   if (!url || unscrapableDomainOf(url)) return result;
   if (!result || typeof result !== "object") return result;
-  return { ...(result as Record<string, unknown>), scrape_budget: scrapeBudgetStatus(context) };
+  const body = result as Record<string, unknown>;
+  recordScrapeOutcome(url, body.error, context);
+  const budget = scrapeBudgetStatus(context);
+  return { ...body, scrape_budget: budget, scrape_budget_remaining: budget.remaining };
 }
 
 async function routeWebSearchTool(

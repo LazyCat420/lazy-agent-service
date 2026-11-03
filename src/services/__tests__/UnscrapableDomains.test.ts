@@ -284,3 +284,41 @@ describe("scrape_url budget per agent run", () => {
     for (let i = 1; i <= 6; i++) expect((await call(`https://fool.com/f${i}`, { conversationId: "conv-D" })).success).toBe(true);
   });
 });
+
+describe("scrape_url failure-rate rules", () => {
+  const run = { conversationId: "conv-fr" };
+  const call = (url: string) =>
+    routeLocalTool("mcp__lazy-agent-service__scrape_url", { url }, run) as Promise<Record<string, unknown>>;
+
+  it("tells the model to search first when the url is not a URL", async () => {
+    const result = await webExtract("NVDA stock news");
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("lazy_web_search");
+  });
+
+  it("refuses a URL that already failed permanently in this run, without charging", async () => {
+    const dead = { url: "x", success: false, error: "scrape failed: URL is permanently unavailable (HTTP 404)" };
+    const extract = vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue(dead);
+    await call("https://fool.com/gone");
+    const again = await call("https://fool.com/gone");
+    expect(again.skipped).toBe("known_dead_url");
+    expect(String(again.error)).toContain("permanently unavailable");
+    expect(extract).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the remaining budget on a successful scrape", async () => {
+    vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue({ url: "x", success: true, content: "page" });
+    const first = await call("https://fool.com/ok1");
+    expect(first.scrape_budget_remaining).toBe(3);
+  });
+
+  it("returns thin pages as success with content_quality thin", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ success: false, content: "Headline only", error: "thin content (13 chars < 900) — headline/teaser" }), { status: 200 }),
+    );
+    const result = await webExtract("https://fool.com/thin", 5000, { fetch: fetchMock as unknown as typeof fetch, now: Date.now });
+    expect(result.status).toBe("ok");
+    expect(result.contentQuality).toBe("thin");
+    expect(result.content).toBe("Headline only");
+  });
+});
