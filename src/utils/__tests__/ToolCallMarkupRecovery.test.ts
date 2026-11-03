@@ -148,6 +148,9 @@ describe("markup recovery under tool_choice none", () => {
 
   it("yields no toolCall when toolChoiceNone is set", async () => {
     expect(await toolCallsFor(true)).toEqual([]);
+    const chunks: SSEStreamChunk[] = [];
+    for await (const c of parseSSEStream(sseStream(body), { label: "test", toolChoiceNone: true })) chunks.push(c);
+    expect(textChunks(chunks)).toContain("<tool_call>");
   });
 
   it("yields one toolCall without the flag (control)", async () => {
