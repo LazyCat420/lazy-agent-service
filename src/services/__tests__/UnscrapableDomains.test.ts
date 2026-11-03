@@ -306,6 +306,22 @@ describe("scrape_url failure-rate rules", () => {
     expect(extract).toHaveBeenCalledTimes(1);
   });
 
+  it("a dead-URL refusal does not spend budget, and another run may still try the URL", async () => {
+    const dead = { url: "x", success: false, error: "scrape failed: URL is permanently unavailable (HTTP 404)" };
+    const extract = vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValueOnce(dead);
+    const callIn = (url: string, conversationId: string) =>
+      routeLocalTool("mcp__lazy-agent-service__scrape_url", { url }, { conversationId }) as Promise<Record<string, unknown>>;
+    await callIn("https://fool.com/gone2", "conv-dead-a");
+    for (let i = 0; i < 3; i++) {
+      expect((await callIn("https://fool.com/gone2", "conv-dead-a")).skipped).toBe("known_dead_url");
+    }
+    extract.mockResolvedValue({ url: "x", success: true, content: "page" });
+    // 1 real attempt + 3 refusals: 3 of the 4 slots remain, so the next real scrape reports 2 left.
+    expect((await callIn("https://fool.com/live", "conv-dead-a")).scrape_budget_remaining).toBe(2);
+    expect((await callIn("https://fool.com/gone2", "conv-dead-b")).success).toBe(true);
+    expect(extract).toHaveBeenCalledTimes(3);
+  });
+
   it("reports the remaining budget on a successful scrape", async () => {
     vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue({ url: "x", success: true, content: "page" });
     const first = await call("https://fool.com/ok1");

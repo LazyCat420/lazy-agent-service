@@ -279,7 +279,7 @@ describe("scrape_url handler", () => {
   it("tells the model to retry with a full URL when the argument is malformed", async () => {
     const out = await ToolOrchestratorService.executeWebExtract({ url: "/investors/earnings" });
     expect(out.success).toBe(false);
-    expect(out.error).toContain("Call scrape_url again with the full URL including https://");
+    expect(out.error).toContain("Call scrape_url again with a full https:// URL copied from search results; if you have none, call lazy_web_search first.");
     expect(out.error).toContain("(url: /investors/earnings)");
   });
 
