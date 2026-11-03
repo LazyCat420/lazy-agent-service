@@ -1024,7 +1024,7 @@ export class VllmShimService {
     originalPath: string,
     upstreamUrl: string,
     upstreamName: string,
-    toolContextToken: string | undefined,
+    tools: { contextToken?: string; choiceNone: boolean },
     res: Response,
   ): Promise<void> {
     if (upstreamContentType.includes("application/json") && basePath === "/v1/models") {
@@ -1032,12 +1032,14 @@ export class VllmShimService {
         return;
       }
     }
+    const toolContextToken = tools.contextToken;
     if (upstreamContentType.includes("application/json") && originalPath.includes("/chat/completions")) {
       try {
         const text = buf.toString("utf8");
         if (text.includes("tool_call") || text.includes("tool calls")) {
           const parsed = JSON.parse(text);
-          const normalized = VllmShimService.normalizeToolCalls(parsed);
+          // A tool_choice:"none" turn has tools off: its text markup stays text, never a callable tool call.
+          const normalized = tools.choiceNone ? parsed : VllmShimService.normalizeToolCalls(parsed);
           res.end(JSON.stringify(toolContextToken ? bindToolResponse(normalized, toolContextToken) : normalized));
           return;
         }
@@ -1061,11 +1063,13 @@ export class VllmShimService {
 
     let body = req.body;
     let toolContextToken: string | undefined;
+    let toolChoiceNone = false;
     if (basePath === "/v1/chat/completions" && req.method === "POST" && body && typeof body === "object") {
       const prepared = await this.prepareChatCompletionsBody(req, res, body as Record<string, unknown>);
       if (prepared.handled) return;
       body = prepared.body;
       toolContextToken = prepared.toolContextToken;
+      toolChoiceNone = prepared.body.tool_choice === "none";
     }
 
     const isEmbedPost = basePath === "/v1/embeddings" && req.method === "POST" && !!body && typeof body === "object";
@@ -1120,7 +1124,7 @@ export class VllmShimService {
         originalPath,
         resolved.upstreamUrl,
         upstreamName,
-        toolContextToken,
+        { contextToken: toolContextToken, choiceNone: toolChoiceNone },
         res,
       );
       return;
