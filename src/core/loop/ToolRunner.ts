@@ -178,9 +178,16 @@ const validateArgs = (tool: CoreTool, args: Record<string, unknown>): string[] =
     const expected = properties[key]?.type;
     if (!expected) continue;
     const check = typeChecks[expected];
-    if (check && !check(value)) problems.push(`"${key}" must be ${expected}`);
+    if (check && !check(value)) problems.push(`"${key}" must be ${expected} (got ${describeValue(value)})`);
   }
   return problems;
+};
+
+/** Type and a 40-char preview of a rejected argument, so the model and telemetry see what was sent. */
+const describeValue = (value: unknown): string => {
+  if (value === null) return "null";
+  const kind = Array.isArray(value) ? "array" : typeof value;
+  return `${kind} ${(JSON.stringify(value) ?? String(value)).slice(0, 40)}`;
 };
 
 /** One repair attempt: strip a ```json fence, drop trailing commas, JSON.parse. */
