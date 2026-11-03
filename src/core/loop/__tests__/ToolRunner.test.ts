@@ -51,7 +51,7 @@ describe("runToolBatch", () => {
       makeCall("ok"),
       makeCall("boom"),
       makeCall("missing_tool"),
-      makeCall("argy", { q: 5 }),
+      makeCall("argy", { q: null }),
       makeCall("solo"),
       makeCall("ok"),
     ];
@@ -150,7 +150,7 @@ describe("runToolBatch", () => {
     });
     const tools = new Map([[search.name, search]] as const);
     const results = await runToolBatch(
-      [makeCall("search", { query: 42, limit: 1.5, flag: "yes" })],
+      [makeCall("search", { query: null, limit: 1.5, flag: "yes" })],
       baseOptions({ tools }),
     );
     expect(results[0].errorCode).toBe("TOOL_BAD_ARGS");
@@ -448,5 +448,43 @@ describe("runToolBatch", () => {
       columns: ["ticker", "pe_ratio", "ev_to_ebitda"],
       limit: 5,
     });
+  });
+
+  it("F2: string-typed args given number/boolean/array/object are coerced to strings; controls unchanged", async () => {
+    const executed: Record<string, unknown>[] = [];
+    const tool = makeTool("t", async (args) => {
+      executed.push(args);
+      return "ok";
+    }, {
+      parameters: {
+        type: "object",
+        properties: { content: { type: "string" }, n: { type: "integer" } },
+        required: [],
+      },
+    });
+    const tools = new Map([[tool.name, tool] as const]);
+    const run = (args: Record<string, unknown>) =>
+      runToolBatch([makeCall("t", args)], baseOptions({ tools }));
+
+    for (const [input, expected] of [
+      [42, "42"],
+      [true, "true"],
+      [["a", "b"], '["a","b"]'],
+      [{ k: 1 }, '{"k":1}'],
+      ["hello", "hello"],
+    ] as const) {
+      executed.length = 0;
+      const results = await run({ content: input });
+      expect(results[0]).toMatchObject({ isError: false, content: "ok" });
+      expect(executed[0]).toEqual({ content: expected });
+    }
+
+    executed.length = 0;
+    await run({ n: "42" });
+    expect(executed[0]).toEqual({ n: 42 });
+
+    const nullResult = await run({ content: null });
+    expect(nullResult[0]).toMatchObject({ isError: true, errorCode: "TOOL_BAD_ARGS" });
+    expect(nullResult[0].content).toContain('"content" must be string');
   });
 });
