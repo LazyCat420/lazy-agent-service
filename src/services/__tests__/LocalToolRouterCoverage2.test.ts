@@ -602,6 +602,39 @@ describe("executeToolViaTradingService", () => {
     });
   });
 
+  it("C11: retries read-only tools on HTTP 503 then succeeds on 200 with 2 fetch calls", async () => {
+    fakes.fetch
+      .mockResolvedValueOnce(new Response("temporary upstream 503", { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse({ status: "success", data: "recovered" }));
+
+    const result = (await executeToolViaTradingService(
+      "get_market_data",
+      { ticker: "MSFT" },
+      undefined,
+      async () => {},
+    )) as Record<string, unknown>;
+    expect(result).toEqual({ status: "success", data: "recovered" });
+    expect(fakes.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("C11: returns existing error text when HTTP 503 fails twice on read-only tools", async () => {
+    fakes.fetch
+      .mockResolvedValueOnce(new Response("temporary upstream 503", { status: 503 }))
+      .mockResolvedValueOnce(new Response("still down 503", { status: 503 }));
+
+    const result = (await executeToolViaTradingService(
+      "get_market_data",
+      { ticker: "MSFT_FAIL" },
+      undefined,
+      async () => {},
+    )) as Record<string, unknown>;
+    expect(result).toEqual({
+      error: "trading-service tool execution failed (503): still down 503",
+      is_error: true,
+    });
+    expect(fakes.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("reports an unreachable bridge", async () => {
     fakes.fetch.mockRejectedValue(new Error("ECONNREFUSED"));
     const result = (await executeToolViaTradingService("get_quote", {})) as Record<string, unknown>;

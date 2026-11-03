@@ -66,6 +66,19 @@ export const REUSABLE_READ_TOOLS = new Set([
   "get_technical_indicators", "get_upcoming_events", "lazy_web_search", "scrape_url",
 ]);
 
+export const READ_ONLY_TOOLS = new Set([
+  ...REUSABLE_READ_TOOLS,
+  "screener_query",
+  "run_tool_chain",
+  "whiteboard_read",
+  "get_sec_filings",
+  "query_sec_filing",
+]);
+
+export function isReadOnlyTool(name: string): boolean {
+  return READ_ONLY_TOOLS.has(name) || READ_ONLY_TOOLS.has(stripMcpPrefix(name));
+}
+
 export const REPEAT_GUARDED_TOOLS = new Set([
   ...REUSABLE_READ_TOOLS,
   "whiteboard_read",
@@ -81,6 +94,21 @@ export const REPEAT_GUARDED_TOOLS = new Set([
   "get_macro_indicators",
 ]);
 
+export type DelayFn = (ms: number) => Promise<void>;
+const realDelayFn: DelayFn = (ms: number) => {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+};
+let currentDelayFn: DelayFn = realDelayFn;
+
+export function setRetryDelayFn(fn: DelayFn): void {
+  currentDelayFn = fn;
+}
+
+export function resetRetryDelayFn(): void {
+  currentDelayFn = realDelayFn;
+}
 
 /**
  * Execute a python-bridge tool via trading-service's HTTP endpoint
@@ -90,7 +118,8 @@ export const REPEAT_GUARDED_TOOLS = new Set([
 export const executeToolViaTradingService = async (
   toolName: string,
   toolArguments: Record<string, unknown>,
-  context?: LocalToolContext
+  context?: LocalToolContext,
+  delayFn: DelayFn = currentDelayFn,
 ): Promise<unknown> => {
   const reusable = REUSABLE_READ_TOOLS.has(toolName);
   // The Python bridge repairs an absent ticker from caller context. Requests
@@ -119,62 +148,113 @@ export const executeToolViaTradingService = async (
     cached: reusable ? readCache : undefined,
     coalesce: reusable,
     repeatGuard: REPEAT_GUARDED_TOOLS.has(toolName),
-    run: () => callTradingService(toolName, toolArguments, context, reusable ? cacheKey : undefined),
+    run: () => callTradingService(toolName, toolArguments, context, reusable ? cacheKey : undefined, delayFn),
   });
+};
 
+interface HttpAttemptResult {
+  ok: boolean;
+  status?: number;
+  data?: unknown;
+  errText?: string;
+  fetchError?: unknown;
+  isAbort?: boolean;
+}
+
+const performTradingServiceFetch = async (
+  url: string,
+  body: string,
+  timeoutMs: number,
+): Promise<HttpAttemptResult> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const apiResponse = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${CONFIG.TRADING_SERVICE_API_KEY || ""}`,
+      },
+      body,
+      signal: controller.signal,
+    });
+    if (!apiResponse.ok) {
+      const errText = await apiResponse.text();
+      return { ok: false, status: apiResponse.status, errText };
+    }
+    const data = await apiResponse.json();
+    return { ok: true, status: apiResponse.status, data };
+  } catch (err: unknown) {
+    const isAbort = (err as Error)?.name === "AbortError";
+    return { ok: false, fetchError: err, isAbort };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+const shouldRetryAttempt = (
+  outcome: HttpAttemptResult,
+  isReadOnly: boolean,
+  attempt: number,
+): boolean => {
+  if (!isReadOnly || attempt >= 2) return false;
+  if (outcome.status !== undefined && outcome.status >= 500 && outcome.status < 600) return true;
+  if (outcome.fetchError !== undefined && !outcome.isAbort) return true;
+  return false;
+};
+
+const formatTradingServiceError = (
+  toolName: string,
+  url: string,
+  timeoutMs: number,
+  outcome: HttpAttemptResult,
+): { error: string; is_error: true } => {
+  if (outcome.fetchError !== undefined) {
+    const message = outcome.isAbort
+      ? `bridge timeout after ${timeoutMs}ms`
+      : (outcome.fetchError as Error).message || String(outcome.fetchError);
+    logger.error(`[LocalToolRouter] trading-service execute ${toolName} unreachable: ${message}`);
+    return { error: `Failed to reach trading-service at ${url}: ${message}`, is_error: true };
+  }
+  const status = outcome.status ?? 500;
+  const errText = outcome.errText ?? "";
+  logger.error(`[LocalToolRouter] trading-service execute ${toolName} → ${status}: ${errText.slice(0, 300)}`);
+  return { error: `trading-service tool execution failed (${status}): ${errText.slice(0, 500)}`, is_error: true };
 };
 
 const callTradingService = async (
   toolName: string,
   toolArguments: Record<string, unknown>,
   context: LocalToolContext | undefined,
-  cacheKey: string | undefined
+  cacheKey: string | undefined,
+  delayFn: DelayFn = currentDelayFn,
 ): Promise<unknown> => {
   const url = `${CONFIG.TRADING_SERVICE_URL}/api/v1/agent-tools/execute`;
   const timeoutMs = CONFIG.SLOW_TOOLS.has(toolName)
     ? CONFIG.SLOW_TOOL_TIMEOUT_MS
     : CONFIG.EXECUTION_TIMEOUT_MS;
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    const apiResponse = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${CONFIG.TRADING_SERVICE_API_KEY || ""}`
-      },
-      body: JSON.stringify({
-        tool_name: toolName,
-        arguments: toolArguments,
-        agent_name: context?.agentName || "",
-        ticker: context?.ticker || "",
-        cycle_id: context?.cycleId || ""
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
+  const body = JSON.stringify({
+    tool_name: toolName,
+    arguments: toolArguments,
+    agent_name: context?.agentName || "",
+    ticker: context?.ticker || "",
+    cycle_id: context?.cycleId || "",
+  });
+  const isReadOnly = isReadOnlyTool(toolName);
 
-    if (!apiResponse.ok) {
-      const errText = await apiResponse.text();
-      logger.error(`[LocalToolRouter] trading-service execute ${toolName} → ${apiResponse.status}: ${errText.slice(0, 300)}`);
-      return { error: `trading-service tool execution failed (${apiResponse.status}): ${errText.slice(0, 500)}`, is_error: true };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const outcome = await performTradingServiceFetch(url, body, timeoutMs);
+    if (outcome.ok) {
+      if (cacheKey && classifyToolResult(outcome.data).success) {
+        cache.set(cacheKey, { result: outcome.data, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
+      }
+      return outcome.data;
     }
-
-    const result = await apiResponse.json();
-    // Never cache a failure: a cached error would be replayed to every repeat
-    // caller for the whole TTL, turning one transient blip into a minute of
-    // guaranteed failures.
-    if (cacheKey && classifyToolResult(result).success) {
-      cache.set(cacheKey, { result, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
+    if (shouldRetryAttempt(outcome, isReadOnly, attempt)) {
+      await delayFn(2000);
+      continue;
     }
-    return result;
-  } catch (fetchError: unknown) {
-    const isAbort = (fetchError as Error)?.name === "AbortError";
-    const message = isAbort
-      ? `bridge timeout after ${timeoutMs}ms`
-      : (fetchError as Error).message || String(fetchError);
-    logger.error(`[LocalToolRouter] trading-service execute ${toolName} unreachable: ${message}`);
-    return { error: `Failed to reach trading-service at ${url}: ${message}`, is_error: true };
+    return formatTradingServiceError(toolName, url, timeoutMs, outcome);
   }
 };
 

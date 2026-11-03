@@ -8,6 +8,7 @@ import type {
   ToolCallHistory,
 } from "./types.ts";
 import { READ_TOOL_SPILL_NAME } from "./SpillBuffer.ts";
+import { isReadOnlyTool } from "../../services/LocalToolRouter.ts";
 import { stripMcpPrefix } from "../../services/McpPrefix.ts";
 
 export const DEFAULT_PARALLEL_TOOL_CONCURRENCY = 8;
@@ -23,6 +24,7 @@ interface InternalHistoryEntry {
   isError: boolean;
   wasStall?: boolean;
   stalledCount?: number;
+  content?: string;
 }
 
 const defaultHistoryByStreak = new WeakMap<Map<string, number>, ToolCallHistory>();
@@ -111,6 +113,7 @@ const splitListString = (trimmed: string): string[] | undefined => {
  * top-level properties are coerced, and only when the parse/convert result
  * matches the schema type — anything else is left for validateArgs to reject.
  */
+/* eslint-disable complexity */
 const coerceArgs = (
   tool: CoreTool,
   args: Record<string, unknown>,
@@ -149,6 +152,7 @@ const coerceArgs = (
   }
   return coerced;
 };
+/* eslint-enable complexity */
 
 const validateArgs = (tool: CoreTool, args: Record<string, unknown>): string[] => {
   const problems: string[] = [];
@@ -238,6 +242,35 @@ function resolveCallHistory(opts: ToolRunnerOptions): ToolCallHistory {
   return existing;
 }
 
+function formatReusedResultContent(priorContent: string): string {
+  const trimmed = priorContent.trim();
+  if (!trimmed) {
+    return JSON.stringify({
+      reused: true,
+      note: "identical call already answered this run",
+      result: "",
+    });
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return JSON.stringify({
+        ...parsed,
+        reused: true,
+        note: "identical call already answered this run",
+        result: parsed,
+      });
+    }
+    return JSON.stringify({
+      reused: true,
+      note: "identical call already answered this run",
+      result: parsed,
+    });
+  } catch {
+    return `[reused: identical call already answered this run]\n${priorContent}`;
+  }
+}
+
 /**
  * H2: Check whether calling `(call.name, fingerprint)` triggers an immediate
  * consecutive-duplicate stall or a 3-cycle A<->B oscillation in the last 6 calls.
@@ -248,6 +281,7 @@ function checkSemanticStallOrOscillation(
   fingerprint: string,
 ): {
   blocked: boolean;
+  reused?: boolean;
   errorCode?: "TOOL_STALL" | "TOOL_OSCILLATION";
   content?: string;
   stalledCount?: number;
@@ -265,6 +299,14 @@ function checkSemanticStallOrOscillation(
   ) {
     const prevStalls = last.stalledCount ?? 0;
     if (prevStalls === 0) {
+      if (isReadOnlyTool(callName)) {
+        return {
+          blocked: false,
+          reused: true,
+          stalledCount: 1,
+          content: formatReusedResultContent(last.content ?? ""),
+        };
+      }
       // 2nd consecutive identical call -> block with structured guidance
       return {
         blocked: true,
@@ -482,6 +524,22 @@ function validateAndCheckStallBeforeExec(
 
   const fingerprint = computeToolCallFingerprint(call.name, args);
   const stallCheck = checkSemanticStallOrOscillation(history, call.name, fingerprint);
+  if (stallCheck.reused) {
+    return {
+      args,
+      stallRecord: {
+        wasStall: true,
+        stalledCount: stallCheck.stalledCount ?? 1,
+      },
+      earlyResult: {
+        toolCallId: call.id,
+        name: call.name,
+        content: (stallCheck.content ?? "").slice(0, opts.toolOutputCap),
+        isError: false,
+        durationMs: opts.now() - start,
+      },
+    };
+  }
   if (stallCheck.blocked) {
     return {
       args,
@@ -690,6 +748,7 @@ function recordToolHistoryAndStreak(
       isError: result.isError,
       wasStall: stallRecord?.wasStall ?? false,
       stalledCount: stallRecord?.stalledCount ?? 0,
+      content: result.content,
     });
   }
 

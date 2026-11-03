@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runToolBatch } from "../ToolRunner.ts";
+import { createToolCallHistory, runToolBatch } from "../ToolRunner.ts";
 import type { CoreTool, CoreToolCall, CoreToolResult, ToolBatchOptions } from "../types.ts";
 
 let idCounter = 0;
@@ -507,5 +507,73 @@ describe("runToolBatch", () => {
     const nullResult = await run({ content: null });
     expect(nullResult[0]).toMatchObject({ isError: true, errorCode: "TOOL_BAD_ARGS" });
     expect(nullResult[0].content).toContain('"content" must be string');
+  });
+
+  it("C4: read-only tool repeated identical call returns prior result with reused:true without re-executing; write tools blocked", async () => {
+    const history = createToolCallHistory();
+    let screenerExecs = 0;
+    const screener = makeTool("screener_query", async (args) => {
+      screenerExecs += 1;
+      return { status: "success", count: 42, filters: args.filters };
+    });
+    let writeExecs = 0;
+    const writer = makeTool("whiteboard_write", async () => {
+      writeExecs += 1;
+      return { status: "written" };
+    });
+    const tools = new Map<string, CoreTool>([
+      [screener.name, screener],
+      [writer.name, writer],
+    ]);
+
+    // 1st screener call: executes
+    const firstResults = await runToolBatch(
+      [makeCall("screener_query", { filters: ["sector:eq:Technology"] })],
+      baseOptions({ tools, callHistory: history }),
+    );
+    expect(firstResults[0].isError).toBe(false);
+    expect(screenerExecs).toBe(1);
+    const parsedFirst = JSON.parse(firstResults[0].content);
+    expect(parsedFirst.count).toBe(42);
+
+    // 2nd identical screener call: returns prior result + reused flag, executor called once
+    const secondResults = await runToolBatch(
+      [makeCall("screener_query", { filters: ["sector:eq:Technology"] })],
+      baseOptions({ tools, callHistory: history }),
+    );
+    expect(secondResults[0].isError).toBe(false);
+    expect(screenerExecs).toBe(1);
+    const parsedSecond = JSON.parse(secondResults[0].content);
+    expect(parsedSecond.reused).toBe(true);
+    expect(parsedSecond.note).toBe("identical call already answered this run");
+    expect(parsedSecond.count).toBe(42);
+
+    // 3rd identical screener call: stall detection triggers and forces finalization
+    const thirdResults = await runToolBatch(
+      [makeCall("screener_query", { filters: ["sector:eq:Technology"] })],
+      baseOptions({ tools, callHistory: history }),
+    );
+    expect(thirdResults[0].isError).toBe(true);
+    expect(thirdResults[0].errorCode).toBe("TOOL_STALL");
+    expect(thirdResults[0].content).toContain("Repeated tool call limit reached");
+    expect(history.finalizeNow).toBe(true);
+
+    // Write tools (e.g. whiteboard_write) still block on 2nd identical call
+    const writeHistory = createToolCallHistory();
+    const firstWrite = await runToolBatch(
+      [makeCall("whiteboard_write", { section: "risk_flags", content: "alert" })],
+      baseOptions({ tools, callHistory: writeHistory }),
+    );
+    expect(firstWrite[0].isError).toBe(false);
+    expect(writeExecs).toBe(1);
+
+    const secondWrite = await runToolBatch(
+      [makeCall("whiteboard_write", { section: "risk_flags", content: "alert" })],
+      baseOptions({ tools, callHistory: writeHistory }),
+    );
+    expect(secondWrite[0].isError).toBe(true);
+    expect(secondWrite[0].errorCode).toBe("TOOL_STALL");
+    expect(secondWrite[0].content).toContain("Duplicate tool call blocked");
+    expect(writeExecs).toBe(1);
   });
 });
