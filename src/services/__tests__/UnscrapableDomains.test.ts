@@ -322,6 +322,14 @@ describe("scrape_url failure-rate rules", () => {
     expect(extract).toHaveBeenCalledTimes(3);
   });
 
+  it("text that is not a URL spends no budget", async () => {
+    const callIn = (url: string) =>
+      routeLocalTool("mcp__lazy-agent-service__scrape_url", { url }, { conversationId: "conv-nonurl" }) as Promise<Record<string, unknown>>;
+    for (let i = 0; i < 5; i++) expect(String((await callIn("NVDA stock news")).error)).toContain("lazy_web_search");
+    vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue({ url: "x", success: true, content: "page" });
+    expect((await callIn("https://fool.com/after-text")).scrape_budget_remaining).toBe(3);
+  });
+
   it("reports the remaining budget on a successful scrape", async () => {
     vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue({ url: "x", success: true, content: "page" });
     const first = await call("https://fool.com/ok1");

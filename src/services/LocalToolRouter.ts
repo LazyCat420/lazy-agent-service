@@ -516,7 +516,10 @@ async function routeScrapeUrlTool(
   // deny-list, budget and SSRF checks so they judge the URL that will be
   // fetched, not the raw text (which used to be rejected outright).
   const url = normalizeScrapeUrl(rawUrl);
-  if (url) {
+  // Text that is not a URL ("NVDA stock news") is rejected by webExtract
+  // without a fetch, so it is neither guarded nor charged to the budget.
+  const fetchable = /^https?:\/\//i.test(url);
+  if (fetchable) {
     const targetRefusal = scrapeTargetGuard(url, context);
     if (targetRefusal) return targetRefusal;
     const deadRefusal = deadUrlRefusal(url, context);
@@ -532,7 +535,7 @@ async function routeScrapeUrlTool(
   // dependent (one side must resolve the other lazily).
   const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
   const result = await ToolOrchestratorService.executeWebExtract(normalized);
-  if (!url || unscrapableDomainOf(url)) return result;
+  if (!fetchable || unscrapableDomainOf(url)) return result;
   if (!result || typeof result !== "object") return result;
   const body = result as Record<string, unknown>;
   recordScrapeOutcome(url, body.error, context);
