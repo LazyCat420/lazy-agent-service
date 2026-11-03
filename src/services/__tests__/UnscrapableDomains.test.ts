@@ -306,6 +306,16 @@ describe("scrape_url failure-rate rules", () => {
     expect(extract).toHaveBeenCalledTimes(1);
   });
 
+  it("a dead-URL refusal carries the unchanged budget counter", async () => {
+    const dead = { url: "x", success: false, error: "scrape failed: URL is permanently unavailable (HTTP 404)" };
+    vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue(dead);
+    const first = await call("https://fool.com/gone3");
+    const again = await call("https://fool.com/gone3");
+    expect(again.skipped).toBe("known_dead_url");
+    expect(again.scrape_budget_remaining).toBe(first.scrape_budget_remaining);
+    expect(again.scrape_budget).toEqual(first.scrape_budget);
+  });
+
   it("a dead-URL refusal does not spend budget, and another run may still try the URL", async () => {
     const dead = { url: "x", success: false, error: "scrape failed: URL is permanently unavailable (HTTP 404)" };
     const extract = vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValueOnce(dead);

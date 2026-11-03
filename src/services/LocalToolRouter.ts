@@ -523,7 +523,7 @@ async function routeScrapeUrlTool(
     const targetRefusal = scrapeTargetGuard(url, context);
     if (targetRefusal) return targetRefusal;
     const deadRefusal = deadUrlRefusal(url, context);
-    if (deadRefusal) return deadRefusal;
+    if (deadRefusal) return withScrapeBudget(deadRefusal, context);
     if (!unscrapableDomainOf(url)) {
       const refusal = chargeScrape(url, context);
       if (refusal) return refusal;
@@ -539,6 +539,11 @@ async function routeScrapeUrlTool(
   if (!result || typeof result !== "object") return result;
   const body = result as Record<string, unknown>;
   recordScrapeOutcome(url, body.error, context);
+  return withScrapeBudget(body, context);
+}
+
+/** Attach the run's scrape counter so the model can plan its remaining calls. */
+function withScrapeBudget(body: Record<string, unknown>, context: LocalToolContext): Record<string, unknown> {
   const budget = scrapeBudgetStatus(context);
   return { ...body, scrape_budget: budget, scrape_budget_remaining: budget.remaining };
 }
