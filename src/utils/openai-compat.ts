@@ -180,6 +180,8 @@ export interface PreparedMessage {
 
 interface SSEParseOptions {
   signal?: AbortSignal;
+  /** The request sent `tool_choice:"none"`, so text tool-call markup is never recovered as a call. */
+  toolChoiceNone?: boolean;
   /** Provider name for errors ("vllm" → "The vllm stream ended …"). */
   label?: string;
   thinkingEnabled?: boolean;
@@ -1092,7 +1094,7 @@ function* finalizeSSEStreamOutput(
     }
   }
 
-  if (!state.nativeToolCallsYielded) {
+  if (!state.nativeToolCallsYielded && !options.toolChoiceNone) {
     let markupIndex = 0;
     for (const call of extractMarkupToolCalls(state.markupContent)) {
       yield {

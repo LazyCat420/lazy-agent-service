@@ -132,3 +132,25 @@ describe("markup tool call recovery in parseSSEStream", () => {
     expect(textChunks(chunks)).toContain("Just an answer, no tools.");
   });
 });
+
+describe("markup recovery under tool_choice none", () => {
+  const body =
+    'data: {"choices":[{"delta":{"content":"<tool_call>{\\"name\\":\\"x\\",\\"arguments\\":{}}</tool_call>"},"finish_reason":"stop"}]}\n\n' +
+    "data: [DONE]\n\n";
+
+  async function toolCallsFor(toolChoiceNone?: boolean): Promise<SSEStreamChunk[]> {
+    const out: SSEStreamChunk[] = [];
+    for await (const c of parseSSEStream(sseStream(body), { label: "test", toolChoiceNone })) {
+      if (typeof c !== "string" && c.type === "toolCall") out.push(c);
+    }
+    return out;
+  }
+
+  it("yields no toolCall when toolChoiceNone is set", async () => {
+    expect(await toolCallsFor(true)).toEqual([]);
+  });
+
+  it("yields one toolCall without the flag (control)", async () => {
+    expect(await toolCallsFor()).toHaveLength(1);
+  });
+});

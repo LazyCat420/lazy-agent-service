@@ -242,6 +242,7 @@ async function* vllmGenerateTextStream(
     for await (const chunk of parseSSEStream(reader, {
       label: "vllm",
       signal: options.signal,
+      toolChoiceNone: options.toolChoice === "none",
       thinkingEnabled: options.thinkingEnabled,
     })) {
       yield normalizeVllmStreamChunk(chunk);
