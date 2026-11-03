@@ -364,6 +364,9 @@ export function recordScrapeOutcome(url: string, error: unknown, scope: ScrapeRu
   const key = scrapeRunKey(scope);
   const message = typeof error === "string" ? error : "";
   if (!key || !PERMANENT_FAILURE_RE.test(message)) return;
+  if (deadUrls.size > 1_000) {
+    for (const [k, v] of deadUrls) if (now - v.at > RUN_TTL_MS) deadUrls.delete(k);
+  }
   const existing = deadUrls.get(key);
   const urls = existing && now - existing.at <= RUN_TTL_MS ? existing.urls : new Map<string, string>();
   urls.set(normalizeUrlForRegistry(url), message.slice(0, 160));
