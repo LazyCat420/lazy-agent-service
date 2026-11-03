@@ -358,7 +358,7 @@ const PERMANENT_FAILURE_RE = /permanently unavailable/i;
 
 /**
  * Remember a URL whose scrape failed permanently, so the same run does not ask
- * again. No-op unless the error says so (404s that may recover are retried).
+ * again. No-op unless the error says so (404s carry that text, so they are recorded as dead for this run).
  */
 export function recordScrapeOutcome(url: string, error: unknown, scope: ScrapeRunScope = {}, now = Date.now()): void {
   const key = scrapeRunKey(scope);
