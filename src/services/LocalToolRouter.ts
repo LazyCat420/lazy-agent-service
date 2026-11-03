@@ -10,6 +10,8 @@ import { stripMcpPrefix } from "./McpPrefix.ts";
 import MCPClientService from "./MCPClientService.ts";
 import {
   chargeScrape,
+  deadUrlRefusal,
+  recordScrapeOutcome,
   filterSearchResultLinks,
   registerRunUrls,
   registerSearchResultUrls,
@@ -514,9 +516,14 @@ async function routeScrapeUrlTool(
   // deny-list, budget and SSRF checks so they judge the URL that will be
   // fetched, not the raw text (which used to be rejected outright).
   const url = normalizeScrapeUrl(rawUrl);
-  if (url) {
+  // Text that is not a URL ("NVDA stock news") is rejected by webExtract
+  // without a fetch, so it is neither guarded nor charged to the budget.
+  const fetchable = /^https?:\/\//i.test(url);
+  if (fetchable) {
     const targetRefusal = scrapeTargetGuard(url, context);
     if (targetRefusal) return targetRefusal;
+    const deadRefusal = deadUrlRefusal(url, context);
+    if (deadRefusal) return withScrapeBudget(deadRefusal, context);
     if (!unscrapableDomainOf(url)) {
       const refusal = chargeScrape(url, context);
       if (refusal) return refusal;
@@ -528,9 +535,17 @@ async function routeScrapeUrlTool(
   // dependent (one side must resolve the other lazily).
   const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
   const result = await ToolOrchestratorService.executeWebExtract(normalized);
-  if (!url || unscrapableDomainOf(url)) return result;
+  if (!fetchable || unscrapableDomainOf(url)) return result;
   if (!result || typeof result !== "object") return result;
-  return { ...(result as Record<string, unknown>), scrape_budget: scrapeBudgetStatus(context) };
+  const body = result as Record<string, unknown>;
+  recordScrapeOutcome(url, body.error, context);
+  return withScrapeBudget(body, context);
+}
+
+/** Attach the run's scrape counter so the model can plan its remaining calls. */
+function withScrapeBudget(body: Record<string, unknown>, context: LocalToolContext): Record<string, unknown> {
+  const budget = scrapeBudgetStatus(context);
+  return { ...body, scrape_budget: budget, scrape_budget_remaining: budget.remaining };
 }
 
 async function routeWebSearchTool(

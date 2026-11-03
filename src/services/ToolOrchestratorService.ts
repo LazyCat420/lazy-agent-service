@@ -490,7 +490,7 @@ let schemaFetchInFlight: Promise<void> | null = null;
 function webExtractFailure(url: string, error: string): Record<string, unknown> {
   const malformed = /url is required/i.test(error) || /must start with http/i.test(error);
   const guidance = malformed
-    ? "Call scrape_url again with the full URL including https:// (copy it from the search results)."
+    ? "Call scrape_url again with a full https:// URL copied from search results; if you have none, call lazy_web_search first."
     : "Try another URL or source.";
   return {
     url,
@@ -1255,6 +1255,10 @@ function finalizeStreamResult(
     };
   }
   return state.finalResult || { error: "Stream ended without exit event" };
+}
+
+function contentQualityField(extracted: { contentQuality?: string }): { content_quality?: string } {
+  return extracted.contentQuality ? { content_quality: extracted.contentQuality } : {};
 }
 
 export default class ToolOrchestratorService {
@@ -2106,6 +2110,7 @@ export default class ToolOrchestratorService {
       content: extracted.content,
       truncated: extracted.truncated,
       ...(extracted.engineUsed ? { engine_used: extracted.engineUsed } : {}),
+      ...contentQualityField(extracted),
       cached: extracted.cached,
     };
   }

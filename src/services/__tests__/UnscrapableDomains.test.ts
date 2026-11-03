@@ -284,3 +284,75 @@ describe("scrape_url budget per agent run", () => {
     for (let i = 1; i <= 6; i++) expect((await call(`https://fool.com/f${i}`, { conversationId: "conv-D" })).success).toBe(true);
   });
 });
+
+describe("scrape_url failure-rate rules", () => {
+  const run = { conversationId: "conv-fr" };
+  const call = (url: string) =>
+    routeLocalTool("mcp__lazy-agent-service__scrape_url", { url }, run) as Promise<Record<string, unknown>>;
+
+  it("tells the model to search first when the url is not a URL", async () => {
+    const result = await webExtract("NVDA stock news");
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("lazy_web_search");
+  });
+
+  it("refuses a URL that already failed permanently in this run, without charging", async () => {
+    const dead = { url: "x", success: false, error: "scrape failed: URL is permanently unavailable (HTTP 404)" };
+    const extract = vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue(dead);
+    await call("https://fool.com/gone");
+    const again = await call("https://fool.com/gone");
+    expect(again.skipped).toBe("known_dead_url");
+    expect(String(again.error)).toContain("permanently unavailable");
+    expect(extract).toHaveBeenCalledTimes(1);
+  });
+
+  it("a dead-URL refusal carries the unchanged budget counter", async () => {
+    const dead = { url: "x", success: false, error: "scrape failed: URL is permanently unavailable (HTTP 404)" };
+    vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue(dead);
+    const first = await call("https://fool.com/gone3");
+    const again = await call("https://fool.com/gone3");
+    expect(again.skipped).toBe("known_dead_url");
+    expect(again.scrape_budget_remaining).toBe(first.scrape_budget_remaining);
+    expect(again.scrape_budget).toEqual(first.scrape_budget);
+  });
+
+  it("a dead-URL refusal does not spend budget, and another run may still try the URL", async () => {
+    const dead = { url: "x", success: false, error: "scrape failed: URL is permanently unavailable (HTTP 404)" };
+    const extract = vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValueOnce(dead);
+    const callIn = (url: string, conversationId: string) =>
+      routeLocalTool("mcp__lazy-agent-service__scrape_url", { url }, { conversationId }) as Promise<Record<string, unknown>>;
+    await callIn("https://fool.com/gone2", "conv-dead-a");
+    for (let i = 0; i < 3; i++) {
+      expect((await callIn("https://fool.com/gone2", "conv-dead-a")).skipped).toBe("known_dead_url");
+    }
+    extract.mockResolvedValue({ url: "x", success: true, content: "page" });
+    // 1 real attempt + 3 refusals: 3 of the 4 slots remain, so the next real scrape reports 2 left.
+    expect((await callIn("https://fool.com/live", "conv-dead-a")).scrape_budget_remaining).toBe(2);
+    expect((await callIn("https://fool.com/gone2", "conv-dead-b")).success).toBe(true);
+    expect(extract).toHaveBeenCalledTimes(3);
+  });
+
+  it("text that is not a URL spends no budget", async () => {
+    const callIn = (url: string) =>
+      routeLocalTool("mcp__lazy-agent-service__scrape_url", { url }, { conversationId: "conv-nonurl" }) as Promise<Record<string, unknown>>;
+    for (let i = 0; i < 5; i++) expect(String((await callIn("NVDA stock news")).error)).toContain("lazy_web_search");
+    vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue({ url: "x", success: true, content: "page" });
+    expect((await callIn("https://fool.com/after-text")).scrape_budget_remaining).toBe(3);
+  });
+
+  it("reports the remaining budget on a successful scrape", async () => {
+    vi.spyOn(ToolOrchestratorService, "executeWebExtract").mockResolvedValue({ url: "x", success: true, content: "page" });
+    const first = await call("https://fool.com/ok1");
+    expect(first.scrape_budget_remaining).toBe(3);
+  });
+
+  it("returns thin pages as success with content_quality thin", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ success: false, content: "Headline only", error: "thin content (13 chars < 900) — headline/teaser" }), { status: 200 }),
+    );
+    const result = await webExtract("https://fool.com/thin", 5000, { fetch: fetchMock as unknown as typeof fetch, now: Date.now });
+    expect(result.status).toBe("ok");
+    expect(result.contentQuality).toBe("thin");
+    expect(result.content).toBe("Headline only");
+  });
+});

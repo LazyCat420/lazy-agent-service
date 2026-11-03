@@ -63,6 +63,8 @@ export interface WebExtractResult {
   error?: string;
   /** Present only when the host is on UNSCRAPABLE_DOMAINS: the matched domain (nothing was fetched). */
   unscrapable?: string;
+  /** "thin" when the fetch worked but the page is only a headline/teaser; content is still returned. */
+  contentQuality?: "thin";
 }
 
 export interface WebExtractDeps {
@@ -225,6 +227,9 @@ async function scrapeViaScraperService(url: string, deps: WebExtractDeps): Promi
       return { status: "error", url, content: "", truncated: false, cached: false, error: `scraper-service HTTP ${response.status}: ${(await response.text()).slice(0, 200)}` };
     }
     const body = (await response.json()) as { success?: boolean; content?: string | null; error?: string | null; engine_used?: string };
+    if (!body.success && body.content && /thin content/i.test(body.error ?? "")) {
+      return { status: "ok", url, content: body.content, truncated: false, cached: false, engineUsed: body.engine_used, contentQuality: "thin" };
+    }
     if (!body.success || !body.content) {
       return { status: "error", url, content: "", truncated: false, cached: false, engineUsed: body.engine_used, error: `scrape failed${body.error ? `: ${body.error.slice(0, 200)}` : " (no content extracted)"}` };
     }
@@ -250,7 +255,7 @@ export async function webExtract(url: string, charLimit = DEFAULT_CHAR_LIMIT, de
       content: "",
       truncated: false,
       cached: false,
-      error: "url is required and must be a full URL starting with http(s):// (e.g. https://example.com/article); copy it from the search results",
+      error: "url is required and must be a full URL starting with http(s):// (e.g. https://example.com/article); copy it from the search results. If you do not have a URL yet, call lazy_web_search first; a ticker, company name or sentence is not a URL",
     };
   }
   // Before the SSRF guard's DNS lookup and any fetch: these publishers fail
