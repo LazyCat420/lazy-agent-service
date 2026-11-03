@@ -855,11 +855,16 @@ export function extractMarkupToolCalls(text: string): MarkupToolCall[] {
   const calls: MarkupToolCall[] = [];
   for (const match of text.matchAll(MARKUP_TOOL_CALL_BLOCK)) {
     const body = match[1].trim();
+    if (body.startsWith("<function=")) {
+      for (const segment of body.split(/(?=<function=)/)) {
+        const qwenCall = _markupCallFromQwenBody(segment.trim());
+        if (qwenCall) calls.push(qwenCall);
+      }
+      continue;
+    }
     const call = body.startsWith("{")
       ? _markupCallFromJsonBody(body)
-      : body.startsWith("<function=")
-        ? _markupCallFromQwenBody(body)
-        : _markupCallFromGlmBody(body);
+      : _markupCallFromGlmBody(body);
     if (call) calls.push(call);
   }
   return calls;

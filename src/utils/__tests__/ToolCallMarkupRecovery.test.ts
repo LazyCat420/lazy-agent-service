@@ -86,6 +86,19 @@ describe("markup tool call recovery in parseSSEStream", () => {
     ]);
   });
 
+  it("recovers every Qwen call when one tool_call block holds several", async () => {
+    const body =
+      'data: {"choices":[{"delta":{"content":"<tool_call>\\n<function=get_quote>\\n<parameter=ticker>\\nJPM\\n</parameter>\\n</function>\\n<function=get_upcoming_events>\\n<parameter=ticker>\\nJPM\\n</parameter>\\n<parameter=days>\\n30\\n</parameter>\\n</function>\\n</tool_call>"},"finish_reason":"stop"}]}\n\n' +
+      "data: [DONE]\n\n";
+
+    const chunks = await collect(sseStream(body));
+    const toolCalls = chunks.filter((c): c is Extract<SSEStreamChunk, { type: "toolCall" }> => c.type === "toolCall");
+    expect(toolCalls).toEqual([
+      { type: "toolCall", id: "call_markup_0", name: "get_quote", args: { ticker: "JPM" } },
+      { type: "toolCall", id: "call_markup_1", name: "get_upcoming_events", args: { ticker: "JPM", days: 30 } },
+    ]);
+  });
+
   it("leaves a truncated Qwen call (no closing tool_call tag) as text", async () => {
     const body =
       'data: {"choices":[{"delta":{"content":"<tool_call>\\n<function=get_upcoming_events>\\n<parameter=ticker>\\nJP"},"finish_reason":"length"}]}\n\n' +
