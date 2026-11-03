@@ -635,7 +635,7 @@ describe("executeToolViaTradingService", () => {
     expect(fakes.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["whiteboard_write", "run_tool_chain"])(
+  it.each(["whiteboard_write", "place_order"])(
     "C11: never retries %s (may write) on HTTP 503",
     async (tool) => {
       fakes.fetch.mockResolvedValue(new Response("upstream down", { status: 503 }));

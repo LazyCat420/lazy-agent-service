@@ -69,6 +69,9 @@ export const REUSABLE_READ_TOOLS = new Set([
 export const READ_ONLY_TOOLS = new Set([
   ...REUSABLE_READ_TOOLS,
   "screener_query",
+  // Named chains of read tools (PermissionLevel.READ_ONLY in trading-service):
+  // a repeat is reused, not blocked, and a 5xx may be retried.
+  "run_tool_chain",
   "whiteboard_read",
   "get_sec_filings",
   "query_sec_filing",
