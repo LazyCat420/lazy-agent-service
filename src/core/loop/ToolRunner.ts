@@ -120,6 +120,10 @@ const coerceArgs = (
       if (typeof value !== "string" || value.trim() === "") continue;
       const n = Number(value);
       if (!Number.isNaN(n)) coerced[key] = n;
+    } else if (expected === "string") {
+      // Qwen markup and native args are JSON-parsed, so a string field can arrive as a number/boolean/array/object.
+      if (typeof value === "number" || typeof value === "boolean") coerced[key] = String(value);
+      else if (typeof value === "object" && value !== null) coerced[key] = JSON.stringify(value);
     }
   }
   return coerced;
