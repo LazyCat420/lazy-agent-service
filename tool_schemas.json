@@ -2288,6 +2288,10 @@
             "type": "string"
           },
           "description": "Fields per row; empty = compact default set"
+        },
+        "ticker": {
+          "type": "string",
+          "description": "Single-ticker lookup (e.g. 'NVDA'); adds ticker:eq:NVDA"
         }
       },
       "required": []
@@ -2637,7 +2641,7 @@
         },
         "section": {
           "type": "string",
-          "description": "The collaboration section name (e.g. 'market_context' or 'risk_flags')."
+          "description": "The collaboration section name owned by your role ('market_context' for v3_junior_analyst, 'risk_flags' for v3_fundamental_analyst). Optional: if omitted, mismatched or reserved, your role's own section is used automatically."
         },
         "content": {
           "type": "string",
@@ -2650,7 +2654,6 @@
       },
       "required": [
         "ticker",
-        "section",
         "content"
       ]
     },

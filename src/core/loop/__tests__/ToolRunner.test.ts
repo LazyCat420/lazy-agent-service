@@ -464,6 +464,14 @@ describe("runToolBatch", () => {
     expect(scalarResults[0]).toMatchObject({ isError: false });
     expect(executed[3]).toEqual({ filters: [], columns: ["7"], limit: 1 });
 
+    // A string that parses as a JSON scalar is still a one-item list, not a rejected arg.
+    const scalarStringResults = await runToolBatch(
+      [makeCall("screener", { filters: [], columns: "7", limit: 1 })],
+      baseOptions({ tools }),
+    );
+    expect(scalarStringResults[0]).toMatchObject({ isError: false });
+    expect(executed[4]).toEqual({ filters: [], columns: ["7"], limit: 1 });
+
     const broken = await runToolBatch(
       [makeCall("screener", { filters: '[{"field":"pe"', columns: "['a'", limit: 1 })],
       baseOptions({ tools }),

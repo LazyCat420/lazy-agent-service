@@ -120,12 +120,16 @@ const coerceStructured = (expected: "array" | "object", value: unknown): unknown
   }
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(trimmed);
-    return typeChecks[expected](parsed) ? parsed : undefined;
+    parsed = JSON.parse(trimmed);
   } catch {
     return expected === "array" ? splitListString(trimmed) : undefined;
   }
+  if (typeChecks[expected](parsed)) return parsed;
+  // A number/boolean string ("7", "true") is one list item, like a bare number; "null" stays rejected.
+  const scalar = typeof parsed === "number" || typeof parsed === "boolean";
+  return expected === "array" && scalar ? [trimmed] : undefined;
 };
 
 const coerceArgs = (
