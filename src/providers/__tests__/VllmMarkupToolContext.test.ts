@@ -44,6 +44,15 @@ describe("vLLM markup tool call trading context", () => {
     expect(TOOL_CONTEXT_ARG in calls[0].args).toBe(false);
     expect(() => authorizeTradingTool(calls[0].name, calls[0].args)).toThrow();
   });
+  it("yields an expired-context markup call unbound instead of failing the turn", async () => {
+    const expired = signToolContext({
+      project: "vllm-trading-bot", agentName: "junior", cycleId: "c1", ticker: "JPM",
+      conversationId: "conv", allowedTools: ["whiteboard_write"], expiresAt: Date.now() - 1,
+    });
+    const calls = await run({ content: markup("whiteboard_write") }, "stop", marker(expired));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual({ note: "hello" });
+  });
   it("does nothing without a marker", async () => {
     const calls = await run({ content: markup("whiteboard_write") }, "stop");
     expect(calls).toHaveLength(1);
