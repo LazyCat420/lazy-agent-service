@@ -26,6 +26,8 @@ import {
   normalizeUsage,
 } from "../utils/openai-compat.ts";
 import type { InputMessage } from "../utils/openai-compat.ts";
+import { extractToolContext } from "../services/TradingToolContext.ts";
+import { bindRecoveredToolArgs } from "../services/TradingToolStream.ts";
 import { currentRequestPriority } from "../services/RequestPriority.ts";
 
 /**
@@ -238,6 +240,13 @@ async function* vllmGenerateTextStream(
       { signal: options.signal, headers: vllmRequestHeaders() },
     );
 
+    let token: string | undefined;
+    try {
+      token = extractToolContext({ messages: payload.messages }).token;
+    } catch (error: unknown) {
+      logger.warn(`[vllm] ignoring invalid trading tool context: ${getErrorMessage(error)}`);
+    }
+
     const reader = response.body!.getReader();
     for await (const chunk of parseSSEStream(reader, {
       label: "vllm",
@@ -245,12 +254,26 @@ async function* vllmGenerateTextStream(
       toolChoiceNone: options.toolChoice === "none",
       thinkingEnabled: options.thinkingEnabled,
     })) {
-      yield normalizeVllmStreamChunk(chunk);
+      yield bindMarkupCall(normalizeVllmStreamChunk(chunk), token);
     }
   } catch (error: unknown) {
     if (error instanceof Error && error.name === "AbortError") return;
     if (error instanceof ProviderError) throw error;
     throw new ProviderError("vllm", getErrorMessage(error), 500, error);
+  }
+}
+
+/** Calls recovered from text markup bypass the shim's binding; attach the
+ * signed trading context (when the request carried one) for allowlisted tools. */
+function bindMarkupCall(chunk: StreamChunk, token: string | undefined): StreamChunk {
+  const call = chunk as unknown as { type?: string; id?: string; name?: string; args?: unknown };
+  if (!token || call.type !== "toolCall" || !call.id?.startsWith("call_markup_")) return chunk;
+  try {
+    const args = call.args && typeof call.args === "object" ? (call.args as Record<string, unknown>) : {};
+    return { ...call, args: bindRecoveredToolArgs(call.name || "", args, token) } as unknown as StreamChunk;
+  } catch (error: unknown) {
+    logger.warn(`[vllm] markup tool call left unbound: ${getErrorMessage(error)}`);
+    return chunk;
   }
 }
 

@@ -1,4 +1,4 @@
-import { attachToolContext, verifyToolContext } from "./TradingToolContext.ts";
+import { TOOL_CONTEXT_ARG, attachToolContext, verifyToolContext } from "./TradingToolContext.ts";
 import { getToolSchemas } from "./ToolSchemaService.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 
@@ -10,6 +10,15 @@ function bindArguments(name: string, args: string, token: string): string {
     throw new Error(`Model requested an unauthorized trading tool: ${name}`);
   }
   return local(name) ? attachToolContext(args, token) : args;
+}
+/** Bind a call recovered from text markup. Unlike bindArguments this never
+ * throws for an unauthorized tool: the unbound call is denied by ToolDispatch
+ * and the agent sees a tool error. A bad token still throws. */
+export function bindRecoveredToolArgs(name: string, args: Record<string, unknown>, token: string): Record<string, unknown> {
+  const context = verifyToolContext(token);
+  const bare = typeof name === "string" ? stripMcpPrefix(name) : "";
+  if (!context.allowedTools.includes(bare) || bare === "think" || !local(name)) return args;
+  return { ...args, [TOOL_CONTEXT_ARG]: token };
 }
 export function bindToolResponse(response: any, token: string): any {
   return { ...response, choices: (response.choices || []).map((choice: any) => ({
