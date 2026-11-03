@@ -635,6 +635,32 @@ describe("executeToolViaTradingService", () => {
     expect(fakes.fetch).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["whiteboard_write", "run_tool_chain"])(
+    "C11: never retries %s (may write) on HTTP 503",
+    async (tool) => {
+      fakes.fetch.mockResolvedValue(new Response("upstream down", { status: 503 }));
+      const delays: number[] = [];
+      await executeToolViaTradingService(tool, { ticker: "MSFT" }, undefined, async (ms) => {
+        delays.push(ms);
+      });
+      expect(fakes.fetch).toHaveBeenCalledTimes(1);
+      expect(delays).toEqual([]);
+    },
+  );
+
+  it("C11: never retries a read-only call that timed out", async () => {
+    fakes.fetch.mockRejectedValue(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    const result = (await executeToolViaTradingService(
+      "get_market_data",
+      { ticker: "MSFT_ABORT" },
+      undefined,
+      async () => {},
+    )) as Record<string, unknown>;
+    expect(result).toMatchObject({ is_error: true });
+    expect(String(result.error)).toContain("bridge timeout after");
+    expect(fakes.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("reports an unreachable bridge", async () => {
     fakes.fetch.mockRejectedValue(new Error("ECONNREFUSED"));
     const result = (await executeToolViaTradingService("get_quote", {})) as Record<string, unknown>;

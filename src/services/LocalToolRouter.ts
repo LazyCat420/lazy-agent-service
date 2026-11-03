@@ -69,7 +69,6 @@ export const REUSABLE_READ_TOOLS = new Set([
 export const READ_ONLY_TOOLS = new Set([
   ...REUSABLE_READ_TOOLS,
   "screener_query",
-  "run_tool_chain",
   "whiteboard_read",
   "get_sec_filings",
   "query_sec_filing",
@@ -100,15 +99,8 @@ const realDelayFn: DelayFn = (ms: number) => {
   setTimeout(resolve, ms);
   return promise;
 };
-let currentDelayFn: DelayFn = realDelayFn;
-
-export function setRetryDelayFn(fn: DelayFn): void {
-  currentDelayFn = fn;
-}
-
-export function resetRetryDelayFn(): void {
-  currentDelayFn = realDelayFn;
-}
+/** One retry for a read-only call on a 5xx or a connection failure (never a timeout). */
+const MAX_ATTEMPTS = 2;
 
 /**
  * Execute a python-bridge tool via trading-service's HTTP endpoint
@@ -119,7 +111,7 @@ export const executeToolViaTradingService = async (
   toolName: string,
   toolArguments: Record<string, unknown>,
   context?: LocalToolContext,
-  delayFn: DelayFn = currentDelayFn,
+  delayFn: DelayFn = realDelayFn,
 ): Promise<unknown> => {
   const reusable = REUSABLE_READ_TOOLS.has(toolName);
   // The Python bridge repairs an absent ticker from caller context. Requests
@@ -199,7 +191,7 @@ const shouldRetryAttempt = (
   isReadOnly: boolean,
   attempt: number,
 ): boolean => {
-  if (!isReadOnly || attempt >= 2) return false;
+  if (!isReadOnly || attempt >= MAX_ATTEMPTS) return false;
   if (outcome.status !== undefined && outcome.status >= 500 && outcome.status < 600) return true;
   if (outcome.fetchError !== undefined && !outcome.isAbort) return true;
   return false;
@@ -229,7 +221,7 @@ const callTradingService = async (
   toolArguments: Record<string, unknown>,
   context: LocalToolContext | undefined,
   cacheKey: string | undefined,
-  delayFn: DelayFn = currentDelayFn,
+  delayFn: DelayFn = realDelayFn,
 ): Promise<unknown> => {
   const url = `${CONFIG.TRADING_SERVICE_URL}/api/v1/agent-tools/execute`;
   const timeoutMs = CONFIG.SLOW_TOOLS.has(toolName)
@@ -244,20 +236,16 @@ const callTradingService = async (
   });
   const isReadOnly = isReadOnlyTool(toolName);
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const outcome = await performTradingServiceFetch(url, body, timeoutMs);
-    if (outcome.ok) {
-      if (cacheKey && classifyToolResult(outcome.data).success) {
-        cache.set(cacheKey, { result: outcome.data, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
-      }
-      return outcome.data;
-    }
-    if (shouldRetryAttempt(outcome, isReadOnly, attempt)) {
-      await delayFn(2000);
-      continue;
-    }
-    return formatTradingServiceError(toolName, url, timeoutMs, outcome);
+  let outcome = await performTradingServiceFetch(url, body, timeoutMs);
+  for (let attempt = 1; !outcome.ok && shouldRetryAttempt(outcome, isReadOnly, attempt); attempt++) {
+    await delayFn(2000);
+    outcome = await performTradingServiceFetch(url, body, timeoutMs);
   }
+  if (!outcome.ok) return formatTradingServiceError(toolName, url, timeoutMs, outcome);
+  if (cacheKey && classifyToolResult(outcome.data).success) {
+    cache.set(cacheKey, { result: outcome.data, expiresAt: Date.now() + CONFIG.CACHE_TTL_MS });
+  }
+  return outcome.data;
 };
 
 /** Forward a tool call to the HTML-Notes internal dispatcher. */
