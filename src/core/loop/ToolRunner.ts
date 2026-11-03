@@ -112,8 +112,22 @@ const splitListString = (trimmed: string): string[] | undefined => {
  * lists (`"['a', 'b']"`), CSV strings, or a bare scalar for an array. Only
  * top-level properties are coerced, and only when the parse/convert result
  * matches the schema type — anything else is left for validateArgs to reject.
+ * coerceStructured handles one array/object arg (undefined = leave as-is).
  */
-/* eslint-disable complexity */
+const coerceStructured = (expected: "array" | "object", value: unknown): unknown => {
+  if (expected === "array" && (typeof value === "number" || typeof value === "boolean")) {
+    return [String(value)];
+  }
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeChecks[expected](parsed) ? parsed : undefined;
+  } catch {
+    return expected === "array" ? splitListString(trimmed) : undefined;
+  }
+};
+
 const coerceArgs = (
   tool: CoreTool,
   args: Record<string, unknown>,
@@ -127,19 +141,8 @@ const coerceArgs = (
     const expected = properties[key]?.type;
     if (!expected) continue;
     if (expected === "array" || expected === "object") {
-      if (expected === "array" && (typeof value === "number" || typeof value === "boolean")) {
-        coerced[key] = [String(value)];
-        continue;
-      }
-      if (typeof value !== "string") continue;
-      const trimmed = value.trim();
-      try {
-        const parsed: unknown = JSON.parse(trimmed);
-        if (typeChecks[expected](parsed)) coerced[key] = parsed;
-      } catch {
-        const items = expected === "array" ? splitListString(trimmed) : undefined;
-        if (items) coerced[key] = items;
-      }
+      const next = coerceStructured(expected, value);
+      if (next !== undefined) coerced[key] = next;
     } else if (expected === "integer" || expected === "number") {
       if (typeof value !== "string" || value.trim() === "") continue;
       const n = Number(value);
@@ -152,7 +155,6 @@ const coerceArgs = (
   }
   return coerced;
 };
-/* eslint-enable complexity */
 
 const validateArgs = (tool: CoreTool, args: Record<string, unknown>): string[] => {
   const problems: string[] = [];
@@ -242,33 +244,20 @@ function resolveCallHistory(opts: ToolRunnerOptions): ToolCallHistory {
   return existing;
 }
 
+const REUSED_NOTE = "identical call already answered this run";
+
 function formatReusedResultContent(priorContent: string): string {
   const trimmed = priorContent.trim();
-  if (!trimmed) {
-    return JSON.stringify({
-      reused: true,
-      note: "identical call already answered this run",
-      result: "",
-    });
-  }
+  let parsed: unknown = trimmed;
   try {
-    const parsed = JSON.parse(trimmed);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return JSON.stringify({
-        ...parsed,
-        reused: true,
-        note: "identical call already answered this run",
-        result: parsed,
-      });
-    }
-    return JSON.stringify({
-      reused: true,
-      note: "identical call already answered this run",
-      result: parsed,
-    });
+    parsed = trimmed ? JSON.parse(trimmed) : "";
   } catch {
-    return `[reused: identical call already answered this run]\n${priorContent}`;
+    return `[reused: ${REUSED_NOTE}]\n${priorContent}`;
   }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return JSON.stringify({ ...parsed, reused: true, note: REUSED_NOTE });
+  }
+  return JSON.stringify({ reused: true, note: REUSED_NOTE, result: parsed });
 }
 
 /**

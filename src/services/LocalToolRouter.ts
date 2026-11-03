@@ -178,6 +178,8 @@ const performTradingServiceFetch = async (
       body,
       signal: controller.signal,
     });
+    // Headers arrived: the bridge timer covers connect/accept only (WriteTimeoutAudit).
+    clearTimeout(timeoutId);
     if (!apiResponse.ok) {
       const errText = await apiResponse.text();
       return { ok: false, status: apiResponse.status, errText };
