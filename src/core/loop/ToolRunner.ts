@@ -187,7 +187,13 @@ const validateArgs = (tool: CoreTool, args: Record<string, unknown>): string[] =
 const describeValue = (value: unknown): string => {
   if (value === null) return "null";
   const kind = Array.isArray(value) ? "array" : typeof value;
-  return `${kind} ${(JSON.stringify(value) ?? String(value)).slice(0, 40)}`;
+  let preview: string;
+  try {
+    preview = JSON.stringify(value) ?? String(value);
+  } catch {
+    preview = String(value); // BigInt or a circular object: JSON cannot encode it
+  }
+  return `${kind} ${preview.slice(0, 40)}`;
 };
 
 /** One repair attempt: strip a ```json fence, drop trailing commas, JSON.parse. */

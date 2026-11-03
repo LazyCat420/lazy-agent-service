@@ -157,6 +157,16 @@ describe("runToolBatch", () => {
     expect(results[0].content).toBe('Invalid arguments for "search": "query" must be string (got null); "limit" must be integer (got number 1.5); "flag" must be boolean (got string "yes").');
   });
 
+  it("R3: a value JSON cannot encode is still reported as a type error", async () => {
+    const search = makeTool("search", async () => "ran", {
+      parameters: { type: "object", properties: { query: { type: "string" } }, required: [] },
+    });
+    const tools = new Map([[search.name, search]] as const);
+    const results = await runToolBatch([makeCall("search", { query: 7n })], baseOptions({ tools }));
+    expect(results[0].errorCode).toBe("TOOL_BAD_ARGS");
+    expect(results[0].content).toBe('Invalid arguments for "search": "query" must be string (got bigint 7).');
+  });
+
   it("R3: __raw with fenced/trailing-comma JSON repairs and runs", async () => {
     let received: unknown;
     const search = makeTool(
