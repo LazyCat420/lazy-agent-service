@@ -777,7 +777,9 @@ export function processNonStreamingResponse(
  *   GLM:  `NAME<arg_key>K</arg_key><arg_value>V<arg_key>K2</arg_key>…`
  *         — values JSON-parsed, string fallback.
  *   JSON: `{"name": "...", "arguments": {...} | "..."}`.
- * Unparseable bodies are skipped (left as text).
+ *   Qwen: `<function=NAME><parameter=K>V</parameter>…</function>`
+ *         — values JSON-parsed, string fallback.
+ * Unparseable bodies and unterminated blocks are skipped (left as text).
  */
 export interface MarkupToolCall {
   name: string;
@@ -788,6 +790,8 @@ export interface MarkupToolCall {
 
 const MARKUP_TOOL_CALL_BLOCK = /<\|?tool_call\|?>([\s\S]*?)<\/?\|?tool_call\|?>/gi;
 const MARKUP_ARG_PAIR = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)(?:<\/arg_value>|(?=<arg_key>)|$)/g;
+const QWEN_FUNCTION_BODY = /^<function=([\w.-]+)>([\s\S]*?)(?:<\/function>)?$/;
+const QWEN_PARAM_PAIR = /<parameter=([\w.-]+)>([\s\S]*?)(?:<\/parameter>|(?=<parameter=)|(?=<\/function>)|$)/g;
 
 const parseMarkupValue = (value: string): unknown => {
   try {
@@ -831,13 +835,31 @@ function _markupCallFromGlmBody(body: string): MarkupToolCall | null {
   return { name, args };
 }
 
+/**
+ * Parse the Qwen3 coder body form (`<function=NAME><parameter=K>V</parameter>…</function>`);
+ * null when not a call. 2026-11-03: Qwen3.8 on dell1 streamed a JPM research call
+ * this way as plain content; the GLM parser rejected the `<` in the name and the
+ * call was dropped, so the run ended with no tool executed.
+ */
+function _markupCallFromQwenBody(body: string): MarkupToolCall | null {
+  const match = QWEN_FUNCTION_BODY.exec(body);
+  if (!match) return null;
+  const args: Record<string, unknown> = {};
+  for (const pair of match[2].matchAll(QWEN_PARAM_PAIR)) {
+    args[pair[1]] = parseMarkupValue(pair[2].trim());
+  }
+  return { name: match[1], args };
+}
+
 export function extractMarkupToolCalls(text: string): MarkupToolCall[] {
   const calls: MarkupToolCall[] = [];
   for (const match of text.matchAll(MARKUP_TOOL_CALL_BLOCK)) {
     const body = match[1].trim();
     const call = body.startsWith("{")
       ? _markupCallFromJsonBody(body)
-      : _markupCallFromGlmBody(body);
+      : body.startsWith("<function=")
+        ? _markupCallFromQwenBody(body)
+        : _markupCallFromGlmBody(body);
     if (call) calls.push(call);
   }
   return calls;

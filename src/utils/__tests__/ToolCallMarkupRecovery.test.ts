@@ -72,6 +72,29 @@ describe("markup tool call recovery in parseSSEStream", () => {
     ]);
   });
 
+  it("recovers Qwen coder-format calls split across chunks (dell1 JPM trace, 2026-11-03)", async () => {
+    const body =
+      'data: {"choices":[{"delta":{"content":"<tool_call>\\n<function=get_upcoming_events>\\n<parameter=ticker>\\nJPM\\n</parameter>\\n</function>\\n</tool_call>\\n<tool_call>\\n<function=get_price_"},"finish_reason":null}]}\n\n' +
+      'data: {"choices":[{"delta":{"content":"history>\\n<parameter=ticker>\\nJPM\\n</parameter>\\n<parameter=days>\\n90\\n</parameter>\\n</function>\\n</tool_call>"},"finish_reason":"stop"}]}\n\n' +
+      "data: [DONE]\n\n";
+
+    const chunks = await collect(sseStream(body));
+    const toolCalls = chunks.filter((c): c is Extract<SSEStreamChunk, { type: "toolCall" }> => c.type === "toolCall");
+    expect(toolCalls).toEqual([
+      { type: "toolCall", id: "call_markup_0", name: "get_upcoming_events", args: { ticker: "JPM" } },
+      { type: "toolCall", id: "call_markup_1", name: "get_price_history", args: { ticker: "JPM", days: 90 } },
+    ]);
+  });
+
+  it("leaves a truncated Qwen call (no closing tool_call tag) as text", async () => {
+    const body =
+      'data: {"choices":[{"delta":{"content":"<tool_call>\\n<function=get_upcoming_events>\\n<parameter=ticker>\\nJP"},"finish_reason":"length"}]}\n\n' +
+      "data: [DONE]\n\n";
+
+    const chunks = await collect(sseStream(body));
+    expect(chunks.filter((c) => c.type === "toolCall")).toEqual([]);
+  });
+
   it("does not duplicate native tool calls and emits exactly one", async () => {
     const body =
       'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_native_1","function":{"name":"global.web.search","arguments":"{\\"query\\":\\"weather\\"}"}}]},"finish_reason":null}]}\n\n' +
