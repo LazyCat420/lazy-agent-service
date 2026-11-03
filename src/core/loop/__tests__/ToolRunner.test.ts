@@ -448,6 +448,27 @@ describe("runToolBatch", () => {
       columns: ["ticker", "pe_ratio", "ev_to_ebitda"],
       limit: 5,
     });
+
+    // Python-repr list strings (single quotes) are what v3_fundamental_analyst actually sends.
+    const reprResults = await runToolBatch(
+      [makeCall("screener", { filters: "['ticker:eq:CRH']", columns: "['price', 'avg_volume']", limit: 1 })],
+      baseOptions({ tools }),
+    );
+    expect(reprResults[0]).toMatchObject({ isError: false, content: "ok" });
+    expect(executed[2]).toEqual({ filters: ["ticker:eq:CRH"], columns: ["price", "avg_volume"], limit: 1 });
+
+    const scalarResults = await runToolBatch(
+      [makeCall("screener", { filters: [], columns: 7, limit: 1 })],
+      baseOptions({ tools }),
+    );
+    expect(scalarResults[0]).toMatchObject({ isError: false });
+    expect(executed[3]).toEqual({ filters: [], columns: ["7"], limit: 1 });
+
+    const broken = await runToolBatch(
+      [makeCall("screener", { filters: '[{"field":"pe"', columns: "['a'", limit: 1 })],
+      baseOptions({ tools }),
+    );
+    expect(broken[0]).toMatchObject({ isError: true, errorCode: "TOOL_BAD_ARGS" });
   });
 
   it("F2: string-typed args given number/boolean/array/object are coerced to strings; controls unchanged", async () => {

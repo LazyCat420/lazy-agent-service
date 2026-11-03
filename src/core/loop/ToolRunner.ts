@@ -86,9 +86,28 @@ const typeChecks: Record<string, (value: unknown) => boolean> = {
 };
 
 /**
+ * Split a non-JSON list string into string[]: CSV (`a,b`) or a Python-repr list (`['a', 'b']`).
+ * Returns undefined for anything that looks like broken JSON (objects, unbalanced brackets).
+ */
+const splitListString = (trimmed: string): string[] | undefined => {
+  if (trimmed.length === 0 || trimmed.includes("{")) return undefined;
+  let body = trimmed;
+  if (body.startsWith("[")) {
+    if (!body.endsWith("]")) return undefined;
+    body = body.slice(1, -1);
+  }
+  const items = body
+    .split(",")
+    .map((s) => s.trim().replace(/^(['"])(.*)\1$/, "$2").trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : undefined;
+};
+
+/**
  * F1: Coerce string-encoded values to their schema types before validation.
  * Models frequently send JSON-encoded strings for structured params
- * (e.g. `"filters": "[{\"field\":\"pe\"}]"`, `"limit": "10"`). Only
+ * (e.g. `"filters": "[{\"field\":\"pe\"}]"`, `"limit": "10"`), Python-repr
+ * lists (`"['a', 'b']"`), CSV strings, or a bare scalar for an array. Only
  * top-level properties are coerced, and only when the parse/convert result
  * matches the schema type — anything else is left for validateArgs to reject.
  */
@@ -105,16 +124,18 @@ const coerceArgs = (
     const expected = properties[key]?.type;
     if (!expected) continue;
     if (expected === "array" || expected === "object") {
+      if (expected === "array" && (typeof value === "number" || typeof value === "boolean")) {
+        coerced[key] = [String(value)];
+        continue;
+      }
       if (typeof value !== "string") continue;
       const trimmed = value.trim();
       try {
         const parsed: unknown = JSON.parse(trimmed);
         if (typeChecks[expected](parsed)) coerced[key] = parsed;
       } catch {
-        // If schema expects an array and the string is CSV/single-token (not broken JSON), coerce to string[].
-        if (expected === "array" && trimmed.length > 0 && !trimmed.startsWith("[") && !trimmed.startsWith("{")) {
-          coerced[key] = trimmed.split(",").map((s) => s.trim()).filter(Boolean);
-        }
+        const items = expected === "array" ? splitListString(trimmed) : undefined;
+        if (items) coerced[key] = items;
       }
     } else if (expected === "integer" || expected === "number") {
       if (typeof value !== "string" || value.trim() === "") continue;
