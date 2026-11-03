@@ -51,6 +51,13 @@ const UPSTREAMS: Record<string, string> = {
   // 8000-fallback dance it left behind cost 957 failed connects in one cycle.
   "jetson": process.env.VLLM_SHIM_JETSON_URL || "http://10.0.0.30:8000",
   "jetson-2": process.env.VLLM_SHIM_JETSON_2_URL || "http://10.0.0.30:8001",
+  // Qwen3.8-Flash-Next on TensorFold (max_batch_size 5 each), added
+  // 2026-11-03 so trading-cycle panel seats can spill off Gold Spark. These
+  // boxes also serve the agent-pool's qwen/qwen37 subagents directly (not
+  // through this shim), so no shim cap: the trading admission controller
+  // reads the engine's own running/waiting counts instead.
+  "dell1": process.env.VLLM_SHIM_DELL1_URL || "http://10.0.0.131:8888",
+  "dell2": process.env.VLLM_SHIM_DELL2_URL || "http://10.0.0.37:8888",
 };
 
 /**
@@ -604,16 +611,11 @@ export class VllmShimService {
     const match = originalUrl.match(/^\/vllm-shim\/([a-z0-9-]+)(\/.*)?$/);
     if (!match) return null;
     const upstreamName = match[1];
-    let upstreamUrl = UPSTREAMS[upstreamName];
-    if (upstreamName === "jetson" && process.env.VLLM_SHIM_JETSON_URL) {
-      upstreamUrl = process.env.VLLM_SHIM_JETSON_URL;
-    } else if (upstreamName === "gold-spark" && process.env.VLLM_SHIM_GOLD_SPARK_URL) {
-      upstreamUrl = process.env.VLLM_SHIM_GOLD_SPARK_URL;
-    } else if (upstreamName === "gold-spark-vision" && process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL) {
-      upstreamUrl = process.env.VLLM_SHIM_GOLD_SPARK_VISION_URL;
-    } else if (upstreamName === "jetson-2" && process.env.VLLM_SHIM_JETSON_2_URL) {
-      upstreamUrl = process.env.VLLM_SHIM_JETSON_2_URL;
-    }
+    if (!Object.hasOwn(UPSTREAMS, upstreamName)) return null;
+    // Read the env per call so a test (or an env change plus restart) can
+    // repoint a KNOWN upstream; unknown names never become routable this way.
+    const envKey = `VLLM_SHIM_${upstreamName.toUpperCase().replace(/-/g, "_")}_URL`;
+    const upstreamUrl = process.env[envKey] || UPSTREAMS[upstreamName];
     if (!upstreamUrl) return null;
     return { upstreamUrl, originalPath: match[2] || "/", upstreamName };
   }

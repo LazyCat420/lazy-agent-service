@@ -4,6 +4,8 @@ export interface ProviderInstanceConfig {
   url: string;
   concurrency?: number;
   nickname?: string;
+  /** Env index N of PROVIDER_<TYPE>_<N>_URL; defaults to list position + 1. */
+  index?: number;
 }
 
 export interface InstanceEntry {

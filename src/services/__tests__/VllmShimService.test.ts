@@ -73,8 +73,24 @@ describe("VllmShimService.resolveUpstream", () => {
     expect(r?.originalPath).toBe("/v1/models?x=1");
   });
 
+  it("routes the Qwen boxes dell1 and dell2", () => {
+    expect(VllmShimService.resolveUpstream("/vllm-shim/dell1/v1/chat/completions")?.upstreamUrl)
+      .toBe("http://10.0.0.131:8888");
+    expect(VllmShimService.resolveUpstream("/vllm-shim/dell2/v1/models")?.upstreamUrl)
+      .toBe("http://10.0.0.37:8888");
+  });
+
   it("returns null for unknown upstreams", () => {
     expect(VllmShimService.resolveUpstream("/vllm-shim/nope/v1/models")).toBeNull();
+  });
+
+  it("an env var cannot make an unknown upstream routable", () => {
+    process.env.VLLM_SHIM_NOPE_URL = "http://10.0.0.99:1";
+    try {
+      expect(VllmShimService.resolveUpstream("/vllm-shim/nope/v1/models")).toBeNull();
+    } finally {
+      delete process.env.VLLM_SHIM_NOPE_URL;
+    }
   });
 
   it("defaults bare upstream to /", () => {

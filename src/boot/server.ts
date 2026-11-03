@@ -218,7 +218,8 @@ function installCompatRoutes(app: Express, mcpAdapter: McpAdapter): void {
     mcpAdapter.handleMessage(req, res).catch(next);
   });
   // vLLM translation shim. ALL PROVIDER_VLLM_*_URL entries in the vault point
-  // here (/vllm-shim/gold-spark, /vllm-shim/jetson, /vllm-shim/jetson-2) so a
+  // here (/vllm-shim/gold-spark, /vllm-shim/jetson, /vllm-shim/jetson-2, and
+  // the Qwen boxes /vllm-shim/dell1, /vllm-shim/dell2 via compose env) so a
   // model swap on any box can never silently strand a thinking-flag spelling.
   // This service is the gateway (:5591); prism-service is retired and no route
   // forwards to it. See VllmShimService for why.

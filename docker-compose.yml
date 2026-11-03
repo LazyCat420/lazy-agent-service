@@ -19,6 +19,16 @@ services:
       - TRADING_MONGO_DB=${TRADING_MONGO_DB:-trading_bot}
       # vLLM nemotron35. :8080 (llama.cpp Bonsai) is gone; see VllmShimService UPSTREAMS.
       - VLLM_SHIM_JETSON_URL=${VLLM_SHIM_JETSON_URL:-http://10.0.0.30:8000}
+      # Qwen3.8-Flash-Next boxes (2026-11-03). vault projects.json defines
+      # PROVIDER_VLLM_1..3 (jetson, gold-spark, jetson-2); these add the LAS
+      # instances vllm-4 / vllm-5 that trading-service addresses as dell1 /
+      # dell2. Concurrency 5 = TensorFold max_batch_size on each box.
+      - PROVIDER_VLLM_4_URL=${PROVIDER_VLLM_4_URL:-http://10.0.0.16:5591/vllm-shim/dell1}
+      - PROVIDER_VLLM_4_NICKNAME=${PROVIDER_VLLM_4_NICKNAME:-Dell1 Qwen}
+      - PROVIDER_VLLM_4_CONCURRENCY=${PROVIDER_VLLM_4_CONCURRENCY:-5}
+      - PROVIDER_VLLM_5_URL=${PROVIDER_VLLM_5_URL:-http://10.0.0.16:5591/vllm-shim/dell2}
+      - PROVIDER_VLLM_5_NICKNAME=${PROVIDER_VLLM_5_NICKNAME:-Dell2 Qwen}
+      - PROVIDER_VLLM_5_CONCURRENCY=${PROVIDER_VLLM_5_CONCURRENCY:-5}
       # NAS otel-collector (deploy-kit/infra/observability); unset = tracing off.
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://10.0.0.16:4318}
       # scraper-service on the NAS. The code default (localhost:8001) is this

@@ -53,10 +53,13 @@ function registerType(type: string, instances: ProviderInstanceConfig[]) {
   if (!factory) return;
 
   for (let i = 0; i < instances.length; i++) {
-    const { url, concurrency = 1, nickname } = instances[i];
+    const { url, concurrency = 1, nickname, index } = instances[i];
     if (!url) continue;
 
-    const instanceNumber = i + 1;
+    // The id follows the env index, not the list position: a gap (e.g.
+    // PROVIDER_VLLM_3 removed) must not silently renumber vllm-4 to vllm-3,
+    // because callers (trading-service) address instances by id.
+    const instanceNumber = index ?? i + 1;
     const id = instanceNumber === 1 ? type : `${type}-${instanceNumber}`;
     const maxConcurrency = Math.max(
       1,

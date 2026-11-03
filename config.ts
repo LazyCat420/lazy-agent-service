@@ -11,6 +11,8 @@ export interface ProviderInstance {
   url: string;
   concurrency: number;
   nickname?: string;
+  /** The N in PROVIDER_<TYPE>_<N>_URL; the instance id is derived from it. */
+  index: number;
 }
 
 /**
@@ -30,7 +32,7 @@ function parseProviderInstances(envPrefix: string): ProviderInstance[] {
     if (!url) continue;
     const concurrency = parseInt(process.env[`${envPrefix}_${i}_CONCURRENCY`] ?? "", 10) || 1;
     const nickname = process.env[`${envPrefix}_${i}_NICKNAME`];
-    const entry: ProviderInstance = { url, concurrency };
+    const entry: ProviderInstance = { url, concurrency, index: i };
     if (nickname) entry.nickname = nickname;
     instances.push(entry);
   }
