@@ -1,10 +1,12 @@
 ---
 part: Agent loop and harness
 status: in-progress
-updated: 2026-10-18
-review-by: 2026-11-01
+updated: 2026-11-03
+review-by: 2026-11-17
 type: plan
 ---
+
+> **Status 2026-11-03 (docs audit):** still live. Phases A, B, B+, C1 and C1-Agent are on main; the core-loop fixes since (`0d93332`, `9549135`, `5e38f9b`, `4a1fe23`) are follow-ups. Open: C2-C4, D1 (the legacy loops: `runAgenticLoop` is still named in 8 non-test files under `src/services/` and `src/core/chat/`), E1 and E3. C2/C3 and Phase E wait on the owner decisions in [the NEXT-SESSION backlog](NEXT-SESSION-core-loop-2026-10-17.md), items 1 and 12.
 
 # 40 — Build the 8 core loop traits into lazy-agent-service (2026-10-17, rev 2)
 

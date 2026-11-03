@@ -1,10 +1,12 @@
 ---
 part: Agent loop and harness
-status: in-progress
-updated: 2026-10-19
-review-by: 2026-11-01
+status: blocked
+updated: 2026-11-03
+review-by: 2026-11-17
 type: plan
 ---
+
+> **Status 2026-11-03 (docs audit):** blocked on the owner. Items 6, 8, 9, 10, 11, 13 and 15 are resolved below. Two decisions are still owed: item 1 (drop E1, and move E2/E3 to trading-service?) and item 12 (C2 has nothing to move; C3: deploy the bridge or keep the plugin loop?). Items 2, 3, 5, 7 and 14 are open checks. No commit since 10-20 has closed any of them.
 
 # NEXT-SESSION backlog: core-loop refactor (from 2026-10-17)
 
