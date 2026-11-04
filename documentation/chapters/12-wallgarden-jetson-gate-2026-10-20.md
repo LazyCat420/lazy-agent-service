@@ -1,10 +1,12 @@
 ---
 part: Models and routing
 status: shipped
-updated: 2026-10-20
-review-by: 2026-11-03
+updated: 2026-11-04
+review-by: 2026-12-04
 type: record
 ---
+
+> **Status 2026-11-04 (docs audit):** still shipped, checked against main `208a640`. The gate has since moved into its own module: the `JetsonGate` class in `src/services/wallgarden/JetsonGate.ts` (shared instance `wallgardenJetsonGate`, `maxInFlight: 2`, `maxWaitMs: 90_000`), and the timeout error is `JetsonGateRejectedError` (HTTP 503). The sections below use the current names. Not re-checked live on the NAS in this pass.
 
 # Chapter 12 — Wallgarden Jetson (`nemotron35`) Priority Gate & Candidate Classification Cutoff (2026-10-20)
 
@@ -17,13 +19,13 @@ Audit findings on `2026-10-20`:
 
 ## Changes (`320bd24`)
 1. **Pinned `EXPECTED_JETSON_MODEL = "nemotron35"`** in `src/services/wallgarden/WallgardenService.ts`.
-2. **In-Process 2-Slot Priority Semaphore (`runWithJetsonGate`)**:
-   - Caps concurrent Jetson LLM calls from Wallgarden at `MAX_IN_FLIGHT = 2`.
+2. **In-Process 2-Slot Priority Semaphore (`JetsonGate`, `src/services/wallgarden/JetsonGate.ts`; `runWithJetsonGate` in `320bd24`)**:
+   - Caps concurrent Jetson LLM calls from Wallgarden at 2 (`wallgardenJetsonGate = new JetsonGate({ maxInFlight: 2, maxWaitMs: 90_000 })`).
    - Enforces strict priority ordering (FIFO within each tier):
      - **Priority 0 (Interactive / Creative Generation)**: `brainstorm`, `similar`, `extract-topics`
      - **Priority 1 (Curation)**: `judge-topics`
      - **Priority 2 (Background)**: `taste-profile`, `recommend-channels`
-   - Rejects queued requests with `priority >= 1` after `90,000ms` with `JetsonGateQueueTimeoutError` (`HTTP 503`) so background traffic fails fast instead of saturating the Jetson queue.
+   - Rejects queued requests with `priority >= 1` after `90,000ms` with `JetsonGateRejectedError` (`HTTP 503`; `JetsonGateQueueTimeoutError` in `320bd24`) so background traffic fails fast instead of saturating the Jetson queue.
    - Exposes live gate telemetry (`maxInFlight`, `inFlight`, `queued`, `rejected`) on `GET /api/wallgarden/models`.
 3. **Disabled `POST /api/wallgarden/classify-candidates`**:
    - Route in `src/routes/WallgardenRoutes.ts` immediately returns `HTTP 200` with `{ classifications: [], disabled: true }` and **zero** LLM calls. Candidate filtering is handled deterministically by the client-side rules and the NAS `brain_graph.py` grounding scorer.
@@ -31,5 +33,5 @@ Audit findings on `2026-10-20`:
    - Live probe against `http://10.0.0.30:8000/v1/chat/completions` confirmed `reasoning_content: null` and `completion_tokens: 5`, so no extra template flags were required.
 
 ## Verification
-- Unit tests in `src/services/wallgarden/__tests__/WallgardenJetsonGate.test.ts` and `src/services/wallgarden/__tests__/WallgardenService.test.ts` (`61/61` tests passing via `testrun`).
+- Unit tests in `src/services/wallgarden/__tests__/JetsonGate.test.ts` (was `WallgardenJetsonGate.test.ts`) and `src/services/wallgarden/__tests__/WallgardenService.test.ts` (`61/61` tests passing via `testrun`).
 - Deployed to Synology NAS (`10.0.0.16:5591`) and verified `GET /api/wallgarden/models`.
