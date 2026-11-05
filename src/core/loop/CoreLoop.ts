@@ -551,6 +551,7 @@ async function* executeCoreLoopToolBatch(
     toolErrorCap,
     maxConsecutiveToolErrors,
     failureStreak,
+    tradingRun: options.tradingRun === true,
     callHistory,
     spillBuffer,
     parallelToolMaxConcurrency,

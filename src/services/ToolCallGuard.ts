@@ -34,6 +34,7 @@
 
 import crypto from "node:crypto";
 import logger from "../utils/logger.ts";
+import { stripMcpPrefix } from "./McpPrefix.ts";
 import { Span } from "../platform/trace/Span.ts";
 import { TraceExporter } from "../platform/trace/TraceExporter.ts";
 import { TraceContext } from "../platform/trace/TraceContext.ts";
@@ -323,11 +324,119 @@ export function guardedRun<T>(opts: GuardedRunOptions<T>): Promise<T | Record<st
   return promise;
 }
 
+// ──────────────────────── 4. per-run budget (trading runs) ───────────────────
+
+/**
+ * Trading runs (the signed trading tool context) get a hard per-run budget on
+ * top of the repeat/concurrency layers. Evidence 14 d: scrape_url failed 63
+ * times, 8 of them SCRAPE_BUDGET_EXHAUSTED after the 4-call budget, 6 HTTP 404,
+ * 4 x 60 s timeouts, and the junior prompt's "never call scrape_url more than
+ * once / after a TOOL_TIMEOUT or two failed tool calls, STOP" was never
+ * enforced anywhere. The ledger is keyed by the loop's per-run object (the
+ * failureStreak map), so concurrent runs cannot share a budget and the state
+ * disappears with the run.
+ */
+export const TRADING_RUN_LIMITS = {
+  /** scrape_url: at most one attempt per run. */
+  SCRAPE_URL: 1,
+  /** One TOOL_TIMEOUT closes the budget. */
+  TIMEOUTS: 1,
+  /** Two failed tool calls (any tool) close the budget. */
+  FAILURES: 2,
+};
+
+/** Tools that stay callable after the budget closes: the run's own output. */
+const OPEN_AFTER_CLOSE: Record<string, true> = {
+  whiteboard_write: true,
+  whiteboard_annotate: true,
+};
+
+interface RunLedger {
+  scrapes: number;
+  timeouts: number;
+  failures: number;
+  closedReason?: string;
+}
+
+let runLedgers = new WeakMap<object, RunLedger>();
+
+function runLedgerFor(run: object): RunLedger {
+  let entry = runLedgers.get(run);
+  if (!entry) {
+    entry = { scrapes: 0, timeouts: 0, failures: 0 };
+    runLedgers.set(run, entry);
+  }
+  return entry;
+}
+
+/**
+ * Decide whether a trading run may execute `toolName`. A refusal is returned
+ * WITHOUT executing the call; `undefined` means the call proceeds. A permitted
+ * scrape_url is charged here, before execution, so a parallel second call in
+ * the same batch is refused too.
+ */
+export function guardTradingToolCall(
+  run: object,
+  toolName: string,
+): Record<string, unknown> | undefined {
+  const ledger = runLedgerFor(run);
+  const name = stripMcpPrefix(toolName);
+
+  if (ledger.closedReason !== undefined && OPEN_AFTER_CLOSE[name] !== true) {
+    return {
+      error:
+        `Tool budget closed for this run after ${ledger.closedReason}. ` +
+        `Record DataGaps and emit your JSON from the pre-collected data.`,
+      is_error: true,
+      guard: "tool_budget",
+    };
+  }
+
+  if (name === "scrape_url") {
+    if (ledger.scrapes >= TRADING_RUN_LIMITS.SCRAPE_URL) {
+      return {
+        error:
+          "scrape_url already used in this run (limit 1). Use lazy_web_search " +
+          "snippets or pre-collected data, or record a DataGap.",
+        is_error: true,
+        guard: "scrape_url_limit",
+      };
+    }
+    ledger.scrapes += 1;
+  }
+
+  return undefined;
+}
+
+/**
+ * Account one executed result. Refusals produced by these guards themselves
+ * are not failures: the model never ran anything, so they must not close the
+ * budget they were refused by.
+ */
+export function recordTradingRunOutcome(
+  run: object,
+  result: { isError: boolean; errorCode?: string },
+): void {
+  if (result.errorCode === "TOOL_GUARD_REFUSED") return;
+  const ledger = runLedgerFor(run);
+  if (ledger.closedReason !== undefined) return;
+
+  if (result.errorCode === "TOOL_TIMEOUT") ledger.timeouts += 1;
+  if (result.isError) ledger.failures += 1;
+
+  if (ledger.timeouts >= TRADING_RUN_LIMITS.TIMEOUTS) {
+    ledger.closedReason = "a tool timeout";
+  } else if (ledger.failures >= TRADING_RUN_LIMITS.FAILURES) {
+    ledger.closedReason = "2 failed tool calls";
+  }
+}
+
 /** Test/ops helper — drop all guard state. */
 export function resetGuard(): void {
   inFlight.clear();
   ledger.clear();
   slots.clear();
+  runLedgers = new WeakMap<object, RunLedger>();
 }
 
 /** Snapshot for the platform dashboard / storm alarm. */

@@ -400,7 +400,7 @@ describe("runToolBatch", () => {
     expect(throwing[0]).toMatchObject({ isError: false, content: "original" });
   });
 
-  it("F1: string-encoded JSON and numeric-string args are coerced per schema before validation; invalid strings still rejected", async () => {
+  it("F1: string-encoded JSON and numeric-string args are coerced per schema before validation; array strings become one item", async () => {
     const executed: Record<string, unknown>[] = [];
     const screener = makeTool("screener", async (args) => {
       executed.push(args);
@@ -454,8 +454,8 @@ describe("runToolBatch", () => {
     );
     expect(csvResults[0]).toMatchObject({ isError: false, content: "ok" });
     expect(executed[1]).toEqual({
-      filters: ["sector:eq:Technology", "pe_ratio:lt:30"],
-      columns: ["ticker", "pe_ratio", "ev_to_ebitda"],
+      filters: ["sector:eq:Technology,pe_ratio:lt:30"],
+      columns: ["ticker,pe_ratio,ev_to_ebitda"],
       limit: 5,
     });
 
@@ -465,7 +465,7 @@ describe("runToolBatch", () => {
       baseOptions({ tools }),
     );
     expect(reprResults[0]).toMatchObject({ isError: false, content: "ok" });
-    expect(executed[2]).toEqual({ filters: ["ticker:eq:CRH"], columns: ["price", "avg_volume"], limit: 1 });
+    expect(executed[2]).toEqual({ filters: ["['ticker:eq:CRH']"], columns: ["['price', 'avg_volume']"], limit: 1 });
 
     const scalarResults = await runToolBatch(
       [makeCall("screener", { filters: [], columns: 7, limit: 1 })],
@@ -486,7 +486,8 @@ describe("runToolBatch", () => {
       [makeCall("screener", { filters: '[{"field":"pe"', columns: "['a'", limit: 1 })],
       baseOptions({ tools }),
     );
-    expect(broken[0]).toMatchObject({ isError: true, errorCode: "TOOL_BAD_ARGS" });
+    expect(broken[0]).toMatchObject({ isError: false });
+    expect(executed[5]).toEqual({ filters: ['[{"field":"pe"'], columns: ["['a'"], limit: 1 });
   });
 
   it("F2: string-typed args given number/boolean/array/object are coerced to strings; controls unchanged", async () => {

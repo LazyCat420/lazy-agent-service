@@ -29,7 +29,8 @@ export type CoreToolErrorCode =
   | "REPLY_CUT_OFF"
   | "TOOL_REPEATED_FAILURE"
   | "TOOL_STALL"
-  | "TOOL_OSCILLATION";
+  | "TOOL_OSCILLATION"
+  | "TOOL_GUARD_REFUSED";
 
 /** Exactly one per CoreToolCall, appended in call order (invariant I3). */
 export interface CoreToolResult {
@@ -145,6 +146,8 @@ export interface CoreLoopOptions {
   maxConsecutiveToolErrors?: number;
   /** H10: Maximum concurrent parallel non-exclusive tool calls (default 8). */
   parallelToolMaxConcurrency?: number;
+  /** Trading run (signed trading tool context): enforce the per-run tool budget in ToolRunner. */
+  tradingRun?: boolean;
   /** H5: Maximum total bytes stored in the run-scoped SpillBuffer (default 4 MiB). */
   spillMaxTotalBytes?: number;
   /** H9: Polled after each tool batch; returned messages are injected before the next model turn. */
@@ -204,6 +207,11 @@ export interface ToolBatchOptions {
   maxConsecutiveToolErrors: number;
   /** Per-tool consecutive error count, owned by the loop, mutated by the runner across batches. */
   failureStreak: Map<string, number>;
+  /**
+   * Trading run (signed trading tool context): apply the per-run scrape_url
+   * limit and the stop-after-timeout/failures budget, keyed by `failureStreak`.
+   */
+  tradingRun?: boolean;
   /** H2: Per-run tool call history for semantic stall & A<->B oscillation detection. */
   callHistory?: ToolCallHistory;
   /** H5: Run-scoped SpillBuffer for oversized tool outputs and read_tool_spill queries. */

@@ -540,6 +540,9 @@ export async function runCoreLoopForAgent(
     tools: toCoreToolsForAgent(context),
     messages: context.messages,
     signal: context.signal,
+    // Trading's signed tool context marks the run: ToolRunner then enforces the
+    // per-run scrape_url limit and the stop-after-timeout/2-failures budget.
+    tradingRun: context.project === "vllm-trading-bot",
     finalizeSignal: context.finalizeSignal,
     finalPassTimeoutMs: context.finalPassTimeoutMs,
     timeoutSignalFor: context.timeoutSignalFor,

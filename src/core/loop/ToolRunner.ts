@@ -9,6 +9,7 @@ import type {
 } from "./types.ts";
 import { READ_TOOL_SPILL_NAME } from "./SpillBuffer.ts";
 import { isReadOnlyTool } from "../../services/LocalToolRouter.ts";
+import { guardTradingToolCall, recordTradingRunOutcome } from "../../services/ToolCallGuard.ts";
 import { stripMcpPrefix } from "../../services/McpPrefix.ts";
 
 export const DEFAULT_PARALLEL_TOOL_CONCURRENCY = 8;
@@ -88,24 +89,6 @@ const typeChecks: Record<string, (value: unknown) => boolean> = {
 };
 
 /**
- * Split a non-JSON list string into string[]: CSV (`a,b`) or a Python-repr list (`['a', 'b']`).
- * Returns undefined for anything that looks like broken JSON (objects, unbalanced brackets).
- */
-const splitListString = (trimmed: string): string[] | undefined => {
-  if (trimmed.length === 0 || trimmed.includes("{")) return undefined;
-  let body = trimmed;
-  if (body.startsWith("[")) {
-    if (!body.endsWith("]")) return undefined;
-    body = body.slice(1, -1);
-  }
-  const items = body
-    .split(",")
-    .map((s) => s.trim().replace(/^(['"])(.*)\1$/, "$2").trim())
-    .filter(Boolean);
-  return items.length > 0 ? items : undefined;
-};
-
-/**
  * F1: Coerce string-encoded values to their schema types before validation.
  * Models frequently send JSON-encoded strings for structured params
  * (e.g. `"filters": "[{\"field\":\"pe\"}]"`, `"limit": "10"`), Python-repr
@@ -113,6 +96,11 @@ const splitListString = (trimmed: string): string[] | undefined => {
  * top-level properties are coerced, and only when the parse/convert result
  * matches the schema type — anything else is left for validateArgs to reject.
  * coerceStructured handles one array/object arg (undefined = leave as-is).
+ *
+ * Arrays never reject a string (the screener_query `"columns" must be array`
+ * failures): a string that parses as a JSON array becomes that array, and any
+ * other string — a bare scalar, CSV, Python-repr — becomes a one-item array.
+ * Objects for an array schema still fail validation, as before.
  */
 const coerceStructured = (expected: "array" | "object", value: unknown): unknown => {
   if (expected === "array" && (typeof value === "number" || typeof value === "boolean")) {
@@ -124,12 +112,11 @@ const coerceStructured = (expected: "array" | "object", value: unknown): unknown
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    return expected === "array" ? splitListString(trimmed) : undefined;
+    return expected === "array" ? [trimmed] : undefined;
   }
   if (typeChecks[expected](parsed)) return parsed;
-  // A number/boolean string ("7", "true") is one list item, like a bare number; "null" stays rejected.
-  const scalar = typeof parsed === "number" || typeof parsed === "boolean";
-  return expected === "array" && scalar ? [trimmed] : undefined;
+  if (expected === "array") return [trimmed];
+  return undefined;
 };
 
 const coerceArgs = (
@@ -747,7 +734,11 @@ function recordToolHistoryAndStreak(
   history: ToolCallHistory,
   opts: ToolRunnerOptions,
 ): void {
-  if (result.errorCode !== "TOOL_CANCELLED" && result.errorCode !== "TOOL_DENIED") {
+  if (
+    result.errorCode !== "TOOL_CANCELLED" &&
+    result.errorCode !== "TOOL_DENIED" &&
+    result.errorCode !== "TOOL_GUARD_REFUSED"
+  ) {
     (history.entries as InternalHistoryEntry[]).push({
       name: call.name,
       fingerprint: computeToolCallFingerprint(call.name, args),
@@ -761,6 +752,7 @@ function recordToolHistoryAndStreak(
   const isNonStreakError =
     result.errorCode === "TOOL_DENIED" ||
     result.errorCode === "TOOL_CANCELLED" ||
+    result.errorCode === "TOOL_GUARD_REFUSED" ||
     result.errorCode === "TOOL_STALL" ||
     result.errorCode === "TOOL_OSCILLATION";
 
@@ -785,6 +777,21 @@ async function processSingleToolCall(
   let args = unwrapped.args;
   let result: CoreToolResult | undefined = unwrapped.errorResult;
   let stallRecord: { wasStall: boolean; stalledCount: number } | undefined;
+
+  // Trading-run budget: refuse without executing, before validation and hooks.
+  if (result === undefined && opts.tradingRun === true) {
+    const refusal = guardTradingToolCall(opts.failureStreak, call.name);
+    if (refusal !== undefined) {
+      result = {
+        toolCallId: call.id,
+        name: call.name,
+        content: JSON.stringify(refusal),
+        isError: true,
+        errorCode: "TOOL_GUARD_REFUSED",
+        durationMs: opts.now() - start,
+      };
+    }
+  }
 
   const tool = opts.tools.get(call.name);
   if (result === undefined) {
@@ -827,6 +834,7 @@ async function processSingleToolCall(
   }
 
   recordToolHistoryAndStreak(call, args, result, stallRecord, history, opts);
+  if (opts.tradingRun === true) recordTradingRunOutcome(opts.failureStreak, result);
 
   if (onExecSettled) {
     await onExecSettled();
