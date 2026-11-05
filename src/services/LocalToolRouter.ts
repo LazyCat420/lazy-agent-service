@@ -66,11 +66,11 @@ export const REUSABLE_READ_TOOLS = new Set([
   "get_earnings_data", "get_finnhub_news",
   "get_institutional_holdings",
   "get_technical_indicators", "get_upcoming_events", "lazy_web_search", "scrape_url",
+  "screener_query",
 ]);
 
 export const READ_ONLY_TOOLS = new Set([
   ...REUSABLE_READ_TOOLS,
-  "screener_query",
   // Named chains of read tools (PermissionLevel.READ_ONLY in trading-service):
   // a repeat is reused, not blocked, and a 5xx may be retried.
   "run_tool_chain",
@@ -86,7 +86,6 @@ export function isReadOnlyTool(name: string): boolean {
 export const REPEAT_GUARDED_TOOLS = new Set([
   ...REUSABLE_READ_TOOLS,
   "whiteboard_read",
-  "screener_query",
   "run_equation",
   "run_backtest",
   "search_equations",

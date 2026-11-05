@@ -585,6 +585,14 @@ describe("executeToolViaTradingService", () => {
     expect(fakes.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("serves a repeated identical screener_query from cache within a run", async () => {
+    const args = { filters: ["sector:eq:Utilities"], limit: 10, sort_by: "market_cap" };
+    const first = await executeToolViaTradingService("screener_query", args);
+    const second = await executeToolViaTradingService("screener_query", args);
+    expect(second).toEqual(first);
+    expect(fakes.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("never caches a failed bridge result", async () => {
     fakes.fetch.mockImplementation(async () => jsonResponse({ error: "boom", is_error: true }));
     const args = { ticker: "NVDA", section: "cache-probe-2" };
