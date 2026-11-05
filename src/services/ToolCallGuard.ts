@@ -35,6 +35,7 @@
 import crypto from "node:crypto";
 import logger from "../utils/logger.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
+import { classifyToolResult } from "./ToolResult.ts";
 import { Span } from "../platform/trace/Span.ts";
 import { TraceExporter } from "../platform/trace/TraceExporter.ts";
 import { TraceContext } from "../platform/trace/TraceContext.ts";
@@ -408,6 +409,9 @@ export function guardTradingToolCall(
   return undefined;
 }
 
+/** Error text of a resolved timeout payload (bridge abort, McpAdapter deadline). */
+const PAYLOAD_TIMEOUT_RE = /TOOL_TIMEOUT|bridge timeout|timed out/i;
+
 /**
  * Account one executed result. Refusals produced by these guards themselves
  * are not failures: the model never ran anything, so they must not close the
@@ -415,14 +419,22 @@ export function guardTradingToolCall(
  */
 export function recordTradingRunOutcome(
   run: object,
-  result: { isError: boolean; errorCode?: string },
+  result: { isError: boolean; errorCode?: string; content?: unknown },
 ): void {
   if (result.errorCode === "TOOL_GUARD_REFUSED") return;
   const ledger = runLedgerFor(run);
   if (ledger.closedReason !== undefined) return;
 
-  if (result.errorCode === "TOOL_TIMEOUT") ledger.timeouts += 1;
-  if (result.isError) ledger.failures += 1;
+  // Trading tools resolve their failures as `{error, is_error: true}` payloads
+  // (executeTradingTool, LocalToolRouter) instead of rejecting, so the runner
+  // reports isError=false for them; read the payload itself.
+  const payload = result.isError ? undefined : classifyToolResult(result.content);
+  const failed = result.isError || payload?.success === false;
+  const timedOut = result.errorCode === "TOOL_TIMEOUT"
+    || (payload?.success === false && PAYLOAD_TIMEOUT_RE.test(payload.errorMessage ?? ""));
+
+  if (timedOut) ledger.timeouts += 1;
+  if (failed) ledger.failures += 1;
 
   if (ledger.timeouts >= TRADING_RUN_LIMITS.TIMEOUTS) {
     ledger.closedReason = "a tool timeout";

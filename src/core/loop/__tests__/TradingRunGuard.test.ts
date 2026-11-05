@@ -122,6 +122,43 @@ describe("trading run budget", () => {
     );
   });
 
+  it("counts resolved {error, is_error} payloads as failures (trading tools never reject)", async () => {
+    const soft = makeTool("soft_fail", async () => ({ error: "HTTP 404", is_error: true }));
+    let okRuns = 0;
+    const ok = makeTool("ok_tool", async () => {
+      okRuns += 1;
+      return "fine";
+    });
+    const options = runOptions([soft, ok]);
+
+    await runToolBatch([makeCall("soft_fail")], options);
+    const afterOne = await runToolBatch([makeCall("ok_tool")], options);
+    expect(afterOne[0].errorCode).toBeUndefined();
+    expect(okRuns).toBe(1);
+    await runToolBatch([makeCall("soft_fail")], options);
+
+    const refused = await runToolBatch([makeCall("ok_tool")], options);
+    expect(okRuns).toBe(1);
+    expect(refused[0].errorCode).toBe("TOOL_GUARD_REFUSED");
+    expect(refusalText(refused[0].content)).toContain(
+      "Tool budget closed for this run after 2 failed tool calls.",
+    );
+  });
+
+  it("closes the budget on a resolved bridge-timeout payload", async () => {
+    const bridge = makeTool("bridge_tool", async () => ({
+      error: "Failed to reach trading-service: bridge timeout after 30000ms",
+      is_error: true,
+    }));
+    const ok = makeTool("ok_tool", async () => "fine");
+    const options = runOptions([bridge, ok]);
+
+    await runToolBatch([makeCall("bridge_tool")], options);
+    const refused = await runToolBatch([makeCall("ok_tool")], options);
+    expect(refused[0].errorCode).toBe("TOOL_GUARD_REFUSED");
+    expect(refusalText(refused[0].content)).toContain("after a tool timeout");
+  });
+
   it("still allows whiteboard_write and whiteboard_annotate after the budget closes", async () => {
     const slow = makeTool("slow_tool", () => new Promise<unknown>(() => {}));
     const write = makeTool("mcp__lazy-agent-service__whiteboard_write", async () => ({ ok: true }));
