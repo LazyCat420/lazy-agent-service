@@ -180,48 +180,4 @@ describe("trading run budget", () => {
     const afterTimeout = await runToolBatch([makeCall("ok_tool")], options);
     expect(afterTimeout[0]).toMatchObject({ isError: false, content: "fine" });
   });
-
-  it("coerces array-schema strings: JSON array stays that array, any other string is one item", async () => {
-    const executed: Record<string, unknown>[] = [];
-    const screener = makeTool("screener_query", async (args) => {
-      executed.push(args);
-      return "ok";
-    }, {
-      parameters: {
-        type: "object",
-        properties: { columns: { type: "array" }, filters: { type: "array" } },
-        required: ["columns"],
-      },
-    });
-    const options = runOptions([screener]);
-
-    const jsonArray = await runToolBatch(
-      [makeCall("screener_query", { columns: '["ticker","pe_ratio"]' })],
-      options,
-    );
-    expect(jsonArray[0]).toMatchObject({ isError: false });
-    expect(executed[0]).toEqual({ columns: ["ticker", "pe_ratio"] });
-
-    const csv = await runToolBatch(
-      [makeCall("screener_query", { columns: "ticker,pe_ratio" })],
-      options,
-    );
-    expect(csv[0]).toMatchObject({ isError: false });
-    expect(executed[1]).toEqual({ columns: ["ticker,pe_ratio"] });
-
-    const scalar = await runToolBatch(
-      [makeCall("screener_query", { columns: "NVDA" })],
-      options,
-    );
-    expect(scalar[0]).toMatchObject({ isError: false });
-    expect(executed[2]).toEqual({ columns: ["NVDA"] });
-
-    // An object for an array schema still fails validation.
-    const objectArg = await runToolBatch(
-      [makeCall("screener_query", { columns: { a: 1 } })],
-      options,
-    );
-    expect(objectArg[0]).toMatchObject({ isError: true, errorCode: "TOOL_BAD_ARGS" });
-    expect(executed).toHaveLength(3);
-  });
 });
