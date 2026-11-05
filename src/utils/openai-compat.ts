@@ -794,6 +794,13 @@ const MARKUP_TOOL_CALL_BLOCK = /<\|?tool_call\|?>([\s\S]*?)<\/?\|?tool_call\|?>/
 const MARKUP_ARG_PAIR = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)(?:<\/arg_value>|(?=<arg_key>)|$)/g;
 const QWEN_FUNCTION_BODY = /^<function=([\w.-]+)>([\s\S]*?)(?:<\/function>)?$/;
 const QWEN_PARAM_PAIR = /<parameter=([\w.-]+)>([\s\S]*?)(?:<\/parameter>|(?=<parameter=)|(?=<\/function>)|$)/g;
+/**
+ * The function opener written as a value-less `<parameter=NAME>`. 2026-11-05: Qwen3.8 on
+ * vllm-4 ended both PRI valuation attempts with `<tool_call><parameter=screener_query>
+ * <parameter=filters>…</function></tool_call>`; the call was dropped and the run ended
+ * on that text. Only an opener followed directly by another tag counts.
+ */
+const QWEN_MISNAMED_FUNCTION_OPENER = /^<parameter=([\w.-]+)>(?=\s*(?:<parameter=|<\/function>))/;
 
 const parseMarkupValue = (value: string): unknown => {
   try {
@@ -856,7 +863,7 @@ function _markupCallFromQwenBody(body: string): MarkupToolCall | null {
 export function extractMarkupToolCalls(text: string): MarkupToolCall[] {
   const calls: MarkupToolCall[] = [];
   for (const match of text.matchAll(MARKUP_TOOL_CALL_BLOCK)) {
-    const body = match[1].trim();
+    const body = match[1].trim().replace(QWEN_MISNAMED_FUNCTION_OPENER, "<function=$1>");
     if (body.startsWith("<function=")) {
       for (const segment of body.split(/(?=<function=)/)) {
         const qwenCall = _markupCallFromQwenBody(segment.trim());
