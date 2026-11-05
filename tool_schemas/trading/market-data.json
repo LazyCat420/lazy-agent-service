@@ -211,7 +211,7 @@
      "items": {
       "type": "string"
      },
-     "description": "Conditions 'field:op:value' (lt/lte/gt/gte/eq/ne/in)"
+     "description": "Conditions 'field:op:value' (lt/lte/gt/gte/eq/ne/in; contains = case-insensitive substring on text fields)"
     },
     "sort": {
      "type": "string",
