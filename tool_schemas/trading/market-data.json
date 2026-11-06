@@ -211,7 +211,7 @@
      "items": {
       "type": "string"
      },
-     "description": "Conditions 'field:op:value' (lt/lte/gt/gte/eq/ne/in; contains = case-insensitive substring on text fields)"
+     "description": "Conditions 'field:op:value' (lt/lte/gt/gte/eq/ne/in; contains = case-insensitive substring on text fields). Text fields (market_cap_tier, sector, industry, name, asset_class, etf_category) take eq/ne/in/contains ONLY, never gt/gte/lt/lte — e.g. 'market_cap_tier:eq:large', not 'market_cap_tier:gte:medium'; use market_cap for numeric size."
     },
     "sort": {
      "type": "string",
