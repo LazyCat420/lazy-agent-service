@@ -497,6 +497,22 @@ async function routeWidgetTool(
   return forwardToHtmlNotes(tName, toolArguments);
 }
 
+/** One warn line per failed scrape so failing domains can be classified; query string stripped. */
+function logScrapeFailure(url: string, result: unknown): void {
+  if (!result || typeof result !== "object") return;
+  const body = result as Record<string, unknown>;
+  if (typeof body.error !== "string" || body.error === "") return;
+  let domain = "unknown";
+  let safe = url.split(/[?#]/)[0];
+  try {
+    domain = new URL(url).hostname;
+  } catch {
+    // keep the placeholder; the truncated text below still identifies the input
+  }
+  const status = /HTTP (\d{3})/.exec(body.error)?.[1] ?? body.error.slice(0, 80);
+  logger.warn(`[ScrapeFail] domain=${domain} status=${status} url=${safe.slice(0, 200)}`);
+}
+
 async function routeScrapeUrlTool(
   toolArguments: Record<string, unknown>,
   context: LocalToolContext,
@@ -525,6 +541,7 @@ async function routeScrapeUrlTool(
   // dependent (one side must resolve the other lazily).
   const { default: ToolOrchestratorService } = await import("./ToolOrchestratorService.ts");
   const result = await ToolOrchestratorService.executeWebExtract(normalized);
+  logScrapeFailure(url, result);
   if (!fetchable || unscrapableDomainOf(url)) return result;
   if (!result || typeof result !== "object") return result;
   const body = result as Record<string, unknown>;

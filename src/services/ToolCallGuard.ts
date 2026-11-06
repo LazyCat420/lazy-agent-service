@@ -409,6 +409,22 @@ export function guardTradingToolCall(
   return undefined;
 }
 
+/**
+ * The tools a trading run may still be offered: scrape_url disappears once its
+ * allowance is spent, and a closed budget leaves only the run's own output
+ * tools. The guard refusals remain the backstop.
+ */
+export function filterOfferedTools<T extends { name: string }>(run: object, tools: T[]): T[] {
+  const ledger = runLedgerFor(run);
+  if (ledger.closedReason !== undefined) {
+    return tools.filter((t) => OPEN_AFTER_CLOSE[stripMcpPrefix(t.name)] === true);
+  }
+  if (ledger.scrapes >= TRADING_RUN_LIMITS.SCRAPE_URL) {
+    return tools.filter((t) => stripMcpPrefix(t.name) !== "scrape_url");
+  }
+  return tools;
+}
+
 /** Error text of a resolved timeout payload (bridge abort, McpAdapter deadline). */
 const PAYLOAD_TIMEOUT_RE = /TOOL_TIMEOUT|bridge timeout|timed out/i;
 

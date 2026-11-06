@@ -2,6 +2,7 @@
  * Core loop: model call → tool calls → paired results → repeat; one final toolless pass on any
  * budget/limit, then either the model's final answer or a synthetic summary of tool output.
  */
+import { filterOfferedTools } from "../../services/ToolCallGuard.ts";
 import type { ChatMessage } from "../../types/ProviderTypes.ts";
 import type { StreamChunk } from "../../types/provider.ts";
 import type {
@@ -182,6 +183,7 @@ async function* runModelTurnWithRetries(
   options: CoreLoopOptions,
   hooked: ChatMessage[],
   schemas: CoreToolSchema[],
+  offeredRun: object | undefined,
   workSignal: AbortSignal,
   finalizeCut: () => boolean,
   providerRetries: number,
@@ -223,7 +225,7 @@ async function* runModelTurnWithRetries(
     try {
       stream = options.model({
         messages: hooked,
-        tools: schemas,
+        tools: offeredRun ? filterOfferedTools(offeredRun, schemas) : schemas,
         toolChoice: "auto",
         signal: turnSignal,
         finalPass: false,
@@ -788,6 +790,7 @@ export async function* runCoreLoop(
         options,
         hooked,
         schemas,
+        options.tradingRun === true ? failureStreak : undefined,
         workSignal,
         finalizeCut,
         providerRetries,
