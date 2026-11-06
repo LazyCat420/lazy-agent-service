@@ -126,7 +126,7 @@
       "properties": {
         "tickers": {
           "type": "string",
-          "description": "Comma-separated tickers, at least 2 (e.g. \"NVDA,AMD,MSFT\"). Leave empty only to analyse the current holdings, which requires 2+ open positions."
+          "description": "Comma-separated tickers, ideally 2+ (e.g. \"NVDA,AMD,MSFT\"). A single ticker is padded with the largest current holdings (up to 10 total). Leave empty to analyse the current holdings, which requires 2+ open positions."
         },
         "lookback_days": {
           "type": "integer",
@@ -446,6 +446,42 @@
     ]
   },
   {
+    "name": "whiteboard_find",
+    "description": "Look up this cycle's shared data ledger for the current ticker: a fact key (e.g. 'pe_ratio', 'fcf_ttm', 'rsi_14'), a tool name (e.g. 'get_earnings_data') to see what it already returned, a keyword, or '*' to list everything. A repeat of a lookup another agent already paid for costs nothing; use it instead of re-fetching data that is already in the ledger. A miss returns status 'not_found', not an error.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Tool name (e.g. 'get_earnings_data', 'screener_query'), fact key from the shared fact vocabulary (e.g. 'pe_ratio', 'fcf_ttm', 'rsi_14', 'hrp_target_weight_pct'), or '*' to list all ledger entries for the current ticker and cycle."
+        },
+        "ticker": {
+          "type": "string",
+          "description": "Optional stock ticker (defaults to the current desk ticker)."
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 16000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_board_of_directors",
+      "v3_debate_judge"
+    ]
+  },
+  {
     "name": "whiteboard_read",
     "description": "Read a section of the team's shared whiteboard for a given ticker. Pipeline artifact sections (written by the desk as it works): 'desk_note', 'fundamental_report', 'quant_report', 'valuation_report', 'bull_argument', 'bear_rebuttal', 'debate_judge', 'tournament_result', 'regime_classification', 'final_decision'. Collaboration sections written during research: 'market_context', 'risk_flags', 'signals'. Board-written only late in the cycle (empty before the decision): 'consensus', 'trade_plan'. Omit section to get the full whiteboard summary.",
     "parameters": {
@@ -502,6 +538,39 @@
         "author": {
           "type": "string",
           "description": "YOUR agent name (e.g. v3_quant_analyst) so teammates know who wrote this. Always provide it."
+        },
+        "facts": {
+          "type": "array",
+          "description": "Optional numeric claims the post rests on, each checked against this cycle's data ledger. One disagreement rejects the whole write; an unbacked key rejects too. Omit for prose-only posts.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "Fact key (e.g. 'pe_ratio', 'rsi_14') or an alias ('rsi', 'atr')."
+              },
+              "value": {
+                "type": "number",
+                "description": "The stated number or enum value."
+              },
+              "unit": {
+                "type": "string",
+                "description": "Unit of the stated value (e.g. 'ratio', 'percent', 'USD')."
+              },
+              "source": {
+                "type": "string",
+                "description": "Where the number came from."
+              },
+              "as_of": {
+                "type": "string",
+                "description": "Date the number is from (YYYY-MM-DD)."
+              }
+            },
+            "required": [
+              "key",
+              "value"
+            ]
+          }
         }
       },
       "required": [

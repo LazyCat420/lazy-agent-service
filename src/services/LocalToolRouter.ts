@@ -75,6 +75,9 @@ export const READ_ONLY_TOOLS = new Set([
   // a repeat is reused, not blocked, and a 5xx may be retried.
   "run_tool_chain",
   "whiteboard_read",
+  // Cycle-ledger lookup: reads trading-service's whiteboard_ledger, never
+  // fetches. Read-only so a repeat is reused/retried, not blocked.
+  "whiteboard_find",
   "get_sec_filings",
   "query_sec_filing",
 ]);
