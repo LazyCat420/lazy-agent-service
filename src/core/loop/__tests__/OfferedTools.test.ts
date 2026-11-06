@@ -55,4 +55,22 @@ describe("tools offered to the model", () => {
     await drain(base(model, [okTool(SCRAPE, "page"), okTool(READ, "q")], false));
     expect(names(model.calls[1])).toContain(SCRAPE);
   });
+
+  it("closed budget with no output tool left goes to the toolless final pass", async () => {
+    const timeoutTool = {
+      ...okTool(READ, ""),
+      execute: async () => ({ error: "TOOL_TIMEOUT after 60s", is_error: true }),
+    };
+    const model = scriptedModel([
+      [{ type: "toolCall", id: "a", name: READ, args: {} }],
+      ["final answer"],
+    ]);
+    const gen = runCoreLoop(base(model, [okTool(SCRAPE, "p"), timeoutTool], true));
+    let step = await gen.next();
+    while (!step.done) step = await gen.next();
+    expect(model.calls).toHaveLength(2);
+    expect(model.calls[1]?.finalPass).toBe(true);
+    expect(model.calls[1]?.toolChoice).toBe("none");
+    expect(step.value.text).toContain("final answer");
+  });
 });

@@ -784,6 +784,10 @@ export async function* runCoreLoop(
 
       finalizeReason = checkLoopFinalizeCondition(finalizeReason, finalizeCut, options, modelCalls);
       if (finalizeReason !== undefined) break;
+      if (options.tradingRun === true && schemas.length > 0 && filterOfferedTools(failureStreak, schemas).length === 0) {
+        finalizeReason = "NO_TOOLS_OFFERED";
+        break;
+      }
 
       const hooked = yield* runBeforeModelCallHooks(messages, options.hooks, modelCalls);
       const turnOutcome = yield* runModelTurnWithRetries(

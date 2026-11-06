@@ -95,6 +95,7 @@ export type CoreFinalizeReason =
   | "PROVIDER_ERROR"
   | "CUT_OFF_TWICE"
   | "RUNAWAY_GENERATION"
+  | "NO_TOOLS_OFFERED"
   | `repeated_tool_call:${string}`;
 
 export interface ToolCallHistoryEntry {
