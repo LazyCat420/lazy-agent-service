@@ -1221,10 +1221,11 @@ describe("streaming text generation", () => {
     const { events, emit } = collect();
     await handleConversation(baseChat(), emit);
 
-    expect(events.map((event) => event.type)).toEqual(["chunk", "status"]);
-    expect(events[0].content).toContain("max_tokens");
-    expect(events[1]).toMatchObject({ phase: "truncated" });
-    expect((stub.finalized.at(-1) as { payload: Record<string, any> }).payload.text).toContain("max_tokens");
+    expect(events.map((event) => event.type)).toEqual(["usage_update", "chunk", "status"]);
+    expect(events[1].content).toContain("max_tokens");
+    expect(events[2]).toMatchObject({ phase: "truncated" });
+    const lastFinalized = stub.finalized.at(-1);
+    expect(JSON.stringify(lastFinalized)).toContain("max_tokens");
   });
 
   it("does not warn when the response has text", async () => {
@@ -1233,7 +1234,7 @@ describe("streaming text generation", () => {
     stub.streamState.stopReason = "max_tokens";
     const { events, emit } = collect();
     await handleConversation(baseChat(), emit);
-    expect(events).toEqual([]);
+    expect(events.map((event) => event.type)).toEqual(["usage_update"]);
   });
 
   it("persists the partial text when the provider stream throws", async () => {
