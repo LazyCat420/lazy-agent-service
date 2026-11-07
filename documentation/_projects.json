@@ -4,14 +4,20 @@
     "label": "Trading Cycle",
     "href": "/documentation",
     "source_html": "finance/trading/trading-client/documentation/index.html",
-    "repos": ["finance/trading/trading-client", "finance/trading/trading-service", "agents/scraper-service"]
+    "repos": ["finance/trading/trading-client", "finance/trading/trading-service"]
   },
   {
-    "slug": "lazy-agent-service",
-    "label": "Lazy Agent",
-    "href": "/documentation/projects/lazy-agent-service",
+    "slug": "agent",
+    "label": "Agent",
+    "href": "/documentation/projects/agent",
     "source_html": "agents/lazy-agent-service/documentation/index.html",
-    "repos": ["agents/lazy-agent-service", "platform/lazycat-sdk"]
+    "repos": [
+      "agents/lazy-agent-service",
+      "agents/scraper-service",
+      "agents/spark-console",
+      "agents/tts-service",
+      "platform/lazycat-sdk"
+    ]
   },
   {
     "slug": "drift-king",

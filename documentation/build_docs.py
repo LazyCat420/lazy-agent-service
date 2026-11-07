@@ -70,6 +70,8 @@ REPO_ROOTS = {
     "trading-service": "../trading-service",
     "scraper-service": "../../../agents/scraper-service",
     "lazy-agent-service": "../../../agents/lazy-agent-service",
+    "spark-console": "../../../agents/spark-console",
+    "tts-service": "../../../agents/tts-service",
     "prism-service": "../../../prism-service",
 }
 OPEN_STATUSES = {"open", "in_progress", "blocked"}
@@ -1017,6 +1019,7 @@ STATUS_TONE = {
     "shipped": "ok",
     "verified": "ok",
     "superseded": "muted",
+    "superseded-in-part": "muted",
     "abandoned": "muted",
     "reference": "muted",
 }
