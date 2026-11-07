@@ -1,0 +1,2 @@
+Lazy Agent Service — Architecture & Operations
+Unified Agent Harness, 78-Tool MCP Registry & Local LLM Router

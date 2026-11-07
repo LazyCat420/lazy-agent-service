@@ -1,0 +1,79 @@
+[
+  {
+    "slug": "trading-cycle",
+    "label": "Trading Cycle",
+    "href": "/documentation",
+    "source_html": "finance/trading/trading-client/documentation/index.html",
+    "repos": ["finance/trading/trading-client", "finance/trading/trading-service", "agents/scraper-service"]
+  },
+  {
+    "slug": "lazy-agent-service",
+    "label": "Lazy Agent",
+    "href": "/documentation/projects/lazy-agent-service",
+    "source_html": "agents/lazy-agent-service/documentation/index.html",
+    "repos": ["agents/lazy-agent-service", "platform/lazycat-sdk"]
+  },
+  {
+    "slug": "drift-king",
+    "label": "Drift King",
+    "href": "/documentation/projects/drift-king",
+    "source_html": "games/drift-king/documentation/index.html",
+    "repos": ["games/drift-king", "games/engine", "games/art-pipeline"]
+  },
+  {
+    "slug": "pinball-knight",
+    "label": "Pinball Knight",
+    "href": "/documentation/projects/pinball-knight",
+    "source_html": "games/pinball-knight/documentation/index.html",
+    "repos": ["games/pinball-knight"]
+  },
+  {
+    "slug": "html-notes",
+    "label": "HTML Notes",
+    "href": "/documentation/projects/html-notes",
+    "source_html": "apps/html-notes/documentation/index.html",
+    "repos": ["apps/html-notes"]
+  },
+  {
+    "slug": "music-player",
+    "label": "Music Player",
+    "href": "/documentation/projects/music-player",
+    "source_html": "apps/media/music-player/documentation/index.html",
+    "repos": ["apps/media/music-player"]
+  },
+  {
+    "slug": "local-coding-agent",
+    "label": "Coding Agent",
+    "href": "/documentation/projects/local-coding-agent",
+    "source_html": "local-coding-agent/documentation/index.html",
+    "repos": ["local-coding-agent", "tern-plugin"]
+  },
+  {
+    "slug": "braindeadbot",
+    "label": "BrainDeadBot",
+    "href": "/documentation/projects/braindeadbot",
+    "source_html": "apps/braindeadbot/braindeadbot-client/documentation/index.html",
+    "repos": ["apps/braindeadbot/braindeadbot-client", "apps/braindeadbot/braindeadbot-service"]
+  },
+  {
+    "slug": "llm-sort-obsidian",
+    "label": "Obsidian Sort",
+    "href": "/documentation/projects/llm-sort-obsidian",
+    "source_html": "apps/obsidian/LLMSortObsidian/documentation/index.html",
+    "repos": ["apps/obsidian/LLMSortObsidian", "apps/obsidian/LLMSortObsidian-Plugin"]
+  },
+  {
+    "slug": "bittle-agent",
+    "label": "Bittle",
+    "href": "/documentation/projects/bittle-agent",
+    "source_html": "hardware/bittle-agent/documentation/index.html",
+    "repos": ["hardware/bittle-agent"]
+  },
+  {
+    "slug": "workspace",
+    "label": "Sun Workspace",
+    "href": "/documentation/projects/workspace",
+    "source_html": "documentation/index.html",
+    "repos": ["documentation", ".agents", "deploy-kit"]
+  }
+]

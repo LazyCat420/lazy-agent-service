@@ -1,0 +1,193 @@
+{
+  "title": "Lazy Agent Service Runtime Execution Graph",
+  "updated": "2026-11-06",
+  "nodes": [
+    {
+      "id": "http_ingress",
+      "label": "HTTP Ingress — Express Boot, Route Mounts & SSE Frames",
+      "stage": 0,
+      "repo": "lazy-agent-service",
+      "entry": "src/boot/runtime.ts:startRuntime",
+      "covers": [
+        "lazy-agent-service:src/index.ts",
+        "lazy-agent-service:src/boot/server.ts",
+        "lazy-agent-service:src/boot/runtime.ts",
+        "lazy-agent-service:src/routes/AgentRoutes.ts",
+        "lazy-agent-service:src/routes/ChatRoutes.ts",
+        "lazy-agent-service:src/routes/Harness2Routes.ts"
+      ],
+      "areas": ["api", "infra"],
+      "timeout_s": null,
+      "skip_or_fallback": "GET /health is never traced and answers while optional backends are down so the 30 s docker healthcheck passes; unmatched mounts 404 with the endpoint registry logged at boot; an Accept: application/json request to /agent returns one JSON reply instead of SSE.",
+      "inputs": [],
+      "outputs": ["request_rows", "agent_sessions"]
+    },
+    {
+      "id": "auth_session",
+      "label": "Session & Identity — AuthMiddleware, Session Registry, Durable Completions",
+      "stage": 1,
+      "repo": "lazy-agent-service",
+      "entry": "src/services/AgentSessionRegistry.ts",
+      "covers": [
+        "lazy-agent-service:src/services/AgentSessionRegistry.ts",
+        "lazy-agent-service:src/services/ActiveGenerationTracker.ts",
+        "lazy-agent-service:src/services/CustomAgentService.ts",
+        "lazy-agent-service:src/routes/ConversationsRoutes.ts",
+        "lazy-agent-service:src/routes/ObsidianCompletionRoutes.ts"
+      ],
+      "areas": ["infra", "state"],
+      "timeout_s": null,
+      "skip_or_fallback": "AuthMiddleware copies x-project/x-username for scoping and never authenticates (boundary guards per ch.12); a run keeps going when the client disconnects — /agent/stop is the only cancel (ADR-10); an unknown conversation or completion id is created lazily.",
+      "inputs": ["request_rows", "custom_agents"],
+      "outputs": ["agent_sessions", "conversations", "durable_completions"]
+    },
+    {
+      "id": "model_router",
+      "label": "Model Router — Dynamic Resolution, vLLM Boxes, Jetson Gate, Provider Budget",
+      "stage": 2,
+      "repo": "lazy-agent-service",
+      "entry": "src/services/DynamicModelResolver.ts:DynamicModelResolver",
+      "covers": [
+        "lazy-agent-service:src/services/DynamicModelResolver.ts",
+        "lazy-agent-service:src/services/VllmModelSyncService.ts",
+        "lazy-agent-service:src/services/CanonicalProviderBudget.ts",
+        "lazy-agent-service:src/services/wallgarden/JetsonGate.ts",
+        "lazy-agent-service:src/providers/openai.ts",
+        "lazy-agent-service:src/providers/vllm.ts"
+      ],
+      "areas": ["models", "infra"],
+      "timeout_s": null,
+      "skip_or_fallback": "Nothing retries across boxes unboundedly; an unavailable box falls back per catalog profile, a box that fails the preflight is skipped for the run; catalog-first getModelProfile keeps unknown models on the reasoning-safe path (ADR-11); wallgarden jobs queue behind the Jetson gate.",
+      "inputs": ["custom_agents", "agent_sessions"],
+      "outputs": ["agent_sessions"]
+    },
+    {
+      "id": "harness2_loop",
+      "label": "Harness Loops — Core Tool Loop, Compaction, Guards, Harness² Recursion",
+      "stage": 3,
+      "repo": "lazy-agent-service",
+      "entry": "src/services/harness2/Harness2Service.ts:runHarness2",
+      "covers": [
+        "lazy-agent-service:src/services/AgenticLoopService.ts",
+        "lazy-agent-service:src/core/loop/CoreLoop.ts",
+        "lazy-agent-service:src/core/loop/ToolRunner.ts",
+        "lazy-agent-service:src/core/loop/MessageCompactor.ts",
+        "lazy-agent-service:src/core/loop/RunawayStreamWatch.ts",
+        "lazy-agent-service:src/services/harness2/Recursion.ts",
+        "lazy-agent-service:src/services/harness2/Library.ts"
+      ],
+      "areas": ["harness"],
+      "timeout_s": null,
+      "skip_or_fallback": "RunawayStreamWatch ends streams that produce nothing or loop; past the 240,000-char mission budget Harness² trajectories compact to start+end behind an explicit COMPACTED note; an all-failed base stops with base-failed and a failed selection never teaches the library (ADR-09); empty/cut proposer replies fail the attempt, they are never a silent KEEP_BASE.",
+      "inputs": ["agent_sessions", "conversations", "tool_schemas", "embedding_vectors"],
+      "outputs": ["agent_sessions", "conversations", "durable_completions"]
+    },
+    {
+      "id": "mcp_tool_dispatch",
+      "label": "Tool Dispatch — Schema Catalog, decideToolCall, MCP Client, Local Router, Sandbox",
+      "stage": 4,
+      "repo": "lazy-agent-service",
+      "entry": "src/services/ToolOrchestratorService.ts:dispatchTool",
+      "covers": [
+        "lazy-agent-service:src/services/ToolOrchestratorService.ts",
+        "lazy-agent-service:src/services/ToolAuthorization.ts",
+        "lazy-agent-service:src/services/LocalToolRouter.ts",
+        "lazy-agent-service:src/services/MCPClientService.ts",
+        "lazy-agent-service:src/services/harnesses/CodeInterpreter.ts",
+        "lazy-agent-service:scripts/export_tool_schemas.py"
+      ],
+      "areas": ["tools", "security"],
+      "timeout_s": null,
+      "skip_or_fallback": "One decision: decideToolCall feeds ApprovalGate; AutoApprovalEngine is gone (ADR-04). stdio MCP rows are refused unless the exact command is on MCP_STDIO_COMMANDS (ADR-06); code_interpreter fails closed when its boot probe sees any capability allowed (ADR-07); read-only repeats are reused, not re-paid (ADR-05); ensureSchemas() waits for an in-flight fetch so boot-window runs see the full catalog (f8c7737).",
+      "inputs": ["tool_schemas", "mcp_servers", "agent_sessions"],
+      "outputs": []
+    },
+    {
+      "id": "trading_tool_stream",
+      "label": "Trading Tool Bridge — Signed Context, Budget Guards, SSE Tool Stream",
+      "stage": 5,
+      "repo": "lazy-agent-service",
+      "entry": "src/services/TradingToolStream.ts:TradingToolStream",
+      "covers": [
+        "lazy-agent-service:src/services/TradingToolStream.ts",
+        "lazy-agent-service:src/core/loop/ToolRunner.ts"
+      ],
+      "areas": ["trading", "tools"],
+      "timeout_s": null,
+      "skip_or_fallback": "A vllm-trading-bot call without the signed _lazy_trading_context is refused (forged → PERMISSION_DENIED); the tool budget counts resolved {error,is_error} payloads and bridge timeouts (e5611e9); scrape_url and closed-budget tools are never offered to trading runs (e7003c8); a run finalizes when no tool is offered after budget close (fb2ea8a); identical screener_query results reuse within a run (ebdda0d).",
+      "inputs": ["agent_sessions", "trading_bridge"],
+      "outputs": ["trading_bridge"]
+    },
+    {
+      "id": "web_search_extract",
+      "label": "Web Search & Extract — Exa Search, scrape_url Budget, /execute API",
+      "stage": 5,
+      "repo": "lazy-agent-service",
+      "entry": "src/services/WebSearchService.ts:webSearch",
+      "covers": [
+        "lazy-agent-service:src/services/WebSearchService.ts",
+        "lazy-agent-service:src/services/WebExtractService.ts",
+        "lazy-agent-service:src/routes/ExecuteRoutes.ts",
+        "lazy-agent-service:src/routes/WebhookRoutes.ts"
+      ],
+      "areas": ["search", "security"],
+      "timeout_s": null,
+      "skip_or_fallback": "/execute 401s without EXECUTE_API_KEY when set; private-address targets and redirect hops are refused by the URL guard; non-URL text never charges the per-run scrape budget (174db2a) and known-dead URLs are refused without re-charging, pruned per run (a989f16); search-first hint on a malformed URL; rate-limit fallback per the shared web-search contract (ch.05).",
+      "inputs": ["agent_sessions", "trading_bridge"],
+      "outputs": ["trading_bridge"]
+    },
+    {
+      "id": "embedding_rag",
+      "label": "Embeddings & RAG — EmbeddingGemma 2, Conversation Index, Memory Recall",
+      "stage": 5,
+      "repo": "lazy-agent-service",
+      "entry": "src/services/EmbeddingService.ts:generateEmbedding",
+      "covers": [
+        "lazy-agent-service:src/services/EmbeddingGemma2Client.ts",
+        "lazy-agent-service:src/services/EmbeddingService.ts",
+        "lazy-agent-service:src/services/ConversationEmbeddingService.ts",
+        "lazy-agent-service:src/services/MemoryExtractor.ts",
+        "lazy-agent-service:src/routes/EmbedRoutes.ts"
+      ],
+      "areas": ["rag", "models"],
+      "timeout_s": null,
+      "skip_or_fallback": "/embed takes one text or a texts batch of 1–32 against the shared embeddinggemma-2 queue on the Jetson; a down backend fails the call with a diagnostic rather than returning zero vectors; memory injection on a cold index degrades to no-context instead of blocking the run (ch.06).",
+      "inputs": ["conversations", "embedding_vectors"],
+      "outputs": ["embedding_vectors"]
+    },
+    {
+      "id": "otel_telemetry",
+      "label": "Telemetry & Gates — OTLP Spans, Request Log Rows, Measured Quality Gates",
+      "stage": 6,
+      "repo": "lazy-agent-service",
+      "entry": "src/telemetry/otel.ts:tracingEnabled",
+      "covers": [
+        "lazy-agent-service:src/telemetry/otel.ts",
+        "lazy-agent-service:src/services/RequestLogger.ts",
+        "lazy-agent-service:scripts/otel-smoke.mjs",
+        "lazy-agent-service:scripts/quality/crap.mjs",
+        "lazy-agent-service:.github/workflows/quality.yml"
+      ],
+      "areas": ["telemetry", "quality"],
+      "timeout_s": null,
+      "skip_or_fallback": "/health is never traced; every other request writes a prism.requests row with createdAt equal to timestamp (d8a3c10, pinned by RequestLoggerPrismParity.test.ts); a missing OTLP endpoint disables tracing (tracingEnabled false) without failing requests; npm run verify blocks CI on lint/type/test/dry/arch/prompt (ADR-08, ch.09).",
+      "inputs": ["request_rows", "otel_spans", "agent_sessions"],
+      "outputs": ["otel_spans"]
+    }
+  ],
+  "edges": [
+    {"from": "http_ingress", "to": "auth_session", "label": "scoped identity + run slot per /agent, /chat, /obsidian-completions request", "kind": "control"},
+    {"from": "auth_session", "to": "model_router", "label": "persona, profile and requested model for the turn", "kind": "control"},
+    {"from": "model_router", "to": "harness2_loop", "label": "resolved provider/model on a healthy box", "kind": "control"},
+    {"from": "harness2_loop", "to": "mcp_tool_dispatch", "label": "validated tool_call + signed trading context", "kind": "control"},
+    {"from": "mcp_tool_dispatch", "to": "harness2_loop", "label": "tool result, refusal or budget notice back into the loop", "kind": "async"},
+    {"from": "mcp_tool_dispatch", "to": "trading_tool_stream", "label": "vllm-trading-bot tool calls onto the bridge", "kind": "async"},
+    {"from": "mcp_tool_dispatch", "to": "web_search_extract", "label": "lazy_web_search, scrape_url and /execute traffic", "kind": "async"},
+    {"from": "harness2_loop", "to": "embedding_rag", "label": "memory injection query + conversation indexing", "kind": "parallel"},
+    {"from": "harness2_loop", "to": "http_ingress", "label": "SSE delta/tool_call/done/error frames", "kind": "control"},
+    {"from": "http_ingress", "to": "otel_telemetry", "label": "request rows and span batches per call", "kind": "async"},
+    {"from": "trading_tool_stream", "to": "otel_telemetry", "label": "bridge tool-call spans with budget counters", "kind": "async"},
+    {"from": "web_search_extract", "to": "otel_telemetry", "label": "search/scrape spans with budget charges", "kind": "async"},
+    {"from": "otel_telemetry", "to": "http_ingress", "label": "audit rows feed /health stats and the next traced request", "kind": "async"}
+  ]
+}

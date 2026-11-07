@@ -1,0 +1,132 @@
+{
+  "title": "Lazy Agent Service Data State-Flow Graph",
+  "updated": "2026-11-06",
+  "layers": {
+    "0": "Ingress & Requests",
+    "1": "Session & Durable State",
+    "2": "Tool Schema & MCP",
+    "3": "External & Trading APIs",
+    "4": "Embeddings & Cache",
+    "5": "Telemetry & Spans"
+  },
+  "stores": [
+    {
+      "id": "request_rows",
+      "kind": "mongo_collection",
+      "layer": 0,
+      "join_keys": ["requestId", "createdAt"],
+      "ttl": "permanent",
+      "writers": ["http_ingress"],
+      "readers": ["otel_telemetry"],
+      "purpose": "Global request-log rows in the shared prism.requests collection; both insert paths write createdAt equal to timestamp plus toolApiNameCount so every time-based audit reader (trading Monitor, prism-client) sees harness calls (d8a3c10)."
+    },
+    {
+      "id": "agent_sessions",
+      "kind": "in_memory",
+      "layer": 1,
+      "join_keys": ["sessionId", "runId"],
+      "ttl": "run",
+      "writers": ["http_ingress", "auth_session", "model_router", "harness2_loop"],
+      "readers": ["harness2_loop", "mcp_tool_dispatch", "trading_tool_stream", "web_search_extract", "otel_telemetry"],
+      "purpose": "Run-scoped state owned by AgentSessionRegistry/ActiveGenerationTracker: tool-call history and fingerprints, per-run scrape budget, known-dead URL map, read-only result reuse, and the activeTools set — pruned together when the run ends (a989f16). Runs survive client disconnect (ADR-10)."
+    },
+    {
+      "id": "conversations",
+      "kind": "mongo_collection",
+      "layer": 1,
+      "join_keys": ["conversationId", "messageId"],
+      "ttl": "permanent",
+      "writers": ["auth_session", "harness2_loop"],
+      "readers": ["harness2_loop", "embedding_rag"],
+      "purpose": "Conversation turns and derived fields (appendMessages field builders); the corpus the conversation-embedding service indexes and the loop recalls from."
+    },
+    {
+      "id": "durable_completions",
+      "kind": "mongo_collection",
+      "layer": 1,
+      "join_keys": ["completionId"],
+      "ttl": "permanent",
+      "writers": ["harness2_loop"],
+      "readers": ["auth_session"],
+      "purpose": "Durable model completions for the LLMSortObsidian plugin: PUT /obsidian-completions persists the run; GET re-attaches with SSE push of live reasoning, activeTools and deltas (9276e3f)."
+    },
+    {
+      "id": "custom_agents",
+      "kind": "mongo_collection",
+      "layer": 1,
+      "join_keys": ["agentId"],
+      "ttl": "permanent",
+      "writers": ["auth_session"],
+      "readers": ["auth_session", "model_router", "harness2_loop"],
+      "purpose": "The shared agent registry (prism.custom_agents): all 34 agents including the trading V3 personas, read directly since prism registration was removed; Canvas persona upserted natively at boot by ClientPersonaSync."
+    },
+    {
+      "id": "tool_schemas",
+      "kind": "file",
+      "layer": 2,
+      "join_keys": ["toolName", "ownerApp"],
+      "ttl": "until-regenerated",
+      "writers": ["mcp_tool_dispatch"],
+      "readers": ["mcp_tool_dispatch", "harness2_loop"],
+      "purpose": "The 78-tool catalog: shards under tool_schemas/<owner_app>/ are the source of truth; scripts/export_tool_schemas.py writes the flat tool_schemas.json and byte-identical trading copies (ADR-02); the runtime cache is filled by ensureSchemas(), which waits for an in-flight fetch (f8c7737)."
+    },
+    {
+      "id": "mcp_servers",
+      "kind": "mongo_collection",
+      "layer": 2,
+      "join_keys": ["serverId", "transport"],
+      "ttl": "permanent",
+      "writers": ["http_ingress"],
+      "readers": ["mcp_tool_dispatch"],
+      "purpose": "MCP server registry rows (prism.mcp_servers) for outbound sse/streamable-http connections; stdio rows connect only when the exact command is on MCP_STDIO_COMMANDS (assertStdioAllowed, ADR-06)."
+    },
+    {
+      "id": "trading_bridge",
+      "kind": "external_api",
+      "layer": 3,
+      "join_keys": ["cycleId", "toolName"],
+      "ttl": "cycle",
+      "writers": ["trading_tool_stream", "web_search_extract"],
+      "readers": ["trading_tool_stream", "web_search_extract"],
+      "purpose": "External API surface: trading-service tool endpoints (writes gated by the signed _lazy_trading_context and cycle-scoping — synthetic probe cycles get no write tools), the Exa web-search backend, and scraper-service; per-run budgets and tool-budget stops close the run (e5611e9, 02b24a4)."
+    },
+    {
+      "id": "embedding_vectors",
+      "kind": "mongo_collection",
+      "layer": 4,
+      "join_keys": ["docId", "space"],
+      "ttl": "permanent",
+      "writers": ["embedding_rag"],
+      "readers": ["embedding_rag", "harness2_loop"],
+      "purpose": "EmbeddingGemma 2 vectors for conversation/memory RAG, produced through the shared Jetson queue (embeddinggemma-2 at 10.0.0.30:8001, batch 1–32) and consumed by memory injection and recall."
+    },
+    {
+      "id": "otel_spans",
+      "kind": "otlp_export",
+      "layer": 5,
+      "join_keys": ["traceId", "spanId"],
+      "ttl": "backend-defined",
+      "writers": ["otel_telemetry"],
+      "readers": ["otel_telemetry"],
+      "purpose": "OpenTelemetry span batches exported to OTLP http://10.0.0.16:4318 → Tempo :3200 → Grafana :3300; per-tool latency/error metrics and the tool-call spans the trading bridge and search paths attach; /health never traced (ch.07)."
+    }
+  ],
+  "flows": [
+    {"from": "http_ingress", "to": "request_rows", "key": "requestId,createdAt", "label": "one audit row per non-/health call, createdAt equal to timestamp"},
+    {"from": "http_ingress", "to": "agent_sessions", "key": "sessionId,runId", "label": "run slot opened on POST /agent, decoupled from the SSE connection"},
+    {"from": "auth_session", "to": "custom_agents", "key": "agentId", "label": "persona + enabledTools lookup for the requested agent"},
+    {"from": "auth_session", "to": "conversations", "key": "conversationId,messageId", "label": "caller turns appended with scoped identity"},
+    {"from": "auth_session", "to": "durable_completions", "key": "completionId", "label": "PUT /obsidian-completions persists the requested completion"},
+    {"from": "harness2_loop", "to": "conversations", "key": "conversationId,messageId", "label": "assistant turns, tool history and derived fields written back"},
+    {"from": "harness2_loop", "to": "agent_sessions", "key": "sessionId,runId", "label": "budget counters, dead-URL map, read-only result reuse"},
+    {"from": "harness2_loop", "to": "embedding_vectors", "key": "docId,space", "label": "memory injection query at prompt assembly"},
+    {"from": "harness2_loop", "to": "durable_completions", "key": "completionId", "label": "streamed deltas, reasoning and activeTools for SSE re-attach"},
+    {"from": "mcp_tool_dispatch", "to": "tool_schemas", "key": "toolName,ownerApp", "label": "catalog offer, validation and ensureSchemas refresh"},
+    {"from": "mcp_tool_dispatch", "to": "mcp_servers", "key": "serverId,transport", "label": "connect/tool-list against allowlisted MCP rows"},
+    {"from": "trading_tool_stream", "to": "trading_bridge", "key": "cycleId,toolName", "label": "signed-context trading tool calls with budget accounting"},
+    {"from": "web_search_extract", "to": "trading_bridge", "key": "cycleId,toolName", "label": "Exa search, scrape and /execute fetch behind URL guard and budget"},
+    {"from": "embedding_rag", "to": "embedding_vectors", "key": "docId,space", "label": "batched EmbeddingGemma 2 writes for conversations and memories"},
+    {"from": "otel_telemetry", "to": "otel_spans", "key": "traceId,spanId", "label": "span batches exported per request, tool call and bridge hop"},
+    {"from": "request_rows", "to": "otel_spans", "key": "requestId,traceId", "label": "audit rows correlated to their trace for audit readers"}
+  ]
+}

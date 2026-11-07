@@ -32,9 +32,8 @@ and the dates are what the daily audit reads to decide what has gone stale.
 from __future__ import annotations
 
 import argparse
-import base64
 import html
-import mimetypes
+import json
 import re
 import subprocess
 import sys
@@ -45,19 +44,115 @@ DOCS_DIR = Path(__file__).resolve().parent
 CHAPTERS_DIR = DOCS_DIR / "chapters"
 OUTPUT = DOCS_DIR / "index.html"
 
+# The ticket ledger. One file per PROJECT, not per repo: the trading cycle spans
+# trading-client, trading-service, lazy-agent-service and scraper-service, and a
+# single cycle bug can need all four. `owner` on each ticket says which repo it
+# belongs to. Other projects (games, html-notes, music-player) carry their own
+# ledger next to their own chapters; nothing is shared between projects.
+TICKETS = DOCS_DIR / "tickets.jsonl"
+LEDGER_CHAPTER = "11-tickets.md"
+
+# The two graph sources rendered as views 1 and 2. They are validated by
+# check_graphs.py; the builder only renders them and maps tickets onto their
+# nodes, so a graph edit never needs an HTML edit.
+EXEC_GRAPH = DOCS_DIR / "execution_graph.json"
+DATA_GRAPH = DOCS_DIR / "data_flow_graph.json"
+
+# The workspace project bar. `active_slug` is this repo's own entry, so the bar
+# can mark "Trading Cycle" as the page you are already on.
+PROJECTS_JSON = DOCS_DIR / "_projects.json"
+ACTIVE_PROJECT = "trading-cycle"
+
+# Where a `repo:path` covers entry is resolved from. Relative to the repo root
+# that holds this documentation/ tree.
+REPO_ROOTS = {
+    "trading-client": ".",
+    "trading-service": "../trading-service",
+    "scraper-service": "../../../agents/scraper-service",
+    "lazy-agent-service": "../../../agents/lazy-agent-service",
+    "prism-service": "../../../prism-service",
+}
+OPEN_STATUSES = {"open", "in_progress", "blocked"}
+CLOSED_STATUSES = {"verified", "closed"}
+SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+
+# This same builder is copied into every project's documentation/ tree, so it
+# must not assume it is rendering the trading cycle's page. `--docs-dir`
+# repoints every path above; `--project` (or the _projects.json match below)
+# says which project bar entry to mark active.
+WORKSPACE_PROJECTS = "finance/trading/trading-client/documentation/_projects.json"
+
+
+def _use_docs_dir(docs_dir: Path) -> None:
+    """Point every DOCS_DIR-derived path at another project's documentation/."""
+    global DOCS_DIR, CHAPTERS_DIR, OUTPUT, TICKETS, EXEC_GRAPH, DATA_GRAPH
+    global PROJECTS_JSON, _DOCS_DIR
+    DOCS_DIR = docs_dir
+    CHAPTERS_DIR = DOCS_DIR / "chapters"
+    OUTPUT = DOCS_DIR / "index.html"
+    TICKETS = DOCS_DIR / "tickets.jsonl"
+    EXEC_GRAPH = DOCS_DIR / "execution_graph.json"
+    DATA_GRAPH = DOCS_DIR / "data_flow_graph.json"
+    PROJECTS_JSON = DOCS_DIR / "_projects.json"
+    _DOCS_DIR = DOCS_DIR
+
+
+def _sun_root() -> Path | None:
+    """The workspace root, i.e. the nearest ancestor directory named sun/."""
+    for candidate in (DOCS_DIR, *DOCS_DIR.parents):
+        if candidate.name == "sun":
+            return candidate
+    return None
+
+
+def _detect_project() -> str | None:
+    """Slug of the project whose index.html this build produces.
+
+    The manifest is looked for in this documentation/ tree first, then in the
+    workspace's own trading-client documentation/ tree, and the page path is
+    matched against each entry's `source_html`."""
+    manifests = [DOCS_DIR / "_projects.json"]
+    root = _sun_root()
+    if root is not None:
+        manifests.append(root / WORKSPACE_PROJECTS)
+    target = (DOCS_DIR / "index.html").resolve()
+    for manifest in manifests:
+        if not manifest.is_file() or root is None:
+            continue
+        try:
+            projects = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(projects, list):
+            continue
+        for p in projects:
+            if not isinstance(p, dict) or not p.get("slug") or not p.get("source_html"):
+                continue
+            if (root / p["source_html"]).resolve() == target:
+                return p["slug"]
+    return None
+
 
 # ---------------------------------------------------------------- inline pass
 
-def _image_html(m: re.Match) -> str:
-    reference = html.unescape(m.group(2))
-    source = reference
-    asset = (DOCS_DIR.parent / reference).resolve()
-    # Chapters use repository-relative assets; embed them so the compiled sheet
-    # works both in the documentation hub and when opened directly from disk.
-    mime = mimetypes.guess_type(reference)[0]
-    if not Path(reference).is_absolute() and asset.is_relative_to(DOCS_DIR.parent) and asset.is_file() and mime and mime.startswith("image/"):
-        source = f"data:{mime};base64,{base64.b64encode(asset.read_bytes()).decode('ascii')}"
-    return f'<img src="{html.escape(source, quote=True)}" alt="{m.group(1)}">'
+_DOCS_DIR = Path(__file__).resolve().parent
+_IMAGE_TYPES = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+
+
+def _img_src(src: str) -> str:
+    """A local figure under documentation/ becomes a data URI. The served page
+    is one file (/documentation returns index.html; nothing under artifacts/
+    is routed), so a relative src 404s there. Anything remote, missing, or
+    outside documentation/ is left as written."""
+    if "://" in src or src.startswith(("/", "data:")):
+        return src
+    path = (_DOCS_DIR / src).resolve()
+    mime = _IMAGE_TYPES.get(path.suffix.lower())
+    if not mime or _DOCS_DIR not in path.parents or not path.is_file():
+        return src
+    import base64
+    return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
 def _inline(text: str) -> str:
@@ -75,7 +170,7 @@ def _inline(text: str) -> str:
     # Images before links — same leading bracket, different meaning.
     text = re.sub(
         r"!\[([^\]]*)\]\(([^)\s]+)\)",
-        _image_html,
+        lambda m: f'<img src="{html.escape(_img_src(html.unescape(m.group(2))), quote=True)}" alt="{m.group(1)}">',
         text,
     )
     text = re.sub(
@@ -520,6 +615,144 @@ figcaption{margin-top:.8rem;font-size:.82rem;color:var(--ink-soft);text-align:ce
   section.chapter{border:0;box-shadow:none;page-break-inside:avoid;padding:0 0 1.5rem}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ------------------------------------------------------- 4-view client
+   Views 1-3 are graph/ticket surfaces rendered outside `main`, so they carry
+   their own heading scale. View 4 is the chapter shell and keeps its layout. */
+.view-switcher{
+  display:flex;flex-wrap:wrap;gap:.4rem;padding:.75rem 1.5rem;
+  background:var(--panel);border-bottom:1px solid var(--rule);
+}
+.view-tab{
+  font:inherit;font-size:.82rem;font-weight:550;cursor:pointer;
+  padding:.42rem .85rem;border-radius:8px;
+  border:1px solid var(--rule);background:var(--panel-2);color:var(--ink-soft);
+}
+.view-tab:hover{color:var(--ink);border-color:var(--ink-soft)}
+.view-tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.view-tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.doc-view{display:none}
+.doc-view.active{display:block}
+.doc-view:not(#view-ref){max-width:1180px;margin:0 auto;padding:2rem 1.5rem 5rem}
+.doc-view h1{
+  font-family:ui-serif,Charter,"Bitstream Charter",Georgia,serif;
+  font-size:1.55rem;font-weight:600;letter-spacing:-.01em;
+  margin:0 0 .55rem;padding-bottom:.6rem;border-bottom:1px solid var(--rule);
+}
+.doc-view h2{
+  font-family:ui-serif,Charter,"Bitstream Charter",Georgia,serif;
+  font-size:1.18rem;font-weight:600;margin:1.9rem 0 .7rem;
+}
+.view-lede{color:var(--ink-soft);max-width:78ch;margin:0 0 1.4rem}
+.muted{color:var(--ink-soft)}
+.pill.muted{background:var(--panel-2);color:var(--ink-soft);border-color:var(--rule)}
+button.pill{font-family:inherit;cursor:pointer}
+/* Graph canvases: the SVG scales to the column, so a wide diagram stays legible
+   on a laptop without a second scroll region. */
+.graph-canvas svg{width:100%;height:auto;display:block;color:var(--ink);min-width:640px}
+.graph-node .gn-box{fill:var(--panel);stroke:var(--rule);stroke-width:1.5}
+.graph-node:hover .gn-box{stroke-width:2.5}
+.graph-node.gn-bad .gn-box{stroke:var(--bad)}
+.graph-node.gn-warn .gn-box{stroke:var(--warn)}
+.graph-node.gn-ok .gn-box{stroke:var(--ok)}
+.gn-stage{font-size:8.5px;font-weight:650;fill:var(--ink)}
+.gn-repo{font-size:7.5px;fill:var(--ink-soft);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.gn-pill{fill:var(--panel-2);stroke:none}
+.gn-bad .gn-pill{fill:var(--bad-bg)}
+.gn-warn .gn-pill{fill:var(--warn-bg)}
+.gn-ok .gn-pill{fill:var(--ok-bg)}
+.gn-pill-text{font-size:7.5px;font-weight:650;fill:var(--ink-soft)}
+.gn-bad .gn-pill-text{fill:var(--bad)}
+.gn-warn .gn-pill-text{fill:var(--warn)}
+.gn-ok .gn-pill-text{fill:var(--ok)}
+.edges .edge{fill:none;stroke-width:1.4}
+.edge-control{stroke:var(--accent)}
+.edge-parallel{stroke:var(--accent);stroke-dasharray:6 4;stroke-width:1.6}
+.edge-async{stroke:var(--ink-soft);stroke-dasharray:2 4;stroke-width:1.1;opacity:.85}
+.mk-control path,.mk-parallel path{fill:var(--accent)}
+.mk-async path{fill:var(--ink-soft)}
+.col-rule{stroke:var(--rule);stroke-dasharray:3 5;stroke-width:1}
+.layer-head{
+  font-size:8.5px;font-weight:700;fill:var(--accent);
+  text-transform:uppercase;letter-spacing:.06em;
+}
+.store-node .st-box{fill:var(--panel);stroke:var(--rule);stroke-width:1.5}
+.store-node:hover .st-box{stroke:var(--accent);stroke-width:2.2}
+.st-id{font-size:9px;font-weight:650;fill:var(--ink);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.st-kind,.st-join{font-size:7px;fill:var(--ink-soft);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.st-pill{fill:var(--panel-2)}
+.st-pill.st-warn{fill:var(--warn-bg)}
+.st-pill.st-ok{fill:var(--ok-bg)}
+.st-pill-text{font-size:7px;font-weight:650;fill:var(--ink-soft)}
+.st-pill.st-warn + .st-pill-text{fill:var(--warn)}
+.actor-node .act-box{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1}
+.actor-node:hover .act-box{stroke-width:2.2}
+.act-label{font-size:6.8px;fill:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.flow-edge{fill:none;stroke:var(--ink-soft);stroke-width:1.1;opacity:.85}
+.mk-flow path{fill:var(--ink-soft)}
+/* Stage cards: one per node, ordered by stage, so a reader can go straight to
+   the stage they care about instead of hunting inside the diagram. */
+.node-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:.9rem;margin:0 0 1.6rem}
+.node-card{
+  background:var(--panel);border:1px solid var(--rule);border-left-width:3px;
+  border-radius:8px;padding:.9rem 1rem;box-shadow:var(--shadow);
+}
+.node-card.gn-bad{border-left-color:var(--bad)}
+.node-card.gn-warn{border-left-color:var(--warn)}
+.node-card.gn-ok{border-left-color:var(--ok)}
+.node-card-head{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:0 0 .65rem}
+.node-card-head h3{
+  flex:1 1 100%;margin:0;font-size:.9rem;font-weight:650;
+  font-family:ui-serif,Charter,Georgia,serif;
+}
+.node-badge{font-family:inherit;cursor:pointer}
+.node-facts{margin:0;display:grid;gap:.35rem;font-size:.8rem}
+.node-facts div{display:grid;grid-template-columns:118px minmax(0,1fr);gap:.5rem;align-items:baseline}
+.node-facts dt{
+  color:var(--ink-soft);font-size:.66rem;text-transform:uppercase;
+  letter-spacing:.05em;font-weight:650;
+}
+.node-facts dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.node-facts dd.covers code{font-size:.7rem;margin:0 .25rem .25rem 0;display:inline-block}
+/* Ticket hub: filters are one row on a desktop and wrap on a phone; the table
+   hides rows with `hidden`, never re-renders, so the DOM is the source of truth. */
+.ticket-filters{
+  display:flex;flex-wrap:wrap;gap:.6rem;align-items:flex-end;
+  background:var(--panel);border:1px solid var(--rule);border-radius:8px;
+  padding:.8rem .9rem;margin:0 0 1rem;
+}
+.ticket-filters label{
+  display:flex;flex-direction:column;gap:.2rem;
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--ink-soft);font-weight:650;
+}
+.ticket-filters label.wide{flex:1 1 260px}
+.ticket-filters select,.ticket-filters input{
+  font:inherit;font-size:.82rem;padding:.3rem .45rem;
+  border:1px solid var(--rule);border-radius:6px;
+  background:var(--panel);color:var(--ink);
+}
+.ticket-filters button{
+  font:inherit;font-size:.8rem;padding:.36rem .85rem;cursor:pointer;
+  border:1px solid var(--rule);border-radius:6px;
+  background:var(--panel-2);color:var(--ink);
+}
+#flt-count{font-size:.75rem;color:var(--ink-soft);margin-left:auto;font-family:ui-monospace,Menlo,monospace}
+#tickets-table{font-size:.8rem}
+#tickets-table td{vertical-align:top}
+.tck-id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:650;font-size:.75rem;margin-right:.25rem}
+.tck-node{font-family:ui-monospace,Menlo,monospace;cursor:pointer}
+.tck-title{font-weight:550;margin-bottom:.15rem}
+.tck-area{font-size:.7rem;margin-top:.15rem}
+.tck-res{font-size:.75rem;max-width:36ch}
+.tck-res code{font-size:.72rem}
+tr.tck-row[hidden]{display:none}
+@media (max-width:900px){
+  .view-switcher{padding:.6rem 1rem}
+  .doc-view:not(#view-ref){padding:1.2rem 1rem 3rem}
+  .node-facts div{grid-template-columns:1fr}
+  .ticket-filters label{flex:1 1 100%}
+}
 """
 
 PAGE = """<!doctype html>
@@ -531,6 +764,7 @@ PAGE = """<!doctype html>
 <style>{css}</style>
 </head>
 <body>
+{project_bar}
 <header class="masthead">
   <div class="masthead-inner">
     <div>
@@ -540,6 +774,11 @@ PAGE = """<!doctype html>
     <span class="stamp"><span class="freshness lede" data-ts="{newest}"></span>generated {stamp} · do not edit by hand</span>
   </div>
 </header>
+{tabs}
+{view_exec}
+{view_data}
+{view_tickets}
+<section class="doc-view" id="view-ref">
 <div class="shell">
   <nav class="toc" aria-label="Contents">
     <h2>Contents</h2>
@@ -547,6 +786,7 @@ PAGE = """<!doctype html>
   </nav>
   <main>{body}</main>
 </div>
+</section>
 <script>
 /* Relative "updated N ago" labels. Rendered at VIEW time, not build time: a
    relative string baked into static HTML is wrong the moment it is written,
@@ -575,7 +815,7 @@ PAGE = """<!doctype html>
       if (seconds < 0) seconds = 0;
       var isRecent = seconds < 86400 * 2; /* 2 days */
       nodes[i].classList.toggle("recent", isRecent);
-
+      
       if (nodes[i].classList.contains("badge")) {{
          nodes[i].textContent = isRecent ? "UPDATED" : "";
          if (!isRecent) nodes[i].style.display = "none";
@@ -604,6 +844,115 @@ PAGE = """<!doctype html>
   paint();
   /* A page left open overnight must not still claim "updated 2 minutes ago". */
   setInterval(paint, 60000);
+}})();
+</script>
+<script>
+/* 4-view client. One file, four surfaces. The hash addresses a view
+   (#view-exec …), and a chapter anchor is an address INSIDE view 4, so a
+   deep link like #decisions switches to Reference and scrolls to it instead
+   of dead-ending on a hidden section. */
+(function () {{
+  var VIEWS = ["exec", "data", "tickets", "ref"];
+  var ACTIVE_STATUSES = ["open", "in_progress", "blocked"];
+
+  function byId(id) {{ return document.getElementById(id); }}
+
+  function setHash(hash) {{
+    try {{
+      if (location.hash !== hash) history.replaceState(null, "", hash);
+    }} catch (e) {{
+      /* file:// pages refuse replaceState in some browsers; the view still
+         switches, only the address bar does not follow. */
+      location.hash = hash;
+    }}
+  }}
+
+  function switchDocView(name) {{
+    if (VIEWS.indexOf(name) < 0) return;
+    var views = document.querySelectorAll(".doc-view");
+    for (var i = 0; i < views.length; i++) {{
+      views[i].classList.toggle("active", views[i].id === "view-" + name);
+    }}
+    var tabs = document.querySelectorAll(".view-tab");
+    for (var j = 0; j < tabs.length; j++) {{
+      tabs[j].classList.toggle("active", tabs[j].getAttribute("data-view") === name);
+    }}
+    setHash("#view-" + name);
+  }}
+
+  function filterTicketsByNode(nodeId) {{
+    switchDocView("tickets");
+    var sel = byId("flt-node");
+    if (sel) sel.value = nodeId || "";
+    applyTicketFilters();
+  }}
+
+  function applyTicketFilters() {{
+    var node = byId("flt-node") ? byId("flt-node").value : "";
+    var status = byId("flt-status") ? byId("flt-status").value : "";
+    var sev = byId("flt-sev") ? byId("flt-sev").value : "";
+    var owner = byId("flt-owner") ? byId("flt-owner").value : "";
+    var qEl = byId("flt-q");
+    var q = qEl ? qEl.value.trim().toLowerCase() : "";
+    var rows = document.querySelectorAll("#tickets-table tr.tck-row");
+    var shown = 0;
+    for (var i = 0; i < rows.length; i++) {{
+      var row = rows[i];
+      var ok = true;
+      if (node && row.getAttribute("data-node") !== node) ok = false;
+      var st = row.getAttribute("data-status");
+      if (ok && status) {{
+        if (status === "active") ok = ACTIVE_STATUSES.indexOf(st) >= 0;
+        else ok = st === status;
+      }}
+      if (ok && sev && row.getAttribute("data-sev") !== sev) ok = false;
+      if (ok && owner && row.getAttribute("data-owner") !== owner) ok = false;
+      if (ok && q && row.textContent.toLowerCase().indexOf(q) < 0) ok = false;
+      row.hidden = !ok;
+      if (ok) shown++;
+    }}
+    var count = byId("flt-count");
+    if (count) count.textContent = "Showing " + shown + " of " + rows.length + " tickets";
+  }}
+
+  function resetTicketFilters() {{
+    ["flt-node", "flt-status", "flt-sev", "flt-owner"].forEach(function (id) {{
+      var el = byId(id);
+      if (el) el.value = "";
+    }});
+    var q = byId("flt-q");
+    if (q) q.value = "";
+    applyTicketFilters();
+  }}
+
+  function applyHash() {{
+    var h = location.hash || "";
+    if (h.indexOf("#view-") === 0 && VIEWS.indexOf(h.slice(6)) >= 0) {{
+      switchDocView(h.slice(6));
+      return;
+    }}
+    if (h.length > 1) {{
+      var target = byId(h.slice(1));
+      if (target && target.closest(".doc-view")) {{
+        var ownerView = target.closest(".doc-view");
+        var name = ownerView.id.replace(/^view-/, "");
+        switchDocView(name);
+        /* Keep the deep link: switchDocView rewrote the hash to #view-<name>. */
+        setHash(h);
+        target.scrollIntoView({{ block: "start" }});
+        return;
+      }}
+    }}
+    switchDocView("exec");
+  }}
+
+  window.switchDocView = switchDocView;
+  window.filterTicketsByNode = filterTicketsByNode;
+  window.applyTicketFilters = applyTicketFilters;
+  window.resetTicketFilters = resetTicketFilters;
+
+  window.addEventListener("hashchange", applyHash);
+  applyHash();
 }})();
 </script>
 </body>
@@ -663,6 +1012,7 @@ FRONT_KEYS = {"part", "status", "updated", "review-by", "owner", "supersedes", "
 STATUS_TONE = {
     "approved": "warn",
     "in-progress": "warn",
+    "draft": "warn",
     "blocked": "bad",
     "shipped": "ok",
     "verified": "ok",
@@ -853,6 +1203,197 @@ def _load_parts(records: list[dict]) -> list[dict]:
     return [g for g in grouped if g["chapters"]]
 
 
+# ------------------------------------------------------------- ticket ledger
+
+def _load_tickets() -> list[dict]:
+    """Read the JSONL ledger. A malformed line is skipped and reported by
+    check_tickets.py, which is the file that owns schema validation — the
+    builder must still render the rest of the board rather than fail the build."""
+    if not TICKETS.exists():
+        return []
+    out = []
+    for line in TICKETS.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("id"):
+            out.append(rec)
+    return out
+
+
+def _repo_root(repo: str) -> Path | None:
+    """Repo root for a `repo:path` covers entry, or None.
+
+    The built-in REPO_ROOTS table covers the trading cycle's repos. Any other
+    project's docs live next to repos that table cannot know about, so the
+    workspace layout is searched by name before giving up."""
+    root = REPO_ROOTS.get(repo)
+    if root:
+        candidate = (DOCS_DIR.parent / root).resolve()
+        if candidate.is_dir():
+            return candidate
+    sun_root = _sun_root()
+    if sun_root is None:
+        return None
+    candidates = [
+        sun_root / repo,
+        sun_root / "games" / repo,
+        sun_root / "agents" / repo,
+        sun_root / "apps" / repo,
+        sun_root / "apps/media" / repo,
+        sun_root / "apps/braindeadbot" / repo,
+        sun_root / "apps/obsidian" / repo,
+        sun_root / "hardware" / repo,
+        sun_root / "finance/trading" / repo,
+    ]
+    if repo in (DOCS_DIR.parent.name, ACTIVE_PROJECT):
+        candidates.append(DOCS_DIR.parent)
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate.resolve()
+    return None
+
+
+def _repo_last_date(entry: str) -> str | None:
+    """Last commit date for a `repo:path` covers entry, or None."""
+    repo, sep, path = entry.partition(":")
+    if not sep:
+        repo, path = "trading-client", entry
+    root = _repo_root(repo)
+    if root is None:
+        return None
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(root), "log", "-1", "--format=%cs", "--", path],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (res.stdout or "").strip() or None
+
+
+def _ticket_flags(t: dict, today: str, dates: dict) -> list[str]:
+    """STALE = an open ticket nobody has looked at since review_by.
+    REGRESSED = a closed ticket whose covered code moved after it was verified."""
+    flags = []
+    status = t.get("status", "")
+    review_by = t.get("review_by") or ""
+    if status in OPEN_STATUSES and review_by and review_by < today:
+        flags.append("STALE")
+    if status in CLOSED_STATUSES:
+        verified = t.get("verified_by") or {}
+        verified_on = verified.get("last_run") or ""
+        if verified_on:
+            for entry in t.get("covers") or []:
+                last = dates.get(entry) or _repo_last_date(entry)
+                dates[entry] = last
+                if last and last > verified_on:
+                    flags.append("REGRESSED")
+                    break
+    return flags
+
+
+def _cell(value: object, limit: int = 120) -> str:
+    text = str(value if value is not None else "").replace("|", "\\|").strip()
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _ticket_board(tickets: list[dict], dates: dict | None = None) -> str:
+    """Markdown for the ledger chapter. Generated — never hand-edited."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    if not tickets:
+        return ("# Ticket ledger\n\n"
+                "No `tickets.jsonl` yet. Tickets are recorded there, one JSON object per line, "
+                "and this page is generated from it by `build_docs.py`.\n")
+
+    if dates is None:
+        dates = {}
+    by_status: dict[str, int] = {}
+    by_sev: dict[str, dict[str, int]] = {}
+    for t in tickets:
+        st = t.get("status", "?")
+        sev = t.get("severity", "?")
+        by_status[st] = by_status.get(st, 0) + 1
+        bucket = by_sev.setdefault(sev, {"open": 0, "closed": 0})
+        if st in OPEN_STATUSES:
+            bucket["open"] += 1
+        elif st in CLOSED_STATUSES:
+            bucket["closed"] += 1
+
+    open_rows = [t for t in tickets if t.get("status") in OPEN_STATUSES]
+    closed_rows = [t for t in tickets if t.get("status") in CLOSED_STATUSES]
+    other_rows = [t for t in tickets if t.get("status") not in OPEN_STATUSES | CLOSED_STATUSES]
+
+    out = ["# Ticket ledger", "",
+           "Generated from `documentation/tickets.jsonl`. Closed tickets stay in the file: "
+           "that history is how a problem is looked up again months later.", ""]
+
+    out += ["## Totals", "", "| status | count |", "|---|---|"]
+    for st in sorted(by_status):
+        out.append(f"| {st} | {by_status[st]} |")
+    out += ["", "| severity | open | closed |", "|---|---|---|"]
+    for sev in sorted(by_sev, key=lambda s: SEVERITY_ORDER.get(s, 9)):
+        out.append(f"| {sev} | {by_sev[sev]['open']} | {by_sev[sev]['closed']} |")
+
+    out += ["", f"## Open work ({len(open_rows)})", ""]
+    if not open_rows:
+        out += ["Nothing open.", ""]
+    for sev in sorted({t.get("severity", "?") for t in open_rows},
+                      key=lambda s: SEVERITY_ORDER.get(s, 9)):
+        rows = [t for t in open_rows if t.get("severity") == sev]
+        rows.sort(key=lambda t: (t.get("area", ""), t.get("id", "")))
+        out += [f"### {sev} ({len(rows)})", "",
+                "| id | title | status | area | owner | age (d) | flags |",
+                "|---|---|---|---|---|---|---|"]
+        for t in rows:
+            opened = t.get("opened") or ""
+            try:
+                age = (datetime.fromisoformat(today) - datetime.fromisoformat(opened)).days
+            except ValueError:
+                age = ""
+            flags = " ".join(_ticket_flags(t, today, dates)) or "—"
+            out.append(
+                f"| {_cell(t.get('id'), 12)} | {_cell(t.get('title'))} | {_cell(t.get('status'), 20)} "
+                f"| {_cell(t.get('area'), 20)} | {_cell(t.get('owner'), 24)} | {age} | {flags} |"
+            )
+        out.append("")
+
+    out += ["", f"## Closed and verified ({len(closed_rows)})", ""]
+    if closed_rows:
+        out += ["| id | title | severity | closed | verified by |", "|---|---|---|---|---|"]
+        for t in sorted(closed_rows, key=lambda t: t.get("id", "")):
+            closed_by = t.get("closed_by") or {}
+            verified = t.get("verified_by") or {}
+            out.append(
+                f"| {_cell(t.get('id'), 12)} | {_cell(t.get('title'))} | {_cell(t.get('severity'), 4)} "
+                f"| {_cell(closed_by.get('date'), 12)} | {_cell(verified.get('cmd'), 70)} |"
+            )
+        out.append("")
+    else:
+        out += ["Nothing closed yet.", ""]
+
+    if other_rows:
+        out += [f"## Won't fix / regressed ({len(other_rows)})", "",
+                "| id | title | status | reason |", "|---|---|---|---|"]
+        for t in other_rows:
+            reason = (t.get("closed_by") or {}).get("note") or ""
+            out.append(f"| {_cell(t.get('id'), 12)} | {_cell(t.get('title'))} | "
+                       f"{_cell(t.get('status'), 20)} | {_cell(reason)} |")
+        out.append("")
+
+    out += ["## Legend", "",
+            "- **P0** cycle halts or the money path is wrong · **P1** wrong desk data or a broken gate · "
+            "**P2** degraded coverage or a wrong dashboard · **P3** debt and cleanup.",
+            "- **STALE** open ticket past its `review_by` date — nobody has looked at it since.",
+            "- **REGRESSED** closed ticket whose covered code changed after it was verified.",
+            "- **age** days since the ticket was opened.", ""]
+    return "\n".join(out)
+
+
 def _read_chapters() -> list[dict]:
     """Parse every chapter once into {path, meta, body}. Front matter is split
     off here so it is never rendered as prose — a chapter that shows its own
@@ -868,10 +1409,814 @@ def _read_chapters() -> list[dict]:
     return records
 
 
+# ------------------------------------------------------- graph views
+#
+# The page is a 4-view client: execution graph, data state-flow, live tickets,
+# reference. Views 1-3 are rendered here from the two graph JSONs and the
+# ledger; view 4 is the chapter body this builder already produced. Nothing in
+# this section is hand-written HTML — every count and badge comes from a file.
+
+CLOSED_ALL = CLOSED_STATUSES | {"wontfix", "wont-fix"}
+
+# One column per stage; the column width comes from the graph's own stage count.
+EXEC_W, EXEC_H = 1360, 440
+EXEC_BOX_W, EXEC_BOX_H, EXEC_GAP = 120, 96, 16
+
+# Data-flow layer 0..5, six columns.
+DATA_LAYERS = {
+    0: "External & Collectors",
+    1: "Cycle Control & Ledger",
+    2: "Desk & Telemetry",
+    3: "Decisions",
+    4: "Execution & Lots",
+    5: "Grading & Calibration",
+}
+DATA_COLS = len(DATA_LAYERS)
+DATA_W, DATA_H = 1280, 460
+DATA_STORE_W, DATA_STORE_H = 150, 84
+DATA_ACTOR_W, DATA_ACTOR_H = 40, 16
+
+AREA_NODE = {
+    "board": "board", "gate": "gatekeeper", "preflight": "preflight",
+    "grading": "grading", "execution": "execution", "collectors": "collectors",
+    "scraper": "collectors", "las-harness": "las_bridge", "context": "phase0",
+    "agents": "junior", "infra": "trigger", "dashboard": "trigger",
+}
+
+TITLE_NODE = (
+    (("debate", "bull", "bear"), "debate"),
+    (("fundamental",), "fa"),
+    (("quant", "equation", "garch"), "qa"),
+    (("valuation",), "va"),
+    (("regime",), "regime"),
+    (("junior",), "junior"),
+    (("phase 0", "phase0", "whiteboard", "ledger"), "phase0"),
+    (("board",), "board"),
+    (("gatekeeper",), "gatekeeper"),
+)
+
+
+def _load_graph(path: Path) -> dict:
+    """A missing or malformed graph is a hard build error: a view that silently
+    renders empty is worse than a build that says why it cannot."""
+    if not path.exists():
+        raise SystemExit(f"{path.name} is missing; views 1-2 are rendered from it.")
+    try:
+        graph = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"{path.name} is not valid JSON: {e}")
+    if not isinstance(graph, dict):
+        raise SystemExit(f"{path.name} must contain a JSON object.")
+    return graph
+
+
+def _ticket_node(t: dict, nodes: list[dict]) -> str:
+    """Every ticket lands on exactly one execution node.
+
+    Explicit `node:` wins; then a shared `covers` entry (the node that covers
+    the most of them); then a title keyword; then the ticket's area. The point
+    is that no ticket is invisible on the graph: an unmapped ticket would be a
+    red badge nobody can see, which is the failure mode this page exists to
+    prevent.
+    """
+    ids = {n.get("id") for n in nodes}
+    explicit = t.get("node")
+    if explicit in ids:
+        return explicit
+
+    covers = set(t.get("covers") or [])
+    if covers:
+        best, best_hits = None, 0
+        for n in nodes:
+            hits = len(covers & set(n.get("covers") or []))
+            if hits > best_hits:
+                best, best_hits = n.get("id"), hits
+        if best:
+            return best
+
+    title = (t.get("title") or "").casefold()
+    for keys, node_id in TITLE_NODE:
+        if any(k in title for k in keys) and node_id in ids:
+            return node_id
+
+    fallback = AREA_NODE.get(t.get("area", ""), "trigger")
+    return fallback if fallback in ids else (nodes[0].get("id") if nodes else "")
+
+
+def _node_stats(tickets: list[dict], nodes: list[dict]) -> dict[str, dict[str, int]]:
+    """Per-node health: open tickets, open P0/P1, and closed history."""
+    stats = {n["id"]: {"open": 0, "p0p1": 0, "closed": 0} for n in nodes}
+    for t in tickets:
+        nid = _ticket_node(t, nodes)
+        bucket = stats.get(nid)
+        if bucket is None:
+            continue
+        status = t.get("status", "")
+        if status in OPEN_STATUSES:
+            bucket["open"] += 1
+            if t.get("severity") in ("P0", "P1"):
+                bucket["p0p1"] += 1
+        elif status in CLOSED_ALL:
+            bucket["closed"] += 1
+    return stats
+
+
+def _health_tone(stat: dict[str, int]) -> str:
+    if stat["p0p1"]:
+        return "bad"
+    if stat["open"]:
+        return "warn"
+    return "ok"
+
+
+def _health_label(stat: dict[str, int]) -> str:
+    if stat["p0p1"]:
+        return f'{stat["p0p1"]} P0/P1 · {stat["open"]} open'
+    if stat["open"]:
+        return f'{stat["open"]} open'
+    return "0 open ✓"
+
+
+def _short_label(label: str) -> str:
+    """'Trigger — Command Enqueue & Dispatch' → 'Trigger'."""
+    return (label or "").split(" — ")[0].strip()
+
+
+def _exec_positions(nodes: list[dict]) -> dict[str, tuple[float, float, float, float]]:
+    """One column per stage, boxes centred vertically inside their column."""
+    by_stage: dict[int, list[dict]] = {}
+    for n in nodes:
+        by_stage.setdefault(int(n.get("stage", 0)), []).append(n)
+    n_cols = max(1, max((int(n.get("stage", 0)) for n in nodes), default=0) + 1)
+    col_w = EXEC_W / n_cols
+    pos = {}
+    for stage, group in by_stage.items():
+        group.sort(key=lambda n: n["id"])
+        total = len(group) * EXEC_BOX_H + (len(group) - 1) * EXEC_GAP
+        top = max(16.0, (EXEC_H - total) / 2)
+        x = stage * col_w + (col_w - EXEC_BOX_W) / 2
+        for i, n in enumerate(group):
+            pos[n["id"]] = (x, top + i * (EXEC_BOX_H + EXEC_GAP), EXEC_BOX_W, EXEC_BOX_H)
+    return pos
+
+
+def _exec_edge_path(a: tuple[float, ...], b: tuple[float, ...]) -> str:
+    """Route an edge so it never runs through a box: same column connects
+    vertically, forward columns curve left-to-right, and a back edge (grading →
+    trigger) loops under the whole diagram."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    if abs(ax - bx) < 1:
+        cx, cy = ax + aw / 2, ay + ah / 2
+        if ay < by:
+            return f"M{cx:.1f} {ay + ah:.1f} L{cx:.1f} {by:.1f}"
+        return f"M{cx:.1f} {ay:.1f} L{cx:.1f} {by + bh:.1f}"
+    if bx > ax:
+        x1, y1 = ax + aw, ay + ah / 2
+        x2, y2 = bx, by + bh / 2
+        dx = (x2 - x1) * 0.45
+        return (f"M{x1:.1f} {y1:.1f} C{x1 + dx:.1f} {y1:.1f} "
+                f"{x2 - dx:.1f} {y2:.1f} {x2:.1f} {y2:.1f}")
+    x1, y1 = ax + aw / 2, ay + ah
+    x2, y2 = bx + bw / 2, by + bh
+    floor = EXEC_H - 10
+    return (f"M{x1:.1f} {y1:.1f} L{x1:.1f} {floor} "
+            f"L{x2:.1f} {floor} L{x2:.1f} {y2:.1f}")
+
+
+def _exec_svg(nodes: list[dict], edges: list[dict],
+              stats: dict[str, dict[str, int]]) -> str:
+    pos = _exec_positions(nodes)
+    markers = "".join(
+        f'<marker id="arrow-{kind}" class="mk-{kind}" viewBox="0 0 8 8" refX="8" '
+        f'refY="4" markerWidth="7" markerHeight="7" orient="auto">'
+        f'<path d="M0,0 L8,4 L0,8 z"/></marker>'
+        for kind in ("control", "parallel", "async")
+    )
+    edge_svg = []
+    for e in edges:
+        src, dst = e.get("from"), e.get("to")
+        if src not in pos or dst not in pos:
+            continue
+        kind = e.get("kind") if e.get("kind") in ("control", "parallel", "async") else "control"
+        edge_svg.append(
+            f'<path class="edge edge-{kind}" d="{_exec_edge_path(pos[src], pos[dst])}" '
+            f'marker-end="url(#arrow-{kind})"><title>{html.escape(src)} → {html.escape(dst)}: '
+            f'{html.escape(e.get("label") or "")}</title></path>'
+        )
+    node_svg = []
+    for n in sorted(nodes, key=lambda n: (int(n.get("stage", 0)), n["id"])):
+        x, y, w, h = pos[n["id"]]
+        stat = stats[n["id"]]
+        tone = _health_tone(stat)
+        health = _health_label(stat)
+        short = _short_label(n.get("label", ""))[:15]
+        nid = n["id"]
+        node_svg.append(
+            f'<g class="graph-node gn-{tone}" data-node="{html.escape(nid, quote=True)}" '
+            f'onclick="window.filterTicketsByNode(\'{html.escape(nid, quote=True)}\')" '
+            f'style="cursor:pointer">'
+            f'<title>Stage {n.get("stage")} · {html.escape(n.get("label", ""))} — '
+            f'{html.escape(n.get("repo", ""))} — {html.escape(health)}</title>'
+            f'<rect class="gn-box" x="{x:.1f}" y="{y:.1f}" width="{w}" height="{h}" rx="9"/>'
+            f'<text class="gn-stage" x="{x + 9:.1f}" y="{y + 21:.1f}">S{n.get("stage")} · '
+            f'{html.escape(short)}</text>'
+            f'<text class="gn-repo" x="{x + 9:.1f}" y="{y + 37:.1f}">'
+            f'{html.escape(n.get("repo", ""))}</text>'
+            f'<rect class="gn-pill" x="{x + 9:.1f}" y="{y + h - 26:.1f}" '
+            f'width="{w - 18}" height="16" rx="8"/>'
+            f'<text class="gn-pill-text" x="{x + w / 2:.1f}" y="{y + h - 15:.1f}" '
+            f'text-anchor="middle">{html.escape(health)}</text>'
+            f'</g>'
+        )
+    stages = sorted({int(n.get("stage", 0)) for n in nodes})
+    stage_span = f"0-{stages[-1]}" if stages else "0"
+    return (
+        f'<figure class="graph-canvas">'
+        f'<svg viewBox="0 0 {EXEC_W} {EXEC_H}" role="img" '
+        f'aria-label="Execution graph: {len(nodes)} nodes across stages {stage_span}">'
+        f'<defs>{markers}</defs>'
+        f'<g class="edges">{"".join(edge_svg)}</g>'
+        f'<g class="nodes">{"".join(node_svg)}</g>'
+        f'</svg>'
+        f'<figcaption>Stages {stage_span} left to right. Solid = control flow, dashed = parallel '
+        f'seats, dotted = async tool/collector work. Click any node to open its tickets.</figcaption>'
+        f'</figure>'
+    )
+
+
+def _exec_cards(nodes: list[dict], stats: dict[str, dict[str, int]]) -> str:
+    cards = []
+    for n in sorted(nodes, key=lambda n: (int(n.get("stage", 0)), n["id"])):
+        nid = n["id"]
+        stat = stats[nid]
+        tone = _health_tone(stat)
+        timeout = n.get("timeout_s")
+        reads = ", ".join(n.get("inputs") or []) or "—"
+        writes = ", ".join(n.get("outputs") or []) or "—"
+        covers = "".join(
+            f'<code>{html.escape(c)}</code> ' for c in (n.get("covers") or [])
+        ) or "—"
+        cards.append(
+            f'<article class="node-card gn-{tone}" id="node-{html.escape(nid, quote=True)}">'
+            f'<header class="node-card-head">'
+            f'<h3>Stage {n.get("stage")} · {html.escape(n.get("label", ""))}</h3>'
+            f'<span class="pill info">{html.escape(n.get("repo", ""))}</span>'
+            f'<button type="button" class="pill {tone} node-badge" '
+            f'onclick="window.filterTicketsByNode(\'{html.escape(nid, quote=True)}\')" '
+            f'title="Show the tickets mapped to this node">'
+            f'{html.escape(_health_label(stat))}</button>'
+            f'</header>'
+            f'<dl class="node-facts">'
+            f'<div><dt>Entry</dt><dd><code>{html.escape(n.get("entry", "") or "—")}</code></dd></div>'
+            f'<div><dt>Timeout</dt><dd>{html.escape(str(timeout) + "s" if timeout else "none")}</dd></div>'
+            f'<div><dt>Failure / Skip Rule</dt><dd>'
+            f'{html.escape(n.get("skip_or_fallback", "") or "—")}</dd></div>'
+            f'<div><dt>Reads → Writes</dt><dd>{html.escape(reads)} → {html.escape(writes)}</dd></div>'
+            f'<div><dt>Covered files</dt><dd class="covers">{covers}</dd></div>'
+            f'</dl></article>'
+        )
+    return f'<div class="node-grid">{"".join(cards)}</div>'
+
+
+def _view_exec(tickets: list[dict], graph: dict,
+               stats: dict[str, dict[str, int]]) -> str:
+    nodes = graph.get("nodes") or []
+    edges = graph.get("edges") or []
+    open_p0p1 = sum(s["p0p1"] for s in stats.values())
+    closed = sum(s["closed"] for s in stats.values())
+    healthy = sum(1 for s in stats.values() if s["p0p1"] == 0)
+    repos = sorted({n.get("repo", "") for n in nodes})
+    stages = sorted({int(n.get("stage", 0)) for n in nodes})
+    stage_span = f"stages {stages[0]}–{stages[-1]}" if stages else "no stages"
+
+    def tile(label: str, value: object, note: str, tone: str) -> str:
+        return (f'<div class="tile {tone}"><div class="label">{html.escape(label)}</div>'
+                f'<div class="value">{html.escape(str(value))}</div>'
+                f'<div class="note">{html.escape(note)}</div></div>')
+
+    kpis = "".join([
+        tile("Execution Nodes", len(nodes),
+             f"{stage_span} across {len(repos)} repos", "ok"),
+        tile("Open P0/P1 on Graph", open_p0p1,
+             "cycle-halting or wrong-desk work", "bad" if open_p0p1 else "ok"),
+        tile("Verified / Closed Tickets", closed,
+             "history kept in the ledger", "ok"),
+        tile("Healthy Nodes (0 P0/P1)", healthy,
+             f"of {len(nodes)} nodes", "warn" if healthy < len(nodes) else "ok"),
+    ])
+    return (
+        f'<section class="doc-view active" id="view-exec">'
+        f'<h1>1. Execution Graph (How It Works)</h1>'
+        f'<p class="view-lede">{len(nodes)} execution nodes across {len(repos)} '
+        f'repo{"" if len(repos) == 1 else "s"} ({stage_span}), stage by stage, with live '
+        f'ticket health from <code>tickets.jsonl</code>.</p>'
+        f'<div class="status-grid">{kpis}</div>'
+        f'{_exec_svg(nodes, edges, stats)}'
+        f'<h2>Stage-by-Stage Node Cards</h2>'
+        f'{_exec_cards(nodes, stats)}'
+        f'</section>'
+    )
+
+
+# Which layer column each execution node sits in on the state-flow map. The
+# flow JSON declares edges between stores and nodes but no actor layer, so the
+# layering of the ACTORS is a rendering decision recorded here (the stores
+# carry their own `layer`).
+NODE_LAYER = {
+    "collectors": 0, "trigger": 1, "preflight": 1, "gatekeeper": 1, "phase0": 1,
+    "regime": 2, "junior": 2, "fa": 2, "qa": 2, "va": 2, "debate": 2,
+    "board": 2, "las_bridge": 2, "contract": 3, "execution": 4, "grading": 5,
+}
+
+
+def _actor_layer(node: dict) -> int:
+    nid = node.get("id", "")
+    if nid in NODE_LAYER:
+        return NODE_LAYER[nid]
+    return min(DATA_COLS - 1, max(0, int(node.get("stage", 0))))
+
+
+def _data_positions(stores: list[dict], actors: list[dict]) -> dict[str, tuple[float, float, float, float, str]]:
+    """Six columns: a header, an actor chip rail on top, stores below it.
+
+    Actors sit above the stores they touch because the same-column edges
+    (collectors → job_runs, execution → orders) are then short vertical arrows
+    instead of a tangle of loops.
+    """
+    col_w = DATA_W / DATA_COLS
+    pos: dict[str, tuple[float, float, float, float, str]] = {}
+
+    by_layer: dict[int, list[dict]] = {}
+    for s in stores:
+        by_layer.setdefault(int(s.get("layer", 0)), []).append(s)
+    actor_by_layer: dict[int, list[dict]] = {}
+    for n in actors:
+        actor_by_layer.setdefault(_actor_layer(n), []).append(n)
+
+    chip_w, chip_h, chip_gap, per_row = 64, DATA_ACTOR_H, 4, 3
+    for layer in range(DATA_COLS):
+        x0 = layer * col_w
+        layer_stores = sorted(by_layer.get(layer, []), key=lambda s: s["id"])
+        layer_actors = sorted(actor_by_layer.get(layer, []), key=lambda n: n["id"])
+
+        rows = (len(layer_actors) + per_row - 1) // per_row
+        rail_h = rows * chip_h + max(0, rows - 1) * chip_gap
+        rail_y = 22.0
+        for i, n in enumerate(layer_actors):
+            row, col = divmod(i, per_row)
+            pos[n["id"]] = (
+                x0 + 8 + col * (chip_w + chip_gap),
+                rail_y + row * (chip_h + chip_gap),
+                chip_w, chip_h, "actor",
+            )
+
+        store_top = rail_y + rail_h + 12
+        avail = DATA_H - store_top - 8
+        total = len(layer_stores) * DATA_STORE_H + max(0, len(layer_stores) - 1) * 8
+        top = store_top + max(0.0, (avail - total) / 2)
+        for i, s in enumerate(layer_stores):
+            pos[s["id"]] = (
+                x0 + 8, top + i * (DATA_STORE_H + 8),
+                DATA_STORE_W, DATA_STORE_H, "store",
+            )
+    return pos
+
+
+def _data_edge_path(s: tuple[float, ...], d: tuple[float, ...]) -> str:
+    sx, sy, sw, sh, skind = s
+    dx, dy, dw, dh, dkind = d
+    if abs(sx - dx) < 1:
+        x1, x2 = sx + sw / 2, dx + dw / 2
+        if sy < dy:
+            y1, y2 = sy + sh, dy
+        else:
+            y1, y2 = sy, dy + dh
+        mid = (y1 + y2) / 2
+        return f"M{x1:.1f} {y1:.1f} C{x1:.1f} {mid:.1f} {x2:.1f} {mid:.1f} {x2:.1f} {y2:.1f}"
+    if dx > sx:
+        x1, y1 = sx + sw, sy + sh / 2
+        x2, y2 = dx, dy + dh / 2
+        bend = (x2 - x1) * 0.45
+        return (f"M{x1:.1f} {y1:.1f} C{x1 + bend:.1f} {y1:.1f} "
+                f"{x2 - bend:.1f} {y2:.1f} {x2:.1f} {y2:.1f}")
+    x1, y1 = sx + sw / 2, sy + sh
+    x2, y2 = dx + dw / 2, dy + dh
+    floor = DATA_H - 8
+    return (f"M{x1:.1f} {y1:.1f} L{x1:.1f} {floor} "
+            f"L{x2:.1f} {floor} L{x2:.1f} {y2:.1f}")
+
+
+def _store_open_count(store: dict, tickets: list[dict], nodes: list[dict]) -> int:
+    """Open tickets that touch a store: named in the title, covered by a
+    `repo:path` entry that contains the collection name, or mapped to one of
+    the nodes that writes it."""
+    sid = store.get("id", "")
+    writers = set(store.get("writers") or [])
+    count = 0
+    for t in tickets:
+        if t.get("status") not in OPEN_STATUSES:
+            continue
+        title = (t.get("title") or "").casefold()
+        covers = t.get("covers") or []
+        if (sid.casefold() in title
+                or any(sid in c for c in covers)
+                or _ticket_node(t, nodes) in writers):
+            count += 1
+    return count
+
+
+def _store_click_target(store: dict, node_ids: set[str]) -> str:
+    for w in store.get("writers") or []:
+        if w in node_ids:
+            return w
+    return "trigger"
+
+
+def _layer_map(graph: dict) -> dict[int, str]:
+    """Column labels: the built-in DATA_LAYERS, overlaid by the graph's own
+    optional `layers` object so a project can name its own columns."""
+    layers = dict(DATA_LAYERS)
+    layers.update({
+        int(k): str(v)
+        for k, v in (graph.get("layers") or {}).items()
+        if str(k).isdigit()
+    })
+    return layers
+
+
+def _data_svg(stores: list[dict], flows: list[dict], actors: list[dict],
+              tickets: list[dict], nodes: list[dict],
+              layers: dict[int, str]) -> str:
+    pos = _data_positions(stores, actors)
+    node_ids = {n["id"] for n in nodes}
+    grid: list[str] = []
+    edges: list[str] = []
+    boxes: list[str] = []
+    col_w = DATA_W / DATA_COLS
+    for layer in range(DATA_COLS):
+        x = layer * col_w
+        grid.append(f'<line class="col-rule" x1="{x:.1f}" y1="4" x2="{x:.1f}" y2="{DATA_H - 4}"/>')
+        grid.append(
+            f'<text class="layer-head" x="{x + 8:.1f}" y="14">{layer} · '
+            f'{html.escape(layers.get(layer, "—"))}</text>'
+        )
+    for f in flows:
+        src, dst = f.get("from"), f.get("to")
+        if src not in pos or dst not in pos:
+            continue
+        edges.append(
+            f'<path class="flow-edge" d="{_data_edge_path(pos[src], pos[dst])}" '
+            f'marker-end="url(#arrow-flow)"><title>{html.escape(src)} → {html.escape(dst)} '
+            f'({html.escape(f.get("key") or "")}): {html.escape(f.get("label") or "")}</title></path>'
+        )
+    for n in actors:
+        x, y, w, h, _ = pos[n["id"]]
+        boxes.append(
+            f'<g class="actor-node" data-node="{html.escape(n["id"], quote=True)}" '
+            f'onclick="window.filterTicketsByNode(\'{html.escape(n["id"], quote=True)}\')" '
+            f'style="cursor:pointer">'
+            f'<title>{html.escape(n.get("label", ""))}</title>'
+            f'<rect class="act-box" x="{x:.1f}" y="{y:.1f}" width="{w}" height="{h}" rx="8"/>'
+            f'<text class="act-label" x="{x + w / 2:.1f}" y="{y + h / 2 + 2.6:.1f}" '
+            f'text-anchor="middle">{html.escape(n["id"][:12])}</text></g>'
+        )
+    for s in sorted(stores, key=lambda s: (int(s.get("layer", 0)), s["id"])):
+        x, y, w, h, _ = pos[s["id"]]
+        opened = _store_open_count(s, tickets, nodes)
+        tone = "warn" if opened else "ok"
+        target = _store_click_target(s, node_ids)
+        join = ",".join(s.get("join_keys") or []) or "—"
+        boxes.append(
+            f'<g class="store-node" data-store="{html.escape(s["id"], quote=True)}" '
+            f'onclick="window.filterTicketsByNode(\'{html.escape(target, quote=True)}\')" '
+            f'style="cursor:pointer">'
+            f'<title>{html.escape(s.get("purpose") or "")}</title>'
+            f'<rect class="st-box" x="{x:.1f}" y="{y:.1f}" width="{w}" height="{h}" rx="8"/>'
+            f'<text class="st-id" x="{x + 8:.1f}" y="{y + 16:.1f}">'
+            f'{html.escape(s["id"][:24])}</text>'
+            f'<text class="st-kind" x="{x + 8:.1f}" y="{y + 31:.1f}">'
+            f'{html.escape(s.get("kind", ""))} · {html.escape(s.get("ttl", ""))}</text>'
+            f'<text class="st-join" x="{x + 8:.1f}" y="{y + 45:.1f}">'
+            f'join: {html.escape(join[:28])}</text>'
+            f'<rect class="st-pill st-{tone}" x="{x + 8:.1f}" y="{y + h - 22:.1f}" '
+            f'width="{w - 16}" height="16" rx="8"/>'
+            f'<text class="st-pill-text" x="{x + w / 2:.1f}" y="{y + h - 11:.1f}" '
+            f'text-anchor="middle">{opened} open ticket{"" if opened == 1 else "s"}</text></g>'
+        )
+    return (
+        f'<figure class="graph-canvas">'
+        f'<svg viewBox="0 0 {DATA_W} {DATA_H}" role="img" '
+        f'aria-label="Data state-flow: {len(stores)} stores across {DATA_COLS} layers">'
+        f'<defs><marker id="arrow-flow" class="mk-flow" viewBox="0 0 8 8" refX="8" refY="4" '
+        f'markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z"/></marker></defs>'
+        f'<g class="layer-grid">{"".join(grid)}</g>'
+        f'<g class="edges">{"".join(edges)}</g>'
+        f'<g class="nodes">{"".join(boxes)}</g>'
+        f'</svg>'
+        f'<figcaption>Six layers left to right; actors (chips) above the stores they touch. '
+        f'Click a store or actor to open its tickets.</figcaption>'
+        f'</figure>'
+    )
+
+
+def _store_table(stores: list[dict], layers: dict[int, str]) -> str:
+    rows = []
+    for s in sorted(stores, key=lambda s: (int(s.get("layer", 0)), s["id"])):
+        layer = int(s.get("layer", 0))
+        rows.append(
+            f'<tr><td><code>{html.escape(s["id"])}</code></td>'
+            f'<td>{layer} · {html.escape(layers.get(layer, "—"))}</td>'
+            f'<td>{html.escape(s.get("kind", ""))}</td>'
+            f'<td>{html.escape(", ".join(s.get("join_keys") or []))}</td>'
+            f'<td>{html.escape(s.get("ttl", ""))}</td>'
+            f'<td>{html.escape(", ".join(s.get("writers") or []))}</td>'
+            f'<td>{html.escape(", ".join(s.get("readers") or []))}</td>'
+            f'<td>{html.escape(s.get("purpose", ""))}</td></tr>'
+        )
+    return (
+        '<div class="scroll-x"><table class="store-table"><thead><tr>'
+        '<th>Store / Collection</th><th>Layer</th><th>Kind</th><th>Join Keys</th>'
+        '<th>TTL</th><th>Writers</th><th>Readers</th><th>Purpose</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+    )
+
+
+def _flow_table(flows: list[dict]) -> str:
+    rows = "".join(
+        f'<tr><td><code>{html.escape(f.get("from", ""))}</code></td>'
+        f'<td><code>{html.escape(f.get("to", ""))}</code></td>'
+        f'<td><code>{html.escape(f.get("key", ""))}</code></td>'
+        f'<td>{html.escape(f.get("label", ""))}</td></tr>'
+        for f in flows
+    )
+    return (
+        '<div class="scroll-x"><table class="flow-table"><thead><tr>'
+        '<th>From</th><th>To</th><th>Join Key</th><th>Payload / State Transition</th>'
+        f'</tr></thead><tbody>{rows}</tbody></table></div>'
+    )
+
+
+def _view_data(tickets: list[dict], graph: dict, nodes: list[dict]) -> str:
+    stores = graph.get("stores") or []
+    flows = graph.get("flows") or []
+    layers = _layer_map(graph)
+    referenced = {f.get("from") for f in flows} | {f.get("to") for f in flows}
+    actors = [n for n in nodes if n["id"] in referenced]
+    return (
+        f'<section class="doc-view" id="view-data">'
+        f'<h1>2. Data State-Flow (How Data Moves)</h1>'
+        f'<p class="view-lede">{len(stores)} stores across {len(layers)} layers, '
+        f'joined by {len(flows)} flows. A store is a collection, not a service: '
+        f'the join key is the contract between the two sides.</p>'
+        f'{_data_svg(stores, flows, actors, tickets, nodes, layers)}'
+        f'<h2>Store &amp; Collection Reference</h2>'
+        f'{_store_table(stores, layers)}'
+        f'<h2>Data Flow Edges</h2>'
+        f'{_flow_table(flows)}'
+        f'</section>'
+    )
+
+
+def _sev_tone(sev: str) -> str:
+    return {"P0": "bad", "P1": "bad", "P2": "warn", "P3": "muted"}.get(sev, "muted")
+
+
+def _status_tone(status: str) -> str:
+    if status in ("wontfix", "wont-fix"):
+        return "muted"
+    if status in CLOSED_ALL:
+        return "ok"
+    if status == "blocked":
+        return "bad"
+    return "warn"
+
+
+def _ticket_resolution(t: dict) -> str:
+    closed_by = t.get("closed_by") or {}
+    verified = t.get("verified_by") or {}
+    closed = t.get("status") in CLOSED_ALL
+    bits: list[str] = []
+    if closed or closed_by:
+        if closed_by.get("note"):
+            bits.append(html.escape(str(closed_by["note"])))
+        if closed_by.get("commit"):
+            bits.append(f'<code>{html.escape(str(closed_by["commit"]))}</code>')
+        if closed_by.get("date"):
+            bits.append(f'<span class="muted">closed {html.escape(str(closed_by["date"]))}</span>')
+    if verified.get("cmd"):
+        bits.append(f'<code>{html.escape(str(verified["cmd"]))}</code>')
+    if not closed and t.get("opened"):
+        bits.append(f'<span class="muted">opened {html.escape(str(t["opened"]))}</span>')
+    return " · ".join(bits) or '<span class="muted">—</span>'
+
+
+def _ticket_rows(tickets: list[dict], nodes: list[dict], dates: dict,
+                 today: str) -> str:
+    rows = []
+    for t in sorted(tickets, key=lambda t: (SEVERITY_ORDER.get(t.get("severity", ""), 9),
+                                            t.get("id", ""))):
+        nid = _ticket_node(t, nodes)
+        status = t.get("status", "")
+        sev = t.get("severity", "")
+        owner = t.get("owner", "")
+        flags = "".join(
+            f'<span class="pill {"bad" if f == "REGRESSED" else "warn"}">{f}</span> '
+            for f in _ticket_flags(t, today, dates)
+        )
+        covers = ", ".join(t.get("covers") or [])
+        rows.append(
+            f'<tr class="tck-row" data-node="{html.escape(nid, quote=True)}" '
+            f'data-status="{html.escape(status, quote=True)}" '
+            f'data-sev="{html.escape(sev, quote=True)}" '
+            f'data-owner="{html.escape(owner, quote=True)}">'
+            f'<td class="tck-idcell"><span class="tck-id">'
+            f'{html.escape(t.get("id", ""))}</span> '
+            f'<span class="pill {_sev_tone(sev)}">{html.escape(sev)}</span></td>'
+            f'<td><span class="pill {_status_tone(status)}">{html.escape(status)}</span> {flags}</td>'
+            f'<td><button type="button" class="pill info tck-node" '
+            f'onclick="window.filterTicketsByNode(\'{html.escape(nid, quote=True)}\')">'
+            f'{html.escape(nid)}</button>'
+            f'<div class="muted tck-area">{html.escape(t.get("area", ""))} · '
+            f'{html.escape(owner)}</div></td>'
+            f'<td><div class="tck-title">{html.escape(t.get("title", ""))}</div>'
+            f'<div class="muted">{html.escape(t.get("source_ref", ""))}'
+            f'{(" · " + html.escape(covers)) if covers else ""}</div></td>'
+            f'<td class="tck-res">{_ticket_resolution(t)}</td></tr>'
+        )
+    return "".join(rows)
+
+
+def _view_tickets(tickets: list[dict], nodes: list[dict],
+                  stats: dict[str, dict[str, int]], dates: dict) -> str:
+    today = datetime.now(timezone.utc).date().isoformat()
+    n_total = len(tickets)
+    n_open = sum(1 for t in tickets if t.get("status") in ("open", "in_progress"))
+    n_blocked = sum(1 for t in tickets if t.get("status") == "blocked")
+    n_closed = sum(1 for t in tickets if t.get("status") in CLOSED_ALL)
+    n_p0p1 = sum(1 for t in tickets
+                 if t.get("status") in OPEN_STATUSES and t.get("severity") in ("P0", "P1"))
+
+    def tile(label: str, value: object, note: str, tone: str) -> str:
+        return (f'<div class="tile {tone}"><div class="label">{html.escape(label)}</div>'
+                f'<div class="value">{html.escape(str(value))}</div>'
+                f'<div class="note">{html.escape(note)}</div></div>')
+
+    kpis = "".join([
+        tile("Total Tickets", n_total, "every ticket ever opened", "ok"),
+        tile("Open", n_open, "open + in-progress", "warn" if n_open else "ok"),
+        tile("Blocked", n_blocked, "waiting on a decision or dependency",
+             "bad" if n_blocked else "ok"),
+        tile("Closed & Verified", n_closed, "closed + wont-fix", "ok"),
+        tile("Open P0/P1", n_p0p1, "cycle-halting or wrong desk data",
+             "bad" if n_p0p1 else "ok"),
+    ])
+
+    node_opts = ['<option value="">All Execution Nodes</option>']
+    for n in sorted(nodes, key=lambda n: (int(n.get("stage", 0)), n["id"])):
+        opened = stats[n["id"]]["open"]
+        node_opts.append(
+            f'<option value="{html.escape(n["id"], quote=True)}">'
+            f'{html.escape(n["id"])} — {html.escape(_short_label(n.get("label", "")))} '
+            f'({opened} open)</option>'
+        )
+    status_opts = "".join(
+        f'<option value="{v}">{html.escape(label)}</option>'
+        for v, label in (("", "All Statuses"), ("active", "Open & Blocked (Active)"),
+                         ("open", "open"), ("blocked", "blocked"),
+                         ("closed", "closed"), ("wontfix", "wontfix (duplicate / obsolete)"))
+    )
+    sev_opts = "".join(
+        f'<option value="{v}">{html.escape(label)}</option>'
+        for v, label in (("", "All Severities"), ("P0", "P0"), ("P1", "P1"),
+                         ("P2", "P2"), ("P3", "P3"))
+    )
+    if ACTIVE_PROJECT == "trading-cycle":
+        owners = ["trading-service", "lazy-agent-service", "scraper-service",
+                  "trading-client", "operator"]
+        owners += sorted({
+            t.get("owner") for t in tickets
+            if t.get("owner") and t.get("owner") not in owners
+        })
+    else:
+        owners = sorted({t.get("owner", "") for t in tickets if t.get("owner")})
+    owner_opts = '<option value="">All Owners</option>' + "".join(
+        f'<option value="{html.escape(o, quote=True)}">{html.escape(o)}</option>'
+        for o in owners
+    )
+
+    rows = _ticket_rows(tickets, nodes, dates, today)
+    return (
+        f'<section class="doc-view" id="view-tickets">'
+        f'<h1>3. Roadmap &amp; Tickets</h1>'
+        f'<p class="view-lede">Rendered from <code>tickets.jsonl</code>. Filter by node, '
+        f'status, severity, owner or free text; every row links back to its graph node.</p>'
+        f'<div class="status-grid">{kpis}</div>'
+        f'<div class="ticket-filters">'
+        f'<label>Node<select id="flt-node" onchange="window.applyTicketFilters()">'
+        f'{"".join(node_opts)}</select></label>'
+        f'<label>Status<select id="flt-status" onchange="window.applyTicketFilters()">'
+        f'{status_opts}</select></label>'
+        f'<label>Severity<select id="flt-sev" onchange="window.applyTicketFilters()">'
+        f'{sev_opts}</select></label>'
+        f'<label>Owner<select id="flt-owner" onchange="window.applyTicketFilters()">'
+        f'{owner_opts}</select></label>'
+        f'<label class="wide">Search<input id="flt-q" type="search" '
+        f'placeholder="Filter by ID, title, file, commit, or command…" '
+        f'oninput="window.applyTicketFilters()"></label>'
+        f'<button type="button" onclick="window.resetTicketFilters()">Reset</button>'
+        f'<span id="flt-count">Showing {n_total} of {n_total} tickets</span>'
+        f'</div>'
+        f'<div class="scroll-x"><table id="tickets-table"><thead><tr>'
+        f'<th>ID</th><th>Status</th><th>Graph Node</th><th>Title &amp; Source</th>'
+        f'<th>Verification / Resolution</th></tr></thead>'
+        f'<tbody>{rows}</tbody></table></div>'
+        f'</section>'
+    )
+
+
+def _project_bar() -> str:
+    """The workspace project bar injected at the very top of <body>.
+
+    Keep this in sync with stage_project_docs.py's `render_project_bar`: the
+    staging script strips a previous bar with
+    `<nav class="sun-project-bar"[^>]*>.*?</nav>` and re-injects it, so the bar
+    must be one non-nesting <nav> whose style is scoped to the bar itself.
+    """
+    if not PROJECTS_JSON.exists():
+        return ""
+    try:
+        projects = json.loads(PROJECTS_JSON.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"{PROJECTS_JSON.name} is not valid JSON: {e}")
+    if not isinstance(projects, list):
+        return ""
+    style = (
+        ".sun-project-bar{background:var(--panel-2,#181c23);"
+        "border-bottom:1px solid var(--rule,#2b323c);"
+        "padding:0.45rem 1.2rem;display:flex;flex-wrap:wrap;gap:0.35rem;"
+        "align-items:center;font-family:system-ui,sans-serif;font-size:0.78rem;"
+        "position:sticky;top:0;z-index:999;}"
+        ".sun-project-bar .sun-proj-label{color:var(--ink-3,#8b95a3);"
+        "text-transform:uppercase;letter-spacing:0.08em;margin-right:0.5rem;}"
+        ".sun-project-bar .sun-proj-tab{color:var(--ink-2,#c8d0da);"
+        "text-decoration:none;padding:0.22rem 0.7rem;border-radius:999px;"
+        "border:1px solid var(--rule,#2b323c);white-space:nowrap;}"
+        ".sun-project-bar .sun-proj-tab:hover{background:var(--panel-3,#212733);}"
+        ".sun-project-bar .sun-proj-tab.active{"
+        "background:var(--accent,#0f6f6c);color:#fff;font-weight:600;}"
+    )
+    tabs = []
+    for p in projects:
+        if not isinstance(p, dict) or not p.get("slug") or not p.get("href"):
+            continue
+        cls = "sun-proj-tab active" if p["slug"] == ACTIVE_PROJECT else "sun-proj-tab"
+        tabs.append(
+            f'<a href="{html.escape(p["href"], quote=True)}" class="{cls}" '
+            f'title="{html.escape(", ".join(p.get("repos") or []), quote=True)}">'
+            f'{html.escape(p.get("label") or p["slug"])}</a>'
+        )
+    return (
+        '<nav class="sun-project-bar" aria-label="Workspace Projects">'
+        f"<style>{style}</style>"
+        '<span class="sun-proj-label">PROJECTS</span>'
+        + "".join(tabs)
+        + "</nav>"
+    )
+
+
+def _view_tabs(open_tickets: int, closed_tickets: int, n_chapters: int = 13) -> str:
+    tabs = (
+        ("exec", "1. Execution Graph (How It Works)"),
+        ("data", "2. Data State-Flow (How Data Moves)"),
+        ("tickets", f"3. Roadmap &amp; Tickets ({open_tickets} open / {closed_tickets} verified)"),
+        ("ref", f"4. Reference &amp; Deep-Dive Specs ({n_chapters} chapters)"),
+    )
+    buttons = "".join(
+        f'<button type="button" class="view-tab{" active" if i == 0 else ""}" '
+        f'data-view="{v}" onclick="window.switchDocView(\'{v}\')">{label}</button>'
+        for i, (v, label) in enumerate(tabs)
+    )
+    return (f'<nav class="view-switcher" aria-label="Documentation views">{buttons}</nav>')
+
+
 def build() -> str:
     chapters = _read_chapters()
     if not chapters:
         raise SystemExit(f"No chapters found in {CHAPTERS_DIR}")
+
+    tickets = _load_tickets()
+    open_tickets = sum(1 for t in tickets if t.get("status") in OPEN_STATUSES)
+    closed_tickets = sum(1 for t in tickets if t.get("status") in CLOSED_ALL)
+
+    # One date cache for the whole build: `_ticket_flags` shells out to git per
+    # covered file, and both the ledger chapter and view 3 need the same answer.
+    dates: dict[str, str | None] = {}
+
+    exec_graph = _load_graph(EXEC_GRAPH)
+    data_graph = _load_graph(DATA_GRAPH)
+    nodes = exec_graph.get("nodes") or []
+    stats = _node_stats(tickets, nodes)
 
     title, subtitle = "Documentation", ""
     meta = DOCS_DIR / "meta.txt"
@@ -901,6 +2246,12 @@ def build() -> str:
             )
         for record in group["chapters"]:
             path, meta, md = record["path"], record["meta"], record["body"]
+            is_ledger = path.name == LEDGER_CHAPTER
+            if is_ledger:
+                # The ledger chapter's body is generated from tickets.jsonl. Its
+                # file keeps only the front matter, so the board can never drift
+                # from the ledger and no one can hand-edit a stale backlog.
+                md = _ticket_board(tickets, dates)
             chap_no += 1
             chap_ts = _last_touched(path)
             touched.append(chap_ts)
@@ -918,6 +2269,11 @@ def build() -> str:
                 f'{html.escape(status)}</span>'
                 if status else ""
             )
+            if is_ledger:
+                tone = "bad" if open_tickets else "ok"
+                nav_status += (
+                    f'<span class="status s-{tone}">{open_tickets} open</span>'
+                )
             nav_parts.append(
                 f'<li><a class="chapter" href="#{chap_id}">'
                 f'<span class="num">{chap_no}</span>'
@@ -951,6 +2307,11 @@ def build() -> str:
         css=CSS,
         stamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         newest=html.escape(max(touched) if touched else ""),
+        project_bar=_project_bar(),
+        tabs=_view_tabs(open_tickets, closed_tickets, len(chapters)),
+        view_exec=_view_exec(tickets, exec_graph, stats),
+        view_data=_view_data(tickets, data_graph, nodes),
+        view_tickets=_view_tickets(tickets, nodes, stats, dates),
         nav="".join(nav_parts),
         body="\n".join(body_parts),
     )
@@ -1001,11 +2362,21 @@ def status_report() -> list[dict]:
 
 
 def main() -> int:
+    global ACTIVE_PROJECT
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="exit 1 if index.html is stale")
     ap.add_argument("--status", action="store_true",
                     help="print chapter front matter as JSON and exit")
+    ap.add_argument("--docs-dir", metavar="PATH",
+                    help="render another project's documentation/ tree")
+    ap.add_argument("--project", metavar="SLUG",
+                    help="project slug to mark active in the workspace project bar")
     args = ap.parse_args()
+
+    if args.docs_dir:
+        _use_docs_dir(Path(args.docs_dir).resolve())
+    ACTIVE_PROJECT = args.project or _detect_project() or ACTIVE_PROJECT
 
     if args.status:
         import json as _json
