@@ -55,3 +55,16 @@ An area is the `part:` in a page's front matter. Pick one; the build fails if a 
 - `13-harness2-audit-2026-10-22.md` (89 KB) is too big for one page and should be split.
 - Chapter numbers repeat (two 07, two 08, two 13); renaming is deferred because older notes cite them.
 - The three exported contract specs in `docs/contracts/` carry no front matter on purpose (they are served as-is).
+
+## Trading-cycle parts that are documented elsewhere (2026-11-06)
+
+The trading cycle's technical design document lives in
+`finance/trading/trading-client/documentation/`. The parts of this service that participate in the
+cycle — the `/agent` route, the tool bridge to trading-service, the scrape budget guard, tool-call
+guards and the refusal messages — are described there in `04-agents-models-tools.md` and
+`02-containers-and-data.md`, and the open problems are tickets in
+`trading-client/documentation/tickets.jsonl` with `owner: lazy-agent-service`.
+
+This repo's own chapters stay for the platform itself: the core loop, durable completions, SSE,
+tool routing, web search/extract, embeddings and observability. Do not add a trading-cycle chapter
+here; update the trading-client section or open a ticket.
