@@ -1,6 +1,6 @@
 {
-  "title": "Lazy Agent Service Runtime Execution Graph",
-  "updated": "2026-11-06",
+  "title": "Agent Platform Runtime Execution Graph",
+  "updated": "2026-11-07",
   "nodes": [
     {
       "id": "http_ingress",
@@ -173,6 +173,57 @@
       "skip_or_fallback": "/health is never traced; every other request writes a prism.requests row with createdAt equal to timestamp (d8a3c10, pinned by RequestLoggerPrismParity.test.ts); a missing OTLP endpoint disables tracing (tracingEnabled false) without failing requests; npm run verify blocks CI on lint/type/test/dry/arch/prompt (ADR-08, ch.09).",
       "inputs": ["request_rows", "otel_spans", "agent_sessions"],
       "outputs": ["otel_spans"]
+    },
+    {
+      "id": "scraper_service",
+      "label": "scraper-service (:8001) — HTTP/Playwright Engines, Collectors, failure_cache.db, PID Pressure Probe",
+      "stage": 7,
+      "repo": "scraper-service",
+      "entry": "scraper_main.py:app",
+      "covers": [
+        "scraper-service:scraper_main.py",
+        "scraper-service:OPERATIONS.md"
+      ],
+      "areas": ["scraper", "infra"],
+      "timeout_s": null,
+      "skip_or_fallback": "AutoEngine tries http first and falls through to playwright when http fails or returns under 900 chars; failure_cache.check and should_skip_domain run before any fetch (phase 0/0b). SCRAPER_MAX_BROWSERS (4) caps concurrent Chromiums per worker. /scrape, /collect and /stream need X-Scraper-Key when SCRAPER_API_KEY is set; /health* is never gated. GET /health/pids always answers 200 and classifies host task count ok/warn/critical against pid_max.",
+      "inputs": ["failure_cache_db"],
+      "outputs": ["failure_cache_db"]
+    },
+    {
+      "id": "spark_console",
+      "label": "spark-console (:8800) — Serving Modes, Render-Permit Arbitration, Telemetry, Token Counter",
+      "stage": 7,
+      "repo": "spark-console",
+      "entry": "console.py:app",
+      "covers": [
+        "spark-console:console.py",
+        "spark-console:subscription_usage.py",
+        "spark-console:request_throughput.py",
+        "spark-console:health_monitor.py"
+      ],
+      "areas": ["models", "telemetry", "infra"],
+      "timeout_s": null,
+      "skip_or_fallback": "POST /api/serving-mode/{mode} fully stops the outgoing deployment before starting the next (never two at once in unified memory). POST /api/render-permit tears the LLM down for a ComfyUI render unless the mode is single-node and the render is on the worker. Monitoring views are read-only: a missing measurement reports unavailable/stale, never idle or crashed.",
+      "inputs": ["spark_state", "spark_usage_history"],
+      "outputs": ["spark_state", "spark_usage_history"]
+    },
+    {
+      "id": "tts_service",
+      "label": "tts-service (:8080, host 3032) — Piper ONNX Neural Voices + From-Scratch Klatt/Formant Synth",
+      "stage": 7,
+      "repo": "tts-service",
+      "entry": "main.py:app",
+      "covers": [
+        "tts-service:main.py",
+        "tts-service:app/piper_manager.py",
+        "tts-service:app/synth_manager.py"
+      ],
+      "areas": ["tts"],
+      "timeout_s": null,
+      "skip_or_fallback": "engine=piper (default) loads <voice>.onnx from PIPER_MODELS_DIR with an LRU of 2 loaded voices; an unknown voice falls back to the default model. engine=synth renders CPU-only numpy formant audio with no model files; an unknown synth voice falls back to narrator. Emojis and exotic symbols are stripped before synthesis.",
+      "inputs": ["piper_models"],
+      "outputs": []
     }
   ],
   "edges": [
@@ -188,6 +239,9 @@
     {"from": "http_ingress", "to": "otel_telemetry", "label": "request rows and span batches per call", "kind": "async"},
     {"from": "trading_tool_stream", "to": "otel_telemetry", "label": "bridge tool-call spans with budget counters", "kind": "async"},
     {"from": "web_search_extract", "to": "otel_telemetry", "label": "search/scrape spans with budget charges", "kind": "async"},
-    {"from": "otel_telemetry", "to": "http_ingress", "label": "audit rows feed /health stats and the next traced request", "kind": "async"}
+    {"from": "otel_telemetry", "to": "http_ingress", "label": "audit rows feed /health stats and the next traced request", "kind": "async"},
+    {"from": "web_search_extract", "to": "scraper_service", "label": "web_extract → POST /scrape; web_search falls back to /collect source=searxng (x-scraper-key)", "kind": "control"},
+    {"from": "spark_console", "to": "model_router", "label": "serving mode decides which model the DGX Spark providers serve", "kind": "async"},
+    {"from": "scraper_service", "to": "http_ingress", "label": "LLM calls to /chat and /agent with x-project: scraper-service", "kind": "async"}
   ]
 }

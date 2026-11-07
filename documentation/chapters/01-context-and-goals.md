@@ -2,10 +2,10 @@
 part: Overview
 type: spec
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:src/index.ts, lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/ToolOrchestratorService.ts, lazy-agent-service:tool_schemas.json
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:src/index.ts, lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/ToolOrchestratorService.ts, lazy-agent-service:tool_schemas.json, scraper-service:OPERATIONS.md, spark-console:gateway.py, tts-service:main.py
 ---
 
 # Context and goals
@@ -73,3 +73,63 @@ covers: lazy-agent-service:src/index.ts, lazy-agent-service:src/services/Agentic
 - A restart during a trading cycle breaks in-flight desks: deploy only between cycles (ch.08).
 - `docs/contracts/` is served as-is by `ContractRoutes` and copied by
   `scripts/export-contracts.mjs`; it is read by other repos and stays in place.
+
+## The platform around it
+
+lazy-agent-service is the hub; three sibling services under `agents/` either feed it or run the
+hardware it routes to.
+
+### scraper-service — the web, fetched safely
+
+A domain-agnostic FastAPI scraper on the NAS at `:8001`. It owns no trading logic: it fetches
+pages (`POST /scrape`, `/scrape/batch`) through an `auto` engine that tries plain HTTP first and
+falls back to headless Playwright, runs collectors (`POST /collect` with `source` = `reddit`,
+`reddit-purge`, `youtube`, `news`/`rss`, `searxng`, `edgar`, `stooq`, …) and streams YouTube
+transcripts (`GET /stream/{video_id}`). It remembers what it learned about the web in
+`failure_cache.db` (dead URLs and per-domain quality), on a named volume.
+
+| Caller | Entry point | Why |
+|---|---|---|
+| lazy-agent-service | `POST /scrape` (`WebExtractService.ts`), SearXNG fallback (`WebSearchService.ts`) | `scrape_url` / `web_extract` / `web_search` tool calls (ch.05) |
+| trading-service | `/scrape`, `/collect` | news, Reddit, SEC and price collection for the trading cycle |
+
+**It is not** the owner of its engine code: `app/scraper` is built from trading-service's source
+by `deploy.sh`, so engine changes land in trading-service and are redeployed here. **It must
+never** take the NAS down again — the 2026-08-20 pid-exhaustion outage (`OPERATIONS.md`) is
+why `init: true`, `SCRAPER_MAX_BROWSERS` and the `GET /health/pids` probe exist (ch.07, ch.08).
+
+### spark-console — the model fleet's control panel
+
+A FastAPI dashboard and memory arbiter on the Gold Spark head node (`10.0.0.141:8800`), with a
+gateway on the NAS (`10.0.0.16:8801`, `gateway.py`) that proxies every request to the head while
+it is up, serves the last fetched dashboard while it is not, and answers `/api/box/*/wake`
+itself so a powered-off box can still be woken. It decides **which LLM is served** on the
+2× DGX Spark pair (serving modes, ch.04), arbitrates unified memory between that LLM and ComfyUI
+renders (`POST /api/render-permit`), auto-launches the Dell Qwen boxes, powers boxes on and
+off, and is the fleet's telemetry source: GPU/memory/temperature/wall-power history, per-model
+throughput, and the token counter for Claude, Google Argon and the self-hosted models (ch.07).
+
+| Caller | Entry point | Why |
+|---|---|---|
+| operator (browser) | `GET /`, `/api/status`, `/api/series`, mode/toggle buttons | watch and steer the cluster |
+| ComfyUI `spark_console_guard` hook | `POST /api/render-permit` | ask for memory before a render queues |
+| workstation `spark-sub-usage.timer` | `POST /api/subscription-usage` | push Claude/Argon/omp token counts every 30 s |
+| lazy-agent-service, omp agents | the model endpoint it brings up (`:8000` on goldspark) | inference (ch.04) |
+
+**It is not** an inference server — it starts and stops the deployments that are — and it is not
+an agent harness; the omp session it restarts on a mode switch is a client of the model.
+
+### tts-service — speech out
+
+A FastAPI text-to-speech service on the NAS (container `:8080`, published `:3032`) with two
+engines: **Piper** neural ONNX voices (default) and a from-scratch, CPU-only Klatt/formant
+synthesiser (`engine: "synth"`). HTML-Notes proxies its `/tts/synthesize` to it, and the trading
+office's spoken lines go through that proxy. **It is not** a speech-to-text service and holds
+no conversation state.
+
+### Platform goals
+
+1. **No sibling can take the host down.** Bounded browsers and a pid probe on the scraper; one
+   deployment at a time on the Sparks; an LRU of two Piper voices in tts-service.
+2. **Every service answers "are you healthy?" without side effects** (ch.07).
+3. **One ledger, one document** (ch.10 ADR-15): every repo's work is a ticket here.

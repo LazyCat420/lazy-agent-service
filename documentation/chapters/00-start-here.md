@@ -2,19 +2,29 @@
 part: Overview
 type: reference
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:documentation/tickets.jsonl, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:package.json, lazy-agent-service:src/boot/server.ts
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:documentation/tickets.jsonl, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:package.json, lazy-agent-service:src/boot/server.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
 ---
 
 # Start here: how this documentation works
 
-This is the technical design document (TDD) for **lazy-agent-service**: the workspace's unified
-agent harness, MCP tool server and local-LLM router, deployed on the NAS as
-`lazy-agent-service` at **port `:5591`** (registry ID `lazy-tool-service`). One document, a fixed
-13-section table of contents. Nothing here is dated "for today's batch"; git history is the
-record of changes, these chapters are the current truth.
+This is the technical design document (TDD) for the **Agent Platform** — every service under
+`agents/`, documented as one hub:
+
+| Service | Port | What it is |
+|---|---|---|
+| **lazy-agent-service** | `:5591` (NAS) | The unified agent harness, MCP tool server and local-LLM router (registry ID `lazy-tool-service`) |
+| **scraper-service** | `:8001` (NAS) | Domain-agnostic scraping: HTTP → Playwright engines, collectors (SEC Edgar, Stooq, SearXNG, RSS, Reddit, YouTube), the learned `failure_cache.db` |
+| **spark-console** | `:8800` (Gold Spark head node; NAS gateway `:8801`) | Dashboard and memory arbiter for the DGX Spark cluster: serving modes, ComfyUI render permits, telemetry, token counter |
+| **tts-service** | `:8080` in the container, published as `:3032` | Text-to-speech: Piper ONNX neural voices and a from-scratch Klatt/formant synthesiser |
+
+One document, a fixed 13-section table of contents; each chapter covers lazy-agent-service first
+and then the sibling services where the chapter's question applies to them. Nothing here is
+dated "for today's batch"; git history is the record of changes, these chapters are the current
+truth. Each sibling repo keeps only its own operational notes (`scraper-service/OPERATIONS.md`,
+`spark-console/README.md`, `tts-service/HANDOFF.md`); the design lives here.
 
 ## The 13 sections and what each answers
 
@@ -54,6 +64,14 @@ npm run deploy                                    # bash deploy.sh — rebuild +
 Every test, build or server run on `main` goes through
 `testrun --wait 30m --max-time <limit> -- <command>`; never run one inside `.worktrees/`.
 
+### The sibling services
+
+| Service | Entry | Health | Tests (from the repo root) | Deploy |
+|---|---|---|---|---|
+| scraper-service | `scraper_main.py:app` (FastAPI, uvicorn) | `GET :8001/health`, `/health/engines`, `/health/feeds`, `/health/search-engines`, `/health/pids` | `python3 -m pytest -q tests` | `./deploy.sh` (stages trading-service's `app/scraper` first) |
+| spark-console | `console.py:app` (FastAPI) | `GET :8800/api/status`, `/api/telemetry/health` | `python3 -m pytest -q tests` | `./deploy.sh` |
+| tts-service | `main.py:app` (FastAPI) | `GET :3032/health` (container `:8080`) | `python3 -m pytest -q tests/test_synth_engine.py` | `./deploy.sh` |
+
 ## Repo map
 
 | Path | What lives there |
@@ -68,6 +86,23 @@ Every test, build or server run on `main` goes through
 | `scripts/quality/` | `crap.mjs`, `dry.mjs`, `arch.mjs`, `deadcode.mjs` gates (see ch.09) |
 | `documentation/` | This TDD: `chapters/`, `execution_graph.json`, `data_flow_graph.json`, `tickets.jsonl` |
 | `docs/contracts/` | Exported contract specs served as-is by `ContractRoutes` — do not move |
+
+The sibling repos, paths relative to `agents/`:
+
+| Path | What lives there |
+|---|---|
+| `scraper-service/scraper_main.py` | The FastAPI entrypoint: router mounts, `X-Scraper-Key` guard, `GET /health/pids` probe |
+| `scraper-service/app/`, `lazycat/` | Gitignored build copies of `trading-service/app/scraper` and `platform/lazycat-sdk`, staged by `deploy.sh` |
+| `scraper-service/OPERATIONS.md` | The 2026-08-20 pid-exhaustion post-mortem, `failure_cache.db`, auth, SEC identity |
+| `scraper-service/searxng/settings.yml` | The SearXNG sidecar's engine list (`bing`, `wikipedia`) |
+| `spark-console/console.py` | The whole console: serving modes, render permits, telemetry, box power, bench |
+| `spark-console/subscription_usage.py`, `request_throughput.py`, `health_monitor.py` | Token counter, throughput and solo ledger, read-only monitoring views |
+| `spark-console/*-start.sh`, `*-stop.sh`, `boxes.json` | Per-deployment launchers and the box table |
+| `tts-service/main.py` | The FastAPI entrypoint and its four routes |
+| `tts-service/app/piper_manager.py`, `app/synth_manager.py`, `app/synth/` | The Piper voice manager and the from-scratch synthesiser |
+
+The ticket ledger covers all four repos: `owner` names the repo, and `node` names its box in
+`execution_graph.json` (`scraper_service`, `spark_console`, `tts_service`).
 
 ## The rules that keep this from rotting
 

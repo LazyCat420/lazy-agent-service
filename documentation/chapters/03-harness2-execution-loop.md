@@ -2,10 +2,10 @@
 part: Architecture
 type: spec
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/core/loop/CoreLoop.ts, lazy-agent-service:src/core/loop/MessageCompactor.ts, lazy-agent-service:src/core/loop/RunawayStreamWatch.ts, lazy-agent-service:src/core/loop/ToolRunner.ts, lazy-agent-service:src/services/TradingToolStream.ts, lazy-agent-service:src/services/harness2/Harness2Service.ts
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/core/loop/CoreLoop.ts, lazy-agent-service:src/core/loop/MessageCompactor.ts, lazy-agent-service:src/core/loop/RunawayStreamWatch.ts, lazy-agent-service:src/core/loop/ToolRunner.ts, lazy-agent-service:src/services/TradingToolStream.ts, lazy-agent-service:src/services/harness2/Harness2Service.ts, lazy-agent-service:src/services/harness2/Library.ts, spark-console:console.py
 ---
 
 # The harness execution loop
@@ -87,3 +87,52 @@ records, request checks and a model preflight (`2ad3f48`). Two catalog bugs were
 benchmark: a cached-schema growth of ~3k chars per call (`42e7a48`) and first-second-after-boot
 runs seeing only orchestrator tools (`f8c7737`). Measured effect and open questions (Phase 2,
 Q1–Q5) are recorded in the archive and the ledger, not duplicated here.
+
+### Experience-library scope (TCK-1020)
+
+`Library` (`src/services/harness2/Library.ts`) is constructed as
+`new Library(domain, root?, { mode?, runScope? })`. With no scope the directory is
+`<root>/<slug(domain)>` — one shared library per domain, the default, because lessons are meant
+to accumulate across runs. A scope narrows it:
+
+| Request field (`/harness2/run`) | Library directory | Use |
+|---|---|---|
+| neither | `<root>/<domain>` | normal accumulation |
+| `isolateLibrary: true` | `<root>/<domain>/<mode>` (`mode` defaults to `parallel`) | keep `parallel` and other modes from teaching each other |
+| `libraryScope: "<id>"` | `<root>/<domain>[/<mode>]/<id>` | a benchmark or A/B run that must start clean and leave the shared library untouched |
+
+`Library.forRun(domain, { root, mode, runId })` builds the run-scoped form in code. Scope names
+that would collide with the library's own layout (`harnesses`, `runs`, `INDEX.md`) throw.
+Every lesson `add()` writes records `- mode:` and `- run:` lines in `EXPERIENCE.md` (defaulting
+from the scope; `Harness2Service` passes the request's mode and `libraryScope`), and
+`contextText({ exclude, mode, runId })` filters on those lines, so a shared library can still be
+read per mode or per run without moving files. Proof: the `per-run and per-mode library scope
+(TCK-1020)` block in `Harness2Library.test.ts`; decision record ch.10 ADR-14.
+
+## The other control loops on the platform
+
+The tool loop above is the only *agent* loop, but two sibling services run their own control
+loops, and their timing explains behaviour seen from here.
+
+**spark-console reconciler** (`reconciler()` in `console.py`, a daemon thread). After a 15 s boot
+settle it runs `reconcile_at_boot()` (bring the LLM up if its toggle is on; adopt a deployment
+that is already running) inside a `try`, so a boot failure can never kill the loop. Then every
+30 s, under the operation lock:
+
+1. `reconcile_remote_llms_locked()` — keep the Dell boxes' standalone models in their desired
+   state (ch.04).
+2. **Auto-resume** — restart a render-suspended LLM once the contending ComfyUI queues have been
+   idle for 300 s (ch.04 render-permit).
+3. **Drift adoption** — an engine answering while the phase says otherwise is adopted as
+   `running`; a `running` phase whose containers vanished is recorded as a `CONTAINER_CRASH`
+   incident (`autoheal_audit`, `GET /api/audit/crashes`) and restarted, at most 3 times in
+   15 minutes (`can_autoheal_restart()`), after which the phase is left at `error` for a human.
+
+**scraper-service `auto` engine** (`app/scraper/engines/auto_engine.py`), per URL: phase 0 asks
+`failure_cache.check(url)` (known dead → answer without a fetch), phase 0b asks
+`should_skip_domain(domain)` (a domain with zero good responses, a `thin_streak` of 5+ and a thin
+response within 24 h is skipped), then plain HTTP. A permanent status (404/410) is recorded dead
+and not retried; thin content counts against the domain and is returned as thin; blocked,
+short (≤150 chars) or failed HTTP results escalate to Playwright, which gets the same thin and
+blocked checks. A skip is reported as `engine_used: "auto (skipped)"`, which is what a harness
+tool call sees as a fast failure rather than a timeout.

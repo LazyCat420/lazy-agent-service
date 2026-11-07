@@ -2,10 +2,10 @@
 part: Runtime & Pipeline
 type: spec
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:src/services/EmbeddingGemma2Client.ts, lazy-agent-service:src/services/EmbeddingService.ts, lazy-agent-service:src/services/ConversationEmbeddingService.ts, lazy-agent-service:src/services/MemoryExtractor.ts, lazy-agent-service:src/routes/EmbedRoutes.ts
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:src/services/EmbeddingGemma2Client.ts, lazy-agent-service:src/services/EmbeddingService.ts, lazy-agent-service:src/services/ConversationEmbeddingService.ts, lazy-agent-service:src/services/MemoryExtractor.ts, lazy-agent-service:src/routes/EmbedRoutes.ts, spark-console:boxes.json
 ---
 
 # Embeddings and RAG
@@ -68,3 +68,17 @@ own single-inference guard stays authoritative.
 Not migrated: the LLMSortObsidian plugin still calls the Jetson directly with the legacy
 `embeddinggemma` alias and no task type (tracked as debt, ledger). Cloud embedding providers
 keep their own modality capabilities; the Jetson adapter is text-only.
+
+## The sibling services and embeddings
+
+None of scraper-service, spark-console or tts-service computes or stores embeddings; RAG on the
+platform is lazy-agent-service's alone. Two things touch this chapter:
+
+- **Port `:8001` means three different things.** The embeddings backend is the Jetson's
+  `http://10.0.0.30:8001/v1`; scraper-service is the NAS's `:8001`; on goldspark `:8001` is the
+  serving engine behind the bench proxy (ch.04). `SCRAPER_SERVICE_URL` and the embedding
+  client's base URL are separate settings — never point one at the other.
+- **The Jetson hosts both** the embeddings server (`:8001`) and `nemotron35` chat (`:8000`,
+  2 slots, ch.04). spark-console's box table lists the Jetson with no SSH and no managed model:
+  it reads the Jetson's power for telemetry and never starts or stops anything there, so an
+  embeddings outage is diagnosed on the Jetson itself, not from the console.

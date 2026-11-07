@@ -2,10 +2,10 @@
 part: Architecture
 type: spec
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/routes/AgentRoutes.ts, lazy-agent-service:src/routes/Harness2Routes.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, lazy-agent-service:src/services/AgentSessionRegistry.ts
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/routes/AgentRoutes.ts, lazy-agent-service:src/routes/Harness2Routes.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, lazy-agent-service:src/services/AgentSessionRegistry.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
 ---
 
 # Architecture and endpoints
@@ -82,3 +82,75 @@ caller → AuthMiddleware → AgentRoutes POST /agent
           → LocalToolRouter | MCP client | trading bridge (ch.05)
   → SSE frames back to caller; request row + spans recorded (ch.07)
 ```
+
+## How the four services connect
+
+```
+             LAN callers (trading-service, html-notes, SDK, omp, browser)
+                 │                     │                         │
+                 ▼                     ▼                         ▼
+   lazy-agent-service :5591 ──► scraper-service :8001     tts-service :3032
+        │   (web_search fallback,        │  (SearXNG sidecar,      (Piper | synth)
+        │    scrape_url / web_extract)   │   failure_cache.db)
+        ▼
+   model endpoints  ◄── started/stopped by ── spark-console :8800 (goldspark)
+   (goldspark :8000, dellbox1/2, Jetson)          ▲            ▲
+                                                   │            │
+                                      ComfyUI render-permit   NAS gateway :8801
+```
+
+- **lazy-agent-service → scraper-service.** `SCRAPER_SERVICE_URL` (default
+  `http://localhost:8001`) is read by `WebExtractService.ts` (`POST /scrape`) and
+  `WebSearchService.ts` (the SearXNG fallback). The `x-scraper-key` header is sent only when
+  `SCRAPER_API_KEY` is set (ch.12).
+- **spark-console → the models lazy-agent-service routes to.** The serving mode decides which
+  model answers on goldspark `:8000`; the Dell boxes and the Jetson serve their own. A mode
+  switch changes the served model id under the router's feet, which is why ch.04's routing
+  resolves models from the live catalog rather than a fixed name.
+- **tts-service** has no dependency on the others; HTML-Notes proxies to it.
+
+## scraper-service endpoints (`scraper_main.py`)
+
+| Route | Guard | What it does |
+|---|---|---|
+| `POST /scrape` | key | Scrape one URL with `auto` (HTTP → Playwright), `http` or `playwright`; known-dead URLs and skipped domains answer without a fetch |
+| `POST /scrape/batch` | key | Several URLs, same engines |
+| `POST /collect` | key | Run one collector: `reddit`, `reddit-purge`, `youtube`, `news`/`rss`, `searxng`, `edgar`, `stooq`, … |
+| `GET /stream/{video_id}` | key | Direct CDN stream URL for a YouTube video (`?audio=true` for an audio-only track); URLs expire after ~6 h |
+| `GET /health` | open | Liveness (HTTP client, browser dependency) plus operational counters — the Docker healthcheck |
+| `GET /health/engines` | open | Deep check that launches real browsers (~5 s); by hand only, never as the healthcheck |
+| `GET /health/search-engines` | open | SearXNG sidecar engines (`bing`, `wikipedia` only — `searxng/settings.yml`) |
+| `GET /health/feeds` | open | Per-RSS-feed `last_success_at`, `consecutive_failures`, `last_error` |
+| `GET /health/pids` | open | Host task count against `pid_max`: `ok`/`warn`/`critical`/`unknown`, always 200 |
+
+The routers come from `app/scraper/api/routes/` (built from trading-service); only
+`/health/pids` is defined in `scraper_main.py` itself.
+
+## spark-console endpoints (`console.py`)
+
+| Group | Routes | What they do |
+|---|---|---|
+| Dashboard | `GET /`, `/console`, `/bench`, `/agents` | The single-page UI and its bench/agent views |
+| State | `GET /api/status`, `/api/series?tier=`, `/api/renders`, `/api/thumb` | Live boxes, 15-min live history, tiered history (`1h` … `1y`) with the per-model registry, ComfyUI renders |
+| Serving | `POST /api/serving-mode/{new_mode}`, `POST /api/toggle/{service}/{onoff}` | Switch deployment; toggle `deepseek`, `comfy_head`, `comfy_worker`, `auto_resume` |
+| Memory arbitration | `POST /api/render-permit` | ComfyUI asks before a prompt queues (ch.04) |
+| Boxes | `POST /api/box/{box}/wake`, `/api/box/{box}/{action}`, `/api/box/{box}/llm/{onoff}`, `GET /api/box/{box}/llm/log`, `/api/box/{box}/wake-capability` | Wake-on-LAN, power, standalone-box model control |
+| Usage | `GET/POST /api/subscription-usage`, `GET /api/usage`, `/api/settings`, `POST /api/usage/reset` | Token counter and settings (ch.07) |
+| Telemetry | `GET /api/telemetry/{runs,cycles,incidents,metrics,health}`, `/api/telemetry/traces/{trace_id}`, `/api/audit/crashes`, `/api/agent-metrics` | Run/cycle telemetry, auto-heal incidents |
+| Bench | `/api/bench/*`, `/api/sparkbench/*` | Concurrency and prefill benchmarks |
+| omp session | `POST /api/omp/workdir`, `/api/omp/mcp-render/{onoff}` | Working folder and render-tool permission for the omp/pi session on the head |
+
+`gateway.py` serves the same UI on the NAS (`:8801`) by proxying to the head (ch.01).
+
+## tts-service endpoints (`main.py`)
+
+| Route | What it does |
+|---|---|
+| `POST /api/v1/tts/synthesize` | `{text, voice_accent, engine}` → `audio/wav`. `engine` is `piper` (default) or `synth`; for `synth`, an unknown `voice_accent` falls back to `narrator`. Empty text → 400 |
+| `GET /api/v1/tts/voices` | Piper voice models on disk plus accent aliases |
+| `GET /api/v1/tts/synth-voices` | Synth voice types (`narrator`, `female`, `child`, `giant`, `whisper`, `aged`, `droid`, `sam`) |
+| `GET /health` | Liveness and `engines: ["piper", "synth"]` |
+
+Text is sanitised before either engine: characters outside word, whitespace, basic punctuation
+and Latin-1 letters are stripped (emoji used to crash ONNX `GatherElements`), and text that
+sanitises to nothing is spoken as "Audio unavailable."

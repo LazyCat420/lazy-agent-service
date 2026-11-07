@@ -2,10 +2,10 @@
 part: Operations & Quality
 type: runbook
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:deploy.sh, lazy-agent-service:package.json, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:src/boot/server.ts
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:deploy.sh, lazy-agent-service:package.json, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:src/boot/server.ts, lazy-agent-service:config.ts, scraper-service:OPERATIONS.md, scraper-service:deploy.sh, spark-console:deploy.sh, tts-service:docker-compose.yml
 ---
 
 # Operations and runbooks
@@ -98,3 +98,93 @@ ssh nas 'sudo -n /usr/local/bin/docker logs --since 1h lazy-agent-service 2>&1 |
 stdout retention is ~1–1.5 h (`max-size=10m, max-file=3`); anything older comes from the
 durable sources above. Long agent sessions keep running when the SSE client disconnects —
 stop one deliberately via `POST /agent/stop`, never by killing the container.
+
+## MCP network rows after TCK-1019
+
+An `sse`/`streamable-http` row that pointed at a LAN host (`10.0.0.x`) or at the NAS itself now
+gets `403` on save and is skipped at boot. To keep one, add its host or origin to
+`MCP_HTTP_ALLOWLIST` (comma-separated) in the deploy environment and redeploy; then
+`POST /mcp-servers/<id>/connect`. A `403` on that route names the refusal reason. URL
+credentials are never accepted — move them to headers or OAuth.
+
+## scraper-service runbooks
+
+Detailed history and every measurement: `agents/scraper-service/OPERATIONS.md`.
+
+**Deploy.** `./deploy.sh` (deploy-kit wrapper) first stages `app/scraper` from
+`finance/trading/trading-service/app/scraper` and `lazycat/` from `platform/lazycat-sdk` —
+both gitignored here — then builds and redeploys on the NAS. An engine fix therefore lands in
+trading-service; a clean `git diff` in scraper-service proves nothing about the image.
+
+**Is the host's pid space safe?**
+
+```bash
+curl -s http://10.0.0.16:8001/health/pids    # status ok | warn | critical | unknown
+curl -s http://10.0.0.16:8001/health         # engine counters, browser slots
+```
+
+`warn` (≥40% of `pid_max`) means look now; `critical` (≥60%) means act: the 2026-08-20 outage
+failed `fork()` at 64%. Find the owner of the tasks on the NAS before restarting anything —
+the pressure may be another container. What bounds this service: `init: true` (tini reaps
+orphans) and `SCRAPER_MAX_BROWSERS` (default 4 per uvicorn worker). `pids_limit` is silently
+discarded on this kernel — do not rely on it.
+
+**A domain or feed stopped producing.** `GET /health/feeds` shows per-feed failures (visibility
+only — feeds are never skipped). A domain skip (zero good responses, `thin_streak` ≥ 5, last
+thin within 24 h) clears on the next good response; `failure_cache.db` lives on the named
+`/app/logs` volume and survives rebuilds. Rows older than `SCRAPER_DOMAIN_MAX_AGE_S` (90 days)
+are pruned.
+
+**SEC collector errors** with `set SEC_USER_AGENT` mean the identity is missing from the
+scraper's environment; set it there (never in git) and redeploy.
+
+## spark-console runbooks
+
+The console runs on goldspark as the user unit `spark-console.service`
+(`systemctl --user status|restart spark-console.service`,
+`journalctl --user -u spark-console.service -f`). Restarting it never drops an in-flight
+completion — `bench-proxy.py` is a separate process.
+
+**Deploy.** The NAS gateway (`:8801`, `gateway.py`) is deployed with `npm run deploy` from
+this working tree; use `npm run deploy -- --skip-pull` so a deployment does not replace newer
+Gold Spark code with GitHub's older source.
+
+**Switch the served model.** Use the console (`POST /api/serving-mode/{mode}`), never the start
+scripts by hand: the console stops the outgoing deployment first, rewrites `omp-model` and
+restarts the omp session (ch.04). Expect goldspark's model endpoint to be down for the whole
+stop + start.
+
+**The LLM vanished during a render.** That is the render-permit working: a ComfyUI render on a
+box the LLM uses suspended it. It comes back by itself only with `auto_resume` on, after the
+contending ComfyUI queues are idle for 300 s; otherwise toggle `deepseek` on.
+
+**The LLM is stuck in `error`.** The reconciler retries up to 3 times in 15 min, then stops.
+Read `GET /api/audit/crashes`, fix the cause, and toggle the LLM off and on.
+
+**Boxes unreachable after a reboot (UFW, 2026-11-03).** goldspark and msi-spark once came up
+with UFW allowing only 22 and 8888: the console (`8800`), bench proxy (`8000`), engine
+(`8001`), ComfyUI (`8188`) and omp-ttyd (`7681`) were blocked from the LAN, and NFS (`2049`,
+`111`) and NCCL were blocked on the fabric, so `dsv41` failed to boot on its NFS mount. The
+standing rules allow all traffic on `192.168.177.0/24` and `192.168.178.0/24` and open those
+five LAN ports on goldspark. Check with `nc -zv 192.168.177.11 2049` from msi-spark.
+
+**A Dell box is not serving.** `boxes.json` must point at the real repo directory
+(`~/Documents/github/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold`); the reconciler
+auto-launches it unless an operator stopped it (`POST /api/box/{box}/llm/on` re-enables).
+
+## tts-service runbooks
+
+**Deploy.** `./deploy.sh` builds and redeploys the NAS container (`3032:8080`). Piper models
+live on the NAS at `/volume1/docker/tts-models`, mounted at `/app/data/piper_models`; adding a
+voice is copying its `.onnx` + `.json` there, no rebuild — voices are resolved by path on
+each request. An unknown voice name logs a warning and falls back to the `default` alias
+(`en_US-lessac-medium`), so "wrong voice" is usually a missing file, not an error.
+
+**500s from Piper on multi-sentence text.** onnxruntime 1.18.1's memory-pattern optimisation
+corrupts ScatterND on the second run of a session, and Piper runs once per sentence. The
+service builds its own `InferenceSession` with `enable_mem_pattern = False`; the per-voice lock
+and retry are backstops. If 500s return after a dependency change, re-run the repro in
+`tts-service/HANDOFF.md` first.
+
+**Memory.** At most two Piper voices are resident (`MAX_LOADED_VOICES = 2`, LRU); the synth
+engine needs no model files and caches up to 64 rendered clips.

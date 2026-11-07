@@ -1,2 +1,2 @@
-Lazy Agent Service — Architecture & Operations
-Unified Agent Harness, 78-Tool MCP Registry & Local LLM Router
+Agent Platform — Architecture & Operations
+Unified Agent Hub: lazy-agent-service (:5591), scraper-service (:8001), spark-console (:8800) & tts-service (:8080)

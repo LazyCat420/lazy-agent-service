@@ -2,10 +2,10 @@
 part: Operations & Quality
 type: reference
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/services/__tests__/McpStdioGuard.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
 ---
 
 # Verification and gates
@@ -62,6 +62,8 @@ waves that closed the CRAP tail (2026-10-31, `ded73cf`).
 | sandbox walls proven independently (ablation: each attack lands with its wall off, is blocked with it on) | `scripts/benchmarks/sandbox-redteam.mts` (6/6 PASS) |
 | hallucinated tool names resolve to canonical tools; string/Python-repr arg coercion | `src/core/loop/__tests__/ToolRunner.test.ts` |
 | trading-boundary: signed context required for `vllm-trading-bot`; markup-recovered calls carry it | `src/services/__tests__/NativeTradingBoundary.test.ts`, `src/providers/__tests__/` vllm/openai-compat cases |
+| `sse`/`streamable-http` rows to internal hosts, non-http(s) schemes or URL credentials → 403 on POST/PUT and `McpHttpRefusedError` at connect; allowlisted host connects (TCK-1019) | `src/services/__tests__/McpStdioGuard.test.ts` (with `McpServersPort.test.ts`, `McpGaps.test.ts` mocking `MCP_HTTP_ALLOWLIST`) |
+| Harness² library scoped per mode and per run; `- mode:`/`- run:` recorded and filtered; reserved scope names refused (TCK-1020) | `src/services/harness2/__tests__/Harness2Library.test.ts`, `src/routes/__tests__/Harness2Routes.test.ts` |
 
 ## Audit and boundary scripts
 
@@ -97,3 +99,32 @@ cycles that route tools and models through it. After deploys that touch tools or
 check the NAS log for `POST /execute/* 401` spikes, confirm the MCP tool list is non-empty
 for a trading agent, and run `npm run smoke:otel`. Library and session state under
 `runtime-data/` survives redeploys (bind mount, `docker-compose.yml`).
+
+## The sibling services' gates
+
+Each sibling is a Python repo tested with pytest from its own root, through `testrun` like
+everything else. Counts below are the runs recorded on 2026-11-07 for the ledger's
+`verified_by`.
+
+| Repo | Command | Result (2026-11-07) | What it proves |
+|---|---|---|---|
+| scraper-service | `python3 -m pytest -q tests/test_health_probe_and_feeds.py` | 11 passed | `read_pid_pressure` ok/warn/critical/unknown (the 2026-08-20 figures classify as critical) and the always-200 `/health/pids` route; search-engine probe spacing and caching; `feed_status` tracking and `/health/feeds` (TCK-1021) |
+| spark-console | `python3 -m pytest -q tests/test_solo_throughput.py tests/test_live_throughput.py tests/test_spark_console_telemetry.py tests/test_health_monitor.py` | 125 passed | solo/aggregate throughput rules, live TensorFold counters, per-model series alignment and summing, temperature history, remote-LLM reconciliation, monitoring views (TCK-1022) |
+| tts-service | `python3 -m pytest -q tests/test_synth_engine.py` | 6 passed | reciter/prosody, frames, Klatt voice controls, post-conditioning of every preset, and the HTTP endpoints (TCK-1023) |
+
+Known non-gating failures: scraper-service's `tests/test_edgar_stooq.py` needs
+`SEC_USER_AGENT` in the environment and raises `SecIdentityMissing` without it; that is the
+collector refusing to run anonymously, not a regression. spark-console also has DOM checks
+(`node tests/dashboard-ui.cjs`, `node tests/throughput-max-ui.cjs`) for the dashboard.
+
+Named sibling proofs:
+
+| Behavior | Test |
+|---|---|
+| two boxes serving one model sum into one per-model series; registry carries id and boxes | `spark-console/tests/test_spark_console_telemetry.py::test_per_model_throughput_sums_serving_boxes_and_registers_model` |
+| runtime-named series stay bucket-aligned across a gap and a save/load | `…::test_tier_named_series_stay_bucket_aligned` |
+| Dell standalone LLMs auto-launch and honour an operator stop | `…::test_remote_llm_reconciliation_and_autolaunch` |
+| temperature tracked in live history and rendered in the dashboard | `…::test_temperature_telemetry_live_history`, `…::test_index_html_temperature_chart_and_sparklines` |
+| self-hosted token counts never enter the subscription total or ROI | `spark-console/tests/test_subscription_usage.py` |
+| host pid pressure classified and served with 200 | `scraper-service/tests/test_health_probe_and_feeds.py` |
+| every synth preset renders clean audio; HTTP routes answer | `tts-service/tests/test_synth_engine.py` |

@@ -2,10 +2,10 @@
 part: Governance
 type: reference
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:src/services/MCPClientService.ts, lazy-agent-service:src/routes/ExecuteRoutes.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:package.json, lazy-agent-service:Dockerfile, lazy-agent-service:scripts/rotate-execute-key.sh
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:src/services/MCPClientService.ts, lazy-agent-service:src/routes/ExecuteRoutes.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:package.json, lazy-agent-service:Dockerfile, lazy-agent-service:scripts/rotate-execute-key.sh, lazy-agent-service:config.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, scraper-service:scraper_main.py, scraper-service:requirements.txt, spark-console:requirements.txt, tts-service:requirements.txt
 ---
 
 # Security and dependencies
@@ -29,6 +29,7 @@ each capability, not a login:
 | Trade | signed `_lazy_trading_context`; unsigned/forged → `PERMISSION_DENIED` | `NativeTradingBoundary.test.ts` |
 | Read every env var | sandbox gets an empty env; allowlisted stdio servers get a sentinel-checked env, never `process.env` wholesale | `McpStdioGuard.test.ts`, `buildStdioEnv` |
 | Reach internals via URL | `url_guard` private-address checks + redirect re-checks | see SSRF below |
+| Point an MCP row at an internal URL | `httpRefusalReason` + `MCP_HTTP_ALLOWLIST` | `McpStdioGuard.test.ts` (TCK-1019) |
 
 ## stdio MCP guard
 
@@ -41,8 +42,30 @@ a row's `args` stay caller-controlled and `-e` re-opens code execution. `PUT ena
 refused row is still allowed so an owner can turn someone else's row off. The refused-path tests
 use a payload that would write a marker file and prove nothing was spawned; the allowlisted test
 spawns a real fixture server and asserts no `MONGO_*`, `DATABASE_URL` or `*_KEY` variable reaches
-it. **Open (TCK-1019):** `sse`/`streamable-http` rows are still unauthenticated, so a caller can
-point the service at internal URLs (SSRF) — filed in the ledger, not fixed here.
+it.
+
+## sse / streamable-http MCP guard (SSRF, TCK-1019)
+
+The same shape guards the network transports. `httpRefusalReason(row)` in
+`MCPClientService.ts` refuses an `sse` or `streamable-http` row when its URL is missing or
+unparseable, is not `http:`/`https:`, carries credentials (`user:pass@`), or names an internal
+host: `localhost`, `*.localhost`, `*.internal`, `0.0.0.0/8`, `127/8`, `10/8`, `172.16/12`,
+`192.168/16`, `169.254/16` (cloud metadata), `::1`, `::`, `fc00::/7`, `fe80::/10` and
+IPv4-mapped IPv6 forms of all of these. Scheme and credential refusals are absolute; the only
+way past the internal-host check is `MCP_HTTP_ALLOWLIST` in
+`config.ts`: comma-separated hosts or origins from the `MCP_HTTP_ALLOWLIST` env var, plus the
+origin of `LAZY_AGENT_SERVICE_PUBLIC_URL`. A refused URL gets:
+
+- `403` on `POST /mcp-servers` and on `PUT /mcp-servers/:id` when the effective row (stored
+  values plus the update) would be refused — `PUT enabled:false` without a URL change stays
+  allowed, as for stdio rows;
+- `McpHttpRefusedError` from `connect()` and again in `createTransport` (mapped to `403` on
+  `/:id/connect`); boot auto-connect (`connectAllFromDB`) skips refused rows.
+
+LAN MCP servers (`10.0.0.x`) therefore need their host on `MCP_HTTP_ALLOWLIST` before they will
+connect. Proof: the `sse / streamable-http SSRF guard (TCK-1019)` block in
+`McpStdioGuard.test.ts` (refused URL shapes on POST/PUT/connect, and an allowlisted stub that
+does connect).
 
 ## /execute and the execute key
 
@@ -57,8 +80,8 @@ verifies 401/200, copies to clipboard, never prints the secret (`--no-deploy` wr
 
 ## SSRF: fetch and scrape
 
-Outbound fetch (web extract, scrape_url, MCP `sse` connects) resolves against private-address
-blocks before the request; the trading bridge additionally enforces per-run scrape budgets —
+Outbound fetch (web extract, scrape_url) resolves against private-address blocks before the
+request, and MCP `sse`/`streamable-http` rows pass the guard above; the trading bridge additionally enforces per-run scrape budgets —
 dead URLs are recorded dead for the run, refused without re-charging, and the per-run maps
 (including known-dead entries) are pruned with the other run state (`a989f16`). Text that is not
 a URL is not charged to the budget (`174db2a`). Redirect hops are re-checked on the scraper side
@@ -99,7 +122,42 @@ the next landing-batch deploy. Validation before landing: `pnpm run typecheck` +
 
 ## Known gaps (tracked, not hidden)
 
-- `TCK-1019` — unauthenticated `sse`/`streamable-http` MCP rows (SSRF).
+- MCP `sse`/`streamable-http` rows are guarded by host, not authenticated: an allowlisted host
+  is trusted for any path on it (TCK-1019 closed the internal-address SSRF, not authentication).
 - crawl4ai redirect re-check (documented residual; default ladder is guarded).
+- tts-service and spark-console have no API authentication (below).
 - prism-service reads the same `prism.mcp_servers` collection; its handling of a stdio row is
   outside this guard (prism-side, Rod's repo — not editable here).
+
+## The sibling services' boundaries
+
+| Service | Who can call it | Guard | Secrets it needs |
+|---|---|---|---|
+| scraper-service `:8001` | lazy-agent-service, trading-service, LAN | `X-Scraper-Key` on `/scrape`, `/scrape/batch`, `/collect`, `/stream/*` — `hmac.compare_digest` against `SCRAPER_API_KEY`; health routes stay open for Docker's `wget` probe | `SCRAPER_API_KEY` (shared with lazy-agent-service and trading-service), `SEC_USER_AGENT` (SEC Edgar identity, refused with a clear error when unset) |
+| spark-console `:8800` / `:8801` | operator browser, ComfyUI guard hook, the workstation usage timer | none on the API; reachability is the UFW rule set on goldspark (LAN `10.0.0.0/24` on 8800/8000/8001/8188/7681, fabric subnets `192.168.177.0/24` and `192.168.178.0/24`) | SSH keys to the boxes it powers and reconciles; Kasa/Home Assistant plug access |
+| tts-service `:3032` | HTML-Notes' `/tts/synthesize` proxy and other LAN clients | none; input is sanitised (non-word symbols stripped before Piper) and the synth engine reads no files | none |
+
+scraper-service's key is keyed on the **presence** of `SCRAPER_API_KEY`, not a flag: with no key
+set it is open, so a rollout sets the key in the callers first and in the scraper last, and a live
+trading cycle never sees a 401 mid-sweep. lazy-agent-service sends the header only when its own
+`SCRAPER_API_KEY` is set (`WebSearchService.ts`, `WebExtractService.ts`).
+
+spark-console's `POST /api/render-permit` tears the serving LLM down for any caller that can
+reach it, and `POST /api/box/{box}/{action}` powers boxes. Both are LAN-only by firewall, not by
+credential — the gap is listed above; do not publish `:8800` or `:8801` beyond the LAN.
+
+### Sibling dependency policy
+
+All three are `python:3.11-slim` images with exact pins in `requirements.txt`:
+
+- **scraper-service** — `fastapi 0.161.0`, `starlette 1.9.0`, `httpx 0.28.1`, `playwright 1.61.0`
+  + `playwright-stealth`, `trafilatura`, `feedparser`, `yt-dlp 2026.10.21`,
+  `youtube-transcript-api`, `twscrape`. `yt-dlp` is the one that must move often (site changes
+  break it); bump it alone and rerun `tests/`.
+- **spark-console** — `fastapi 0.161.0`, `uvicorn 0.54.0`, `starlette 1.9.0`, `websockets 17.3`;
+  everything else is the standard library, on purpose, because the same file runs as a host
+  systemd unit and in the NAS gateway container.
+- **tts-service** — `piper-tts 1.2.0`, `onnxruntime 1.18.1`, `numpy 1.26.4`. onnxruntime is
+  pinned because 1.18.1's memory-pattern optimisation corrupts ScatterND on the second run of a
+  session; the service builds its own `InferenceSession` with `enable_mem_pattern = False`
+  (`tts-service/HANDOFF.md`). An onnxruntime bump must re-run the multi-sentence repro there.

@@ -1,6 +1,6 @@
 {
-  "title": "Lazy Agent Service Data State-Flow Graph",
-  "updated": "2026-11-06",
+  "title": "Agent Platform Data State-Flow Graph",
+  "updated": "2026-11-07",
   "layers": {
     "0": "Ingress & Requests",
     "1": "Session & Durable State",
@@ -109,6 +109,46 @@
       "writers": ["otel_telemetry"],
       "readers": ["otel_telemetry"],
       "purpose": "OpenTelemetry span batches exported to OTLP http://10.0.0.16:4318 → Tempo :3200 → Grafana :3300; per-tool latency/error metrics and the tool-call spans the trading bridge and search paths attach; /health never traced (ch.07)."
+    },
+    {
+      "id": "failure_cache_db",
+      "kind": "file",
+      "layer": 4,
+      "join_keys": ["url", "domain", "feed_url"],
+      "ttl": "dead_urls until expires_at; domain_quality pruned after SCRAPER_DOMAIN_MAX_AGE_S (90 d)",
+      "writers": ["scraper_service"],
+      "readers": ["scraper_service"],
+      "purpose": "scraper-service's learned record of the web at /app/logs/failure_cache.db (named volume): dead_urls (permanent 404/410), domain_quality (thin_streak, good_count, last_thin_at) behind the domain skip rule, and feed_status per RSS feed served by GET /health/feeds. PRAGMA user_version migration ladder; outlives every deploy."
+    },
+    {
+      "id": "spark_state",
+      "kind": "file",
+      "layer": 1,
+      "join_keys": ["serving_mode"],
+      "ttl": "permanent",
+      "writers": ["spark_console"],
+      "readers": ["spark_console"],
+      "purpose": "spark-console DATA_DIR/state.json: serving_mode, DeepSeek/LLM on-off intent, auto_resume and the boxes whose ComfyUI was paused for the LLM; reconciled at boot and every 30 s."
+    },
+    {
+      "id": "spark_usage_history",
+      "kind": "file",
+      "layer": 5,
+      "join_keys": ["model", "box", "tier"],
+      "ttl": "tiered (1h, 24h, 7d, 30d, 1y)",
+      "writers": ["spark_console"],
+      "readers": ["spark_console"],
+      "purpose": "spark-console DATA_DIR/history.json tiered series (per-box GPU mem/util/power/temp, per-model tok/s and watts behind GET /api/series), usage.json (request throughput and solo ledger) and subscription_usage.json (pushed Claude/Argon/local token records)."
+    },
+    {
+      "id": "piper_models",
+      "kind": "file",
+      "layer": 4,
+      "join_keys": ["voice"],
+      "ttl": "permanent",
+      "writers": [],
+      "readers": ["tts_service"],
+      "purpose": "Piper <voice>.onnx + <voice>.onnx.json pairs on the NAS (/volume1/docker/tts-models mounted at /app/data/piper_models); at most 2 voices held in RAM by the LRU."
     }
   ],
   "flows": [
@@ -127,6 +167,11 @@
     {"from": "web_search_extract", "to": "trading_bridge", "key": "cycleId,toolName", "label": "Exa search, scrape and /execute fetch behind URL guard and budget"},
     {"from": "embedding_rag", "to": "embedding_vectors", "key": "docId,space", "label": "batched EmbeddingGemma 2 writes for conversations and memories"},
     {"from": "otel_telemetry", "to": "otel_spans", "key": "traceId,spanId", "label": "span batches exported per request, tool call and bridge hop"},
-    {"from": "request_rows", "to": "otel_spans", "key": "requestId,traceId", "label": "audit rows correlated to their trace for audit readers"}
+    {"from": "request_rows", "to": "otel_spans", "key": "requestId,traceId", "label": "audit rows correlated to their trace for audit readers"},
+    {"from": "scraper_service", "to": "failure_cache_db", "key": "url,domain,feed_url", "label": "dead URLs, domain quality per scrape, feed status per RSS fetch"},
+    {"from": "failure_cache_db", "to": "scraper_service", "key": "url,domain", "label": "phase 0/0b check before any network request"},
+    {"from": "spark_console", "to": "spark_state", "key": "serving_mode", "label": "mode switch, toggles, render-permit suspensions"},
+    {"from": "spark_console", "to": "spark_usage_history", "key": "model,box", "label": "5 s samples rolled into tiers; pushed subscription records"},
+    {"from": "piper_models", "to": "tts_service", "key": "voice", "label": "load <voice>.onnx on first use (LRU of 2)"}
   ]
 }

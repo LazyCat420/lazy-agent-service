@@ -2,10 +2,10 @@
 part: Runtime & Pipeline
 type: spec
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:tool_schemas.json, lazy-agent-service:src/services/ToolOrchestratorService.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:tool_schemas.json, lazy-agent-service:src/services/ToolOrchestratorService.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts, scraper-service:searxng/settings.yml, tts-service:app/synth/presets.py
 ---
 
 # Tools and the schema registry
@@ -68,8 +68,12 @@ Exa endpoint for the whole house (the one public IP is bot-blocked everywhere el
 identical queries answered for 30 min (case/spacing-insensitive), in-flight identical queries
 share one call. Pacing: one Exa call at a time, ≥1.5 s apart, network-wide; a caller waiting
 >20 s gets `busy`. After any 429/rate-limit signal: 60 s cooldown, callers get
-`rate_limited` immediately. **No scraping fallback, on purpose** — news has `news_search`
-(keyed APIs).
+`rate_limited` immediately. **Fallback: scraper-service's SearXNG collector.** When Exa fails
+or answers `ok` with no results (its keyless index misses fresh news), the same query goes to
+`POST $SCRAPER_SERVICE_URL/collect` with `source: "searxng"` (timeout
+`WEB_SEARCH_SEARXNG_TIMEOUT_MS`, default 20 s); a `busy` answer never falls back, so a burst
+cannot pile onto SearXNG too. Only answers with results are cached. News still has
+`news_search` (keyed APIs).
 
 **`scrape_url` / extract** (`WebExtractService.ts`, `scrapeTargetGuard` in
 `LocalToolRouter.ts`): refuses scraping sites with a dedicated tool (`finviz.com` →
@@ -87,3 +91,26 @@ identical args return the cached first result (`screener_query` result reuse in-
 `ebdda0d`). Oversized tool results are cut to the per-result limit (`SpillBuffer` /
 `ToolOutputSubstituter`), the truncation is recorded, and cross-ticker contamination is
 blocked at the bridge (`Cross-contamination blocked: MSFT != AAPL`).
+
+## Tools served by the sibling services
+
+No tool schema lives in the sibling repos; the catalog stays the single generator's output.
+Two catalog tools are thin clients of scraper-service, and its collectors are the backend
+other repos call directly.
+
+| Tool (this catalog) | Sibling call | What the tool sees |
+|---|---|---|
+| `web_search` (fallback path) | scraper-service `POST /collect {source: "searxng"}` | `provider: "searxng"` results; SearXNG queries only `bing` and `wikipedia` (DuckDuckGo, Google and the rest bot-block the house IP) |
+| `scrape_url` / web extract | scraper-service `POST /scrape {url, engine: "auto"}` | `content`, `engineUsed` (`auto (http)`, `auto (http-teaser)`, Playwright, `auto (skipped)`), `contentQuality: "thin"` when the scraper says so |
+
+scraper-service's own collectors (`POST /collect`), for callers that use it directly
+(trading-service): `reddit`, `reddit-purge`, `youtube`, `news`/`rss` (per-feed health in
+`/health/feeds`), `searxng`, `edgar` (needs `SEC_USER_AGENT`), `stooq`, plus finnews,
+stocktwits, twitter, kannapedia and leafly collector modules in
+`app/scraper/collectors/`.
+
+**Voices as a capability.** tts-service is not a catalog tool; clients call
+`POST /api/v1/tts/synthesize` directly. Piper voices are the `.onnx` models on the NAS volume
+(`GET /api/v1/tts/voices` lists them with accent aliases); the synth engine's eight voice types
+(`GET /api/v1/tts/synth-voices`) are numeric presets in `app/synth/presets.py`, so adding one is
+a code change, not a download.

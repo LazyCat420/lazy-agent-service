@@ -2,10 +2,10 @@
 part: Governance
 type: decisions
 status: verified
-updated: 2026-11-06
-last-verified: 2026-11-06
-review-by: 2026-12-06
-covers: lazy-agent-service:src/services/ToolAuthorization.ts, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:src/services/MCPClientService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/LocalToolRouter.ts
+updated: 2026-11-07
+last-verified: 2026-11-07
+review-by: 2026-12-07
+covers: lazy-agent-service:src/services/ToolAuthorization.ts, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:src/services/MCPClientService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/services/harness2/Library.ts, spark-console:console.py
 ---
 
 # Decisions
@@ -139,3 +139,46 @@ and enforcement was switched on last, verified live (no key → 401, keyed → 2
 trading cycle with 0 denials after). Rotation is a script that never prints the key:
 `scripts/rotate-execute-key.sh` (`a3944c3`, enforcement `0c1c2b3`). Rollout items that depend on
 a stopped container or a human paste are reported open, never silently skipped.
+
+## ADR-13 — Network MCP rows: refuse internal hosts unless allowlisted (2026-11-07)
+
+**Decision.** ADR-06 closed stdio; `sse`/`streamable-http` rows could still point the service at
+`127.0.0.1`, the NAS's own admin ports or `169.254.169.254`. The guard mirrors ADR-06 exactly:
+one predicate, `httpRefusalReason`, applied at the route (`403` on `POST`/`PUT /mcp-servers`), at
+`connect()`/`createTransport` (`McpHttpRefusedError`) and in boot auto-connect. Non-http(s)
+schemes and URL credentials are always refused; internal and link-local hosts are refused unless
+the host or origin is on `MCP_HTTP_ALLOWLIST` (env, plus the service's own public origin). Hostnames are judged by
+name, not by DNS resolution — a rebinding name is out of scope and the allowlist is the operator's
+statement of trust. Proof: `McpStdioGuard.test.ts` TCK-1019 block (`f8063bf`).
+
+## ADR-14 — Harness² library scope is opt-in per request (2026-11-07)
+
+**Decision.** One experience library per domain stays the default, because lessons are meant to
+accumulate. A caller that needs isolation asks for it: `isolateLibrary` scopes the library by
+serving mode (`<root>/<domain>/<mode>`), `libraryScope` by run (`.../<runScope>`), and
+`Library.forRun(domain, { root, mode, runId })` builds the same thing in code. Every lesson
+records `- mode:` and `- run:` lines in `EXPERIENCE.md`, so `contextText({ mode, runId })` can
+filter a shared library without moving files. Scope names that collide with the library's own
+layout (`harnesses`, `runs`, `INDEX.md`) throw. Proof: `Harness2Library.test.ts` TCK-1020 block
+(`f8063bf`).
+
+## ADR-15 — One TDD for every `agents/*` service (2026-11-07)
+
+**Decision.** lazy-agent-service, scraper-service, spark-console and tts-service are documented
+in this one 13-chapter document instead of four. They share callers, the LAN trust model and
+the model fleet, and the questions an operator asks ("why is web search slow", "why did the LLM
+vanish") cross service lines. Each sibling keeps its operational notes
+(`scraper-service/OPERATIONS.md`, `spark-console/README.md`, `tts-service/HANDOFF.md`); the
+content of `spark-console/documentation/chapters/01..05` is folded into ch.04, ch.07 and ch.08
+here. Those files stay in the spark-console repo as dated history (this TDD archives, never
+deletes); this document is the current truth. Tickets for every repo live in this ledger with `owner` set to the repo.
+
+## ADR-16 — spark-console never overlaps two deployments (2026-10, recorded 2026-11-07)
+
+**Decision.** Unified memory on the Sparks holds one LLM deployment at a time. A serving-mode
+switch (`POST /api/serving-mode/{new_mode}`) fully stops the outgoing deployment — containers
+gone — before the new one starts, and a ComfyUI render that needs a box the LLM occupies is
+granted only after the LLM is torn down (`POST /api/render-permit`). The LLM comes back by
+itself only when `auto_resume` is on and every contending ComfyUI queue has been idle for
+`AUTO_RESUME_IDLE_S` (300 s). Running both at once would OOM the box; a slower handover is
+the accepted cost (ch.04, ch.08).
