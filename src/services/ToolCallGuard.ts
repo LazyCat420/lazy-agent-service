@@ -39,6 +39,7 @@ import { classifyToolResult } from "./ToolResult.ts";
 import { Span } from "../platform/trace/Span.ts";
 import { TraceExporter } from "../platform/trace/TraceExporter.ts";
 import { TraceContext } from "../platform/trace/TraceContext.ts";
+import { STOP_DO_NOT_RETRY_SCRAPE } from "./UnscrapableDomains.ts";
 
 const num = (name: string, fallback: number): number => {
   const raw = Number(process.env[name]);
@@ -397,8 +398,8 @@ export function guardTradingToolCall(
     if (ledger.scrapes >= TRADING_RUN_LIMITS.SCRAPE_URL) {
       return {
         error:
-          "scrape_url already used in this run (limit 1). Use lazy_web_search " +
-          "snippets or pre-collected data, or record a DataGap.",
+          `${STOP_DO_NOT_RETRY_SCRAPE} scrape_url already used in this run (limit 1). ` +
+          "Use lazy_web_search snippets or pre-collected data, or record a DataGap.",
         is_error: true,
         guard: "scrape_url_limit",
       };

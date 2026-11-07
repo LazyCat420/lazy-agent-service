@@ -1348,6 +1348,46 @@ async function consumeChatProviderStream(
   }
 }
 
+/**
+ * TCK-1033: a toolless /chat completion must not depend on `done.usage`
+ * alone. The Board's call runs without tools, so it never enters the
+ * function-calling loop — the only other place this route emits
+ * `usage_update` — and when the provider streamed no usage chunk the
+ * Finalizer emits `done` with `usage: null`. trading-service's SSE reader
+ * falls back to the last `usage_update` precisely for that case, so the
+ * absence of the event lost the cycle's token usage outright (trading-client
+ * ch. "RC-3 usage capture", 03-open-work.md). Emitted only when the provider
+ * reported usage — the same rule the function-call loop follows, so a model
+ * that reports nothing fabricates nothing.
+ *
+ * The payload keeps the harness convention (`inputTokens`/`outputTokens`/
+ * `totalInputTokens`, see `withTotalInputTokens`) and adds the snake_case
+ * fields the trading readers consume (`prompt_tokens`, `completion_tokens`,
+ * `total_tokens`).
+ */
+function emitToollessUsageUpdate(
+  emit: EmitFunction,
+  usage: TokenUsage | null | undefined,
+  requests = 1,
+): void {
+  if (!usage) return;
+  const promptTokens =
+    (usage.inputTokens ?? 0) +
+    (usage.cacheReadInputTokens ?? 0) +
+    (usage.cacheCreationInputTokens ?? 0);
+  const completionTokens = usage.outputTokens ?? 0;
+  emit({
+    type: SERVER_SENT_EVENT_TYPES.USAGE_UPDATE,
+    usage: {
+      ...withTotalInputTokens(usage),
+      requests,
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: usage.totalTokens ?? promptTokens + completionTokens,
+    },
+  });
+}
+
 function isErrorToolExecutionResult(result: unknown): boolean {
   if (!result || typeof result !== "object") return false;
   return Boolean("error" in result && (result as { error?: unknown }).error);
@@ -1698,6 +1738,14 @@ async function handleStreamingText(context: GenerationContext) {
     if (!executed) break;
   }
 
+  // TCK-1033: the function-call loop above is what normally emits the
+  // cumulative usage_update. A toolless completion never enters it, so emit
+  // the finished call's usage here instead (the loop already covered the
+  // calls it made, which is why this only runs at iteration 0).
+  if (functionCallIteration === 0) {
+    emitToollessUsageUpdate(emit, streamState.usage as TokenUsage | null | undefined);
+  }
+
   applyChatTruncationWarningIfNeeded(streamState, emit);
   const now = performance.now();
   await finalizeTextGeneration(
@@ -1857,6 +1905,13 @@ async function handleNonStreamingText(context: GenerationContext) {
     ConversationGenerationTracker.complete(subRequestId);
   }
   emitNonStreamingResultEvents(genResult, emit);
+  // TCK-1033: same reason as the streaming path — a completion with no tool
+  // calls is finished here and this route emits no other usage event, so the
+  // provider's counts would otherwise reach the Board only through done,
+  // which is null whenever the provider reported no usage.
+  if (!genResult.toolCalls || genResult.toolCalls.length === 0) {
+    emitToollessUsageUpdate(emit, genResult.usage as TokenUsage | undefined);
+  }
   const images = await uploadAndEmitNonStreamingImages(genResult, project, username, emit);
   await finalizeTextGeneration(
     context,

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { runToolBatch } from "../ToolRunner.ts";
 import { resetGuard } from "../../../services/ToolCallGuard.ts";
+import { STOP_DO_NOT_RETRY_SCRAPE } from "../../../services/UnscrapableDomains.ts";
 import type { CoreTool, CoreToolCall, ToolBatchOptions } from "../types.ts";
 
 let idCounter = 0;
@@ -67,8 +68,8 @@ describe("trading run budget", () => {
     expect(second[0]).toMatchObject({ isError: true, errorCode: "TOOL_GUARD_REFUSED" });
     expect(JSON.parse(second[0].content)).toEqual({
       error:
-        "scrape_url already used in this run (limit 1). Use lazy_web_search " +
-        "snippets or pre-collected data, or record a DataGap.",
+        `${STOP_DO_NOT_RETRY_SCRAPE} scrape_url already used in this run (limit 1). ` +
+        "Use lazy_web_search snippets or pre-collected data, or record a DataGap.",
       is_error: true,
       guard: "scrape_url_limit",
     });

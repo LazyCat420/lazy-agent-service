@@ -11,6 +11,7 @@ import { resetGuard } from "../ToolCallGuard.ts";
 import { webExtract, __resetWebExtractForTests } from "../WebExtractService.ts";
 import {
   SCRAPE_BUDGET_CODE,
+  STOP_DO_NOT_RETRY_SCRAPE,
   UNSCRAPABLE_CODE,
   UNSCRAPABLE_DOMAINS,
   __resetScrapeBudgetForTests,
@@ -254,7 +255,8 @@ describe("scrape_url budget per agent run", () => {
     const fifth = await call("https://fool.com/a5", run);
     expect(fifth.success).toBe(false);
     expect(fifth.skipped).toBe("scrape_budget");
-    expect(String(fifth.error)).toMatch(new RegExp(`^${SCRAPE_BUDGET_CODE}: this run has used its 4 scrape_url calls`));
+    expect(String(fifth.error).startsWith(STOP_DO_NOT_RETRY_SCRAPE)).toBe(true);
+    expect(String(fifth.error)).toContain(`${SCRAPE_BUDGET_CODE}: this run has used its 4 scrape_url calls`);
     expect(extract).toHaveBeenCalledTimes(4);
     // Another run (a different conversation) has its own budget.
     expect((await call("https://fool.com/b1", { ...run, conversationId: "conv-B" })).success).toBe(true);
@@ -302,6 +304,7 @@ describe("scrape_url failure-rate rules", () => {
     await call("https://fool.com/gone");
     const again = await call("https://fool.com/gone");
     expect(again.skipped).toBe("known_dead_url");
+    expect(String(again.error).startsWith(STOP_DO_NOT_RETRY_SCRAPE)).toBe(true);
     expect(String(again.error)).toContain("permanently unavailable");
     expect(extract).toHaveBeenCalledTimes(1);
   });

@@ -40,6 +40,20 @@ export const SCRAPE_BUDGET_CODE = "SCRAPE_BUDGET_EXHAUSTED";
 export const USE_DEDICATED_TOOL_CODE = "USE_DEDICATED_TOOL";
 export const UNVERIFIED_URL_CODE = "UNVERIFIED_URL";
 
+/**
+ * TCK-3035: the leading line every scrape-ledger refusal carries. Evidence
+ * 14 d counted scrape_url calls made after a refusal had already been
+ * returned for the same target; a refusal worded only as an explanation
+ * ("this run has used its budget", "already failed earlier") left the model
+ * retrying the refused URL until the loop's own step budget ran out. A
+ * refusal that opens with an imperative STOP line naming the tool gives the
+ * model an unambiguous instruction to act on before it reads the reason.
+ * The stable telemetry codes below stay in the message (after this line) so
+ * error_message splits are unchanged.
+ */
+export const STOP_DO_NOT_RETRY_SCRAPE =
+  "STOP_DO_NOT_RETRY_SCRAPE: URL already scraped or refused in this cycle; do not call scrape_url again for this target.";
+
 /** True when the URL is a Yahoo Finance /m/<uuid> partner teaser stub. */
 export function isPartnerTeaserUrl(url: string): boolean {
   try {
@@ -340,7 +354,7 @@ export function chargeScrape(url: string, scope: ScrapeRunScope = {}, now = Date
       success: false,
       skipped: "scrape_budget",
       error:
-        `${SCRAPE_BUDGET_CODE}: this run has used its ${budget} scrape_url calls, so this page was not fetched. ` +
+        `${STOP_DO_NOT_RETRY_SCRAPE} ${SCRAPE_BUDGET_CODE}: this run has used its ${budget} scrape_url calls, so this page was not fetched. ` +
         "Do not call scrape_url again in this run; finish from the headlines, snippets and pages you already have.",
     };
   }
@@ -386,7 +400,7 @@ export function deadUrlRefusal(url: string, scope: ScrapeRunScope = {}, now = Da
     success: false,
     skipped: "known_dead_url",
     error:
-      `KNOWN_DEAD_URL: this exact URL already failed earlier in this run (${prior}) and will not recover, so it was not fetched. ` +
+      `${STOP_DO_NOT_RETRY_SCRAPE} KNOWN_DEAD_URL: this exact URL already failed earlier in this run (${prior}) and will not recover, so it was not fetched. ` +
       "Do not retry it; pick a different URL from lazy_web_search results or finish with what you have.",
   };
 }
