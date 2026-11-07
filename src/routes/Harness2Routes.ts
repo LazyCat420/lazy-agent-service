@@ -180,6 +180,9 @@ function check(body: Record<string, unknown>): Checked {
     mode: body.mode as Harness2Request["mode"],
     selectionPool: body.selectionPool as Harness2Request["selectionPool"],
     seed: body.seed as number | undefined,
+    // TCK-1020: opt-in per-mode / per-scope library instead of the one domain library.
+    isolateLibrary: body.isolateLibrary === true ? true : undefined,
+    libraryScope: typeof body.libraryScope === "string" && body.libraryScope.trim() ? body.libraryScope : undefined,
     solver,
     improver,
     project: typeof body.project === "string" ? body.project : undefined,

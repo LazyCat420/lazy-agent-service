@@ -228,3 +228,17 @@ export const MCP_STDIO_COMMANDS: string[] = (process.env.MCP_STDIO_COMMANDS ?? "
   .split(",")
   .map((entry) => entry.trim())
   .filter(Boolean);
+
+// ── MCP sse / streamable-http servers ─────────────────────────
+// An sse or streamable-http row is a URL this service fetches, so a row aimed
+// at loopback, a private range, link-local / cloud metadata (169.254.169.254)
+// or an *.internal host is refused unless its host or origin is listed here
+// (comma-separated: `10.0.0.16:8035`, `http://10.0.0.16:8035`, `mcp.lan`).
+// Public hosts need no entry. The origin of LAZY_AGENT_SERVICE_PUBLIC_URL is
+// trusted as well when it is set.
+export const MCP_HTTP_ALLOWLIST: string[] = [
+  ...(process.env.MCP_HTTP_ALLOWLIST ?? "").split(","),
+  ...(LAZY_AGENT_SERVICE_PUBLIC_URL ? [LAZY_AGENT_SERVICE_PUBLIC_URL.replace(/\/+$/, "")] : []),
+]
+  .map((entry) => entry.trim())
+  .filter(Boolean);

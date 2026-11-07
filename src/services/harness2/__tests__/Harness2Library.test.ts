@@ -111,6 +111,101 @@ describe("library paths [R10]", () => {
   });
 });
 
+describe("per-run and per-mode library scope (TCK-1020)", () => {
+  it("without a scope the library is the one domain directory, as before", () => {
+    const root = tmp();
+    expect(new Library("finance", root).dir).toBe(path.join(root, "finance"));
+    expect(new Library("finance", root, {}).dir).toBe(path.join(root, "finance"));
+  });
+
+  it("mode and run scopes nest under the domain and never see each other's entries", () => {
+    const root = tmp();
+    const shared = new Library("finance", root);
+    const seq = new Library("finance", root, { mode: "sequential" });
+    const run = Library.forRun("finance", { root, mode: "parallel", runId: "run-1" });
+    const runOnly = new Library("finance", root, { runScope: "../run-2" });
+    expect(seq.dir).toBe(path.join(root, "finance", "sequential"));
+    expect(run.dir).toBe(path.join(root, "finance", "parallel", "run-1"));
+    expect(path.relative(path.join(root, "finance"), runOnly.dir).startsWith("..")).toBe(false);
+
+    shared.add("t-shared", BASE, { experience: { ...EXP, cue: "shared-cue" } });
+    seq.add("t-seq", BASE, { experience: { ...EXP, cue: "seq-cue" } });
+    run.add("t-run", BASE, { experience: { ...EXP, cue: "run-cue" } });
+
+    expect(shared.entries()).toEqual(["t-shared"]);
+    expect(seq.entries()).toEqual(["t-seq"]);
+    expect(run.entries()).toEqual(["t-run"]);
+    expect(runOnly.entries()).toEqual([]);
+    expect(shared.contextText()).not.toContain("seq-cue");
+    expect(seq.contextText()).not.toContain("shared-cue");
+    expect(run.contextText()).not.toContain("seq-cue");
+    // A scoped library's entries carry its scope as metadata.
+    const text = fs.readFileSync(path.join(run.entryDir("t-run"), "EXPERIENCE.md"), "utf8");
+    expect(text).toMatch(/^- mode: parallel$/m);
+    expect(text).toMatch(/^- run: run-1$/m);
+  });
+
+  it("a scope that would collide with the domain's own directories is refused", () => {
+    expect(() => new Library("finance", tmp(), { mode: "harnesses" })).toThrow(/collides/);
+    expect(() => Library.forRun("finance", { root: tmp(), runId: "runs" })).toThrow(/collides/);
+  });
+
+  it("contextText filters one library by recorded mode and run", () => {
+    const lib = new Library("mixed", tmp());
+    lib.add("a", BASE, { experience: { ...EXP, cue: "par-r1" }, mode: "parallel", runId: "r1" });
+    lib.add("b", BASE, { experience: { ...EXP, cue: "seq-r1" }, mode: "sequential", runId: "r1" });
+    lib.add("c", BASE, { experience: { ...EXP, cue: "par-r2" }, mode: "parallel", runId: "r2" });
+    lib.add("d", BASE, { experience: { ...EXP, cue: "untagged" } });
+
+    const all = lib.contextText();
+    for (const cue of ["par-r1", "seq-r1", "par-r2", "untagged"]) expect(all).toContain(cue);
+
+    const par = lib.contextText({ mode: "parallel" });
+    expect(par).toContain("par-r1");
+    expect(par).toContain("par-r2");
+    expect(par).not.toContain("seq-r1");
+    expect(par).not.toContain("untagged");
+
+    const r1 = lib.contextText({ runId: "r1" });
+    expect(r1).toContain("par-r1");
+    expect(r1).toContain("seq-r1");
+    expect(r1).not.toContain("par-r2");
+
+    const both = lib.contextText({ mode: "sequential", runId: "r1" });
+    expect(both).toContain("seq-r1");
+    expect(both).not.toContain("par-r1");
+    expect(lib.contextText({ mode: "sequential", runId: "r2" })).toBe("");
+  });
+
+  it("runHarness2 with isolateLibrary + libraryScope learns into its own library only", async () => {
+    const root = tmp();
+    await runHarness2(req(root, { taskId: "t-iso", isolateLibrary: true, libraryScope: "run-a" }), {
+      execute,
+      propose: learner,
+    });
+    expect(new Library("finance", root).entries()).toEqual([]);
+    const isolated = Library.forRun("finance", { root, mode: "parallel", runId: "run-a" });
+    expect(isolated.entries()).toEqual(["t-iso"]);
+    expect(fs.readFileSync(path.join(isolated.entryDir("t-iso"), "EXPERIENCE.md"), "utf8")).toMatch(/^- run: run-a$/m);
+
+    // A later run in another scope does not read run-a's lesson; one in the same scope does.
+    const seen: Record<string, string> = {};
+    const spy: Proposer = async (p, label) => ((seen[label] = p), "<notes>KEEP_BASE</notes>");
+    await runHarness2(req(root, { taskId: "t-other", isolateLibrary: true, libraryScope: "run-b" }), { execute, propose: spy });
+    expect(seen["inv1.a1"]).not.toContain("## Entry t-iso");
+    await runHarness2(req(root, { taskId: "t-same", isolateLibrary: true, libraryScope: "run-a" }), { execute, propose: spy });
+    expect(seen["inv1.a1"]).toContain("## Entry t-iso");
+  });
+
+  it("the default run still learns into the shared domain library, tagged with its mode", async () => {
+    const root = tmp();
+    await runHarness2(req(root, { taskId: "t-default" }), { execute, propose: learner });
+    const shared = new Library("finance", root);
+    expect(shared.entries()).toEqual(["t-default"]);
+    expect(fs.readFileSync(path.join(shared.entryDir("t-default"), "EXPERIENCE.md"), "utf8")).toMatch(/^- mode: parallel$/m);
+  });
+});
+
 describe("reflection input [R18]", () => {
   it("shows the base harness once, diffs every candidate against it, and maps the anonymous ids", async () => {
     let reflection = "";

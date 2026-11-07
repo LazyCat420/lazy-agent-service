@@ -73,6 +73,13 @@ export interface Harness2Request {
   /** Mixed into the per-task selection seed; the order is already task-specific without it. */
   seed?: number;
   libraryRoot?: string;
+  /**
+   * TCK-1020: read and write a library private to this run's mode (<domain>/<mode>) instead of
+   * the one shared domain library. Off by default, so existing callers keep the domain library.
+   */
+  isolateLibrary?: boolean;
+  /** TCK-1020: narrow the library further to this scope (<domain>[/<mode>]/<libraryScope>), e.g. a run id. */
+  libraryScope?: string;
   project?: string;
   username?: string;
 }
@@ -471,6 +478,8 @@ async function reflectAndStoreHarnessExperience(
         why: selection.why,
         label: selection.chosenLabel,
         experience: exp.entry,
+        mode: req.mode ?? "parallel",
+        runId: req.libraryScope,
       });
     } catch (error) {
       errors.push(`library entry not stored: ${errText(error)}`);
@@ -581,7 +590,10 @@ export async function runHarness2(
   const bp: BenchPrompts = { ...req.bench, work: req.bench?.work || req.task };
   const { signal, execute, propose, budget } = resolveHarness2Runtime(req, deps);
   const errors: string[] = [];
-  const library = new Library(req.domain, req.libraryRoot);
+  const library = new Library(req.domain, req.libraryRoot, {
+    mode: req.isolateLibrary ? (req.mode ?? "parallel") : undefined,
+    runScope: req.libraryScope,
+  });
   const { libraryEntriesBefore, libraryText } = loadHarnessLibraryContext(
     library,
     req.taskId,

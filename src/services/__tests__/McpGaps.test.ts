@@ -22,7 +22,9 @@ import type * as ConfigModule from "../../../config.ts";
 
 vi.mock("../../../config.ts", async (importOriginal) => {
   const original = await importOriginal<typeof ConfigModule>();
-  return { ...original, MCP_OAUTH_ENCRYPTION_KEY: "ab".repeat(32) };
+  // The stub MCP and OAuth servers listen on loopback, which the SSRF guard
+  // (TCK-1019) refuses unless allowlisted.
+  return { ...original, MCP_OAUTH_ENCRYPTION_KEY: "ab".repeat(32), MCP_HTTP_ALLOWLIST: ["127.0.0.1"] };
 });
 
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";

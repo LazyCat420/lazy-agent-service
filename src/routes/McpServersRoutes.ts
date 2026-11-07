@@ -5,6 +5,8 @@ import express, { Request, Response, NextFunction } from "express";
 import { ObjectId, type Db } from "mongodb";
 import requireDb from "../middleware/RequireDbMiddleware.ts";
 import MCPClientService, {
+  httpRefusalReason,
+  McpHttpRefusedError,
   McpStdioRefusedError,
   stdioRefusalReason,
 } from "../services/MCPClientService.ts";
@@ -97,6 +99,12 @@ function stdioRefusedResponse(res: Response, name: string, reason: string) {
   });
 }
 
+/** 403 for an sse / streamable-http row aimed at a non-allowlisted internal URL (SSRF guard). */
+function httpRefusedResponse(res: Response, name: string, reason: string) {
+  logger.warn(`MCP server "${name}" refused: ${reason}`);
+  return res.status(403).json({ error: `MCP server "${name}": ${reason}` });
+}
+
 interface ConnectedServerInfo {
   name: string;
   status: string;
@@ -167,6 +175,10 @@ router.post(
       const refusal = stdioRefusalReason(parsed.data);
       if (refusal) {
         return stdioRefusedResponse(res, parsed.data.name, refusal);
+      }
+      const httpRefusal = httpRefusalReason(parsed.data);
+      if (httpRefusal) {
+        return httpRefusedResponse(res, parsed.data.name, httpRefusal);
       }
       if (await findNameClash(db, req, parsed.data.name)) {
         return nameClashResponse(res, parsed.data.name);
@@ -254,6 +266,7 @@ router.put(
         transport: parsed.data.transport ?? existing.transport,
         command: parsed.data.command ?? existing.command,
         env: parsed.data.env ?? existing.env,
+        url: parsed.data.url ?? existing.url,
       };
       // Turning a refused row off (and nothing else that could launch it) stays allowed.
       const onlyDisables =
@@ -265,6 +278,10 @@ router.put(
       const refusal = stdioRefusalReason(effective);
       if (refusal && !onlyDisables) {
         return stdioRefusedResponse(res, parsed.data.name ?? existing.name, refusal);
+      }
+      const httpRefusal = httpRefusalReason(effective);
+      if (httpRefusal && !(onlyDisables && parsed.data.url === undefined)) {
+        return httpRefusedResponse(res, parsed.data.name ?? existing.name, httpRefusal);
       }
 
       const updates: Record<string, unknown> = {
@@ -381,7 +398,7 @@ router.post(
           authorizationUrl: error.authorizationUrl,
         });
       }
-      if (error instanceof McpStdioRefusedError) {
+      if (error instanceof McpStdioRefusedError || error instanceof McpHttpRefusedError) {
         return res.status(403).json({ error: error.message });
       }
       const serverId = req.params.id as string;

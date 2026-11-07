@@ -13,7 +13,7 @@ import { ACCEPTED_MCP_PREFIXES } from "./McpPrefix.ts";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { ObjectId } from "mongodb";
 import MongoWrapper from "../wrappers/MongoWrapper.ts";
-import { MCP_STDIO_COMMANDS, MONGO_DB_NAME } from "../../config.ts";
+import { MCP_HTTP_ALLOWLIST, MCP_STDIO_COMMANDS, MONGO_DB_NAME } from "../../config.ts";
 import {
   approveMcpTools,
   reviewMcpTools,
@@ -310,6 +310,113 @@ export function assertStdioAllowed(config: MCPServerConfig): void {
   }
 }
 
+// ─── sse / streamable-http guard (SSRF) ──────────────────────────────────────
+// An sse or streamable-http row is a URL this service fetches with its own
+// network position. The same unauthenticated routes write it, so a row aimed
+// at loopback, a private range, link-local / cloud metadata or an *.internal
+// name is refused unless MCP_HTTP_ALLOWLIST names its host or origin.
+// Literal hosts only: the WHATWG URL parser already normalises 0x7f.1,
+// 2130706433 and friends to dotted IPv4, so those forms are caught too.
+
+/** Thrown when an sse / streamable-http MCP server's URL is not allowed. */
+export class McpHttpRefusedError extends Error {
+  constructor(serverName: string, reason: string) {
+    super(`MCP server "${serverName}": ${reason}`);
+    this.name = "McpHttpRefusedError";
+  }
+}
+
+const HTTP_TRANSPORTS: Record<string, true> = { sse: true, "streamable-http": true };
+
+/** True for an IPv4 literal in loopback, private, link-local or "this network" space. */
+function isInternalIPv4(host: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return (
+    a === 0 || // 0.0.0.0/8
+    a === 127 || // loopback
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) // link-local, incl. 169.254.169.254 metadata
+  );
+}
+
+/** True for an IPv6 literal (brackets stripped) that is loopback, unspecified, ULA, link-local or v4-mapped internal. */
+function isInternalIPv6(host: string): boolean {
+  if (!host.includes(":")) return false;
+  const h = host.toLowerCase();
+  if (h === "::1" || h === "::") return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(h)) return true; // fc00::/7 unique local
+  if (/^fe[89ab][0-9a-f]:/.test(h)) return true; // fe80::/10 link-local
+  const mapped = /^::ffff:(.+)$/.exec(h);
+  if (mapped) {
+    const tail = mapped[1];
+    if (isInternalIPv4(tail)) return true;
+    // The URL parser prints ::ffff:127.0.0.1 as ::ffff:7f00:1.
+    const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(tail);
+    if (hex) {
+      const hi = parseInt(hex[1], 16);
+      const lo = parseInt(hex[2], 16);
+      return isInternalIPv4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    }
+  }
+  return false;
+}
+
+/** True when the URL's host or origin is on MCP_HTTP_ALLOWLIST. */
+function isAllowlistedUrl(url: URL): boolean {
+  return MCP_HTTP_ALLOWLIST.some((entry) => {
+    const want = entry.toLowerCase().replace(/\/+$/, "");
+    return want === url.origin || want === url.host || want === url.hostname;
+  });
+}
+
+/** Why this sse / streamable-http config may not be fetched, or null when it may (or isn't http). */
+export function httpRefusalReason(config: {
+  transport?: unknown;
+  url?: unknown;
+}): string | null {
+  if (typeof config.transport !== "string" || !Object.hasOwn(HTTP_TRANSPORTS, config.transport)) return null;
+  const raw = typeof config.url === "string" ? config.url.trim() : "";
+  if (!raw) return `${config.transport} needs a url`;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return `url "${raw}" is not a valid URL`;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return `url scheme "${url.protocol}" is not http: or https:`;
+  }
+  if (url.username || url.password) {
+    return "url may not carry credentials; use headers or auth instead";
+  }
+  if (isAllowlistedUrl(url)) return null;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  const internal =
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "internal" ||
+    host.endsWith(".internal") ||
+    isInternalIPv4(host) ||
+    isInternalIPv6(host);
+  if (internal) {
+    return `host "${url.host}" is internal (loopback, private, link-local or metadata) and not in MCP_HTTP_ALLOWLIST`;
+  }
+  return null;
+}
+
+/** Throws McpHttpRefusedError for a refused sse / streamable-http config. */
+export function assertHttpAllowed(config: MCPServerConfig): void {
+  const reason = httpRefusalReason(config);
+  if (reason) {
+    logger.warn(`[MCP] Refused ${config.transport} server "${config.name}": ${reason}`);
+    throw new McpHttpRefusedError(config.name, reason);
+  }
+}
+
 /** Inherited by a spawned stdio server; everything else in process.env stays here. */
 const STDIO_INHERITED_ENV = new Set(["PATH", "HOME", "LANG", "TMPDIR"]);
 
@@ -333,6 +440,8 @@ function createTransport(
   config: MCPServerConfig,
   authProvider?: McpOAuthProvider,
 ): StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
+  // connect() already checked; repeated so no caller of createTransport can skip it.
+  assertHttpAllowed(config);
   let rawUrl = config.url || "";
   const isDocker = fs.existsSync("/.dockerenv") || fs.existsSync("/opt/venv/bin/python");
   if (!isDocker) {
@@ -425,6 +534,7 @@ const MCPClientService = {
 
     // Before the disconnect below, so a refused config can't tear down a live connection.
     assertStdioAllowed(config);
+    assertHttpAllowed(config);
 
     // Disconnect existing connection if any
     if (connections.has(serverName)) {
@@ -1051,9 +1161,10 @@ const MCPClientService = {
         .toArray()) as unknown as MCPServerConfig[];
 
       // The collection is shared with prism-service: skip (never spawn) a
-      // stdio row whose command isn't allowlisted.
+      // stdio row whose command isn't allowlisted, nor an sse/http row aimed
+      // at an internal host that isn't allowlisted.
       const servers = rows.filter((row) => {
-        const reason = stdioRefusalReason(row);
+        const reason = stdioRefusalReason(row) ?? httpRefusalReason(row);
         if (reason) logger.warn(`[MCP] Auto-connect skipped "${row.name}": ${reason}`);
         return !reason;
       });

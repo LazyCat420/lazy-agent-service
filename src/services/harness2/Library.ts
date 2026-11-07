@@ -7,6 +7,11 @@
  *
  * Retrieval is by construction: a domain directory only holds same-domain entries. The
  * whole tree is carried, never a summary.
+ *
+ * A scoped library (TCK-1020) is the same layout one or two levels down:
+ * <root>/<domain>/<mode>/..., <root>/<domain>/<runScope>/... or <root>/<domain>/<mode>/<runScope>/...
+ * (`new Library(domain, root, { mode, runScope })`, `Library.forRun(domain, { root, mode, runId })`).
+ * EXPERIENCE.md records `- mode:` / `- run:` so contextText can filter one library by them too.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -59,11 +64,34 @@ function readTree(dir: string): Tree {
   return tree;
 }
 
+/**
+ * Optional narrowing of a domain library (TCK-1020; upstream library.py:23 keeps one library per
+ * domain forever). `mode` puts it under <domain>/<mode>, `runScope` under <domain>[/<mode>]/<runScope>.
+ */
+export interface LibraryScope {
+  mode?: string;
+  runScope?: string;
+}
+
+/** Names the domain directory already uses for its own entries and run records. */
+const RESERVED_SCOPE_NAMES: Record<string, true> = { harnesses: true, runs: true, "INDEX.md": true };
+
+/** `- mode:` / `- run:` metadata lines of an EXPERIENCE.md, by key. */
+const META_LINE: Record<"mode" | "runId", RegExp> = { mode: /^- mode: (\S+)$/m, runId: /^- run: (\S+)$/m };
+
 export class Library {
   readonly dir: string;
 
-  constructor(readonly domain: string, root?: string) {
-    this.dir = path.join(libraryRootOf(root), slug(domain));
+  constructor(readonly domain: string, root?: string, readonly scope: LibraryScope = {}) {
+    const parts = [scope.mode, scope.runScope].filter((p): p is string => Boolean(p?.trim())).map(slug);
+    const reserved = parts.find((p) => Object.hasOwn(RESERVED_SCOPE_NAMES, p));
+    if (reserved) throw new Error(`library scope "${reserved}" collides with the domain library's own directory`);
+    this.dir = path.join(libraryRootOf(root), slug(domain), ...parts);
+  }
+
+  /** A library private to one run (and mode): <root>/<domain>[/<mode>]/<runId>. */
+  static forRun(domain: string, opts: { root?: string; mode?: string; runId: string }): Library {
+    return new Library(domain, opts.root, { mode: opts.mode, runScope: opts.runId });
   }
 
   get index(): string {
@@ -108,7 +136,11 @@ export class Library {
   }
 
   /** Store one adopted harness + why; returns null (and writes nothing) without an experience. */
-  add(taskId: string, harness: Tree, opts: { why?: string; label?: string; experience?: Partial<Experience> | null }): string | null {
+  add(
+    taskId: string,
+    harness: Tree,
+    opts: { why?: string; label?: string; experience?: Partial<Experience> | null; mode?: string; runId?: string },
+  ): string | null {
     const exp = opts.experience;
     if (!hasExperience(exp)) return null;
     assertNoGraderVerdicts(harness);
@@ -128,8 +160,13 @@ export class Library {
       `- adopted: \`${opts.label || "?"}\``,
       `- components: ${inventory(harness)}`,
       `- stored: ${new Date().toISOString()}`,
-      "",
     ];
+    // Defaults from the library's own scope, so a scoped library's entries always carry it.
+    const mode = (opts.mode ?? this.scope.mode)?.trim();
+    const runId = (opts.runId ?? this.scope.runScope)?.trim();
+    if (mode) lines.push(`- mode: ${slug(mode)}`);
+    if (runId) lines.push(`- run: ${slug(runId)}`);
+    lines.push("");
     if (opts.why?.trim()) lines.push("## Why this was chosen", opts.why.trim(), "");
     if (exp.edits?.trim()) lines.push("## What each edit did", exp.edits.trim(), "");
     lines.push("## Transferable lesson");
@@ -172,11 +209,21 @@ export class Library {
    * The library as proposer evidence, or "" when it holds no experience for this task (upstream
    * `context_dir`). `exclude` drops entries, such as the current task's own, from the index and the
    * blocks (upstream `retain`: only earlier tasks). Entries are oldest first, and the oldest are
-   * dropped past the cap.
+   * dropped past the cap. `mode` / `runId` keep only entries whose EXPERIENCE.md records that
+   * `- mode:` / `- run:`; an entry stored without the line is left out when the filter is asked for.
    */
-  contextText(opts: { exclude?: string[] } = {}): string {
+  contextText(opts: { exclude?: string[]; mode?: string; runId?: string } = {}): string {
     const skip = new Set((opts.exclude ?? []).map(slug));
-    let names = this.entriesByAge().filter((n) => !skip.has(n) && fs.existsSync(path.join(this.dir, "harnesses", n, "EXPERIENCE.md")));
+    const wanted = (["mode", "runId"] as const)
+      .filter((key) => opts[key]?.trim())
+      .map((key) => ({ re: META_LINE[key], value: slug(opts[key]!) }));
+    let names = this.entriesByAge().filter((n) => {
+      const exp = path.join(this.dir, "harnesses", n, "EXPERIENCE.md");
+      if (skip.has(n) || !fs.existsSync(exp)) return false;
+      if (!wanted.length) return true;
+      const text = fs.readFileSync(exp, "utf8");
+      return wanted.every(({ re, value }) => re.exec(text)?.[1] === value);
+    });
     if (!names.length) return "";
     const block = (name: string) => {
       const d = path.join(this.dir, "harnesses", name);

@@ -22,14 +22,20 @@ import { ObjectId } from "mongodb";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const allowlist = vi.hoisted(() => [] as string[]);
+const httpAllowlist = vi.hoisted(() => [] as string[]);
 vi.mock("../../../config.ts", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   MCP_STDIO_COMMANDS: allowlist,
+  MCP_HTTP_ALLOWLIST: httpAllowlist,
 }));
 
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
 import mcpServersRouter from "../../routes/McpServersRoutes.ts";
-import MCPClientService, { buildStdioEnv } from "../MCPClientService.ts";
+import MCPClientService, {
+  buildStdioEnv,
+  httpRefusalReason,
+  McpHttpRefusedError,
+} from "../MCPClientService.ts";
 
 // ─── In-memory Mongo collection (as in McpServersPort.test.ts) ────────────────
 type Doc = Record<string, unknown> & { _id: ObjectId };
@@ -130,6 +136,10 @@ afterAll(async () => {
 beforeEach(async () => {
   await MCPClientService.disconnectAll();
   allowlist.length = 0;
+  // The stub servers listen on loopback, which the SSRF guard refuses unless
+  // allowlisted: the test sseUrl origin and the dead streamable-http host.
+  httpAllowlist.length = 0;
+  httpAllowlist.push(new URL(sseUrl).origin, "127.0.0.1:1");
   store = fakeDb();
   vi.spyOn(MongoWrapper, "getDb").mockReturnValue(store.db as never);
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-stdio-guard-"));
@@ -307,5 +317,98 @@ describe("transport validation and http/sse still work", () => {
     const created = await call("POST", "", { name: "web", transport: "streamable-http", url: "http://127.0.0.1:1/mcp" });
     expect(created.status).toBe(201);
     expect(store.docs[0].transport).toBe("streamable-http");
+  });
+});
+
+describe("sse / streamable-http SSRF guard (TCK-1019)", () => {
+  const METADATA = "http://169.254.169.254/latest/meta-data/";
+  const refused = [
+    ["sse", METADATA],
+    ["streamable-http", METADATA],
+    ["streamable-http", "http://10.0.0.5:8080/mcp"],
+    ["sse", "http://192.168.1.20/sse"],
+    ["sse", "http://172.20.0.3:9000/sse"],
+    ["sse", "http://localhost:7000/sse"],
+    ["sse", "http://127.0.0.2:7000/sse"],
+    ["sse", "http://0x7f.1:7000/sse"],
+    ["sse", "http://0.0.0.0:7000/sse"],
+    ["sse", "http://[::1]:7000/sse"],
+    ["sse", "http://[::ffff:127.0.0.1]:7000/sse"],
+    ["sse", "http://metadata.google.internal/computeMetadata/v1/"],
+    ["sse", "https://user:secret@mcp.example.com/sse"],
+    ["sse", "file:///etc/passwd"],
+    ["sse", "gopher://mcp.example.com/"],
+  ] as const;
+
+  it.each(refused)("POST %s %s → 403, nothing stored", async (transport, url) => {
+    const created = await call("POST", "", { name: "ssrf", transport, url });
+    expect(created.status).toBe(403);
+    expect(created.body.error).toMatch(/MCP server "ssrf"/);
+    expect(store.docs).toHaveLength(0);
+  });
+
+  it("an sse row with no url is refused", () => {
+    expect(httpRefusalReason({ transport: "sse" })).toMatch(/needs a url/);
+    expect(httpRefusalReason({ transport: "stdio", url: METADATA })).toBeNull();
+  });
+
+  it("public hosts pass without an allowlist entry", () => {
+    httpAllowlist.length = 0;
+    expect(httpRefusalReason({ transport: "sse", url: "https://mcp.example.com/sse" })).toBeNull();
+    expect(httpRefusalReason({ transport: "streamable-http", url: "http://8.8.8.8/mcp" })).toBeNull();
+  });
+
+  it("the test stub connects only because its origin is allowlisted", async () => {
+    httpAllowlist.length = 0;
+    const blocked = await call("POST", "", { name: "remote", transport: "sse", url: sseUrl });
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.error).toMatch(/MCP_HTTP_ALLOWLIST/);
+
+    httpAllowlist.push(new URL(sseUrl).host);
+    const created = await call("POST", "", { name: "remote", transport: "sse", url: sseUrl });
+    expect(created.status).toBe(201);
+    const connected = await call("POST", `/${created.body.id}/connect`);
+    expect(connected.status).toBe(200);
+    expect(connected.body).toMatchObject({ success: true, toolCount: 1 });
+  });
+
+  it("PUT that points an allowlisted row at the metadata endpoint → 403, row unchanged", async () => {
+    const created = await call("POST", "", { name: "remote", transport: "sse", url: sseUrl });
+    expect(created.status).toBe(201);
+    const moved = await call("PUT", `/${created.body.id}`, { url: METADATA });
+    expect(moved.status).toBe(403);
+    expect(store.docs[0].url).toBe(sseUrl);
+  });
+
+  it("a stored metadata row is refused at /:id/connect and at connect()", async () => {
+    const _id = new ObjectId();
+    store.docs.push({
+      _id, project: "html-notes", username: "tester", enabled: true,
+      name: "metadata", transport: "sse", url: METADATA,
+    });
+    const connected = await call("POST", `/${_id}/connect`);
+    expect(connected.status).toBe(403);
+    expect(connected.body.error).toMatch(/169\.254\.169\.254/);
+
+    await expect(
+      MCPClientService.connect({ name: "metadata", transport: "streamable-http", url: METADATA } as never),
+    ).rejects.toBeInstanceOf(McpHttpRefusedError);
+    expect(MCPClientService.isConnected("metadata")).toBe(false);
+  });
+
+  it("boot auto-connect skips an unallowlisted internal row and still connects the rest", async () => {
+    store.docs.push(
+      {
+        _id: new ObjectId(), project: "html-notes", username: "tester", enabled: true,
+        name: "internal", transport: "streamable-http", url: "http://10.0.0.5:8080/mcp",
+      },
+      {
+        _id: new ObjectId(), project: "html-notes", username: "tester", enabled: true,
+        name: "remote", transport: "sse", url: sseUrl,
+      },
+    );
+    await expect(MCPClientService.connectAllFromDB(store.db as never)).resolves.toBeUndefined();
+    expect(MCPClientService.isConnected("remote")).toBe(true);
+    expect(MCPClientService.isConnected("internal")).toBe(false);
   });
 });

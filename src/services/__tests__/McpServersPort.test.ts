@@ -16,6 +16,13 @@ import { ObjectId } from "mongodb";
 import { z } from "zod";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The stub MCP server listens on loopback, which the SSRF guard (TCK-1019)
+// refuses unless allowlisted.
+vi.mock("../../../config.ts", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  MCP_HTTP_ALLOWLIST: ["127.0.0.1"],
+}));
+
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
 import mcpServersRouter from "../../routes/McpServersRoutes.ts";
 import MCPClientService from "../MCPClientService.ts";
