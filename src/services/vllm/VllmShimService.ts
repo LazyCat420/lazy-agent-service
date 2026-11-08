@@ -76,6 +76,35 @@ const CAPACITY_GROUPS: Record<string, string> = {
 };
 
 /**
+ * Upstreams that are registered but NOT in the default active pool.
+ *
+ * `jetson-2` (10.0.0.30:8001) is the embeddinggemma embedder behind LAS
+ * instance vllm-3, not a chat box. TCK-4016 (2026-11-07): its
+ * `/vllm-shim/jetson-2/v1/models` answered HTTP 502 while it stayed in
+ * rotation, so every discovery probe paid a dead round trip. Requests to a
+ * disabled upstream get a clean JSON answer instead of a proxied 502; opt in
+ * with ENABLE_JETSON_2=1.
+ */
+const OPT_IN_UPSTREAMS: Record<string, string> = {
+  "jetson-2": "ENABLE_JETSON_2",
+};
+
+/**
+ * How long an upstream stays marked unreachable after a failed probe.
+ *
+ * A GET `/v1/models` that comes back 502/503/504 (or never answers) is
+ * positive evidence the box is down. Until the cooldown expires, discovery
+ * probes are answered locally with a clean 503 JSON instead of paying the
+ * dead round trip again — the same answer a caller would get from the dead
+ * upstream, minus the timeout. Short on purpose: a restarted box returns on
+ * the next probe.
+ */
+const UPSTREAM_UNAVAILABLE_COOLDOWN_MS =
+  Number(process.env.VLLM_SHIM_UNAVAILABLE_COOLDOWN_MS) > 0
+    ? Number(process.env.VLLM_SHIM_UNAVAILABLE_COOLDOWN_MS)
+    : 60_000;
+
+/**
  * Headers timeout only — cleared once the upstream responds, so long
  * generations and SSE streams are never cut off mid-flight. Non-stream vLLM
  * calls hold headers until generation completes, so this needs the same large
@@ -754,6 +783,39 @@ export class VllmShimService {
     this.semaphores.clear();
   }
 
+  /** Upstream name → epoch ms until which it is out of rotation, and why. */
+  private static readonly unreachableUntil = new Map<string, number>();
+  private static readonly unreachableReason = new Map<string, string>();
+
+  /**
+   * Is this upstream part of the default active pool?
+   *
+   * Everything is, except the opt-in list above — `jetson-2` needs
+   * ENABLE_JETSON_2=1. Read per call so an env change plus restart takes
+   * effect without a rebuild.
+   */
+  public static upstreamEnabled(upstream: string): boolean {
+    const envVar = OPT_IN_UPSTREAMS[upstream];
+    if (!envVar) return true;
+    return (process.env[envVar] || "").trim() === "1";
+  }
+
+  /** True while a failed probe has this upstream out of rotation. */
+  public static upstreamUnreachable(upstream: string): boolean {
+    return (this.unreachableUntil.get(upstream) || 0) > Date.now();
+  }
+
+  /** Take an upstream out of rotation after a down-status/failed probe. */
+  public static markUpstreamUnreachable(upstream: string, reason: string): void {
+    if (this.upstreamUnreachable(upstream)) return; // log once per cooldown
+    logger.warn(
+      `[VllmShim] upstream "${upstream}" marked unreachable for ` +
+        `${UPSTREAM_UNAVAILABLE_COOLDOWN_MS}ms: ${reason}`,
+    );
+    this.unreachableUntil.set(upstream, Date.now() + UPSTREAM_UNAVAILABLE_COOLDOWN_MS);
+    this.unreachableReason.set(upstream, reason);
+  }
+
   /** Cache of known active models by upstream name. */
   private static readonly activeModelsByUpstream = new Map<string, string>();
 
@@ -1053,12 +1115,48 @@ export class VllmShimService {
   public static async handle(req: Request, res: Response) {
     const resolved = this.resolveUpstream(req.originalUrl);
     if (!resolved) {
+      const known = Object.keys(UPSTREAMS).filter((name) => this.upstreamEnabled(name));
       return res.status(404).json({
-        error: `vllm-shim: unknown upstream in "${req.originalUrl}" (known: ${Object.keys(UPSTREAMS).join(", ")})`,
+        error: `vllm-shim: unknown upstream in "${req.originalUrl}" (known: ${known.join(", ")})`,
       });
     }
     const { upstreamUrl, originalPath, upstreamName } = resolved;
     const basePath = originalPath.split("?")[0];
+
+    // Registered but outside the default active pool (jetson-2 unless opted
+    // in): a clean JSON answer, never a proxied call to a shim that is not in
+    // rotation. 404 matches "unknown upstream" — discovery reads it as "this
+    // provider serves nothing", not as a transient 502 worth retrying.
+    if (!this.upstreamEnabled(upstreamName)) {
+      return res.status(404).json({
+        error:
+          `vllm-shim: upstream "${upstreamName}" is disabled by default ` +
+          `(opt in with ${OPT_IN_UPSTREAMS[upstreamName]}=1)`,
+        upstream: upstreamName,
+        disabled: true,
+      });
+    }
+
+    // A discovery probe against a box a recent probe proved down is answered
+    // here, not sent upstream: same clean JSON, no dead round trip.
+    const isModelsProbe = req.method === "GET" && basePath === "/v1/models";
+    if (isModelsProbe && this.upstreamUnreachable(upstreamName)) {
+      const retryAfterS = Math.max(
+        1,
+        Math.ceil(((this.unreachableUntil.get(upstreamName) || 0) - Date.now()) / 1000),
+      );
+      return res
+        .status(503)
+        .setHeader("Retry-After", String(retryAfterS))
+        .json({
+          error:
+            `vllm-shim: upstream "${upstreamName}" is unreachable ` +
+            `(${this.unreachableReason.get(upstreamName) || "no successful probe"}); ` +
+            `out of rotation for ${retryAfterS}s`,
+          upstream: upstreamName,
+          unreachable: true,
+        });
+    }
     const targetUrl = `${upstreamUrl}${originalPath}`;
 
     let body = req.body;
@@ -1104,6 +1202,17 @@ export class VllmShimService {
 
     try {
       let response = await fetchOnce();
+      // A /v1/models probe is how callers decide whether to route here: a
+      // down status is positive evidence, so the box leaves rotation until
+      // the cooldown expires. A clean answer puts it back.
+      if (isModelsProbe) {
+        if (response.status === 502 || response.status === 503 || response.status === 504) {
+          this.markUpstreamUnreachable(upstreamName, `HTTP ${response.status} on /v1/models`);
+        } else if (response.ok) {
+          this.unreachableUntil.delete(upstreamName);
+          this.unreachableReason.delete(upstreamName);
+        }
+      }
       response = await this.maybeAutoHealModel404(response, basePath, upstreamUrl, upstreamName, body, fetchOnce);
       response = await this.maybeRescaleEmbedOverflow(isEmbedPost, response, body, fetchOnce);
 
@@ -1130,6 +1239,9 @@ export class VllmShimService {
       return;
     } catch (error: any) {
       logger.error(`[VllmShim] Failed to proxy ${originalPath}: ${error.message}`);
+      if (isModelsProbe) {
+        this.markUpstreamUnreachable(upstreamName, `fetch failed: ${error.message}`);
+      }
       if (!res.headersSent) {
         return res.status(502).json({ error: `vllm-shim upstream failure: ${error.message}` });
       }
