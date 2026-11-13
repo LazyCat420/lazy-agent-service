@@ -80,6 +80,7 @@ function makeCancelledLoopResult(
   lastAssistantText: string,
   modelCalls: number,
   toolCalls: number,
+  providerRetries: number,
 ): CoreLoopResult {
   fillMissingCancelledToolMessages(messages);
   return {
@@ -88,6 +89,7 @@ function makeCancelledLoopResult(
     messages,
     modelCalls,
     toolCalls,
+    providerRetries,
     answerSource: "model",
     error: { code: "RUN_CANCELLED", message: "cancelled" },
   };
@@ -193,6 +195,8 @@ async function* runModelTurnWithRetries(
   {
     turn: SingleModelTurnState;
     modelCallsDelta: number;
+    /** Provider calls that were retries (all attempts beyond the first of this turn). */
+    providerRetriesDelta: number;
     finalizeReason?: CoreFinalizeReason;
     cutText?: string;
     cancelled?: boolean;
@@ -243,27 +247,28 @@ async function* runModelTurnWithRetries(
       }
       const failure = errorOf(caught);
       if (failure.code === "TOKEN_BUDGET_FINALIZE") {
-        return { turn, modelCallsDelta, finalizeReason: "TOKEN_BUDGET" };
+        return { turn, modelCallsDelta, providerRetriesDelta: Math.max(0, modelCallsDelta - 1), finalizeReason: "TOKEN_BUDGET" };
       }
       if (finalizeCut()) {
         return {
           turn,
           modelCallsDelta,
+          providerRetriesDelta: Math.max(0, modelCallsDelta - 1),
           cutText: turn.calls.length === 0 ? turn.text : undefined,
           finalizeReason: options.shouldFinalize?.() ?? "DEADLINE_SOFT",
         };
       }
       if (options.signal.aborted) {
-        return { turn, modelCallsDelta, cancelled: true };
+        return { turn, modelCallsDelta, providerRetriesDelta: Math.max(0, modelCallsDelta - 1), cancelled: true };
       }
       if (attempt === providerRetries) {
         yield { type: "warning", code: failure.code, message: failure.message };
-        return { turn, modelCallsDelta, finalizeReason: "PROVIDER_ERROR" };
+        return { turn, modelCallsDelta, providerRetriesDelta: Math.max(0, modelCallsDelta - 1), finalizeReason: "PROVIDER_ERROR" };
       }
       yield { type: "warning", code: "PROVIDER_RETRY", message: failure.message };
     }
   }
-  return { turn, modelCallsDelta };
+  return { turn, modelCallsDelta, providerRetriesDelta: Math.max(0, modelCallsDelta - 1) };
 }
 
 function appendRunawayAssistantMessage(
@@ -339,6 +344,8 @@ async function* evaluateNoToolCompletion(
   stopGateState: { attempts: number; maxRetries: number; nudged: boolean },
   modelCalls: number,
   toolCalls: number,
+  providerRetries: number,
+  turnCutOff: boolean,
   finalizeReason: CoreFinalizeReason | undefined,
 ): AsyncGenerator<
   CoreLoopEvent,
@@ -391,8 +398,12 @@ async function* evaluateNoToolCompletion(
       messages,
       modelCalls,
       toolCalls,
-      finalizeReason,
-      answerSource: "model",
+      providerRetries,
+      // LF-06: a turn that hit the provider's length cut-off but still
+      // "completed" without tool calls ships incomplete text — report it
+      // truthfully; the text and flow themselves are unchanged.
+      finalizeReason: turnCutOff && finalizeReason === undefined ? "CUT_OFF" : finalizeReason,
+      answerSource: turnCutOff ? "partial" : "model",
     },
   };
 }
@@ -405,15 +416,17 @@ async function* consumeFinalPassStream(
   finalTimeout: AbortSignal | undefined,
 ): AsyncGenerator<
   CoreLoopEvent,
-  { finalText: string; finalThinking: string; finalError: unknown; finalTimedOut: boolean; cancelled: boolean }
+  { finalText: string; finalThinking: string; finalError: unknown; finalTimedOut: boolean; finalPassCalls: number; cancelled: boolean }
 > {
   let finalText = "";
   let finalThinking = "";
   let finalError: unknown;
   let finalTimedOut = false;
+  let finalPassCalls = 0;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     let stream: AsyncIterable<StreamChunk> | undefined;
+    finalPassCalls++;
     try {
       stream = options.model({
         messages: hooked,
@@ -439,7 +452,7 @@ async function* consumeFinalPassStream(
       await closeStream(stream);
       finalError = error;
       if (options.signal.aborted) {
-        return { finalText, finalThinking, finalError, finalTimedOut, cancelled: true };
+        return { finalText, finalThinking, finalError, finalTimedOut, finalPassCalls, cancelled: true };
       }
       if (finalTimeout?.aborted) {
         finalTimedOut = true;
@@ -455,19 +468,21 @@ async function* consumeFinalPassStream(
     };
     finalError = undefined;
   }
-  return { finalText, finalThinking, finalError, finalTimedOut, cancelled: false };
+  return { finalText, finalThinking, finalError, finalTimedOut, finalPassCalls, cancelled: false };
 }
 
 async function* resolveFinalPassOutcome(
   finalText: string,
   finalThinking: string,
   finalError: unknown,
+  finalTimedOut: boolean,
   cutText: string,
   lastAssistantText: string,
   usableToolResults: Array<{ name: string; content: string }>,
   messages: ChatMessage[],
   modelCalls: number,
   toolCalls: number,
+  providerRetries: number,
   finalizeReason: CoreFinalizeReason | undefined,
 ): AsyncGenerator<CoreLoopEvent, CoreLoopResult> {
   const synthetic =
@@ -481,15 +496,16 @@ async function* resolveFinalPassOutcome(
     const failure = errorOf(finalError);
     yield { type: "warning", code: failure.code, message: failure.message };
     if (cutText.trim() !== "") {
-      return { status: "completed", text: cutText, messages, modelCalls, toolCalls, finalizeReason, answerSource: "model" };
+      // LF-06: cut-off model text shipped as the answer is never "model".
+      return { status: "completed", text: cutText, messages, modelCalls, toolCalls, providerRetries, finalizeReason, answerSource: "partial" };
     }
     yield { type: "text.delta", text: synthetic };
     messages.push({ role: "assistant", content: synthetic });
-    return { status: "completed", text: synthetic, messages, modelCalls, toolCalls, finalizeReason, answerSource: "synthetic" };
+    return { status: "completed", text: synthetic, messages, modelCalls, toolCalls, providerRetries, finalizeReason, answerSource: "synthetic" };
   }
   if (finalError !== undefined) {
     if (cutText.trim() !== "") {
-      return { status: "completed", text: cutText, messages, modelCalls, toolCalls, finalizeReason, answerSource: "model" };
+      return { status: "completed", text: cutText, messages, modelCalls, toolCalls, providerRetries, finalizeReason, answerSource: "partial" };
     }
     return {
       status: "failed",
@@ -497,6 +513,7 @@ async function* resolveFinalPassOutcome(
       messages,
       modelCalls,
       toolCalls,
+      providerRetries,
       finalizeReason,
       answerSource: "model",
       error: errorOf(finalError),
@@ -511,14 +528,16 @@ async function* resolveFinalPassOutcome(
       finalAssistant.reasoning_content = finalThinking;
     }
     messages.push(finalAssistant);
-    return { status: "completed", text: resolvedCombined, messages, modelCalls, toolCalls, finalizeReason, answerSource: "model" };
+    // LF-06: a combined cut-off prefix, or a timed-out partial, is incomplete text.
+    const shippedPartial = cutText.trim() !== "" || finalTimedOut;
+    return { status: "completed", text: resolvedCombined, messages, modelCalls, toolCalls, providerRetries, finalizeReason, answerSource: shippedPartial ? "partial" : "model" };
   }
   if (cutText.trim() !== "") {
-    return { status: "completed", text: cutText, messages, modelCalls, toolCalls, finalizeReason, answerSource: "model" };
+    return { status: "completed", text: cutText, messages, modelCalls, toolCalls, providerRetries, finalizeReason, answerSource: "partial" };
   }
   yield { type: "text.delta", text: synthetic };
   messages.push({ role: "assistant", content: synthetic });
-  return { status: "completed", text: synthetic, messages, modelCalls, toolCalls, finalizeReason, answerSource: "synthetic" };
+  return { status: "completed", text: synthetic, messages, modelCalls, toolCalls, providerRetries, finalizeReason, answerSource: "synthetic" };
 }
 
 async function* executeCoreLoopToolBatch(
@@ -593,6 +612,7 @@ async function* runFinalAnswerPass(
   usableToolResults: Array<{ name: string; content: string }>,
   modelCalls: number,
   toolCalls: number,
+  providerRetries: number,
   finalizeReason: CoreFinalizeReason | undefined,
 ): AsyncGenerator<CoreLoopEvent, CoreLoopResult> {
   yield { type: "finalize", reason: finalizeReason! };
@@ -605,7 +625,6 @@ async function* runFinalAnswerPass(
 
   const hooked = yield* runBeforeModelCallHooks(messages, options.hooks, modelCalls);
   yield { type: "model.start", step: modelCalls, finalPass: true };
-  const nextModelCalls = modelCalls + 1;
 
   const finalTimeout =
     options.finalPassTimeoutMs === undefined
@@ -616,20 +635,26 @@ async function* runFinalAnswerPass(
     : options.signal;
 
   const finalPass = yield* consumeFinalPassStream(options, hooked, schemas, finalSignal, finalTimeout);
+  // LF-07: providerAttempts includes every final-pass call; retries are the
+  // calls beyond the pass's first attempt (the retry loop above).
+  const nextModelCalls = modelCalls + finalPass.finalPassCalls;
+  const nextProviderRetries = providerRetries + Math.max(0, finalPass.finalPassCalls - 1);
   if (finalPass.cancelled) {
-    return makeCancelledLoopResult(messages, lastAssistantText, nextModelCalls, toolCalls);
+    return makeCancelledLoopResult(messages, lastAssistantText, nextModelCalls, toolCalls, nextProviderRetries);
   }
 
   return yield* resolveFinalPassOutcome(
     finalPass.finalText,
     finalPass.finalThinking,
     finalPass.finalError,
+    finalPass.finalTimedOut,
     cutText,
     lastAssistantText,
     usableToolResults,
     messages,
     nextModelCalls,
     toolCalls,
+    nextProviderRetries,
     finalizeReason,
   );
 }
@@ -768,6 +793,9 @@ export async function* runCoreLoop(
   const stopGateState = { attempts: 0, maxRetries: options.maxStopGateRetries ?? 2, nudged: false };
 
   let modelCalls = 0;
+  // LF-07: provider calls that were retries (main-turn retry loop). The
+  // final-pass retry is added in runFinalAnswerPass.
+  let providerRetryCalls = 0;
   let toolCalls = 0;
   let runawayNudged = false;
   let cutOffs = 0;
@@ -779,7 +807,7 @@ export async function* runCoreLoop(
   try {
     while (true) {
       if (options.signal.aborted) {
-        return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls);
+        return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls, providerRetryCalls);
       }
 
       finalizeReason = checkLoopFinalizeCondition(finalizeReason, finalizeCut, options, modelCalls);
@@ -801,8 +829,9 @@ export async function* runCoreLoop(
         modelCalls,
       );
       modelCalls += turnOutcome.modelCallsDelta;
+      providerRetryCalls += turnOutcome.providerRetriesDelta;
       if (turnOutcome.cancelled) {
-        return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls);
+        return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls, providerRetryCalls);
       }
       if (turnOutcome.cutText !== undefined) cutText = turnOutcome.cutText;
       if (turnOutcome.finalizeReason !== undefined) {
@@ -856,6 +885,8 @@ export async function* runCoreLoop(
           stopGateState,
           modelCalls,
           toolCalls,
+          providerRetryCalls,
+          cutOff,
           finalizeReason,
         );
         if (noToolOutcome.action === "return") return noToolOutcome.result;
@@ -884,7 +915,7 @@ export async function* runCoreLoop(
       );
       toolCalls += calls.length;
       if (options.signal.aborted) {
-        return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls);
+        return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls, providerRetryCalls);
       }
 
       if (callHistory.finalizeNow && callHistory.finalizeReason) {
@@ -901,6 +932,7 @@ export async function* runCoreLoop(
       usableToolResults,
       modelCalls,
       toolCalls,
+      providerRetryCalls,
       finalizeReason,
     );
   } finally {

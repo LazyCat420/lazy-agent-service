@@ -20,4 +20,12 @@ export interface SseEvent {
   audioRef?: string;
   traceId?: string;
   conversationId?: string;
+  /** LF-06: "synthetic" = loop-built digest, "partial" = cut-off/incomplete model text. */
+  answerSource?: "model" | "synthetic" | "partial";
+  /** LF-06: why the agent loop finalized; "COMPLETED" on a clean finish. */
+  finalizeReason?: string;
+  /** LF-07: total provider calls for the run, retries included (>= 1). */
+  providerAttempts?: number;
+  /** LF-07: provider calls that were retries (>= 0). */
+  providerRetries?: number;
 }

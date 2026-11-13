@@ -93,6 +93,7 @@ export type CoreFinalizeReason =
   | "TOKEN_BUDGET"
   | "EMPTY_REPLY"
   | "PROVIDER_ERROR"
+  | "CUT_OFF"
   | "CUT_OFF_TWICE"
   | "RUNAWAY_GENERATION"
   | "NO_TOOLS_OFFERED"
@@ -193,8 +194,15 @@ export interface CoreLoopResult {
   modelCalls: number;
   toolCalls: number;
   finalizeReason?: CoreFinalizeReason;
-  /** "synthetic" when the final pass returned nothing and the loop summarized tool results. */
-  answerSource: "model" | "synthetic";
+  /**
+   * "synthetic" when the final pass returned nothing and the loop summarized
+   * tool results; "partial" when cut-off or incomplete model text (a cut-off
+   * prefix, or a final pass that timed out mid-stream) was shipped as the
+   * answer (LF-06). "model" only for a complete model answer.
+   */
+  answerSource: "model" | "synthetic" | "partial";
+  /** Provider calls that were retries: main-turn retries plus the final-pass retry (LF-07). */
+  providerRetries: number;
   error?: { code: string; message: string };
 }
 

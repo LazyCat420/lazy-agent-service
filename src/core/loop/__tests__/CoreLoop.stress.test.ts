@@ -744,7 +744,9 @@ describe("finalize signal", () => {
     );
 
     expect(result.status).toBe("completed");
-    expect(result.answerSource).toBe("model");
+    // LF-06: a final pass that timed out mid-stream ships incomplete text —
+    // that is "partial", not "model" (S-01 fix).
+    expect(result.answerSource).toBe("partial");
     expect(result.text).toContain("Partial answer.");
     expect(events.some((e) => e.type === "warning" && e.code === "FINAL_PASS_TIMEOUT")).toBe(true);
     const isDelta = (e: CoreLoopEvent): e is Extract<CoreLoopEvent, { type: "text.delta" }> => e.type === "text.delta";

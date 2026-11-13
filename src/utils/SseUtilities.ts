@@ -87,6 +87,11 @@ export function createSseEmitter(res: Response, connectionSignal: AbortSignal) {
   };
 }
 
+// ─── loop honesty fields (LF-06 / LF-07, slice S-01) ─────────
+// The mapping helpers live in ./LoopHonestyFields.ts (dependency-free leaf,
+// shared with AgenticLoopService); buildJsonResponseFromEvents below copies
+// the fields off the done event.
+
 /**
  * Build a flat JSON response from collected SSE events.
  * Used by non-streaming callers (?stream=false).
@@ -166,6 +171,18 @@ export function buildJsonResponseFromEvents(
       model: doneEvent.model || requestBody.model,
       usage: doneEvent.usage || null,
       estimatedCost: doneEvent.estimatedCost ?? null,
+      // Loop honesty fields (LF-06/LF-07): present when the run went through
+      // the agent loop; absent otherwise so older clients see no change.
+      ...(doneEvent.answerSource && { answerSource: doneEvent.answerSource }),
+      ...(doneEvent.finalizeReason && {
+        finalizeReason: doneEvent.finalizeReason,
+      }),
+      ...(doneEvent.providerAttempts !== undefined && {
+        providerAttempts: doneEvent.providerAttempts,
+      }),
+      ...(doneEvent.providerRetries !== undefined && {
+        providerRetries: doneEvent.providerRetries,
+      }),
       ...(doneEvent.audioRef && { audioRef: doneEvent.audioRef }),
       ...(doneEvent.traceId && { traceId: doneEvent.traceId }),
       ...(doneEvent.conversationId && {
