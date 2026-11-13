@@ -88,43 +88,9 @@ export function createSseEmitter(res: Response, connectionSignal: AbortSignal) {
 }
 
 // ─── loop honesty fields (LF-06 / LF-07, slice S-01) ─────────
-
-/** Truth-telling fields the agent loop computes but used to drop on the floor. */
-export interface LoopHonestyFields {
-  /** "synthetic" when the final answer is a loop-built digest, not model text. */
-  answerSource: "model" | "synthetic";
-  /** Why the loop finalized; "COMPLETED" when it finished with nothing to report. */
-  finalizeReason: string;
-  /** Total provider calls made for the run, retries included (>= 1). */
-  providerAttempts: number;
-}
-
-/**
- * Map the values the loop already computed (CoreLoopResult) onto response
- * fields. `finalizeReason` passes through unchanged — including any
- * `repeated_tool_call:<name>` value — and becomes "COMPLETED" when the loop
- * never had to finalize. `providerAttempts` is the loop's model-call counter,
- * which increments on every provider attempt (CoreLoop retry loop), floored at 1.
- */
-export function deriveLoopHonestyFields(result: {
-  answerSource?: "model" | "synthetic";
-  finalizeReason?: string;
-  modelCalls?: number;
-}): LoopHonestyFields {
-  return {
-    answerSource: result.answerSource === "synthetic" ? "synthetic" : "model",
-    finalizeReason: result.finalizeReason ?? "COMPLETED",
-    providerAttempts: Math.max(1, Math.trunc(result.modelCalls ?? 1)),
-  };
-}
-
-/** Decorate the final `done` SSE event with the loop honesty fields; other events pass through. */
-export function withLoopHonestyFields<T extends { type: string }>(
-  event: T,
-  meta: LoopHonestyFields,
-): T & LoopHonestyFields {
-  return event.type === "done" ? { ...event, ...meta } : (event as T & LoopHonestyFields);
-}
+// The mapping helpers live in ./LoopHonestyFields.ts (dependency-free leaf,
+// shared with AgenticLoopService); buildJsonResponseFromEvents below copies
+// the fields off the done event.
 
 /**
  * Build a flat JSON response from collected SSE events.
@@ -213,6 +179,9 @@ export function buildJsonResponseFromEvents(
       }),
       ...(doneEvent.providerAttempts !== undefined && {
         providerAttempts: doneEvent.providerAttempts,
+      }),
+      ...(doneEvent.providerRetries !== undefined && {
+        providerRetries: doneEvent.providerRetries,
       }),
       ...(doneEvent.audioRef && { audioRef: doneEvent.audioRef }),
       ...(doneEvent.traceId && { traceId: doneEvent.traceId }),

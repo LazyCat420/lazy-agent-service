@@ -37,7 +37,7 @@ import {
   type AgentRouteCoreLoopInput,
   type AgentRouteCoreLoopOutput,
 } from "../core/loop/AgentRouteAdapter.ts";
-import { deriveLoopHonestyFields, withLoopHonestyFields } from "../utils/SseUtilities.ts";
+import { deriveLoopHonestyFields, withLoopHonestyFields } from "../utils/LoopHonestyFields.ts";
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Loop resilience helpers (compaction pressure + overflow recovery)
@@ -553,9 +553,9 @@ async function executeCoreLoopAdapterPath(
     agentConversationId: context.agentConversationId ?? null,
     parentAgentConversationId: resolvedParentAgentConversationId,
     traceId: context.traceId ?? null,
-    // LF-06: a synthetic digest is not a successful answer; stop logging
-    // every completed run as a blanket success.
-    success: coreOut.result.answerSource !== "synthetic",
+    // LF-06: only a complete model answer is a success; synthetic digests and
+    // cut-off partials are not, even though the loop "completed".
+    success: coreOut.result.answerSource === "model",
     usage: coreOut.usage,
     estimatedCost: calculateTextCost(
       coreOut.usage,
