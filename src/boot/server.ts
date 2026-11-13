@@ -8,8 +8,12 @@ import { listProviders } from "../providers/index.ts";
 import { setupWebSocket } from "../websocket/index.ts";
 import { authMiddleware } from "../middleware/AuthMiddleware.ts";
 import { requestLoggerMiddleware } from "../middleware/RequestLoggerMiddleware.ts";
-import { CORS_MAX_AGE_SECONDS } from "../constants.ts";
+import { CORS_MAX_AGE_SECONDS, PROVIDERS } from "../constants.ts";
 import McpAdapter from "../services/McpAdapter.ts";
+import MongoWrapper from "../wrappers/MongoWrapper.ts";
+import { getInstancesByType } from "../providers/instance-registry.ts";
+import { MONGO_DB_NAME } from "../../config.ts";
+import { createHealthProbe } from "./healthProbe.ts";
 
 // Routes
 import chatRouter from "../routes/ChatRoutes.ts";
@@ -132,7 +136,45 @@ function installMiddleware(app: Express): void {
   app.use(requestLoggerMiddleware);
 }
 
+/**
+ * Is a configured vLLM box actually in rotation? Every PROVIDER_VLLM_*_URL
+ * points at our own shim (/vllm-shim/<name>), and some upstreams are
+ * registered but disabled by default (jetson-2 = LAS vllm-3, the embedder,
+ * unless ENABLE_JETSON_2=1 — VllmShimService answers 404 by design). Probing
+ * those would pin /health to `degraded` forever, so ask the shim's own
+ * enabled check; URLs that are not shim routes are always probed.
+ */
+function isBoxEnabled(baseUrl: string): boolean {
+  try {
+    const resolved = VllmShimService.resolveUpstream(new URL(baseUrl).pathname);
+    return resolved ? VllmShimService.upstreamEnabled(resolved.upstreamName) : true;
+  } catch {
+    return true; // unparsable URL — let the probe itself report the failure
+  }
+}
+
 function installHealthRoutes(app: Express): void {
+  // LF-11: the static `{"status":"ok"}` kept the container green while Mongo
+  // or every model box was dead. This probe pings the Mongo connection the
+  // service already holds and GETs <base>/v1/models on every configured vLLM
+  // box, both with a 2 s timeout. Contract with the compose healthcheck
+  // (wget exit code) and deploy script: the route path and the `status` key
+  // stay, `degraded` answers 200 so a partial outage never marks the
+  // container unhealthy, and only a total outage (Mongo down or every box
+  // down) answers 503. Results are cached 10 s so a probe storm cannot
+  // hammer the boxes.
+  const healthProbe = createHealthProbe({
+    pingMongo: async () => {
+      const db = MongoWrapper.getDb(MONGO_DB_NAME);
+      await db.command({ ping: 1 });
+    },
+    listBoxes: () =>
+      getInstancesByType(PROVIDERS.VLLM).map((entry) => ({
+        name: entry.id,
+        url: entry.baseUrl,
+        enabled: isBoxEnabled(entry.baseUrl),
+      })),
+  });
   app.get("/", (_req: Request, res: Response) => {
     res.json({
       name: "Lazy Agent Service",
@@ -141,8 +183,13 @@ function installHealthRoutes(app: Express): void {
       endpoints: ENDPOINTS,
     });
   });
-  app.get("/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok" });
+  app.get("/health", async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const report = await healthProbe.check();
+      res.status(report.httpStatus).json({ status: report.status, checks: report.checks });
+    } catch (error) {
+      next(error);
+    }
   });
 }
 
