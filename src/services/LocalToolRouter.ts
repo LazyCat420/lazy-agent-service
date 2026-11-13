@@ -506,7 +506,7 @@ function logScrapeFailure(url: string, result: unknown): void {
   const body = result as Record<string, unknown>;
   if (typeof body.error !== "string" || body.error === "") return;
   let domain = "unknown";
-  let safe = url.split(/[?#]/)[0];
+  const safe = url.split(/[?#]/)[0];
   try {
     domain = new URL(url).hostname;
   } catch {

@@ -62,6 +62,18 @@ PRE_BUILD() {
 
 
 
+# Deploy gate: lint errors abort before the vitest step (deploy-kit/lib.sh
+# calls PRE_TEST there). Warnings must NOT block: the existing `lint` script
+# is `eslint src` with no --max-warnings, so it exits non-zero only on
+# errors — no separate lint:gate/--quiet script is needed. lib.sh calls this
+# hook without set -e, so the abort must be explicit.
+PRE_TEST() {
+  step "Linting (errors gate the deploy; warnings do not)"
+  if ! pnpm run lint; then
+    fail "Lint errors! Aborting deployment."
+  fi
+}
+
 EXTRA_SSH_SYNC() {
   # vault-service's deployed copy is the canonical projects.json (credentials
   # rotate there). vault-service is not checked out locally, so the old local

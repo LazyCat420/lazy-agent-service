@@ -229,6 +229,46 @@ router.post(
 );
 
 /**
+ * PUT is partial: judge the row as it would be stored, so a command-only
+ * edit, a switch to stdio, or re-enabling a stdio row is caught too.
+ * `onlyDisables` = turning a refused row off (and nothing else that could
+ * launch it), which stays allowed even when the row itself is refused.
+ */
+function putRowGuards(
+  data: {
+    transport?: "stdio" | "sse" | "streamable-http";
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    enabled?: boolean;
+  },
+  existing: McpServerDocument,
+): {
+  effective: {
+    transport: "stdio" | "sse" | "streamable-http";
+    command?: string;
+    env?: Record<string, string>;
+    url?: string;
+  };
+  onlyDisables: boolean;
+} {
+  const effective = {
+    transport: data.transport ?? existing.transport,
+    command: data.command ?? existing.command,
+    env: data.env ?? existing.env,
+    url: data.url ?? existing.url,
+  };
+  const onlyDisables =
+    data.enabled === false &&
+    data.transport === undefined &&
+    data.command === undefined &&
+    data.args === undefined &&
+    data.env === undefined;
+  return { effective, onlyDisables };
+}
+
+/**
  * PUT /mcp-servers/:id
  * Update an MCP server config.
  */
@@ -262,19 +302,7 @@ router.put(
       if (!existing) {
         return res.status(404).json(NOT_FOUND);
       }
-      const effective = {
-        transport: parsed.data.transport ?? existing.transport,
-        command: parsed.data.command ?? existing.command,
-        env: parsed.data.env ?? existing.env,
-        url: parsed.data.url ?? existing.url,
-      };
-      // Turning a refused row off (and nothing else that could launch it) stays allowed.
-      const onlyDisables =
-        parsed.data.enabled === false &&
-        parsed.data.transport === undefined &&
-        parsed.data.command === undefined &&
-        parsed.data.args === undefined &&
-        parsed.data.env === undefined;
+      const { effective, onlyDisables } = putRowGuards(parsed.data, existing);
       const refusal = stdioRefusalReason(effective);
       if (refusal && !onlyDisables) {
         return stdioRefusedResponse(res, parsed.data.name ?? existing.name, refusal);

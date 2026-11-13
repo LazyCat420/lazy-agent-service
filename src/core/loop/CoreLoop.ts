@@ -664,6 +664,7 @@ function resolveCoreLoopConfig(options: CoreLoopOptions) {
   const toolOutputCap = options.toolOutputCap ?? 16_000;
   const toolErrorCap = options.toolErrorCap ?? 2_048;
   const providerRetries = options.providerRetries ?? 2;
+  const maxStopGateRetries = options.maxStopGateRetries ?? 2;
   const maxConsecutiveToolErrors = options.maxConsecutiveToolErrors ?? 3;
   const parallelToolMaxConcurrency = options.parallelToolMaxConcurrency ?? 8;
   const now = options.now ?? Date.now;
@@ -681,6 +682,7 @@ function resolveCoreLoopConfig(options: CoreLoopOptions) {
     toolOutputCap,
     toolErrorCap,
     providerRetries,
+    maxStopGateRetries,
     maxConsecutiveToolErrors,
     parallelToolMaxConcurrency,
     now,
@@ -766,6 +768,15 @@ async function* _handleCutOffTurn(
   };
 }
 
+/** A trading run whose failure-streak guard has closed off every offered tool (nothing left to call). */
+function isNoToolsOffered<T extends { name: string }>(
+  tradingRun: boolean | undefined,
+  failureStreak: object,
+  schemas: T[],
+): boolean {
+  return tradingRun === true && schemas.length > 0 && filterOfferedTools(failureStreak, schemas).length === 0;
+}
+
 export async function* runCoreLoop(
   options: CoreLoopOptions,
 ): AsyncGenerator<CoreLoopEvent, CoreLoopResult> {
@@ -774,6 +785,7 @@ export async function* runCoreLoop(
     toolOutputCap,
     toolErrorCap,
     providerRetries,
+    maxStopGateRetries,
     maxConsecutiveToolErrors,
     parallelToolMaxConcurrency,
     now,
@@ -790,7 +802,7 @@ export async function* runCoreLoop(
   const spillBuffer = new SpillBuffer(options.spillMaxTotalBytes);
   const completedToolOutputs = new Map<string, string>();
   const toolsCalled = new Set<string>();
-  const stopGateState = { attempts: 0, maxRetries: options.maxStopGateRetries ?? 2, nudged: false };
+  const stopGateState = { attempts: 0, maxRetries: maxStopGateRetries, nudged: false };
 
   let modelCalls = 0;
   // LF-07: provider calls that were retries (main-turn retry loop). The
@@ -812,7 +824,7 @@ export async function* runCoreLoop(
 
       finalizeReason = checkLoopFinalizeCondition(finalizeReason, finalizeCut, options, modelCalls);
       if (finalizeReason !== undefined) break;
-      if (options.tradingRun === true && schemas.length > 0 && filterOfferedTools(failureStreak, schemas).length === 0) {
+      if (isNoToolsOffered(options.tradingRun, failureStreak, schemas)) {
         finalizeReason = "NO_TOOLS_OFFERED";
         break;
       }
