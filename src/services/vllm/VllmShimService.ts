@@ -1112,6 +1112,61 @@ export class VllmShimService {
     res.end(buf);
   }
 
+  /**
+   * Shape the request body for the upstream call: chat completions go
+   * through the trading tool protocol (which may answer the request itself —
+   * then `handled: true` and the response is already written), embedding
+   * inputs are clamped to the char budget.
+   */
+  private static async prepareProxyBody(
+    req: Request,
+    res: Response,
+    basePath: string,
+  ): Promise<{
+    handled: boolean;
+    body: Record<string, unknown>;
+    toolContextToken?: string;
+    toolChoiceNone: boolean;
+    isEmbedPost: boolean;
+  }> {
+    let body = req.body;
+    let toolContextToken: string | undefined;
+    let toolChoiceNone = false;
+    if (basePath === "/v1/chat/completions" && req.method === "POST" && body && typeof body === "object") {
+      const prepared = await this.prepareChatCompletionsBody(req, res, body as Record<string, unknown>);
+      if (prepared.handled) {
+        return { handled: true, body: prepared.body, toolContextToken, toolChoiceNone, isEmbedPost: false };
+      }
+      body = prepared.body;
+      toolContextToken = prepared.toolContextToken;
+      toolChoiceNone = prepared.body.tool_choice === "none";
+    }
+    const isEmbedPost = basePath === "/v1/embeddings" && req.method === "POST" && !!body && typeof body === "object";
+    if (isEmbedPost) {
+      body = this.clampEmbeddingInput({ ...req.body });
+    }
+    return { handled: false, body, toolContextToken, toolChoiceNone, isEmbedPost };
+  }
+
+  /**
+   * A /v1/models probe is how callers decide whether to route here: a
+   * down status is positive evidence, so the box leaves rotation until the
+   * cooldown expires. A clean answer puts it back.
+   */
+  private static noteModelsProbeOutcome(
+    isModelsProbe: boolean,
+    upstreamName: string,
+    response: globalThis.Response,
+  ): void {
+    if (!isModelsProbe) return;
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
+      this.markUpstreamUnreachable(upstreamName, `HTTP ${response.status} on /v1/models`);
+    } else if (response.ok) {
+      this.unreachableUntil.delete(upstreamName);
+      this.unreachableReason.delete(upstreamName);
+    }
+  }
+
   public static async handle(req: Request, res: Response) {
     const resolved = this.resolveUpstream(req.originalUrl);
     if (!resolved) {
@@ -1159,21 +1214,12 @@ export class VllmShimService {
     }
     const targetUrl = `${upstreamUrl}${originalPath}`;
 
-    let body = req.body;
-    let toolContextToken: string | undefined;
-    let toolChoiceNone = false;
-    if (basePath === "/v1/chat/completions" && req.method === "POST" && body && typeof body === "object") {
-      const prepared = await this.prepareChatCompletionsBody(req, res, body as Record<string, unknown>);
-      if (prepared.handled) return;
-      body = prepared.body;
-      toolContextToken = prepared.toolContextToken;
-      toolChoiceNone = prepared.body.tool_choice === "none";
-    }
-
-    const isEmbedPost = basePath === "/v1/embeddings" && req.method === "POST" && !!body && typeof body === "object";
-    if (isEmbedPost) {
-      body = this.clampEmbeddingInput({ ...req.body });
-    }
+    const preparedBody = await this.prepareProxyBody(req, res, basePath);
+    if (preparedBody.handled) return;
+    const body = preparedBody.body;
+    const toolContextToken = preparedBody.toolContextToken;
+    const toolChoiceNone = preparedBody.toolChoiceNone;
+    const isEmbedPost = preparedBody.isEmbedPost;
 
     const upstreamAbortController = new AbortController();
     const fetchOnce = async (): Promise<globalThis.Response> => {
@@ -1202,17 +1248,9 @@ export class VllmShimService {
 
     try {
       let response = await fetchOnce();
-      // A /v1/models probe is how callers decide whether to route here: a
-      // down status is positive evidence, so the box leaves rotation until
-      // the cooldown expires. A clean answer puts it back.
-      if (isModelsProbe) {
-        if (response.status === 502 || response.status === 503 || response.status === 504) {
-          this.markUpstreamUnreachable(upstreamName, `HTTP ${response.status} on /v1/models`);
-        } else if (response.ok) {
-          this.unreachableUntil.delete(upstreamName);
-          this.unreachableReason.delete(upstreamName);
-        }
-      }
+      // A /v1/models probe is routing evidence: bad statuses park the box,
+      // a clean answer puts it back (see noteModelsProbeOutcome).
+      this.noteModelsProbeOutcome(isModelsProbe, upstreamName, response);
       response = await this.maybeAutoHealModel404(response, basePath, upstreamUrl, upstreamName, body, fetchOnce);
       response = await this.maybeRescaleEmbedOverflow(isEmbedPost, response, body, fetchOnce);
 

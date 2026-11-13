@@ -92,6 +92,42 @@ export function createSseEmitter(res: Response, connectionSignal: AbortSignal) {
 // shared with AgenticLoopService); buildJsonResponseFromEvents below copies
 // the fields off the done event.
 
+/** tool_execution events split into the call (pre-execution) and the result (post-execution). */
+const _isToolCallEvent = (event: SseEvent): boolean =>
+  event.type === "tool_execution" && event.status === "calling";
+
+const _isToolResultEvent = (event: SseEvent): boolean =>
+  event.type === "tool_execution" &&
+  (event.status === "done" || event.status === "error");
+
+/** image and audio payloads share one wire shape. */
+const _toMediaPayload = (event: SseEvent) => ({
+  data: event.data,
+  mimeType: event.mimeType,
+  minioRef: event.minioRef || null,
+});
+
+/** Honesty fields (LF-06/LF-07) copied off the done event; each present only when set. */
+function _honestyFields(doneEvent: SseEvent): Record<string, unknown> {
+  return {
+    ...(doneEvent.answerSource && { answerSource: doneEvent.answerSource }),
+    ...(doneEvent.finalizeReason && {
+      finalizeReason: doneEvent.finalizeReason,
+    }),
+    ...(doneEvent.providerAttempts !== undefined && {
+      providerAttempts: doneEvent.providerAttempts,
+    }),
+    ...(doneEvent.providerRetries !== undefined && {
+      providerRetries: doneEvent.providerRetries,
+    }),
+    ...(doneEvent.audioRef && { audioRef: doneEvent.audioRef }),
+    ...(doneEvent.traceId && { traceId: doneEvent.traceId }),
+    ...(doneEvent.conversationId && {
+      conversationId: doneEvent.conversationId,
+    }),
+  };
+}
+
 /**
  * Build a flat JSON response from collected SSE events.
  * Used by non-streaming callers (?stream=false).
@@ -123,27 +159,17 @@ export function buildJsonResponseFromEvents(
     .join("");
   const images = events
     .filter((event: SseEvent) => event.type === "image")
-    .map((event: SseEvent) => ({
-      data: event.data,
-      mimeType: event.mimeType,
-      minioRef: event.minioRef || null,
-    }));
+    .map(_toMediaPayload);
 
   const toolCalls = events
-    .filter(
-      (event: SseEvent) => event.type === "tool_execution" && event.status === "calling",
-    )
+    .filter(_isToolCallEvent)
     .map((event: SseEvent) => ({
       name: event.tool?.name,
       args: event.tool?.args,
     }));
 
   const toolResults = events
-    .filter(
-      (event: SseEvent) =>
-        event.type === "tool_execution" &&
-        (event.status === "done" || event.status === "error"),
-    )
+    .filter(_isToolResultEvent)
     .map((event: SseEvent) => ({
       name: event.tool?.name,
       args: event.tool?.args,
@@ -153,11 +179,7 @@ export function buildJsonResponseFromEvents(
 
   const audioEvents = events
     .filter((event: SseEvent) => event.type === "audio")
-    .map((event: SseEvent) => ({
-      data: event.data,
-      mimeType: event.mimeType,
-      minioRef: event.minioRef || null,
-    }));
+    .map(_toMediaPayload);
 
   return {
     response: {
@@ -173,21 +195,7 @@ export function buildJsonResponseFromEvents(
       estimatedCost: doneEvent.estimatedCost ?? null,
       // Loop honesty fields (LF-06/LF-07): present when the run went through
       // the agent loop; absent otherwise so older clients see no change.
-      ...(doneEvent.answerSource && { answerSource: doneEvent.answerSource }),
-      ...(doneEvent.finalizeReason && {
-        finalizeReason: doneEvent.finalizeReason,
-      }),
-      ...(doneEvent.providerAttempts !== undefined && {
-        providerAttempts: doneEvent.providerAttempts,
-      }),
-      ...(doneEvent.providerRetries !== undefined && {
-        providerRetries: doneEvent.providerRetries,
-      }),
-      ...(doneEvent.audioRef && { audioRef: doneEvent.audioRef }),
-      ...(doneEvent.traceId && { traceId: doneEvent.traceId }),
-      ...(doneEvent.conversationId && {
-        conversationId: doneEvent.conversationId,
-      }),
+      ..._honestyFields(doneEvent),
     },
   };
 }

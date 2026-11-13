@@ -336,6 +336,7 @@ describe("runCoreLoop — honesty fields on real exits", () => {
       finalAttempt += 1;
       if (finalAttempt === 1) {
         return (async function* () {
+          yield* []; // fail before the first chunk; keeps this an async generator
           throw new Error("flaky provider");
         })();
       }
