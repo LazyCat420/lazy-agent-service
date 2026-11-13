@@ -20,4 +20,10 @@ export interface SseEvent {
   audioRef?: string;
   traceId?: string;
   conversationId?: string;
+  /** LF-06: "synthetic" when the final answer is a loop-built digest, not model text. */
+  answerSource?: "model" | "synthetic";
+  /** LF-06: why the agent loop finalized; "COMPLETED" on a clean finish. */
+  finalizeReason?: string;
+  /** LF-07: total provider calls for the run, retries included (>= 1). */
+  providerAttempts?: number;
 }

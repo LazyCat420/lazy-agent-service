@@ -37,6 +37,7 @@ import {
   type AgentRouteCoreLoopInput,
   type AgentRouteCoreLoopOutput,
 } from "../core/loop/AgentRouteAdapter.ts";
+import { deriveLoopHonestyFields, withLoopHonestyFields } from "../utils/SseUtilities.ts";
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Loop resilience helpers (compaction pressure + overflow recovery)
@@ -552,7 +553,9 @@ async function executeCoreLoopAdapterPath(
     agentConversationId: context.agentConversationId ?? null,
     parentAgentConversationId: resolvedParentAgentConversationId,
     traceId: context.traceId ?? null,
-    success: true,
+    // LF-06: a synthetic digest is not a successful answer; stop logging
+    // every completed run as a blanket success.
+    success: coreOut.result.answerSource !== "synthetic",
     usage: coreOut.usage,
     estimatedCost: calculateTextCost(
       coreOut.usage,
@@ -575,7 +578,20 @@ async function executeCoreLoopAdapterPath(
       `[AgenticLoopService] Failed to log CoreLoop /agent request: ${error instanceof Error ? error.message : String(error)}`,
     ),
   );
-  await (harness as any).finalize(preFinalMessages, hooks);
+  // LF-06/LF-07: carry the loop's honesty fields onto the final `done` event
+  // (SSE) and the JSON reply built from the same events — the only place the
+  // loop's truth can reach the caller.
+  const doneMeta = deriveLoopHonestyFields(coreOut.result);
+  const originalEmit = context.emit;
+  context.emit = (event) => originalEmit(withLoopHonestyFields(event, doneMeta));
+  try {
+    const finalizer = harness as unknown as {
+      finalize: (messages: ConversationMessage[], hooks: unknown) => Promise<void>;
+    };
+    await finalizer.finalize(preFinalMessages, hooks);
+  } finally {
+    context.emit = originalEmit;
+  }
   return { messages: preFinalMessages };
 }
 
