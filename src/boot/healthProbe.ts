@@ -9,10 +9,15 @@
  *     providers use, so a box that cannot answer discovery cannot pass).
  *
  * Verdict rules (the deploy contract):
- *   - Mongo failing              -> `down`,  HTTP 503 (container goes unhealthy)
- *   - every box failing          -> `down`,  HTTP 503
- *   - some boxes failing         -> `degraded`, HTTP 200 (wget still passes)
+ *   - Mongo failing (including a 2 s timeout — the ping is raced against a
+ *     timer, not just measured, because the driver's server-selection can
+ *     hang ~30 s)  -> `down`, HTTP 503 (container goes unhealthy)
+ *   - every enabled box failing  -> `down`,  HTTP 503
+ *   - some enabled boxes failing -> `degraded`, HTTP 200 (wget still passes)
  *   - everything answering       -> `ok`,    HTTP 200
+ *   - boxes disabled by default (jetson-2/vllm-3 unless ENABLE_JETSON_2=1)
+ *     are reported `{ok: null, skipped: "disabled"}`, never probed, never
+ *     counted; with zero enabled boxes the verdict follows Mongo alone.
  *
  * Results are cached for 10 s — and the in-flight probe is shared — so a
  * probe storm hits Mongo and the boxes once per TTL, not once per request.
@@ -23,9 +28,12 @@
  */
 
 export interface CheckResult {
-  ok: boolean;
+  /** null for skipped boxes (registered but disabled, e.g. jetson-2). */
+  ok: boolean | null;
   ms: number;
   error?: string;
+  /** Set instead of `error` when the box was not probed at all. */
+  skipped?: string;
 }
 
 export type HealthStatus = "ok" | "degraded" | "down";
@@ -42,6 +50,13 @@ export interface BoxTarget {
   name: string;
   /** Provider base URL; the probe GETs `<url>/v1/models`. */
   url: string;
+  /**
+   * False for registered-but-disabled boxes (jetson-2/vllm-3 unless
+   * ENABLE_JETSON_2=1 — VllmShimService answers 404 by design). They are
+   * reported as `{ok: null, skipped: "disabled"}`, never probed, and never
+   * counted toward degraded/down. Undefined = enabled.
+   */
+  enabled?: boolean;
 }
 
 export interface HealthProbeDeps {
@@ -71,6 +86,29 @@ export function publicErrorText(error: unknown): string {
   return raw.replace(/(\/\/)[^\s/@]*@[^\s/]*/g, "$1[redacted]@").slice(0, 200);
 }
 
+/**
+ * Hard bound: reject with Error("timeout") if `task` has not settled within
+ * timeoutMs, clearing the timer on both settle paths. The Mongo driver's own
+ * server-selection can hang ~30 s (MongoManager builds the client with no
+ * timeout options), so racing the promise — not just measuring it — is what
+ * keeps /health inside its 2 s budget and under the 5 s healthcheck timeout.
+ */
+function withDeadline<T>(task: () => Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
+    task().then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function probeBox(
   fetchImpl: typeof fetch,
   url: string,
@@ -93,7 +131,7 @@ export function createHealthProbe(deps: HealthProbeDeps): HealthProbe {
   async function timed(task: () => Promise<unknown>): Promise<CheckResult> {
     const startedAt = now();
     try {
-      await task();
+      await withDeadline(task, timeoutMs);
       return { ok: true, ms: now() - startedAt };
     } catch (error) {
       return { ok: false, ms: now() - startedAt, error: publicErrorText(error) };
@@ -102,19 +140,28 @@ export function createHealthProbe(deps: HealthProbeDeps): HealthProbe {
 
   async function run(): Promise<HealthReport> {
     const boxes = deps.listBoxes();
+    // Disabled boxes (registered but outside the shim's default pool) are
+    // never probed and never counted — counting them would pin /health to
+    // `degraded` forever, hiding genuine single-box outages.
+    const enabled = boxes.filter((box) => box.enabled !== false);
     const [mongo, ...boxResults] = await Promise.all([
       timed(() => deps.pingMongo()),
-      ...boxes.map((box) => timed(() => probeBox(fetchImpl, box.url, timeoutMs))),
+      ...enabled.map((box) => timed(() => probeBox(fetchImpl, box.url, timeoutMs))),
     ]);
 
     const checks: Record<string, CheckResult> = { mongo };
-    boxes.forEach((box, index) => {
-      checks[box.name] = boxResults[index];
+    boxes.forEach((box) => {
+      const index = enabled.findIndex((entry) => entry.name === box.name);
+      checks[box.name] =
+        index >= 0
+          ? boxResults[index]
+          : { ok: null, ms: 0, skipped: "disabled" };
     });
 
     const failedBoxes = boxResults.filter((result) => !result.ok).length;
     if (!mongo.ok) return { status: "down", checks, httpStatus: 503 };
-    if (boxes.length > 0 && failedBoxes === boxes.length) {
+    // Zero enabled boxes: the verdict follows Mongo alone.
+    if (enabled.length > 0 && failedBoxes === enabled.length) {
       return { status: "down", checks, httpStatus: 503 };
     }
     if (failedBoxes > 0) return { status: "degraded", checks, httpStatus: 200 };

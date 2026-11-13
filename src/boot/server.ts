@@ -136,6 +136,23 @@ function installMiddleware(app: Express): void {
   app.use(requestLoggerMiddleware);
 }
 
+/**
+ * Is a configured vLLM box actually in rotation? Every PROVIDER_VLLM_*_URL
+ * points at our own shim (/vllm-shim/<name>), and some upstreams are
+ * registered but disabled by default (jetson-2 = LAS vllm-3, the embedder,
+ * unless ENABLE_JETSON_2=1 — VllmShimService answers 404 by design). Probing
+ * those would pin /health to `degraded` forever, so ask the shim's own
+ * enabled check; URLs that are not shim routes are always probed.
+ */
+function isBoxEnabled(baseUrl: string): boolean {
+  try {
+    const resolved = VllmShimService.resolveUpstream(new URL(baseUrl).pathname);
+    return resolved ? VllmShimService.upstreamEnabled(resolved.upstreamName) : true;
+  } catch {
+    return true; // unparsable URL — let the probe itself report the failure
+  }
+}
+
 function installHealthRoutes(app: Express): void {
   // LF-11: the static `{"status":"ok"}` kept the container green while Mongo
   // or every model box was dead. This probe pings the Mongo connection the
@@ -155,6 +172,7 @@ function installHealthRoutes(app: Express): void {
       getInstancesByType(PROVIDERS.VLLM).map((entry) => ({
         name: entry.id,
         url: entry.baseUrl,
+        enabled: isBoxEnabled(entry.baseUrl),
       })),
   });
   app.get("/", (_req: Request, res: Response) => {

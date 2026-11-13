@@ -2,8 +2,11 @@
  * LF-11 — /health must tell the truth. Fakes for Mongo ping, box list and
  * fetch drive the verdict rules without sockets:
  *   all up -> ok 200; one box down -> degraded 200; mongo down -> down 503;
- *   every box down -> down 503; cache holds within 10 s; error text never
- *   leaks URL credentials.
+ *   every box down -> down 503; hung mongo ping -> down 503 "timeout" (2 s
+ *   race, not just a measurement); disabled boxes (jetson-2/vllm-3) are
+ *   skipped and never counted; with zero enabled boxes the verdict follows
+ *   mongo alone; cache holds within 10 s; error text never leaks URL
+ *   credentials.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -107,6 +110,98 @@ describe("createHealthProbe verdicts", () => {
 
     expect(report.status).toBe("down");
     expect(report.httpStatus).toBe(503);
+  });
+
+  it("reports down/503 with error 'timeout' when the mongo ping hangs", async () => {
+    // A hang (e.g. Mongo server-selection stalling ~30 s) must count as mongo
+    // down within the probe budget — the ping is raced against a timer.
+    const { fetchImpl } = makeFetch();
+    const probe = createHealthProbe(
+      makeDeps({
+        fetchImpl,
+        timeoutMs: 50,
+        pingMongo: () => new Promise<never>(() => {}),
+      }),
+    );
+
+    const report = await probe.check();
+
+    expect(report.status).toBe("down");
+    expect(report.httpStatus).toBe(503);
+    expect(report.checks.mongo.ok).toBe(false);
+    expect(report.checks.mongo.error).toContain("timeout");
+    expect(report.checks.vllm.ok).toBe(true); // boxes still probed in parallel
+  });
+
+  it("skips disabled boxes: not probed, not counted toward degraded/down", async () => {
+    const { fetchImpl, calls } = makeFetch();
+    const probe = createHealthProbe(
+      makeDeps({
+        fetchImpl,
+        listBoxes: () => [
+          ...BOXES,
+          { name: "vllm-3", url: "http://10.0.0.16:5591/vllm-shim/jetson-2", enabled: false },
+        ],
+      }),
+    );
+
+    const report = await probe.check();
+
+    expect(report.status).toBe("ok"); // the disabled box does not pin degraded
+    expect(report.httpStatus).toBe(200);
+    expect(report.checks["vllm-3"]).toEqual({ ok: null, ms: 0, skipped: "disabled" });
+    expect(calls.map((c) => c.url)).not.toContain(
+      "http://10.0.0.16:5591/vllm-shim/jetson-2/v1/models",
+    );
+  });
+
+  it("still reports degraded when an enabled box fails next to a disabled one", async () => {
+    const { fetchImpl } = makeFetch({ failBoxes: ["http://10.0.0.20:8000"] });
+    const probe = createHealthProbe(
+      makeDeps({
+        fetchImpl,
+        listBoxes: () => [
+          BOXES[0],
+          { name: "vllm-3", url: "http://10.0.0.16:5591/vllm-shim/jetson-2", enabled: false },
+        ],
+      }),
+    );
+
+    const report = await probe.check();
+
+    expect(report.status).toBe("degraded");
+    expect(report.httpStatus).toBe(200);
+  });
+
+  it("follows mongo alone when no box is enabled", async () => {
+    const { fetchImpl, calls } = makeFetch();
+
+    const up = await createHealthProbe(
+      makeDeps({
+        fetchImpl,
+        listBoxes: () => [
+          { name: "vllm-3", url: "http://10.0.0.16:5591/vllm-shim/jetson-2", enabled: false },
+        ],
+      }),
+    ).check();
+    expect(up.status).toBe("ok");
+    expect(up.httpStatus).toBe(200);
+    expect(calls).toHaveLength(0); // nothing probed, nothing counted
+
+    const downProbe = createHealthProbe(
+      makeDeps({
+        fetchImpl,
+        listBoxes: () => [
+          { name: "vllm-3", url: "http://10.0.0.16:5591/vllm-shim/jetson-2", enabled: false },
+        ],
+        pingMongo: async () => {
+          throw new Error("ECONNREFUSED");
+        },
+      }),
+    );
+    const down = await downProbe.check();
+    expect(down.status).toBe("down");
+    expect(down.httpStatus).toBe(503);
   });
 });
 
