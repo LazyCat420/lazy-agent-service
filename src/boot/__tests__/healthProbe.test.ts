@@ -156,12 +156,15 @@ describe("createHealthProbe verdicts", () => {
   });
 
   it("still reports degraded when an enabled box fails next to a disabled one", async () => {
+    // Two ENABLED boxes, one failing -> "some enabled down" -> degraded.
+    // With a single enabled box and it failing, the rule says ALL enabled
+    // are down -> down/503; the disabled box must not change either verdict.
     const { fetchImpl } = makeFetch({ failBoxes: ["http://10.0.0.20:8000"] });
     const probe = createHealthProbe(
       makeDeps({
         fetchImpl,
         listBoxes: () => [
-          BOXES[0],
+          ...BOXES,
           { name: "vllm-3", url: "http://10.0.0.16:5591/vllm-shim/jetson-2", enabled: false },
         ],
       }),
@@ -171,6 +174,9 @@ describe("createHealthProbe verdicts", () => {
 
     expect(report.status).toBe("degraded");
     expect(report.httpStatus).toBe(200);
+    expect(report.checks.vllm.ok).toBe(false);
+    expect(report.checks["vllm-2"].ok).toBe(true);
+    expect(report.checks["vllm-3"]).toEqual({ ok: null, ms: 0, skipped: "disabled" });
   });
 
   it("follows mongo alone when no box is enabled", async () => {
