@@ -781,7 +781,8 @@ export function processNonStreamingResponse(
  *   JSON: `{"name": "...", "arguments": {...} | "..."}`.
  *   Qwen: `<function=NAME><parameter=K>V</parameter>…</function>`
  *         — values JSON-parsed, string fallback.
- * Unparseable bodies and unterminated blocks are skipped (left as text).
+ * Unparseable bodies and unterminated blocks are skipped here; the cut-off is reported by
+ * hasUnterminatedToolMarkup, and both DSML dialects parse through _extractDsmlCalls.
  */
 export interface MarkupToolCall {
   name: string;
@@ -791,6 +792,12 @@ export interface MarkupToolCall {
 }
 
 const MARKUP_TOOL_CALL_BLOCK = /<\|?tool_call\|?>([\s\S]*?)<\/?\|?tool_call\|?>/gi;
+const DSML_LEGACY_HEADER = /<[｜|]\s*tool\s+calls\s*[｜|]>/gi;
+const DSML_LEGACY_BLOCK = /<[｜|]\s*tool_call\s*[｜|]>([\s\S]*?)<[｜|]\s*end of tool call\s*[｜|]>/gi;
+const DSML_INVOKE_BLOCK = /<[｜|]\s*DSML\s*[｜|]\s*invoke\s+name="([^"]*)"[^>]*>([\s\S]*?)<\/[｜|]\s*DSML\s*[｜|]\s*invoke\s*>/gi;
+const DSML_PARAMETER = /<[｜|]\s*DSML\s*[｜|]\s*parameter\s+name="([^"]*)"([^>]*)>([\s\S]*?)<\/[｜|]\s*DSML\s*[｜|]\s*parameter\s*>/gi;
+const DSML_ANY_TAG = /<\/?[｜|]\s*DSML\s*[｜|][^>]*>/gi;
+const TOOL_MARKUP_OPEN = /<\|?tool_call\|?>|<[｜|]\s*tool_call\s*[｜|]>|<[｜|]\s*tool\s+calls\s*[｜|]>|<[｜|]\s*DSML\s*[｜|]|<\/[｜|]\s*DSML/i;
 const MARKUP_ARG_PAIR = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)(?:<\/arg_value>|(?=<arg_key>)|$)/g;
 const QWEN_FUNCTION_BODY = /^<function=([\w.-]+)>([\s\S]*?)(?:<\/function>)?$/;
 const QWEN_PARAM_PAIR = /<parameter=([\w.-]+)>([\s\S]*?)(?:<\/parameter>|(?=<parameter=)|(?=<\/function>)|$)/g;
@@ -818,14 +825,20 @@ function _markupCallFromJsonBody(body: string): MarkupToolCall | null {
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== "object" || !("name" in parsed) || typeof parsed.name !== "string" || !parsed.name) return null;
-  const raw = "arguments" in parsed ? parsed.arguments : undefined;
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  const fn = obj.function as Record<string, unknown> | undefined;
+  const name = (typeof obj.name === "string" && obj.name)
+    || (typeof fn?.name === "string" && fn.name)
+    || (typeof obj.tool_name === "string" && obj.tool_name);
+  if (!name) return null;
+  const raw = obj.arguments ?? obj.parameters ?? obj.args;
   if (typeof raw === "string") {
     const value = parseMarkupValue(raw);
-    if (value && typeof value === "object" && !Array.isArray(value)) return { name: parsed.name, args: value as Record<string, unknown> };
-    return { name: parsed.name, args: {}, argsParseError: true, rawArgs: raw.slice(0, 2000) };
+    if (value && typeof value === "object" && !Array.isArray(value)) return { name, args: value as Record<string, unknown> };
+    return { name, args: {}, argsParseError: true, rawArgs: raw.slice(0, 2000) };
   }
-  return { name: parsed.name, args: raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {} };
+  return { name, args: raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {} };
 }
 
 /** Parse the GLM body form (`NAME<arg_key>K</arg_key><arg_value>V…`); null when not a call. */
@@ -860,6 +873,35 @@ function _markupCallFromQwenBody(body: string): MarkupToolCall | null {
   return { name: match[1], args };
 }
 
+/** Invoke body -> args: DSML parameter tags, else bare/fenced JSON. */
+function _dsmlArgsFromBody(body: string): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  let sawParameter = false;
+  for (const pair of body.matchAll(DSML_PARAMETER)) {
+    sawParameter = true;
+    const key = pair[1].trim();
+    if (key) args[key] = /string="true"/i.test(pair[2]) ? pair[3].trim() : parseMarkupValue(pair[3].trim());
+  }
+  if (sawParameter) return args;
+  const bare = body.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  const call = bare.startsWith("{") ? _markupCallFromJsonBody(bare) : null;
+  return (call?.args && typeof call.args === "object" ? call.args : {}) as Record<string, unknown>;
+}
+/** Both DSML dialects: legacy tool_call blocks and <｜DSML｜invoke blocks. */
+function _extractDsmlCalls(text: string): MarkupToolCall[] {
+  const calls: MarkupToolCall[] = [];
+  for (const block of text.matchAll(DSML_LEGACY_BLOCK)) {
+    const bare = block[1].trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    const call = _markupCallFromJsonBody(bare);
+    if (call) calls.push(call);
+  }
+  for (const invoke of text.matchAll(DSML_INVOKE_BLOCK)) {
+    const name = invoke[1].trim();
+    if (name) calls.push({ name, args: _dsmlArgsFromBody(invoke[2]) });
+  }
+  return calls;
+}
+
 export function extractMarkupToolCalls(text: string): MarkupToolCall[] {
   const calls: MarkupToolCall[] = [];
   for (const match of text.matchAll(MARKUP_TOOL_CALL_BLOCK)) {
@@ -876,7 +918,27 @@ export function extractMarkupToolCalls(text: string): MarkupToolCall[] {
       : _markupCallFromGlmBody(body);
     if (call) calls.push(call);
   }
+  calls.push(..._extractDsmlCalls(text));
   return calls;
+}
+/** True when a tool-call opener survives removal of every COMPLETE block: a cut-off call. */
+export function hasUnterminatedToolMarkup(text: string): boolean {
+  const stripped = text
+    .replace(DSML_LEGACY_HEADER, "")
+    .replace(MARKUP_TOOL_CALL_BLOCK, "")
+    .replace(DSML_LEGACY_BLOCK, "")
+    .replace(DSML_INVOKE_BLOCK, "")
+    .replace(DSML_ANY_TAG, "");
+  return TOOL_MARKUP_OPEN.test(stripped);
+}
+/** Remove every complete markup block (all dialects); non-markup text comes back untouched. */
+export function stripMarkupToolCalls(text: string): string {
+  return text
+    .replace(DSML_LEGACY_HEADER, "")
+    .replace(MARKUP_TOOL_CALL_BLOCK, "")
+    .replace(DSML_LEGACY_BLOCK, "")
+    .replace(DSML_INVOKE_BLOCK, "")
+    .replace(DSML_ANY_TAG, "");
 }
 
 /**
@@ -1109,6 +1171,9 @@ function* finalizeSSEStreamOutput(
         id: `call_markup_${markupIndex++}`,
         ...call,
       };
+    }
+    if (state.lastFinishReason !== "length" && hasUnterminatedToolMarkup(state.markupContent)) {
+      yield { type: "stopReason", stopReason: "length" };
     }
   }
 

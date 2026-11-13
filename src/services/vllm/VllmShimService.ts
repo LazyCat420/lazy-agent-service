@@ -6,6 +6,7 @@ import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 import { filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
+import { extractMarkupToolCalls, hasUnterminatedToolMarkup, stripMarkupToolCalls } from "../../utils/openai-compat.ts";
 
 /**
  * OpenAI-compat translation shim between prism-service and a vLLM endpoint.
@@ -263,15 +264,6 @@ export class VllmShimService {
   }
 
   /**
-   * DeepSeek DSML tool call tags:
-   * Supports both full-width vertical bar (｜) and standard ASCII (|):
-   * <｜tool calls｜> ... <｜tool_call｜> ... <｜end of tool call｜>
-   */
-  private static readonly DEEPSEEK_TOOL_CALLS_HEADER_RE = /<[｜|]tool calls[｜|]>/i;
-  private static readonly DEEPSEEK_TOOL_CALL_BLOCK_RE =
-    /<[｜|]tool_call[｜|]>([\s\S]*?)<[｜|]end of tool call[｜|]>/gi;
-
-  /**
    * Normalizes DeepSeek DSML tool calls embedded in `choices[0].message.content`
    * into standard OpenAI `tool_calls: [...]` format.
    *
@@ -308,67 +300,35 @@ export class VllmShimService {
     }
 
     const content: string = msg.content;
-    if (!VllmShimService.DEEPSEEK_TOOL_CALLS_HEADER_RE.test(content) && !content.includes("tool_call")) {
+    if (!content.includes("tool_call") && !content.includes("tool calls")
+      && !content.includes("<function=") && !content.includes("DSML")) {
       return { choice, modified: false };
     }
-
-    const toolCalls = VllmShimService.extractDsmlToolCalls(content);
+    const toolCalls = extractMarkupToolCalls(content);
     if (toolCalls.length === 0) {
+      // LF-02: never execute guessed arguments; report the cut like a real length cut so
+      // consumers apply their existing truncation handling instead of trusting the text.
+      if (hasUnterminatedToolMarkup(content)) {
+        return { choice: { ...choice, finish_reason: "length" }, modified: true };
+      }
       return { choice, modified: false };
     }
-
-    // Clean content by removing <｜tool calls｜> and all <｜tool_call｜>...<｜end of tool call｜> blocks
-    const cleanedContent = content
-      .replace(/<[｜|]tool calls[｜|]>/gi, "")
-      .replace(VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE, "")
-      .trim();
-
+    const cleanedContent = stripMarkupToolCalls(content).trim();
     return {
       choice: {
         ...choice,
         message: {
           ...msg,
           content: cleanedContent.length > 0 ? cleanedContent : null,
-          tool_calls: toolCalls,
+          tool_calls: toolCalls.map((call): DsmlToolCall => ({
+            id: `call_${Math.random().toString(36).slice(2, 11)}`,
+            type: "function",
+            function: { name: call.name, arguments: JSON.stringify(call.args) },
+          })),
         },
       },
       modified: true,
     };
-  }
-
-  /** Parse DeepSeek DSML tool-call blocks out of message content. */
-  private static extractDsmlToolCalls(content: string): DsmlToolCall[] {
-    const toolCalls: DsmlToolCall[] = [];
-
-    let match: RegExpExecArray | null;
-    VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.lastIndex = 0;
-    while ((match = VllmShimService.DEEPSEEK_TOOL_CALL_BLOCK_RE.exec(content)) !== null) {
-      let rawCall = match[1].trim();
-      // Strip markdown fences if present (e.g. ```json ... ```)
-      if (rawCall.startsWith("```")) {
-        rawCall = rawCall.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-      }
-
-      try {
-        const parsed = JSON.parse(rawCall);
-        const toolName = parsed.name || parsed.function?.name || parsed.tool_name;
-        const toolArgs = parsed.arguments ?? parsed.parameters ?? parsed.args ?? {};
-        if (toolName) {
-          toolCalls.push({
-            id: `call_${Math.random().toString(36).slice(2, 11)}`,
-            type: "function",
-            function: {
-              name: String(toolName),
-              arguments: typeof toolArgs === "string" ? toolArgs : JSON.stringify(toolArgs),
-            },
-          });
-        }
-      } catch (err: any) {
-        logger.warn(`[VllmShim] Failed to parse DeepSeek DSML tool call: ${err.message}. Raw: ${rawCall}`);
-      }
-    }
-
-    return toolCalls;
   }
 
   /**
@@ -1098,7 +1058,7 @@ export class VllmShimService {
     if (upstreamContentType.includes("application/json") && originalPath.includes("/chat/completions")) {
       try {
         const text = buf.toString("utf8");
-        if (text.includes("tool_call") || text.includes("tool calls")) {
+        if (text.includes("tool_call") || text.includes("tool calls") || text.includes("<function=") || text.includes("DSML")) {
           const parsed = JSON.parse(text);
           // A tool_choice:"none" turn has tools off: its text markup stays text, never a callable tool call.
           const normalized = tools.choiceNone ? parsed : VllmShimService.normalizeToolCalls(parsed);
