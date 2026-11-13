@@ -93,6 +93,7 @@ export type CoreFinalizeReason =
   | "TOKEN_BUDGET"
   | "EMPTY_REPLY"
   | "PROVIDER_ERROR"
+  | "CUT_OFF"
   | "CUT_OFF_TWICE"
   | "RUNAWAY_GENERATION"
   | "NO_TOOLS_OFFERED"

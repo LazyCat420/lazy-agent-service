@@ -345,6 +345,7 @@ async function* evaluateNoToolCompletion(
   modelCalls: number,
   toolCalls: number,
   providerRetries: number,
+  turnCutOff: boolean,
   finalizeReason: CoreFinalizeReason | undefined,
 ): AsyncGenerator<
   CoreLoopEvent,
@@ -398,8 +399,11 @@ async function* evaluateNoToolCompletion(
       modelCalls,
       toolCalls,
       providerRetries,
-      finalizeReason,
-      answerSource: "model",
+      // LF-06: a turn that hit the provider's length cut-off but still
+      // "completed" without tool calls ships incomplete text — report it
+      // truthfully; the text and flow themselves are unchanged.
+      finalizeReason: turnCutOff && finalizeReason === undefined ? "CUT_OFF" : finalizeReason,
+      answerSource: turnCutOff ? "partial" : "model",
     },
   };
 }
@@ -882,6 +886,7 @@ export async function* runCoreLoop(
           modelCalls,
           toolCalls,
           providerRetryCalls,
+          cutOff,
           finalizeReason,
         );
         if (noToolOutcome.action === "return") return noToolOutcome.result;

@@ -265,6 +265,22 @@ describe("runCoreLoop — honesty fields on real exits", () => {
     });
   });
 
+  it("single length cut-off, no tool calls: partial / CUT_OFF", async () => {
+    const { result } = await runLoop({
+      model: scriptedModel([["truncated reply ", { type: "stopReason", stopReason: "length" }]]),
+      tools: [],
+      messages: [{ role: "user", content: "hi" }],
+      signal,
+      maxSteps: 8,
+    });
+    expect(result.status).toBe("completed");
+    expect(result.answerSource).toBe("partial");
+    expect(result.finalizeReason).toBe("CUT_OFF");
+    expect(result.text).toBe("truncated reply ");
+    expect(result.modelCalls).toBe(1);
+    expect(result.providerRetries).toBe(0);
+  });
+
   it("step-limit digest: synthetic / STEP_LIMIT / 2 attempts / 0 retries", async () => {
     const { result } = await runLoop({
       model: scriptedModel([[{ type: "toolCall", id: "c1", name: "widgets", args: {} }], []]),
