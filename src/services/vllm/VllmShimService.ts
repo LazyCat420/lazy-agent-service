@@ -1079,6 +1079,35 @@ export class VllmShimService {
     }
   }
 
+  private static rewriteChatCompletionsJsonBody(
+    text: string,
+    tools: { contextToken?: string; choiceNone: boolean; healedLiveModel?: string },
+  ): string | null {
+    const hasToolMarkup = text.includes("tool_call") || text.includes("tool calls");
+    if (!hasToolMarkup && !tools.healedLiveModel) {
+      return null;
+    }
+    const parsed = JSON.parse(text);
+    // A tool_choice:"none" turn has tools off: its text markup stays text, never a callable tool call.
+    const normalized =
+      hasToolMarkup && !tools.choiceNone
+        ? VllmShimService.normalizeToolCalls(parsed)
+        : parsed;
+    const withLiveModel =
+      tools.healedLiveModel &&
+      normalized &&
+      typeof normalized === "object" &&
+      !Array.isArray(normalized) &&
+      (normalized as Record<string, unknown>).model !== tools.healedLiveModel
+        ? { ...(normalized as Record<string, unknown>), model: tools.healedLiveModel }
+        : normalized;
+    const bound =
+      hasToolMarkup && tools.contextToken
+        ? bindToolResponse(withLiveModel, tools.contextToken)
+        : withLiveModel;
+    return JSON.stringify(bound);
+  }
+
   private static async handleNonStreamJsonResponse(
     buf: Buffer,
     upstreamContentType: string,
@@ -1086,7 +1115,7 @@ export class VllmShimService {
     originalPath: string,
     upstreamUrl: string,
     upstreamName: string,
-    tools: { contextToken?: string; choiceNone: boolean },
+    tools: { contextToken?: string; choiceNone: boolean; healedLiveModel?: string },
     res: Response,
   ): Promise<void> {
     if (upstreamContentType.includes("application/json") && basePath === "/v1/models") {
@@ -1094,19 +1123,15 @@ export class VllmShimService {
         return;
       }
     }
-    const toolContextToken = tools.contextToken;
     if (upstreamContentType.includes("application/json") && originalPath.includes("/chat/completions")) {
       try {
-        const text = buf.toString("utf8");
-        if (text.includes("tool_call") || text.includes("tool calls")) {
-          const parsed = JSON.parse(text);
-          // A tool_choice:"none" turn has tools off: its text markup stays text, never a callable tool call.
-          const normalized = tools.choiceNone ? parsed : VllmShimService.normalizeToolCalls(parsed);
-          res.end(JSON.stringify(toolContextToken ? bindToolResponse(normalized, toolContextToken) : normalized));
+        const rewritten = this.rewriteChatCompletionsJsonBody(buf.toString("utf8"), tools);
+        if (rewritten !== null) {
+          res.end(rewritten);
           return;
         }
       } catch (error) {
-        if (toolContextToken) throw error;
+        if (tools.contextToken) throw error;
       }
     }
     res.end(buf);
@@ -1165,6 +1190,23 @@ export class VllmShimService {
       this.unreachableUntil.delete(upstreamName);
       this.unreachableReason.delete(upstreamName);
     }
+  }
+
+  private static stampHealedLiveModelHeader(
+    preHealResponse: globalThis.Response,
+    postHealResponse: globalThis.Response,
+    body: unknown,
+    res: Response,
+  ): string | undefined {
+    if (postHealResponse === preHealResponse || !body || typeof body !== "object") {
+      return undefined;
+    }
+    const model = (body as Record<string, unknown>).model;
+    if (typeof model !== "string" || !model) {
+      return undefined;
+    }
+    res.setHeader("X-Vllm-Shim-Live-Model", model);
+    return model;
   }
 
   public static async handle(req: Request, res: Response) {
@@ -1251,7 +1293,9 @@ export class VllmShimService {
       // A /v1/models probe is routing evidence: bad statuses park the box,
       // a clean answer puts it back (see noteModelsProbeOutcome).
       this.noteModelsProbeOutcome(isModelsProbe, upstreamName, response);
+      const preHealResponse = response;
       response = await this.maybeAutoHealModel404(response, basePath, upstreamUrl, upstreamName, body, fetchOnce);
+      const healedLiveModel = this.stampHealedLiveModelHeader(preHealResponse, response, body, res);
       response = await this.maybeRescaleEmbedOverflow(isEmbedPost, response, body, fetchOnce);
 
       res.status(response.status);
@@ -1271,7 +1315,7 @@ export class VllmShimService {
         originalPath,
         resolved.upstreamUrl,
         upstreamName,
-        { contextToken: toolContextToken, choiceNone: toolChoiceNone },
+        { contextToken: toolContextToken, choiceNone: toolChoiceNone, healedLiveModel },
         res,
       );
       return;

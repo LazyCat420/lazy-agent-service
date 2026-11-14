@@ -221,14 +221,104 @@ export default class AgenticToolResolver {
     return PRISM_LOCAL_TOOL_NAMES.has(tool.name) || Boolean(ALWAYS_AVAILABLE_COGNITIVE_TOOLS[cleanToolName]);
   }
 
+  private static isTradingToolResolutionContext({
+    options,
+    agent,
+    project,
+    agentConversationId,
+  }: {
+    options: ResolveParams["options"];
+    agent?: string;
+    project?: string;
+    agentConversationId?: string;
+  }): boolean {
+    if (project === "vllm-trading-bot" || ToolOrchestratorService.isTradingRequest(project)) {
+      return true;
+    }
+    if (
+      Boolean(options.tradingToolContext) ||
+      Boolean(options._lazy_trading_context) ||
+      (typeof options.systemPrompt === "string" &&
+        options.systemPrompt.includes("<TRADING_TOOL_CONTEXT_V1>"))
+    ) {
+      return true;
+    }
+    if (agentConversationId && Boolean(ToolContext.get(agentConversationId, "tradingToolContext"))) {
+      return true;
+    }
+    if (agent) {
+      const persona = AgentPersonaRegistry.get(agent) as { project?: string } | null;
+      if (persona?.project === "vllm-trading-bot") return true;
+      if (/^(?:(?:custom_)?v3_|board$|research_worker$)/i.test(agent.trim())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static hasExplicitSystemToolInWhitelist(
+    explicitWhitelist: string[],
+    systemTools: Set<string>,
+    clientSchemas: Array<{ name?: unknown; domain?: unknown }>,
+  ): boolean {
+    const coreDomainNames = new Set<string>(
+      clientSchemas
+        .filter((schema) => typeof schema.name === "string" && isCoreDomain(String(schema.domain || "")))
+        .map((schema) => String(schema.name)),
+    );
+    return explicitWhitelist.some((entry) => {
+      if (entry.startsWith("domain:") || entry.startsWith("domainKey:")) {
+        const domainVal = entry.replace(/^domain(?:Key)?:/, "");
+        return isCoreDomain(domainVal) || domainVal.toLowerCase().includes("core");
+      }
+      const clean = entry.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+      return (
+        CORE_AGENTIC_TOOLS.has(entry) ||
+        CORE_AGENTIC_TOOLS.has(clean) ||
+        CORE_ORCHESTRATOR_TOOLS.has(entry) ||
+        CORE_ORCHESTRATOR_TOOLS.has(clean) ||
+        systemTools.has(entry) ||
+        systemTools.has(clean) ||
+        coreDomainNames.has(entry) ||
+        coreDomainNames.has(clean)
+      );
+    });
+  }
+
+  private static shouldLockCoreTools(
+    resolvedPersona: { coreToolsLocked?: boolean } | null,
+    options: ResolveParams["options"],
+    isTradingContext: boolean,
+    systemTools: Set<string>,
+    clientSchemas: Array<{ name?: unknown; domain?: unknown }>,
+  ): boolean {
+    if (isTradingContext) return false;
+    if (resolvedPersona) return resolvedPersona.coreToolsLocked ?? true;
+    if (
+      Array.isArray(options.enabledTools) &&
+      !AgenticToolResolver.hasExplicitSystemToolInWhitelist(
+        options.enabledTools,
+        systemTools,
+        clientSchemas,
+      )
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   private static filterToolsByEnabledList(
     dynamicTools: ToolSchema[],
     resolvedEnabledTools: string[],
-    shouldApplyDisabledFilter: boolean,
-    options: ResolveParams["options"],
-    agent: string | undefined,
-    defaultTopology: string,
+    filterCtx: {
+      shouldApplyDisabledFilter: boolean;
+      options: ResolveParams["options"];
+      agent: string | undefined;
+      defaultTopology: string;
+      isTradingContext: boolean;
+    },
   ): ToolSchema[] {
+    const { shouldApplyDisabledFilter, options, agent, defaultTopology, isTradingContext } = filterCtx;
     const hasPrefixed = resolvedEnabledTools.some(
       (entry) => entry.startsWith("domain:") || entry.startsWith("domainKey:"),
     );
@@ -244,11 +334,17 @@ export default class AgenticToolResolver {
     }
 
     const resolvedPersona = agent ? AgentPersonaRegistry.get(agent) : null;
-    const isCoreToolsLocked = resolvedPersona?.coreToolsLocked ?? true;
     const systemTools = new Set<string>(
       clientSchemas
         .filter((toolSchema) => toolSchema.system === true && !CORE_ORCHESTRATOR_TOOLS.has(toolSchema.name as string))
         .map((toolSchema) => toolSchema.name as string),
+    );
+    const isCoreToolsLocked = AgenticToolResolver.shouldLockCoreTools(
+      resolvedPersona,
+      options,
+      isTradingContext,
+      systemTools,
+      clientSchemas,
     );
     const clientDisabledSet =
       shouldApplyDisabledFilter && Array.isArray(options.disabledTools) && options.disabledTools.length > 0
@@ -324,6 +420,31 @@ export default class AgenticToolResolver {
     return finalTools;
   }
 
+  private static stripCoreAndSystemTools(
+    tools: ToolSchema[],
+    defaultTopology: string,
+  ): ToolSchema[] {
+    const clientSchemas = ToolOrchestratorService.getClientToolSchemas(defaultTopology) || [];
+    const systemTools = new Set<string>(
+      clientSchemas
+        .filter((toolSchema) => toolSchema.system === true)
+        .map((toolSchema) => toolSchema.name as string),
+    );
+    return tools.filter((tool) => {
+      const cleanName = tool.name.replace(/^(mcp__[a-zA-Z0-9_-]+__)/, "");
+      if (ALWAYS_AVAILABLE_COGNITIVE_TOOLS[cleanName]) return true;
+      return (
+        !CORE_AGENTIC_TOOLS.has(tool.name) &&
+        !CORE_AGENTIC_TOOLS.has(cleanName) &&
+        !CORE_ORCHESTRATOR_TOOLS.has(tool.name) &&
+        !CORE_ORCHESTRATOR_TOOLS.has(cleanName) &&
+        !systemTools.has(tool.name) &&
+        !systemTools.has(cleanName) &&
+        !isCoreDomain(tool.domain || "")
+      );
+    });
+  }
+
   /**
    * Resolves the final set of tools for an agentic loop.
    * Handles MCP tools, disabledBuiltIns mode, prefix expansion,
@@ -332,7 +453,7 @@ export default class AgenticToolResolver {
   static async resolve({
     options,
     agent,
-    project: _project,
+    project,
     username: _username,
     modelDefinition,
     agentConversationId,
@@ -354,10 +475,17 @@ export default class AgenticToolResolver {
       logger.info(`[AgenticLoop] Merged ${mcpTools.length} MCP tools from connected servers`);
     }
 
-    if (ToolOrchestratorService.isTradingRequest(_project)) {
+    if (ToolOrchestratorService.isTradingRequest(project)) {
       const merged = ToolOrchestratorService.withTradingCatalog(dynamicTools);
       dynamicTools.splice(0, dynamicTools.length, ...merged);
     }
+
+    const isTradingContext = AgenticToolResolver.isTradingToolResolutionContext({
+      options,
+      agent,
+      project,
+      agentConversationId,
+    });
 
     let { resolvedEnabledTools, shouldApplyDisabledFilter } =
       AgenticToolResolver.resolveDynamicEnabledTools(options, agentConversationId);
@@ -381,11 +509,16 @@ export default class AgenticToolResolver {
       finalTools = AgenticToolResolver.filterToolsByEnabledList(
         dynamicTools,
         resolvedEnabledTools,
-        shouldApplyDisabledFilter,
-        options,
-        agent,
-        defaultTopology,
+        {
+          shouldApplyDisabledFilter,
+          options,
+          agent,
+          defaultTopology,
+          isTradingContext,
+        },
       );
+    } else if (isTradingContext) {
+      finalTools = AgenticToolResolver.stripCoreAndSystemTools(dynamicTools, defaultTopology);
     }
 
     finalTools = AgenticToolResolver.filterNativeAndWorkspaceCollisions(
