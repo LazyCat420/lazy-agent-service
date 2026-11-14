@@ -940,6 +940,35 @@ export function stripMarkupToolCalls(text: string): string {
     .replace(DSML_INVOKE_BLOCK, "")
     .replace(DSML_ANY_TAG, "");
 }
+/** True when one complete <tool_call> block yields no call (literal-\n body, prose, invalid JSON, empty). Must stay in lockstep with extractMarkupToolCalls' dispatch. */
+function _blockYieldsCall(rawBody: string): boolean {
+  const body = rawBody.trim().replace(QWEN_MISNAMED_FUNCTION_OPENER, "<function=$1>");
+  if (body.startsWith("<function=")) {
+    return body.split(/(?=<function=)/).some((segment) => _markupCallFromQwenBody(segment.trim()) !== null);
+  }
+  const call = body.startsWith("{") ? _markupCallFromJsonBody(body) : _markupCallFromGlmBody(body);
+  return call !== null;
+}
+/**
+ * True when a COMPLETE block is seen but no parser accepts it (so `extractMarkupToolCalls`
+ * returns nothing for it) — the literal-backslash-n body, prose body, invalid JSON, empty body,
+ * and a DSML `invoke` whose `name=` is missing or empty. Such a block must never be passed along
+ * silently or vanish from the answer unreported: the stream and shim paths report it as the same
+ * length cut an unterminated call gets.
+ */
+export function hasUnparseableToolMarkup(text: string): boolean {
+  for (const match of text.matchAll(MARKUP_TOOL_CALL_BLOCK)) {
+    if (!_blockYieldsCall(match[1])) return true;
+  }
+  for (const block of text.matchAll(DSML_LEGACY_BLOCK)) {
+    const bare = block[1].trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    if (_markupCallFromJsonBody(bare) === null) return true;
+  }
+  for (const invoke of text.matchAll(DSML_INVOKE_BLOCK)) {
+    if (!invoke[1].trim()) return true;
+  }
+  return /<[｜|]\s*DSML\s*[｜|]\s*invoke(?![^>]*name=)/i.test(text.replace(DSML_INVOKE_BLOCK, ""));
+}
 
 /**
  * Parse an SSE stream from an OpenAI-compatible /v1/chat/completions endpoint.
@@ -1163,17 +1192,28 @@ function* finalizeSSEStreamOutput(
     }
   }
 
-  if (!state.nativeToolCallsYielded && !options.toolChoiceNone) {
-    let markupIndex = 0;
-    for (const call of extractMarkupToolCalls(state.markupContent)) {
-      yield {
-        type: "toolCall",
-        id: `call_markup_${markupIndex++}`,
-        ...call,
-      };
+  if (!state.nativeToolCallsYielded) {
+    if (!options.toolChoiceNone) {
+      let markupIndex = 0;
+      for (const call of extractMarkupToolCalls(state.markupContent)) {
+        yield {
+          type: "toolCall",
+          id: `call_markup_${markupIndex++}`,
+          ...call,
+        };
+      }
     }
-    if (state.lastFinishReason !== "length" && hasUnterminatedToolMarkup(state.markupContent)) {
-      yield { type: "stopReason", stopReason: "length" };
+    // S-06 review fixes 1+3: an unterminated OR unparseable block is never executed and
+    // never passed along silently. This branch mints no call - it only reports - so it runs
+    // even under tool_choice "none", where a truncated answer must not be finalized complete.
+    if (state.lastFinishReason !== "length") {
+      const unparseable = hasUnparseableToolMarkup(state.markupContent);
+      if (unparseable) {
+        logger.warn(`[${options.label ?? "OpenAI-compatible"}] Dropped unparseable tool markup, reporting length cut. Raw: ${state.markupContent.slice(0, 2000)}`);
+      }
+      if (unparseable || hasUnterminatedToolMarkup(state.markupContent)) {
+        yield { type: "stopReason", stopReason: "length" };
+      }
     }
   }
 

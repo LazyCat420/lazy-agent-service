@@ -82,6 +82,9 @@ export interface StreamToolCallChunk {
   status?: "calling" | "done" | "error";
   native?: boolean;
   thoughtSignature?: string;
+  /** Set by markup recovery when the block's arguments string failed to parse (S-06); rawArgs keeps it verbatim. */
+  argsParseError?: boolean;
+  rawArgs?: string;
 }
 
 export interface StreamUsageChunk {

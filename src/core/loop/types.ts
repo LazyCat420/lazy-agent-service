@@ -15,6 +15,9 @@ export interface CoreToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
+  /** Set when markup recovery could not parse the block's arguments string (S-06); args are NOT guessed. */
+  argsParseError?: boolean;
+  rawArgs?: string;
 }
 
 export type ToolCallSpec = CoreToolCall;

@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   extractMarkupToolCalls,
   hasUnterminatedToolMarkup,
+  hasUnparseableToolMarkup,
   parseSSEStream,
   stripMarkupToolCalls,
   type SSEStreamChunk,
@@ -261,3 +262,35 @@ describe("case 6: non-stream unterminated reports length without minting tool ca
     expect("tool_calls" in normalized.choices[0]!.message).toBe(false);
   });
 });
+
+// ── S-06 review fixes (docs/audits/2026-11-las/s06-review.md) ─────────────────────────
+
+const X1_LITERAL_BACKSLASH_F4 = "<tool_call>\\n<function=lazy_web_search>\\n<parameter=query>\\nNvidia data center partners limit China sales 49% FT November 2026\\n</parameter>\\n<parameter=limit>\\n6\\n</parameter>\\n</function>\\n</tool_call>"; // the plan stored double-escaped F4 bytes: a COMPLETE block no parser accepts (review check 2)
+const X2_NOT_A_CALL = "<tool_call>not a call</tool_call>"; // prose body
+const X3_INVALID_JSON = "<tool_call>{\"name\":</tool_call>"; // invalid JSON body
+const X4_DSML_NO_NAME = "<｜DSML｜ calls>\n<｜DSML｜ invoke>\n<｜DSML｜ parameter name=\"ticker\" string=\"true\">SWBI</｜DSML｜ parameter>\n</｜DSML｜ invoke>\n</｜DSML｜ calls>"; // DSML invoke without name=
+const X5_BROKEN_ARGS = "<tool_call>{\"name\":\"x\",\"arguments\":\"{broken\"}</tool_call>"; // malformed arguments string (review fix 2)
+
+async function streamChunks(contents: string[], toolChoiceNone = false): Promise<SSEStreamChunk[]> {
+  const chunks: SSEStreamChunk[] = [];
+  for await (const chunk of parseSSEStream(sseStream(contents), { label: "test", toolChoiceNone })) chunks.push(chunk);
+  return chunks;
+}
+
+function toolCallChunks(chunks: SSEStreamChunk[]): Array<Extract<SSEStreamChunk, { type: "toolCall" }>> {
+  return chunks.filter((c): c is Extract<SSEStreamChunk, { type: "toolCall" }> => typeof c !== "string" && c.type === "toolCall");
+}
+
+function stopReasons(chunks: SSEStreamChunk[]): string[] {
+  return chunks
+    .filter((c): c is Extract<SSEStreamChunk, { type: "stopReason" }> => typeof c !== "string" && c.type === "stopReason")
+    .map((c) => c.stopReason);
+}
+
+function shimChoice(content: string, reportOnly = false): ShimResponse["choices"][number] {
+  const normalized = VllmShimService.normalizeToolCalls({
+    choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+  } as ShimResponse, { reportOnly });
+  return normalized.choices[0]!;
+}
+

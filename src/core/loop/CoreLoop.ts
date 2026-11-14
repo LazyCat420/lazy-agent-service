@@ -172,7 +172,9 @@ async function* consumeSingleModelStream(
     } else if (chunk.type === "toolCall") {
       const id = chunk.id ?? `call_${step}_${state.calls.length}`;
       const args = typeof chunk.args === "string" ? { __raw: chunk.args } : chunk.args;
-      state.calls.push({ id, name: chunk.name, args });
+      // S-06 review fix 2: keep the honest parse-failure signal - a call whose markup
+      // arguments failed to parse carries argsParseError/rawArgs instead of invented args.
+      state.calls.push({ id, name: chunk.name, args, argsParseError: chunk.argsParseError, rawArgs: chunk.rawArgs });
     } else if (chunk.type === "usage") {
       yield { type: "usage", usage: { ...chunk.usage } };
     } else if (chunk.type === "stopReason" && chunk.stopReason === "length") {

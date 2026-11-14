@@ -6,7 +6,7 @@ import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 import { filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
-import { extractMarkupToolCalls, hasUnterminatedToolMarkup, stripMarkupToolCalls } from "../../utils/openai-compat.ts";
+import { extractMarkupToolCalls, hasUnterminatedToolMarkup, hasUnparseableToolMarkup, stripMarkupToolCalls } from "../../utils/openai-compat.ts";
 
 /**
  * OpenAI-compat translation shim between prism-service and a vLLM endpoint.
@@ -242,6 +242,9 @@ interface DsmlToolCall {
   id: string;
   type: "function";
   function: { name: string; arguments: string };
+  /** Set when the block's arguments string failed to parse (S-06); arguments then holds rawArgs verbatim, never an invented "{}". */
+  argsParseError?: boolean;
+  rawArgs?: string;
 }
 
 export class VllmShimService {
@@ -270,14 +273,15 @@ export class VllmShimService {
    * If `tool_calls` is already present or no DSML tool tags are found, the response
    * is returned unmodified.
    */
-  public static normalizeToolCalls<T extends Record<string, any>>(response: T): T {
+  public static normalizeToolCalls<T extends Record<string, any>>(response: T, options?: { reportOnly?: boolean }): T {
     if (!response || !Array.isArray(response.choices)) {
       return response;
     }
 
+    const reportOnly = options?.reportOnly === true;
     let modified = false;
     const choices = response.choices.map((choice: any) => {
-      const normalized = VllmShimService.normalizeToolCallChoice(choice);
+      const normalized = VllmShimService.normalizeToolCallChoice(choice, reportOnly);
       if (normalized.modified) modified = true;
       return normalized.choice;
     });
@@ -285,9 +289,10 @@ export class VllmShimService {
     return modified ? ({ ...response, choices } as T) : response;
   }
 
-  /** Normalize one choice's DSML content; `modified` says whether it changed. */
+  /** Normalize one choice's DSML content; `modified` says whether it changed. `reportOnly` (tool_choice "none") mints no call, it only reports cuts. */
   private static normalizeToolCallChoice(
     choice: any,
+    reportOnly = false,
   ): { choice: any; modified: boolean } {
     const msg = choice?.message;
     if (!msg || typeof msg.content !== "string") {
@@ -308,23 +313,50 @@ export class VllmShimService {
     if (toolCalls.length === 0) {
       // LF-02: never execute guessed arguments; report the cut like a real length cut so
       // consumers apply their existing truncation handling instead of trusting the text.
-      if (hasUnterminatedToolMarkup(content)) {
+      // S-06 review fix 1: an unparseable COMPLETE block is reported the same way - never
+      // passed along silently (restores the dropped-block warn the old shim logged).
+      if (hasUnterminatedToolMarkup(content) || hasUnparseableToolMarkup(content)) {
+        logger.warn(`[VllmShim] Unterminated or unparseable tool markup, reporting length cut. Raw: ${content.slice(0, 2000)}`);
         return { choice: { ...choice, finish_reason: "length" }, modified: true };
       }
       return { choice, modified: false };
+    }
+    if (reportOnly) {
+      // tool_choice "none": parseable markup stays text exactly as today - no call is minted.
+      return { choice, modified: false };
+    }
+    // S-06 review fix 1: a COMPLETE block that survived the strip without producing a call
+    // must not vanish with the other blocks - the turn is reported as a cut as well.
+    const unparseableCompanion = hasUnparseableToolMarkup(content);
+    if (unparseableCompanion) {
+      logger.warn(`[VllmShim] Dropped unparseable tool markup alongside parsed calls, reporting length cut. Raw: ${content.slice(0, 2000)}`);
     }
     const cleanedContent = stripMarkupToolCalls(content).trim();
     return {
       choice: {
         ...choice,
+        ...(unparseableCompanion ? { finish_reason: "length" } : {}),
         message: {
           ...msg,
           content: cleanedContent.length > 0 ? cleanedContent : null,
-          tool_calls: toolCalls.map((call): DsmlToolCall => ({
-            id: `call_${Math.random().toString(36).slice(2, 11)}`,
-            type: "function",
-            function: { name: call.name, arguments: JSON.stringify(call.args) },
-          })),
+          tool_calls: toolCalls.map((call): DsmlToolCall => {
+            // S-06 review fix 2: never invent arguments "{}" for a failed parse - the old
+            // shim emitted a malformed arguments string verbatim, so do the same, and carry
+            // the error flags the stream path carries.
+            const mapped: DsmlToolCall = {
+              id: `call_${Math.random().toString(36).slice(2, 11)}`,
+              type: "function",
+              function: {
+                name: call.name,
+                arguments: call.argsParseError && call.rawArgs !== undefined ? call.rawArgs : JSON.stringify(call.args),
+              },
+            };
+            if (call.argsParseError) {
+              mapped.argsParseError = true;
+              if (call.rawArgs !== undefined) mapped.rawArgs = call.rawArgs;
+            }
+            return mapped;
+          }),
         },
       },
       modified: true,
@@ -1060,8 +1092,12 @@ export class VllmShimService {
         const text = buf.toString("utf8");
         if (text.includes("tool_call") || text.includes("tool calls") || text.includes("<function=") || text.includes("DSML")) {
           const parsed = JSON.parse(text);
-          // A tool_choice:"none" turn has tools off: its text markup stays text, never a callable tool call.
-          const normalized = tools.choiceNone ? parsed : VllmShimService.normalizeToolCalls(parsed);
+          // A tool_choice:"none" turn has tools off: its text markup stays text, never a callable
+          // tool call. S-06 review fix 3: reportOnly still REPORTS unterminated/unparseable blocks
+          // as a length cut (it mints no call), so a truncated answer is not finalized complete.
+          const normalized = tools.choiceNone
+            ? VllmShimService.normalizeToolCalls(parsed, { reportOnly: true })
+            : VllmShimService.normalizeToolCalls(parsed);
           res.end(JSON.stringify(toolContextToken ? bindToolResponse(normalized, toolContextToken) : normalized));
           return;
         }
