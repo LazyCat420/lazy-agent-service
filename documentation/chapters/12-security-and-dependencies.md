@@ -2,10 +2,10 @@
 part: Governance
 type: reference
 status: verified
-updated: 2026-11-07
-last-verified: 2026-11-07
-review-by: 2026-12-07
-covers: lazy-agent-service:src/services/MCPClientService.ts, lazy-agent-service:src/routes/ExecuteRoutes.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:package.json, lazy-agent-service:Dockerfile, lazy-agent-service:scripts/rotate-execute-key.sh, lazy-agent-service:config.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, scraper-service:scraper_main.py, scraper-service:requirements.txt, spark-console:requirements.txt, tts-service:requirements.txt
+updated: 2026-11-13
+last-verified: 2026-11-13
+review-by: 2026-12-13
+covers: lazy-agent-service:src/services/MCPClientService.ts, lazy-agent-service:src/services/AgenticToolResolver.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/routes/ExecuteRoutes.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:package.json, lazy-agent-service:Dockerfile, lazy-agent-service:scripts/rotate-execute-key.sh, lazy-agent-service:config.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, scraper-service:scraper_main.py, scraper-service:requirements.txt, spark-console:requirements.txt, tts-service:requirements.txt
 ---
 
 # Security and dependencies
@@ -27,6 +27,7 @@ each capability, not a login:
 | Run arbitrary JS | permission-locked sandbox child, fails closed | `sandbox-redteam.mts` |
 | Spend external API budget | `EXECUTE_API_KEY` on `/execute`; per-run scrape/tool budgets on trading runs | `ExecuteApiKey.test.ts`, budget tests in `src/core/loop/__tests__/` |
 | Trade | signed `_lazy_trading_context`; unsigned/forged → `PERMISSION_DENIED` | `NativeTradingBoundary.test.ts` |
+| Trading tool-surface isolation | `AgenticToolResolver` unlocks core tools and strips unrequested `CORE_AGENTIC_TOOLS` (`search_web`), `CORE_ORCHESTRATOR_TOOLS`, and `system` tools in trading contexts (`T3`, `f10b64d`) | `TradingToolResolverIsolation.test.ts` |
 | Read every env var | sandbox gets an empty env; allowlisted stdio servers get a sentinel-checked env, never `process.env` wholesale | `McpStdioGuard.test.ts`, `buildStdioEnv` |
 | Reach internals via URL | `url_guard` private-address checks + redirect re-checks | see SSRF below |
 | Point an MCP row at an internal URL | `httpRefusalReason` + `MCP_HTTP_ALLOWLIST` | `McpStdioGuard.test.ts` (TCK-1019) |
@@ -85,8 +86,11 @@ request, and MCP `sse`/`streamable-http` rows pass the guard above; the trading 
 dead URLs are recorded dead for the run, refused without re-charging, and the per-run maps
 (including known-dead entries) are pruned with the other run state (`a989f16`). Text that is not
 a URL is not charged to the budget (`174db2a`). Redirect hops are re-checked on the scraper side
-(httpx response hook, Playwright document guard) against metadata endpoints like
-`169.254.169.254`; **crawl4ai remains a documented residual** (it is not in the default ladder).
+(httpx response hook, Playwright document guard, and post-redirect `UNSCRAPABLE_DOMAINS` check)
+against metadata endpoints like `169.254.169.254` (crawl4ai was removed from `scraper-service`
+2026-11-04). `scraper-service` also bounds per-worker request concurrency through `AdmissionGate`
+(`SCRAPER_ADMISSION_INFLIGHT=8`, `SCRAPER_ADMISSION_WAITING=16`, fast `429` + `Retry-After: 5`)
+and shares per-domain pacing across workers via SQLite WAL `rate_limiter.db` (`C3`, `C4`).
 A repeated read of the same URL within a run is reused, not re-fetched (ADR-05).
 
 ## Snippet execution
@@ -104,7 +108,8 @@ URLs); production reads secrets from the vault/deploy-kit chain. `9810c4f` locke
 explicit origin allowlist, hard-failed on a missing API key in production, and removed the
 hardcoded credential from `config.ts`. DB-name inputs pass the `BAD_DB_NAMES` guard (parity with
 trading-service's `clean_db_name`, `a8a3319`). The MCP OAuth/execute keys rotate without ever
-appearing in command output. Never open or print `.env*` from tooling or docs.
+appearing in command output, and `healthProbe.ts` strips URL credentials before exposing upstream
+addresses on `GET /health` (`S-13`). Never open or print `.env*` from tooling or docs.
 
 ## Dependency policy
 
@@ -124,7 +129,6 @@ the next landing-batch deploy. Validation before landing: `pnpm run typecheck` +
 
 - MCP `sse`/`streamable-http` rows are guarded by host, not authenticated: an allowlisted host
   is trusted for any path on it (TCK-1019 closed the internal-address SSRF, not authentication).
-- crawl4ai redirect re-check (documented residual; default ladder is guarded).
 - tts-service and spark-console have no API authentication (below).
 - prism-service reads the same `prism.mcp_servers` collection; its handling of a stdio row is
   outside this guard (prism-side, Rod's repo — not editable here).

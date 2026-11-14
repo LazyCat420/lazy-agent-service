@@ -2,10 +2,10 @@
 part: Architecture
 type: spec
 status: verified
-updated: 2026-11-07
-last-verified: 2026-11-07
-review-by: 2026-12-07
-covers: lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/routes/AgentRoutes.ts, lazy-agent-service:src/routes/Harness2Routes.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, lazy-agent-service:src/services/AgentSessionRegistry.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
+updated: 2026-11-13
+last-verified: 2026-11-13
+review-by: 2026-12-13
+covers: lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/routes/AgentRoutes.ts, lazy-agent-service:src/routes/Harness2Routes.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:src/services/AgentSessionRegistry.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/utils/LoopHonestyFields.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
 ---
 
 # Architecture and endpoints
@@ -20,8 +20,9 @@ else.
 
 | Endpoint | Method | What it does |
 |---|---|---|
-| `/health` | GET | Liveness for Docker (30 s checks); never traced (ch.07) |
-| `/agent` | POST | The main agent run. Default response is SSE (`Accept: text/event-stream`); `Accept: application/json` returns a single JSON reply. Runs `AgenticLoopService` with persona + tools. |
+| `/health` | GET | Deep readiness/liveness probe (`src/boot/healthProbe.ts`, `S-13`, never traced): races a 2 s Mongo ping against 2 s `GET <base>/v1/models` probes across enabled vLLM boxes (skipping shim-disabled boxes such as `jetson-2`), cached 10 s (`200` `ok` / `degraded`, `503` `down`) |
+| `/vllm-shim/:box/*` | GET/POST | OpenAI-compatible LAN vLLM proxy (`VllmShimService.ts`): `/v1/models` discovery (non-LLM filter + TensorFold `/metrics` `max_model_len`), `/v1/chat/completions` & `/v1/completions` streaming, 60 s probe circuit-breaker, and `404` model-swap auto-heal (`S-10`, `f10b64d`) stamping `X-Vllm-Shim-Live-Model` + JSON `"model"` |
+| `/agent` | POST | Gateway agent run. Default response is SSE (`Accept: text/event-stream`); `Accept: application/json` returns a single JSON reply. Runs `AgenticLoopService` with persona + tools and emits loop honesty metadata (`S-01`). |
 | `/agent/stop` | POST | Stop a running agent session (tracked in `ActiveGenerationTracker`; decoupled from the SSE connection lifecycle so a dropped mobile client doesn't cancel the run) |
 | `/harness2/run` | POST | The v2 harness run endpoint (ch.03): async run jobs with records, request checks and model preflight; rollouts always terminate. Plus `GET /harness2/library/:domain`, `GET/DELETE /harness2/library/:domain/:taskId`. |
 | `/chat` | POST (+ static `public/chat`) | First-party chat UI and OpenAI-style chat turns on the same loop |
@@ -38,9 +39,14 @@ else.
 
 Streaming responses emit `delta` content, `delta.reasoning` / `delta.reasoning_content`
 (recovered reasoning from `nemotron35` / DeepSeek), `tool_call` events, `job.activeTools`,
-and terminal `done`/`error` frames. `RunawayStreamWatch` (`src/core/loop/`) ends streams that
-produce nothing or loop; runs keep going when the client disconnects, and the first-party
-chat UI re-attaches to the durable record.
+and terminal `done`/`error` frames. Terminal `done` frames and non-streaming `/agent` JSON
+responses carry explicit loop honesty fields (`S-01`, `LoopHonestyFields.ts` / `SseUtilities.ts`):
+`answerSource` (`"model"` | `"partial"` | `"synthetic"`), `finalizeReason` (`"COMPLETED"`,
+`"CUT_OFF"` on single length-cut turns without tool calls, `"CUT_OFF_TWICE"`, `"STEP_LIMIT"`,
+etc.), `providerAttempts`, and `providerRetries`; request logging marks only
+`answerSource === "model"` as a clean model completion. `RunawayStreamWatch` (`src/core/loop/`)
+ends streams that produce nothing or loop; runs keep going when the client disconnects, and the
+first-party chat UI re-attaches to the durable record.
 
 ## MCP surface and the Prism history
 
@@ -63,13 +69,27 @@ only the `LocalToolRouter` repeat guards from that era remain (ch.10 ADR-05).
 
 ## lazycat-sdk integration
 
-lazycat-sdk resolves `prism_client.url` to the bare `http://<host>:5591` (never `:7777`;
+`lazycat-sdk` resolves `agent_client.url` to bare `http://<host>:5591` (never `:7777`;
 `harness_base_url()`/`harness_agent_url()` strip any `/prism-proxy` so no production call can
-reach the old gateway). `call_agent` routes to native `/agent` through the SDK whenever a
-harness URL is set — the old direct-vLLM bypass applies only to callers that never configured
-one. Provider/model resolution reads `GET /config?includeLocal=true`; persona registration and
-the Canvas persona upsert happen through `CustomAgentsRoutes` / `ClientPersonaSync.ts`.
-Endpoint-by-endpoint coverage is pinned by `NativePrismExitRoutes.test.ts`.
+reach the retired gateway). Execution follows two deliberate paths through `:5591`:
+
+- **Trading seats & direct local-vLLM harnesses (`b0757c8` + `a8ab691` in `lazycat-sdk`, `S-10`
+  `f10b64d` here):** trading cycle seats run their multi-turn tool loop in-process inside
+  `lazycat-sdk` (`AgentHarness`), streaming OpenAI-compatible SSE directly over
+  `/vllm-shim/<box>/v1/chat/completions` (`gold-spark`, `gold-spark-vision`, `jetson`, `dell1`,
+  `dell2`). `VllmShimService` handles dynamic `/v1/models` discovery and `404` model-swap
+  auto-heal (rewriting `body.model` to the live served ID after a serving-mode switch, stamping
+  `X-Vllm-Shim-Live-Model`, and rewriting non-stream JSON `"model"`).
+- **Gateway `/agent` runs:** callers opting into the server-side harness (`V3_USE_PRISM=1`,
+  first-party chat, non-vLLM providers, or server-managed personas) invoke `POST /agent`, where
+  `AgenticToolResolver` isolates trading contexts from unrequested `CORE_AGENTIC_TOOLS` /
+  `search_web` injection (`T3`, ch.05) and `LocalToolRouter` treats `"read_ledger_entry"` as
+  idempotent read-only (`T2`, ch.05).
+
+Provider/model resolution reads `GET /config?includeLocal=true`; persona registration and the
+Canvas persona upsert happen through `CustomAgentsRoutes` / `ClientPersonaSync.ts`.
+Endpoint-by-endpoint coverage is pinned by `NativePrismExitRoutes.test.ts` and
+`ReadLedgerAndShimLiveModel.test.ts`.
 
 ## Request lifecycle (one tool-calling turn)
 
@@ -113,14 +133,14 @@ caller → AuthMiddleware → AgentRoutes POST /agent
 
 | Route | Guard | What it does |
 |---|---|---|
-| `POST /scrape` | key | Scrape one URL with `auto` (HTTP → Playwright), `http` or `playwright`; known-dead URLs and skipped domains answer without a fetch |
-| `POST /scrape/batch` | key | Several URLs, same engines |
-| `POST /collect` | key | Run one collector: `reddit`, `reddit-purge`, `youtube`, `news`/`rss`, `searxng`, `edgar`, `stooq`, … |
+| `POST /scrape` | key + `AdmissionGate` | Scrape one URL with `auto` (HTTP → Playwright), `http` or `playwright` (120 s deadline; fast `429` + `Retry-After: 5` when admission is full); cached dead/empty URLs and skipped domains answer without a fetch |
+| `POST /scrape/batch` | key + `AdmissionGate` | Several URLs, same engines and 120 s route deadline |
+| `POST /collect` | key + `AdmissionGate` | Run one collector: `reddit`, `reddit-purge`, `youtube`, `news`/`rss`, `searxng`, `edgar`, `stooq`, … |
 | `GET /stream/{video_id}` | key | Direct CDN stream URL for a YouTube video (`?audio=true` for an audio-only track); URLs expire after ~6 h |
-| `GET /health` | open | Liveness (HTTP client, browser dependency) plus operational counters — the Docker healthcheck |
+| `GET /health` | open | Liveness (`503` if shared httpx client missing) plus `admission`, cross-worker SQLite `rate_limiter`, `failure_cache` (`lost_writes`), shared `engine_counters` (with `skip_reasons` parity), and `browser_slots` |
 | `GET /health/engines` | open | Deep check that launches real browsers (~5 s); by hand only, never as the healthcheck |
 | `GET /health/search-engines` | open | SearXNG sidecar engines (`bing`, `wikipedia` only — `searxng/settings.yml`) |
-| `GET /health/feeds` | open | Per-RSS-feed `last_success_at`, `consecutive_failures`, `last_error` |
+| `GET /health/feeds` | open | Per-RSS-feed `last_success_at`, `consecutive_failures`, `last_error` across the 26 active feeds (dead Yahoo RSS removed in `S-18`, sorted worst-first) |
 | `GET /health/pids` | open | Host task count against `pid_max`: `ok`/`warn`/`critical`/`unknown`, always 200 |
 
 The routers come from `app/scraper/api/routes/` (built from trading-service); only

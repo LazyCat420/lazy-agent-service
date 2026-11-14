@@ -2,10 +2,10 @@
 part: Runtime & Pipeline
 type: spec
 status: verified
-updated: 2026-11-07
-last-verified: 2026-11-07
-review-by: 2026-12-07
-covers: lazy-agent-service:src/services/DynamicModelResolver.ts, lazy-agent-service:src/services/wallgarden/JetsonGate.ts, lazy-agent-service:src/services/wallgarden/WallgardenService.ts, lazy-agent-service:src/services/CanonicalProviderBudget.ts, lazy-agent-service:src/services/VllmModelSyncService.ts, spark-console:console.py, spark-console:boxes.json, spark-console:dsv41-start.sh
+updated: 2026-11-13
+last-verified: 2026-11-13
+review-by: 2026-12-13
+covers: lazy-agent-service:src/services/DynamicModelResolver.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:src/services/wallgarden/JetsonGate.ts, lazy-agent-service:src/services/wallgarden/WallgardenService.ts, lazy-agent-service:src/services/CanonicalProviderBudget.ts, lazy-agent-service:src/services/VllmModelSyncService.ts, spark-console:console.py, spark-console:boxes.json, spark-console:dsv41-start.sh
 ---
 
 # Models and routing
@@ -39,6 +39,28 @@ catalogs in sync with what each box actually serves.
    an empty model reply is surfaced, and prism-style in-loop retry behaviour was ported during
    the cutover (ch.10 ADR-01). Nothing here retries across boxes unboundedly; a box that
    fails its probe is out for the round.
+
+## The `/vllm-shim/<box>` proxy & live model-swap auto-heal (`S-10`, `TCK-4016`)
+
+`lazycat-sdk` direct harness streaming calls local LAN engines through
+`/vllm-shim/:box/v1/*` (`src/services/vllm/VllmShimService.ts`) rather than hardcoding box IPs or
+model names in caller containers:
+
+- **Enabled upstreams:** `gold-spark` (`vllm-2`), `gold-spark-vision`, `jetson` (`vllm`), `dell1`
+  (`qwen-dell1`), and `dell2` (`qwen-dell2`). Retired `jetson-2` (`10.0.0.61`) is disabled by
+  default behind `ENABLE_JETSON_2=1` (`TCK-4016`, `e916932`), returning a fast `404` JSON without
+  connect-timeout stalls and staying excluded from `GET /health` probes (`S-13`).
+- **Dynamic `/v1/models` discovery & probe circuit-breaker:** `GET /vllm-shim/:box/v1/models`
+  strips non-LLM entries (`gliner`, `market_cnn`, `timeseries_rnn`), populates missing
+  `max_model_len` from TensorFold `/metrics` (`tensorfold_health:context_length`), and caches the
+  live model ID per upstream. Failed probes (`502`/`503`/`504`) mark the upstream unreachable for
+  60 s (`503` + `Retry-After` without hanging every turn on TCP timeouts).
+- **`404` model-swap auto-heal (`S-10`, `f10b64d`):** when `spark-console` switches serving modes
+  and an upstream answers `POST /v1/chat/completions` with HTTP `404` (`model does not exist`) for
+  a caller's cached model name, `maybeAutoHealModel404` re-queries `/v1/models`, rewrites
+  `body.model` to the live served ID, retries transparently, stamps response header
+  `X-Vllm-Shim-Live-Model: <liveModel>` (flushed before SSE chunks as well as non-stream replies),
+  and rewrites `"model"` in non-stream JSON bodies (`ReadLedgerAndShimLiveModel.test.ts`).
 
 ## Token budgets
 

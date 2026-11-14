@@ -2,20 +2,25 @@
 part: Architecture
 type: spec
 status: verified
-updated: 2026-11-07
-last-verified: 2026-11-07
-review-by: 2026-12-07
-covers: lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/core/loop/CoreLoop.ts, lazy-agent-service:src/core/loop/MessageCompactor.ts, lazy-agent-service:src/core/loop/RunawayStreamWatch.ts, lazy-agent-service:src/core/loop/ToolRunner.ts, lazy-agent-service:src/services/TradingToolStream.ts, lazy-agent-service:src/services/harness2/Harness2Service.ts, lazy-agent-service:src/services/harness2/Library.ts, spark-console:console.py
+updated: 2026-11-13
+last-verified: 2026-11-13
+review-by: 2026-12-13
+covers: lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/AgenticToolResolver.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/core/loop/CoreLoop.ts, lazy-agent-service:src/core/loop/MessageCompactor.ts, lazy-agent-service:src/core/loop/RunawayStreamWatch.ts, lazy-agent-service:src/core/loop/ToolRunner.ts, lazy-agent-service:src/services/TradingToolStream.ts, lazy-agent-service:src/utils/LoopHonestyFields.ts, lazy-agent-service:src/services/harness2/Harness2Service.ts, lazy-agent-service:src/services/harness2/Library.ts, spark-console:console.py
 ---
 
 # The harness execution loop
 
-Everything that runs an agent goes through one loop: `AgenticLoopService` driving
-`src/core/loop/` (`CoreLoop.ts`, `ToolRunner.ts`, `MessageCompactor.ts`,
-`RunawayStreamWatch.ts`, `SpillBuffer.ts`, `ToolOutputSubstituter.ts`). `harness2` adds a
-self-improving layer on top. A turn is: model call → tool calls → tool results → next model
-call, until final answer, budget close, or a guard fires. The loop never fabricates a tool
-answer: a failed tool returns an error result to the model.
+Gateway-hosted agent runs go through one loop: `AgenticLoopService` driving `src/core/loop/`
+(`CoreLoop.ts`, `ToolRunner.ts`, `MessageCompactor.ts`, `RunawayStreamWatch.ts`, `SpillBuffer.ts`,
+`ToolOutputSubstituter.ts`), while trading cycle seats execute their multi-turn tool loop inside
+`lazycat-sdk` (`AgentHarness`), streaming directly through `/vllm-shim/<box>/v1/chat/completions`
+(ch.02, ch.04). `harness2` adds a self-improving layer on top of `AgenticLoopService`. A turn is:
+model call → tool calls → tool results → next model call, until final answer, budget close, or a
+guard fires. The loop never fabricates a tool answer: a failed tool returns an error result to the
+model, and every completed or terminated run emits explicit loop honesty fields (`S-01`,
+`LoopHonestyFields.ts`): `answerSource` (`"model"` | `"partial"` | `"synthetic"`),
+`finalizeReason` (`"COMPLETED"`, `"CUT_OFF"` on single length-cut turns without tool calls,
+`"CUT_OFF_TWICE"`, `"STEP_LIMIT"`, etc.), `providerAttempts`, and `providerRetries`.
 
 ## Multi-turn tool calling
 
@@ -47,7 +52,7 @@ after compaction instead of failing the run.
 | Guard | Fires when | Behaviour |
 |---|---|---|
 | `RunawayStreamWatch` | a stream produces nothing / loops | ends the stream; retry timing is measured with `performance.now` (`c4b18a9`) |
-| `REPEAT_GUARDED_TOOLS` (`LocalToolRouter`) | an idempotent desk tool (`whiteboard_read`, `peer_comparison`, `data_completeness`, `get_earnings_data`, `get_upcoming_events`, `get_market_data`) is called twice with identical args in one run | the first result is reused, not re-executed (`1003bb2`); a `run_tool_chain` repeat is reused, not a `TOOL_STALL` failure (`260c020`) |
+| `REPEAT_GUARDED_TOOLS` & `READ_ONLY_TOOLS` (`LocalToolRouter`) | an idempotent desk tool (`whiteboard_read`, `peer_comparison`, `data_completeness`, `get_earnings_data`, `get_upcoming_events`, `get_market_data`) is called twice with identical args in one run, or a read-only desk query (`whiteboard_find`, `read_ledger_entry`, `T2` `f10b64d`) hits a transient 5xx | repeat calls reuse the first result (`1003bb2`; `run_tool_chain` repeat is reused rather than failing with `TOOL_STALL`, `260c020`), and `READ_ONLY_TOOLS` classify ledger/whiteboard reads as safe idempotent reads rather than state-mutating writes |
 | Trading tool budget | a trading run exhausts its tool budget | closed-budget tools and `scrape_url` stop being offered (`e7003c8`), the run finalizes when no tool remains after budget close (`fb2ea8a`); the budget counts resolved `{error,is_error}` payloads and bridge timeouts (`e5611e9`) |
 | Scrape budget | per-run `scrape_url` limit | enforced per run (`02b24a4`); known-dead URLs are refused without spending budget, malformed URLs get one search-first hint (`7c279f5`, `f32f98f`) |
 | Approval | an unapproved tool call | `ApprovalGate.authorizeToolCalls` waits on the shared `decideToolCall` decision; `AutoApprovalEngine` was removed 2026-10-16 |
@@ -62,9 +67,11 @@ re-PUT returns the job, a changed payload is rejected; results persist atomicall
 an interruption note — never replays. `GET /obsidian-completions/:id` supports SSE push and
 reports live `delta.reasoning` / `activeTools` while running (`9276e3f`).
 
-**Trading**: trading desk runs route through `/agent`; the loop keeps running when the SSE
-client drops (stop only via `/agent/stop`), and outcomes are graded from the durable telemetry
-rows, not the connection.
+**Trading**: cycle seats run their multi-turn loop in `lazycat-sdk` streaming over
+`/vllm-shim/<box>/v1/chat/completions` (`b0757c8`, `a8ab691`, `f10b64d`), while gateway `/agent`
+runs (`V3_USE_PRISM=1` or interactive trading chat) keep running when the SSE client drops (stop
+only via `/agent/stop`), isolate tool resolution through `AgenticToolResolver` (`T3`, ch.05), and
+grade outcomes from durable telemetry and loop honesty fields rather than socket liveness.
 
 ## Streaming callbacks — `TradingToolStream.ts`
 
@@ -128,11 +135,15 @@ that is already running) inside a `try`, so a boot failure can never kill the lo
    incident (`autoheal_audit`, `GET /api/audit/crashes`) and restarted, at most 3 times in
    15 minutes (`can_autoheal_restart()`), after which the phase is left at `error` for a human.
 
-**scraper-service `auto` engine** (`app/scraper/engines/auto_engine.py`), per URL: phase 0 asks
-`failure_cache.check(url)` (known dead → answer without a fetch), phase 0b asks
-`should_skip_domain(domain)` (a domain with zero good responses, a `thin_streak` of 5+ and a thin
-response within 24 h is skipped), then plain HTTP. A permanent status (404/410) is recorded dead
-and not retried; thin content counts against the domain and is returned as thin; blocked,
-short (≤150 chars) or failed HTTP results escalate to Playwright, which gets the same thin and
-blocked checks. A skip is reported as `engine_used: "auto (skipped)"`, which is what a harness
-tool call sees as a fast failure rather than a timeout.
+**scraper-service `auto` engine** (`app/scraper/engines/auto_engine.py`), per URL: phase 0 checks
+`UNSCRAPABLE_DOMAINS` (`seekingalpha.com`, `reuters.com`, `streetinsider.com`, `chartmill.com`,
+`thestreet.com`) and `failure_cache.check(url)` (7-day dead/empty TTL in schema-v2
+`failure_cache.db` → answer without a fetch), phase 0b checks `should_skip_domain(domain)`
+(`good_count == 0`, `thin_streak >= 5`, last thin within 24 h), then plain HTTP (shared
+cross-worker `rate_limiter.db`, RFC-9110 `Retry-After` `auto (waiting)` on `429`/`503`). A live
+HTTP `404`/`410` without block-page content records `dead_link` and returns `auto (failed)` on the
+first network hit, whereas subsequent cache hits return `auto (skipped)` and increment
+`skip_reasons` (`auto.skipped == sum(skip_reasons.values())` in shared `scraper_metrics.db`).
+Blocked, UA-sniffed `404` block pages, or short (`< 900` chars) HTTP results escalate to
+Playwright unless `browser_is_hopeless(domain)` (`browser_successes == 0` and
+`browser_tries >= 5` within 24 h) short-circuits browser escalation.

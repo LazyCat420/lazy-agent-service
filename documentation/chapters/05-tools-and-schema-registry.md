@@ -2,10 +2,10 @@
 part: Runtime & Pipeline
 type: spec
 status: verified
-updated: 2026-11-07
-last-verified: 2026-11-07
-review-by: 2026-12-07
-covers: lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:tool_schemas.json, lazy-agent-service:src/services/ToolOrchestratorService.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts, scraper-service:searxng/settings.yml, tts-service:app/synth/presets.py
+updated: 2026-11-13
+last-verified: 2026-11-13
+review-by: 2026-12-13
+covers: lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:tool_schemas.json, lazy-agent-service:src/services/AgenticToolResolver.ts, lazy-agent-service:src/services/ToolOrchestratorService.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts, scraper-service:searxng/settings.yml, tts-service:app/synth/presets.py
 ---
 
 # Tools and the schema registry
@@ -28,6 +28,18 @@ signed tool context.
 Built-ins offered by the loop on top of the catalog: `think`, `execute_python`,
 `emit_structured_output`, `ask_user`, `get_music`, `read_url`, `read_web_page`,
 `search_news`.
+
+### Trading tool-resolution isolation (`T3`, `f10b64d`)
+
+`AgenticToolResolver.ts` (`isTradingToolResolutionContext`) detects trading callers whenever
+`project === "vllm-trading-bot"`, `ToolOrchestratorService.isTradingRequest(project)` is true,
+`tradingToolContext` / `_lazy_trading_context` is attached, `<TRADING_TOOL_CONTEXT_V1>` appears in
+`systemPrompt`, conversation `ToolContext` is present, or a trading persona (`v3_*`, `board`,
+`research_worker`) is active. In trading contexts, `shouldLockCoreTools` is forced `false` and
+`CORE_AGENTIC_TOOLS` (including `search_web`), `CORE_ORCHESTRATOR_TOOLS`, and `system` tools are
+stripped whenever no explicit caller whitelist requested them — preserving only
+`ALWAYS_AVAILABLE_COGNITIVE_TOOLS` (`execute_python`, `emit_structured_output`, `think`). Pinned in
+`src/services/__tests__/TradingToolResolverIsolation.test.ts`.
 
 ## The single generator
 
@@ -84,11 +96,15 @@ cannot pile onto SearXNG too. Only answers with results are cached. News still h
 known-dead URLs (404s recorded per run) are refused without spending the run's scrape budget;
 thin content counts as success (ch.03 guard table).
 
-## Repeat guards and result bounding
+## Repeat guards, read-only classification, and result bounding
 
 Six idempotent desk tools are repeat-guarded per run (`REPEAT_GUARDED_TOOLS`, `1003bb2`):
 identical args return the cached first result (`screener_query` result reuse in-run is
-`ebdda0d`). Oversized tool results are cut to the per-result limit (`SpillBuffer` /
+`ebdda0d`). Separately, `LocalToolRouter.ts` `READ_ONLY_TOOLS` classifies both
+`"whiteboard_find"` and `"read_ledger_entry"` (`T2`, `f10b64d`,
+`ReadLedgerAndShimLiveModel.test.ts`) as idempotent read-only queries so cycle-ledger lookups can
+be retried safely on transient 5xx responses rather than treated as non-idempotent writes.
+Oversized tool results are cut to the per-result limit (`SpillBuffer` /
 `ToolOutputSubstituter`), the truncation is recorded, and cross-ticker contamination is
 blocked at the bridge (`Cross-contamination blocked: MSFT != AAPL`).
 

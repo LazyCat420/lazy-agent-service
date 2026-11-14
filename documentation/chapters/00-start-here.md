@@ -2,10 +2,10 @@
 part: Overview
 type: reference
 status: verified
-updated: 2026-11-07
-last-verified: 2026-11-07
-review-by: 2026-12-07
-covers: lazy-agent-service:documentation/tickets.jsonl, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:package.json, lazy-agent-service:src/boot/server.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
+updated: 2026-11-13
+last-verified: 2026-11-13
+review-by: 2026-12-13
+covers: lazy-agent-service:documentation/tickets.jsonl, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:package.json, lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:src/services/AgenticToolResolver.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
 ---
 
 # Start here: how this documentation works
@@ -49,7 +49,8 @@ truth. Each sibling repo keeps only its own operational notes (`scraper-service/
 | Thing | Value |
 |---|---|
 | HTTP + SSE API | `http://10.0.0.16:5591` (NAS; compose name `lazy-agent-service`) |
-| Health | `GET :5591/health` (never traced, docker healthcheck every 30 s) |
+| Health | `GET :5591/health` (2 s raced Mongo + enabled vLLM `/v1/models` probe, cached 10 s; never traced, docker healthcheck every 30 s) |
+| vLLM Shim | `GET/POST :5591/vllm-shim/<box>/v1/*` (OpenAI-compatible LAN vLLM proxy with `/v1/models` discovery + `404` model-swap auto-heal) |
 | OTLP export | `http://10.0.0.16:4318` → Tempo `:3200` → Grafana `:3300` |
 | Embeddings backend | `http://10.0.0.30:8001/v1` (Jetson `embeddinggemma-2`) |
 | Jetson chat (`nemotron35`) | `http://10.0.0.30:8000/v1` (`max_num_seqs = 2`) |
@@ -76,10 +77,11 @@ Every test, build or server run on `main` goes through
 
 | Path | What lives there |
 |---|---|
-| `src/boot/server.ts` | Express bootstrap; every route mount and the endpoint registry |
+| `src/boot/server.ts`, `src/boot/healthProbe.ts` | Express bootstrap, route mounts, endpoint registry, and deep `/health` Mongo + vLLM box probe |
 | `src/routes/` | One file per mounted router (`AgentRoutes`, `Harness2Routes`, `McpServersRoutes`, …) |
 | `src/core/loop/` | The core loop: `CoreLoop.ts`, `ToolRunner.ts`, `MessageCompactor.ts`, `RunawayStreamWatch.ts` |
-| `src/services/` | `AgenticLoopService.ts`, `ToolOrchestratorService.ts`, `LocalToolRouter.ts`, `DynamicModelResolver.ts`, `WebSearchService.ts`, `WebExtractService.ts`, `EmbeddingGemma2Client.ts`, `TradingToolStream.ts`, `harness2/`, `wallgarden/` |
+| `src/services/` | `AgenticLoopService.ts`, `AgenticToolResolver.ts`, `ToolOrchestratorService.ts`, `LocalToolRouter.ts`, `DynamicModelResolver.ts`, `vllm/VllmShimService.ts`, `WebSearchService.ts`, `WebExtractService.ts`, `EmbeddingGemma2Client.ts`, `TradingToolStream.ts`, `harness2/`, `wallgarden/` |
+| `src/utils/LoopHonestyFields.ts` | Canonical `answerSource`, `finalizeReason`, `providerAttempts`, `providerRetries` derivation |
 | `src/telemetry/otel.ts` | OpenTelemetry loader, imported before the app |
 | `tool_schemas/<owner_app>/*.json` | The canonical tool-schema shards (source of truth, 78 tools) |
 | `scripts/export_tool_schemas.py` | The single generator (see ch.05, ch.10 ADR-02) |
@@ -120,8 +122,11 @@ The ticket ledger covers all four repos: `owner` names the repo, and `node` name
 
 ## Trading-cycle parts documented elsewhere
 
-The trading cycle's TDD lives in `finance/trading/trading-client/documentation/`. The parts of
-this service that participate in the cycle (the `/agent` route, the tool bridge, the scrape
-budget guard, refusal messages) are described there, and cycle-side problems are tickets there
-with `owner: lazy-agent-service`. This repo's chapters cover the platform itself; do not add a
+The trading cycle's TDD lives in `finance/trading/trading-client/documentation/`. Trading cycle
+seats execute their multi-turn tool loop inside `lazycat-sdk` (`AgentHarness`), streaming directly
+through this service's `/vllm-shim/<box>/v1/chat/completions` while relying on this service for
+dynamic `/v1/models` discovery, `404` model-swap auto-heal, `/agent` gateway runs, the trading
+tool bridge, `AgenticToolResolver` trading isolation, and scrape budget guards. Cycle-side
+contracts are described there, and cycle-side problems are tickets there with
+`owner: lazy-agent-service`. This repo's chapters cover the platform itself; do not add a
 trading-cycle chapter here.

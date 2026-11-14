@@ -2,10 +2,10 @@
 part: Operations & Quality
 type: reference
 status: verified
-updated: 2026-11-07
-last-verified: 2026-11-07
-review-by: 2026-12-07
-covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/services/__tests__/McpStdioGuard.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
+updated: 2026-11-13
+last-verified: 2026-11-13
+review-by: 2026-12-13
+covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:deploy.sh, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/boot/__tests__/healthProbe.test.ts, lazy-agent-service:src/services/__tests__/McpStdioGuard.test.ts, lazy-agent-service:src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts, lazy-agent-service:src/services/__tests__/TradingToolResolverIsolation.test.ts, lazy-agent-service:src/utils/__tests__/loopHonestyFields.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
 ---
 
 # Verification and gates
@@ -36,7 +36,7 @@ Every test, build or server run on `main` goes through
 | Gate | Command | Threshold | Status |
 |---|---|---|---|
 | Types | `npm run typecheck` | 0 errors | blocking |
-| Lint | `npm run lint` | ESLint `complexity` **error at 20**, `max-depth` 5, `max-params` 6, `max-lines-per-function` 150 | 0 findings |
+| Lint | `npm run lint` | ESLint `complexity` **error at 20**, `max-depth` 5, `max-params` 6, `max-lines-per-function` 150 (also enforced in `deploy.sh` `PRE_TEST`, `S-14` `c2f2d9c`) | 0 errors |
 | CRAP | `npm run quality:crap` | **0** functions over McCabe 30, **0** over CRAP 60 | done (ratchet `ded73cf`) |
 | Duplication | `npm run quality:dry` | logic duplication ≤ 8 % (declarative tables excluded) | 2.26 % (177 clones) |
 | Architecture | `npm run quality:arch` | 0 dependency errors (`services-no-routes` is an error; `no-circular` is a warning pending the cycle cleanup) | 0 errors |
@@ -64,6 +64,10 @@ waves that closed the CRAP tail (2026-10-31, `ded73cf`).
 | trading-boundary: signed context required for `vllm-trading-bot`; markup-recovered calls carry it | `src/services/__tests__/NativeTradingBoundary.test.ts`, `src/providers/__tests__/` vllm/openai-compat cases |
 | `sse`/`streamable-http` rows to internal hosts, non-http(s) schemes or URL credentials → 403 on POST/PUT and `McpHttpRefusedError` at connect; allowlisted host connects (TCK-1019) | `src/services/__tests__/McpStdioGuard.test.ts` (with `McpServersPort.test.ts`, `McpGaps.test.ts` mocking `MCP_HTTP_ALLOWLIST`) |
 | Harness² library scoped per mode and per run; `- mode:`/`- run:` recorded and filtered; reserved scope names refused (TCK-1020) | `src/services/harness2/__tests__/Harness2Library.test.ts`, `src/routes/__tests__/Harness2Routes.test.ts` |
+| loop honesty fields (`answerSource`, `finalizeReason` including single-turn `CUT_OFF`, `providerAttempts`, `providerRetries`) emitted on SSE `done` and JSON `/agent` responses (`S-01`) | `src/utils/__tests__/loopHonestyFields.test.ts` |
+| deep `GET /health` probe: 2 s raced Mongo + enabled vLLM `/v1/models` checks (`ok` / `degraded` / `down`), 10 s shared-flight cache, URL credential redaction, disabled `jetson-2` excluded (`S-13`) | `src/boot/__tests__/healthProbe.test.ts` |
+| `/vllm-shim` `404` model-swap auto-heal (`X-Vllm-Shim-Live-Model` header + non-stream JSON `"model"` stamp, `S-10`) and `read_ledger_entry` in `LocalToolRouter.READ_ONLY_TOOLS` (`T2`) | `src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts` |
+| trading tool-resolution isolation: `AgenticToolResolver` unlocks core tools and strips unrequested `CORE_AGENTIC_TOOLS` / `search_web` / `CORE_ORCHESTRATOR_TOOLS` / `system` tools (`T3`) | `src/services/__tests__/TradingToolResolverIsolation.test.ts` |
 
 ## Audit and boundary scripts
 

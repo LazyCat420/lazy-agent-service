@@ -2,10 +2,10 @@
 part: Operations & Quality
 type: runbook
 status: verified
-updated: 2026-11-07
-last-verified: 2026-11-07
-review-by: 2026-12-07
-covers: lazy-agent-service:deploy.sh, lazy-agent-service:package.json, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:src/boot/server.ts, lazy-agent-service:config.ts, scraper-service:OPERATIONS.md, scraper-service:deploy.sh, spark-console:deploy.sh, tts-service:docker-compose.yml
+updated: 2026-11-13
+last-verified: 2026-11-13
+review-by: 2026-12-13
+covers: lazy-agent-service:deploy.sh, lazy-agent-service:package.json, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:config.ts, scraper-service:OPERATIONS.md, scraper-service:deploy.sh, spark-console:deploy.sh, tts-service:docker-compose.yml
 ---
 
 # Operations and runbooks
@@ -27,16 +27,23 @@ git push origin main                        # integrator only
 npm run deploy                              # = bash deploy.sh
 ```
 
-`deploy.sh` builds the image, pushes to the registry, recreates the NAS container and gates
-on health. Verify after:
+`deploy.sh` runs `npm run lint` in `PRE_TEST` (blocking deploys on any ESLint error, `S-14`
+`c2f2d9c` / `466a83d`), builds the image, pushes to the registry, recreates the NAS container
+and gates on health. Verify after:
 
-1. `GET http://10.0.0.16:5591/health` → 200 (the boot endpoint registry logs the same list).
-2. Container log shows `[otel] tracing ...` **on**, and no `[PrismMcpRedial]`-era lines
+1. `GET http://10.0.0.16:5591/health` → `200` with `status: "ok"` when Mongo and all enabled
+   vLLM boxes answer within 2 s, `200` with `status: "degraded"` on partial box outage, or `503`
+   with `status: "down"` if Mongo or every enabled box is down (`S-13`, `healthProbe.ts`, cached
+   10 s; `jetson-2` is skipped unless `ENABLE_JETSON_2=1`).
+2. `GET http://10.0.0.16:5591/vllm-shim/gold-spark/v1/models` → live served model catalog; after
+   a `spark-console` serving-mode swap, a stale-model `/v1/chat/completions` call auto-heals on
+   `404` and returns `X-Vllm-Shim-Live-Model` (`S-10`, `f10b64d`).
+3. Container log shows `[otel] tracing ...` **on**, and no `[PrismMcpRedial]`-era lines
    (that service was retired with prism, `ee61164`).
-3. `GET :5591/obsidian-completions` → `{version: 1, durableVaultChat: true}`.
-4. `GET :5591/api/wallgarden/models` → Jetson gate telemetry present
+4. `GET :5591/obsidian-completions` → `{version: 1, durableVaultChat: true}`.
+5. `GET :5591/api/wallgarden/models` → Jetson gate telemetry present
    (`maxInFlight: 2, inFlight, queued, rejected`).
-5. Grafana Tempo (`:3300`): a span for your own health call within a minute, service
+6. Grafana Tempo (`:3300`): a span for your own non-health call within a minute, service
    `lazy-agent-service` (`/health` itself is untraced by design).
 
 ## Regenerate `tool_schemas.json`
@@ -120,20 +127,27 @@ trading-service; a clean `git diff` in scraper-service proves nothing about the 
 
 ```bash
 curl -s http://10.0.0.16:8001/health/pids    # status ok | warn | critical | unknown
-curl -s http://10.0.0.16:8001/health         # engine counters, browser slots
+curl -s http://10.0.0.16:8001/health         # admission, rate_limiter, failure_cache, engine_counters, browser_slots
 ```
 
 `warn` (≥40% of `pid_max`) means look now; `critical` (≥60%) means act: the 2026-08-20 outage
 failed `fork()` at 64%. Find the owner of the tasks on the NAS before restarting anything —
 the pressure may be another container. What bounds this service: `init: true` (tini reaps
-orphans) and `SCRAPER_MAX_BROWSERS` (default 4 per uvicorn worker). `pids_limit` is silently
-discarded on this kernel — do not rely on it.
+orphans), `AdmissionGate` (`SCRAPER_ADMISSION_INFLIGHT=8`, `SCRAPER_ADMISSION_WAITING=16`, fast
+`429` + `Retry-After: 5`), and `SCRAPER_MAX_BROWSERS` (default 4 per uvicorn worker).
+`pids_limit` is silently discarded on this kernel — do not rely on it.
 
-**A domain or feed stopped producing.** `GET /health/feeds` shows per-feed failures (visibility
-only — feeds are never skipped). A domain skip (zero good responses, `thin_streak` ≥ 5, last
-thin within 24 h) clears on the next good response; `failure_cache.db` lives on the named
-`/app/logs` volume and survives rebuilds. Rows older than `SCRAPER_DOMAIN_MAX_AGE_S` (90 days)
-are pruned.
+**A domain or feed stopped producing.** `GET /health/feeds` shows per-feed failures sorted
+worst-first across the 26 active `RSS_FEEDS` (dead Yahoo Finance RSS removed in `S-18`,
+`f4e85233`; visibility only — feeds are never skipped). A domain skip (`good_count == 0`,
+`thin_streak >= 5`, last thin within 24 h) clears on the next good response, and
+`browser_is_hopeless` (`browser_successes == 0`, `browser_tries >= 5`, last browser try within
+24 h) skips Playwright escalation for 24 h while leaving one daily probe. `/app/logs` persists
+three cross-worker SQLite WAL databases across `uvicorn --workers 2`: `failure_cache.db` (schema
+v2, 7-day dead-link TTL, `lost_writes` tracked on `/health`), `rate_limiter.db`
+(`SharedRateLimiter` + RFC-9110 `Retry-After`), and `scraper_metrics.db` (`engine_counters` with
+`auto.skipped == sum(skip_reasons.values())`). Rows older than `SCRAPER_DOMAIN_MAX_AGE_S` (90
+days) are pruned.
 
 **SEC collector errors** with `set SEC_USER_AGENT` mean the identity is missing from the
 scraper's environment; set it there (never in git) and redeploy.
