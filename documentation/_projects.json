@@ -8,7 +8,7 @@
   },
   {
     "slug": "agent",
-    "label": "Agent",
+    "label": "lazy-agent-service",
     "href": "/documentation/projects/agent",
     "source_html": "agents/lazy-agent-service/documentation/index.html",
     "repos": [
@@ -38,7 +38,7 @@
     "label": "HTML Notes",
     "href": "/documentation/projects/html-notes",
     "source_html": "apps/html-notes/documentation/index.html",
-    "repos": ["apps/html-notes"]
+    "repos": ["apps/html-notes", "apps/doc-client"]
   },
   {
     "slug": "music-player",
@@ -81,5 +81,12 @@
     "href": "/documentation/projects/workspace",
     "source_html": "documentation/index.html",
     "repos": ["documentation", ".agents", "deploy-kit"]
+  },
+  {
+    "slug": "agentic-workflow",
+    "label": "agent-pool",
+    "href": "/documentation/projects/agentic-workflow",
+    "source_html": ".agents/documentation/index.html",
+    "repos": [".agents", ".omp"]
   }
 ]

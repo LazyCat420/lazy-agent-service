@@ -43,6 +43,11 @@ from pathlib import Path
 DOCS_DIR = Path(__file__).resolve().parent
 CHAPTERS_DIR = DOCS_DIR / "chapters"
 OUTPUT = DOCS_DIR / "index.html"
+# Benchmark write-ups: detail moved out of a chapter to keep it under its size
+# cap. Rendered after the last chapter as an appendix, never counted as
+# chapters. A project with no bench/ directory renders exactly as before.
+BENCH_DIR = DOCS_DIR / "bench"
+BENCH_PART = "Benchmark write-ups"
 
 # The ticket ledger. One file per PROJECT, not per repo: the trading cycle spans
 # trading-client, trading-service, lazy-agent-service and scraper-service, and a
@@ -87,10 +92,11 @@ WORKSPACE_PROJECTS = "finance/trading/trading-client/documentation/_projects.jso
 
 def _use_docs_dir(docs_dir: Path) -> None:
     """Point every DOCS_DIR-derived path at another project's documentation/."""
-    global DOCS_DIR, CHAPTERS_DIR, OUTPUT, TICKETS, EXEC_GRAPH, DATA_GRAPH
+    global DOCS_DIR, CHAPTERS_DIR, BENCH_DIR, OUTPUT, TICKETS, EXEC_GRAPH, DATA_GRAPH
     global PROJECTS_JSON, _DOCS_DIR
     DOCS_DIR = docs_dir
     CHAPTERS_DIR = DOCS_DIR / "chapters"
+    BENCH_DIR = DOCS_DIR / "bench"
     OUTPUT = DOCS_DIR / "index.html"
     TICKETS = DOCS_DIR / "tickets.jsonl"
     EXEC_GRAPH = DOCS_DIR / "execution_graph.json"
@@ -157,6 +163,23 @@ def _img_src(src: str) -> str:
     return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
+_BENCH_LINK = re.compile(r"^(?:\.\./|documentation/)?bench/([^/#]+)\.md(?:#(.+))?$")
+
+
+def _bench_id(stem: str) -> str:
+    return f"bench-{_slug(stem)}"
+
+
+def _href(target: str) -> str:
+    """A link to a rendered bench write-up becomes its anchor on this page;
+    every other target is returned unchanged."""
+    m = _BENCH_LINK.match(target)
+    if not m or not (BENCH_DIR / f"{m.group(1)}.md").is_file():
+        return target
+    section = _bench_id(m.group(1))
+    return f"#{section}-{m.group(2)}" if m.group(2) else f"#{section}"
+
+
 def _inline(text: str) -> str:
     """Inline markdown → HTML. Code spans are extracted FIRST and restored last
     so that emphasis/link syntax inside `code` is never interpreted."""
@@ -177,7 +200,7 @@ def _inline(text: str) -> str:
     )
     text = re.sub(
         r"\[([^\]]+)\]\(([^)\s]+)\)",
-        lambda m: f'<a href="{html.escape(m.group(2), quote=True)}">{m.group(1)}</a>',
+        lambda m: f'<a href="{html.escape(_href(m.group(2)), quote=True)}">{m.group(1)}</a>',
         text,
     )
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
@@ -224,9 +247,10 @@ def _table(rows: list[str]) -> str:
     )
 
 
-def render_markdown(md: str, toc: list[dict] | None = None) -> str:
+def render_markdown(md: str, toc: list[dict] | None = None, id_prefix: str = "") -> str:
     """Markdown subset → HTML: headings, lists, tables, fenced code, quotes,
-    horizontal rules, raw HTML blocks (used for inline SVG figures)."""
+    horizontal rules, raw HTML blocks (used for inline SVG figures).
+    `id_prefix` namespaces heading ids (bench write-ups repeat chapter headings)."""
     lines = md.replace("\r\n", "\n").split("\n")
     out: list[str] = []
     i = 0
@@ -288,7 +312,7 @@ def render_markdown(md: str, toc: list[dict] | None = None) -> str:
         if m:
             close_lists()
             level, text = len(m.group(1)), _inline(m.group(2).strip())
-            anchor = _slug(m.group(2))
+            anchor = id_prefix + _slug(m.group(2))
             if toc is not None and level == 2:
                 toc.append({"id": anchor, "text": re.sub(r"<[^>]+>", "", text)})
             out.append(f'<h{level} id="{anchor}">{text}</h{level}>')
@@ -645,6 +669,7 @@ figcaption{margin-top:.8rem;font-size:.82rem;color:var(--ink-soft);text-align:ce
   font-family:ui-serif,Charter,"Bitstream Charter",Georgia,serif;
   font-size:1.18rem;font-weight:600;margin:1.9rem 0 .7rem;
 }
+.stat-chart{margin:1rem 0 1.6rem;padding:.8rem 1rem;background:var(--panel);border:1px solid var(--rule);border-radius:10px}.stat-chart figcaption{font-size:.8rem;color:var(--ink-soft);margin-top:.3rem}
 .view-lede{color:var(--ink-soft);max-width:78ch;margin:0 0 1.4rem}
 .muted{color:var(--ink-soft)}
 .pill.muted{background:var(--panel-2);color:var(--ink-soft);border-color:var(--rule)}
@@ -1960,7 +1985,951 @@ def _flow_table(flows: list[dict]) -> str:
     )
 
 
-def _view_data(tickets: list[dict], graph: dict, nodes: list[dict]) -> str:
+def _load_stats() -> dict:
+    """Optional per-project statistics: DOCS_DIR/stats.json (agent-pool writes it with bin/pool-stats)."""
+    try:
+        return json.loads((DOCS_DIR / "stats.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _stat_pct(x) -> str:
+    return "n/a" if x is None else f"{x * 100:.1f}%"
+
+
+# Outcome segments of a verified run, in stacking order, with their colour.
+_STAT_SEGMENTS = [
+    ("clean", ("clean",), "var(--ok)"),
+    ("fixed by orchestrator / re-brief", ("fixed", "rebriefed"), "var(--accent)"),
+    ("partial / escalated", ("partial", "escalated"), "var(--warn)"),
+    ("fail / reverted", ("fail", "reverted"), "var(--bad)"),
+]
+
+
+def _svg_legend(items: list[tuple[str, str]], y: int, x0: int = 130) -> str:
+    out, x = [], x0
+    for label, colour in items:
+        out.append(f'<rect x="{x}" y="{y - 9}" width="10" height="10" rx="2" style="fill:{colour}"/>'
+                   f'<text x="{x + 14}" y="{y}" font-size="11" style="fill:var(--ink-soft)">{html.escape(label)}</text>')
+        x += 26 + 6.6 * len(label)
+    return "".join(out)
+
+
+_GOLD = "#d4a017"
+_MIN_RANK_N = 20
+
+
+def _best_of(items, value, min_n_of, lower_is_better: bool = True, min_n: int = _MIN_RANK_N):
+    """Name of the best item: lowest (or highest) value among items with at least min_n samples."""
+    pool = [(k, value(v)) for k, v in items if min_n_of(v) >= min_n and value(v) is not None]
+    if not pool:
+        return None
+    return (min if lower_is_better else max)(pool, key=lambda kv: kv[1])[0]
+
+
+def _nm(name: str, best) -> str:
+    """Row label content; the best row gets a gold star and bold gold text."""
+    if best is not None and name == best:
+        return f'<tspan style="fill:{_GOLD};font-weight:700">\u2605 {html.escape(name)}</tspan>'
+    return html.escape(name)
+
+
+def _best_note(best, what: str) -> str:
+    if not best:
+        return ""
+    return (f'<figcaption><b style="color:{_GOLD}">\u2605 Best: {html.escape(best)}</b> \u2014 {html.escape(what)} '
+            f'(only models with \u2265 {_MIN_RANK_N} samples can win).</figcaption>')
+
+
+def _gold_box(x, y, w, h) -> str:
+    return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="3" style="fill:none;stroke:{_GOLD};stroke-width:2.5"/>'
+
+
+def _svg_outcome_bars(rows: dict, title: str) -> str:
+    """Horizontal 100% stacked bar per model: what happened to its verified runs."""
+    items = [(k, v) for k, v in sorted(rows.items(), key=lambda kv: -kv[1]["verified"]) if v["verified"]]
+    if not items:
+        return ""
+    W, left, bar_w, row_h = 820, 130, 420, 24
+    H = 46 + row_h * len(items)
+    best = _best_of(items, lambda v: (v.get("outcomes") or {}).get("clean", 0) / v["verified"], lambda v: v["verified"],
+                    lower_is_better=False)
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>',
+             _svg_legend([(lbl, col) for lbl, _, col in _STAT_SEGMENTS], 32)]
+    for i, (name, v) in enumerate(items):
+        y = 44 + i * row_h
+        oc = v.get("outcomes") or {}
+        x = left
+        parts.append(f'<text x="{left - 8}" y="{y + 14}" font-size="12" text-anchor="end" '
+                     f'style="fill:var(--ink)">{_nm(name, best)}</text>')
+        if name == best:
+            parts.append(_gold_box(left - 3, y - 3, bar_w + 6, 24))
+        for label, keys, colour in _STAT_SEGMENTS:
+            n = sum(oc.get(k, 0) for k in keys)
+            if not n:
+                continue
+            w = bar_w * n / v["verified"]
+            parts.append(f'<rect x="{x:.1f}" y="{y}" width="{w:.1f}" height="18" style="fill:{colour}">'
+                         f'<title>{html.escape(name)}: {n} {html.escape(label)} of {v["verified"]} verified</title></rect>')
+            x += w
+        clean = oc.get("clean", 0) / v["verified"]
+        warn = " \u26a0" if v["verified"] < 20 else ""
+        parts.append(f'<text x="{left + bar_w + 8}" y="{y + 14}" font-size="11" style="fill:var(--ink-soft)">'
+                     f'{clean * 100:.0f}% clean \u00b7 {_stat_pct(v["fault_rate"])} fault \u00b7 n={v["verified"]}{warn}</text>')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>'
+            f'{_best_note(best, "highest share of clean runs")}</figure>')
+
+
+def _svg_rate_ci(rows: dict, title: str, mark_best: bool = True, keep_order: bool = False) -> str:
+    """Fault rate per model with its 95% Wilson interval as a whisker."""
+    items = [(k, v) for k, v in (rows.items() if keep_order else sorted(rows.items(), key=lambda kv: (kv[1]["fault_rate"] or 0)))
+             if v["verified"] >= 5]
+    if not items:
+        return ""
+    W, left, bar_w, row_h = 820, 130, 420, 22
+    top = max(0.5, max(v["ci95"][1] for _, v in items))
+    H = 50 + row_h * len(items)
+    sx = lambda r: left + bar_w * r / top
+    best = _best_of(items, lambda v: v["fault_rate"], lambda v: v["verified"]) if mark_best else None
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>']
+    for t in range(0, int(top * 100) + 1, 10):
+        x = sx(t / 100)
+        parts.append(f'<line x1="{x:.1f}" y1="24" x2="{x:.1f}" y2="{H - 14}" style="stroke:var(--rule)" stroke-width="1"/>'
+                     f'<text x="{x:.1f}" y="{H - 2}" font-size="10" text-anchor="middle" style="fill:var(--ink-soft)">{t}%</text>')
+    for i, (name, v) in enumerate(items):
+        y = 30 + i * row_h
+        r = v["fault_rate"] or 0
+        lo, hi = v["ci95"]
+        parts.append(
+            f'<text x="{left - 8}" y="{y + 12}" font-size="12" text-anchor="end" style="fill:var(--ink)">{_nm(name, best)}</text>'
+            f'<rect x="{left}" y="{y + 2}" width="{max(1, sx(r) - left):.1f}" height="12" style="fill:var(--bad);opacity:.75">'
+            f'<title>{html.escape(name)}: {v["faults"]} faults / {v["verified"]} verified</title></rect>'
+            f'<line x1="{sx(lo):.1f}" y1="{y + 8}" x2="{sx(hi):.1f}" y2="{y + 8}" style="stroke:var(--ink)" stroke-width="1.5"/>'
+            f'<line x1="{sx(lo):.1f}" y1="{y + 3}" x2="{sx(lo):.1f}" y2="{y + 13}" style="stroke:var(--ink)" stroke-width="1.5"/>'
+            f'<line x1="{sx(hi):.1f}" y1="{y + 3}" x2="{sx(hi):.1f}" y2="{y + 13}" style="stroke:var(--ink)" stroke-width="1.5"/>'
+            f'<text x="{min(W - 4, sx(hi) + 6):.1f}" y="{y + 12}" font-size="11" style="fill:var(--ink-soft)">'
+            f'{_stat_pct(r)} (n={v["verified"]})</text>')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>'
+            f'{_best_note(best, "lowest fault rate")}</figure>')
+
+
+def _svg_daily(daily: dict, title: str) -> str:
+    """Stacked column per day (verified runs by outcome) with the unverified count on top."""
+    if not daily:
+        return ""
+    days = list(daily.items())
+    W, H, left, base = 820, 230, 40, 190
+    col = min(70, (W - left - 10) / len(days))
+    peak = max(max(v["verified"] for _, v in days), 1)
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>',
+             _svg_legend([(lbl, c) for lbl, _, c in _STAT_SEGMENTS], 32, x0=left)]
+    for i, (d, v) in enumerate(days):
+        x = left + i * col + 6
+        y = base
+        oc = v.get("outcomes") or {}
+        for label, keys, colour in _STAT_SEGMENTS:
+            n = sum(oc.get(k, 0) for k in keys)
+            if not n:
+                continue
+            h = (base - 50) * n / peak
+            y -= h
+            parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{col - 12:.1f}" height="{h:.1f}" style="fill:{colour}">'
+                         f'<title>{d}: {n} {html.escape(label)}</title></rect>')
+        parts.append(
+            f'<text x="{x + (col - 12) / 2:.1f}" y="{y - 4:.1f}" font-size="10" text-anchor="middle" '
+            f'style="fill:var(--ink)">{v["verified"]}</text>'
+            f'<text x="{x + (col - 12) / 2:.1f}" y="{base + 14}" font-size="10" text-anchor="middle" '
+            f'style="fill:var(--ink-soft)">{d[5:]}</text>'
+            f'<text x="{x + (col - 12) / 2:.1f}" y="{base + 27}" font-size="9" text-anchor="middle" '
+            f'style="fill:var(--bad)">{_stat_pct(v["fault_rate"])}</text>')
+    parts.append(f'<line x1="{left}" y1="{base}" x2="{W - 4}" y2="{base}" style="stroke:var(--rule)"/>')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>'
+            '<figcaption>Number on top: verified runs that day. Red number: fault rate that day.</figcaption></figure>')
+
+
+def _svg_rework(models: dict, title: str) -> str:
+    """Per model: agent commits, how many got re-fixed later, fixes authored, fixes that needed fixing again."""
+    items = [(k, v) for k, v in sorted(models.items(), key=lambda kv: -kv[1]["commits"]) if v["commits"]]
+    if not items:
+        return ""
+    W, left, bar_w, row_h = 820, 130, 400, 34
+    peak = max(v["commits"] for _, v in items)
+    H = 46 + row_h * len(items)
+    sx = lambda n: bar_w * n / peak
+    best = _best_of(items, lambda v: v["refix_rate"], lambda v: v["commits"])
+    legend = [("commits", "var(--panel-2)"), ("re-fixed later", "var(--warn)"),
+              ("fixes it made", "var(--accent)"), ("its fixes re-fixed", "var(--bad)")]
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>',
+             _svg_legend(legend, 32)]
+    for i, (name, v) in enumerate(items):
+        y = 42 + i * row_h
+        parts.append(
+            f'<text x="{left - 8}" y="{y + 17}" font-size="12" text-anchor="end" style="fill:var(--ink)">{_nm(name, best)}</text>'
+            f'<rect x="{left}" y="{y}" width="{sx(v["commits"]):.1f}" height="13" style="fill:var(--panel-2);stroke:var(--rule)">'
+            f'<title>{v["commits"]} agent commits</title></rect>'
+            f'<rect x="{left}" y="{y}" width="{sx(v["refixed"]):.1f}" height="13" style="fill:var(--warn)">'
+            f'<title>{v["refixed"]} commits had lines rewritten later by someone else</title></rect>'
+            f'<rect x="{left}" y="{y + 15}" width="{sx(v["fixes"]):.1f}" height="11" style="fill:var(--accent)">'
+            f'<title>{v["fixes"]} commits fixed an earlier agent commit</title></rect>'
+            f'<rect x="{left}" y="{y + 15}" width="{sx(v["fixes_refixed"]):.1f}" height="11" style="fill:var(--bad)">'
+            f'<title>{v["fixes_refixed"]} of those fixes had to be fixed again</title></rect>'
+            f'<text x="{left + bar_w + 8}" y="{y + 11}" font-size="11" style="fill:var(--ink-soft)">'
+            f'{v["refixed"]}/{v["commits"]} re-fixed ({_stat_pct(v["refix_rate"])}) \u00b7 survival {_stat_pct(v["survival"])}</text>'
+            f'<text x="{left + bar_w + 8}" y="{y + 25}" font-size="11" style="fill:var(--ink-soft)">'
+            f'{v["fixes"]} fixes, {v["fixes_refixed"]} re-fixed ({_stat_pct(v["fix_refix_rate"])})</text>')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>'
+            f'{_best_note(best, "lowest share of commits re-fixed later")}</figure>')
+
+
+def _svg_hbars(pairs: list[tuple[str, int]], title: str, colour: str = "var(--accent)") -> str:
+    pairs = [p for p in pairs if p[1]]
+    if not pairs:
+        return ""
+    peak = max(n for _, n in pairs)
+    left = max(130, int(6.6 * max(len(k) for k, _ in pairs)) + 14)
+    W, bar_w, row_h = 820, 820 - left - 60, 20
+    H = 28 + row_h * len(pairs)
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>']
+    for i, (k, n) in enumerate(pairs):
+        y = 24 + i * row_h
+        parts.append(f'<text x="{left - 8}" y="{y + 12}" font-size="12" text-anchor="end" style="fill:var(--ink)">{html.escape(k)}</text>'
+                     f'<rect x="{left}" y="{y + 2}" width="{bar_w * n / peak:.1f}" height="12" style="fill:{colour}"/>'
+                     f'<text x="{left + bar_w * n / peak + 6:.1f}" y="{y + 12}" font-size="11" style="fill:var(--ink-soft)">{n}</text>')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg></figure>')
+
+
+def _vs_avg_cells(rate, avg) -> str:
+    """Two cells: percentage-point difference from the average, and the rate as a multiple of it.
+    Green = better than average (lower fault rate), red = worse."""
+    if avg is None:
+        return ""
+    if rate is None or not avg:
+        return '<td data-v="">n/a</td><td data-v="">n/a</td>'
+    d = (rate - avg) * 100
+    tone = "var(--ok)" if d < -0.05 else ("var(--bad)" if d > 0.05 else "var(--ink-soft)")
+    return (f'<td data-v="{d:.3f}" style="color:{tone};font-weight:600;white-space:nowrap">{d:+.1f} pp</td>'
+            f'<td data-v="{rate / avg:.4f}" style="color:{tone}">{rate / avg:.2f}\u00d7</td>')
+
+
+def _svg_mix_index(mix: dict, title: str) -> str:
+    """Actual faults / faults expected from the model's job mix (each job at its all-model average).
+    1.0 = exactly as good as an average model doing the same jobs; below 1 = better."""
+    items = [(m, v) for m, v in mix.items() if v["index"] is not None and v["verified"] >= 5]
+    items.sort(key=lambda kv: kv[1]["index"])
+    best = _best_of(items, lambda v: v["index"], lambda v: v["verified"])
+    if not items:
+        return ""
+    W, left, half, row_h = 820, 130, 230, 22
+    top = max(2.0, min(4.0, max(v["index"] for _, v in items)))
+    mid = left + half
+    sx = lambda r: mid + half * (min(r, top) - 1) / (top - 1) if r >= 1 else mid - half * (1 - r)
+    H = 50 + row_h * len(items)
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>',
+             f'<line x1="{mid}" y1="24" x2="{mid}" y2="{H - 14}" style="stroke:var(--ink)" stroke-width="1"/>',
+             f'<text x="{mid}" y="{H - 2}" font-size="10" text-anchor="middle" style="fill:var(--ink-soft)">1.0\u00d7 = average for its job mix</text>',
+             f'<text x="{left}" y="{H - 2}" font-size="10" style="fill:var(--ok)">\u2190 better</text>',
+             f'<text x="{mid + half}" y="{H - 2}" font-size="10" text-anchor="end" style="fill:var(--bad)">worse \u2192</text>']
+    for i, (m, v) in enumerate(items):
+        y = 28 + i * row_h
+        x = sx(v["index"])
+        colour = "var(--ok)" if v["index"] < 1 else "var(--bad)"
+        x0, w = (x, mid - x) if x < mid else (mid, x - mid)
+        warn = " \u26a0" if v["verified"] < 20 else ""
+        parts.append(
+            f'<text x="{left - 8}" y="{y + 12}" font-size="12" text-anchor="end" style="fill:var(--ink)">{_nm(m, best)}</text>'
+            f'<rect x="{x0:.1f}" y="{y + 2}" width="{max(w, 1):.1f}" height="12" style="fill:{colour};opacity:.85">'
+            f'<title>{m}: {v["faults"]} faults vs {v["expected"]} expected from its job mix</title></rect>'
+            f'<text x="{mid + half + 10}" y="{y + 12}" font-size="11" style="fill:var(--ink-soft)">'
+            f'{v["index"]:.2f}\u00d7 \u00b7 {v["faults"]}/{v["expected"]:.1f} exp. \u00b7 n={v["verified"]}{warn}</text>')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>'
+            '<figcaption>Normalised for job mix: each model\'s faults divided by the faults an average model would '
+            'have made on the same jobs (each job at its all-model fault rate). Removes the penalty for taking the '
+            'hard jobs (build, debug).</figcaption>' + _best_note(best, "fewest faults relative to its job mix") + '</figure>')
+
+
+_SORT_JS = r"""<script>(function(){
+function val(c){if(!c)return null;var s=c.hasAttribute('data-v')?c.getAttribute('data-v'):c.textContent.trim();
+ if(s===''||/^n\/a/i.test(s))return null;var t=s.replace(/,/g,'').replace(/^[^\d+\-.a-z]+/i,'');
+ var m=t.match(/^[+\-]?\d*\.?\d+/);return m?parseFloat(m[0]):s.toLowerCase();}
+document.querySelectorAll('table.stat-sort').forEach(function(t){if(t.dataset.sortReady)return;t.dataset.sortReady='1';
+ var hs=t.tHead?t.tHead.rows[0].cells:[];Array.prototype.forEach.call(hs,function(th,i){
+  th.style.cursor='pointer';th.title='Click to sort';th.addEventListener('click',function(){
+   var b=t.tBodies[0];if(!b)return;var rows=Array.prototype.slice.call(b.rows);var asc=th.getAttribute('data-dir')!=='asc';
+   Array.prototype.forEach.call(hs,function(h){h.removeAttribute('data-dir');h.textContent=h.textContent.replace(/ [\u25b2\u25bc]$/,'');});
+   th.setAttribute('data-dir',asc?'asc':'desc');th.textContent+=asc?' \u25b2':' \u25bc';
+   rows.sort(function(x,y){var a=val(x.cells[i]),c=val(y.cells[i]);if(a===null&&c===null)return 0;if(a===null)return 1;if(c===null)return -1;
+    if(typeof a===typeof c)return (a<c?-1:a>c?1:0)*(asc?1:-1);return (typeof a==='number'?-1:1)*(asc?1:-1);});
+   rows.forEach(function(r){b.appendChild(r);});});});});})();</script>"""
+
+
+def _stat_table(first: str, rows: dict, limit: int = 0, avg=None) -> str:
+    items = sorted(rows.items(), key=lambda kv: -kv[1]["verified"])
+    if limit:
+        items = items[:limit]
+    body = []
+    best = _best_of(items, lambda v: v["fault_rate"], lambda v: v["verified"])
+    for k, v in items:
+        oc = v.get("outcomes") or {}
+        small = 0 < v["verified"] < 20
+        ci = f'{_stat_pct(v["ci95"][0])}\u2013{_stat_pct(v["ci95"][1])}' if v["verified"] else "n/a"
+        body.append(
+            (f'<tr style="background:rgba(212,160,23,.12)"><td><b style="color:{_GOLD}">\u2605</b> <code>{html.escape(str(k))}</code></td>'
+             if k == best else f'<tr><td><code>{html.escape(str(k))}</code></td>')
+            + f'<td>{v["runs"]}</td><td>{v["verified"]}</td>'
+            f'<td>{oc.get("clean", 0)}</td><td>{oc.get("fixed", 0)}</td><td>{oc.get("rebriefed", 0)}</td>'
+            f'<td>{oc.get("partial", 0) + oc.get("escalated", 0)}</td><td>{oc.get("fail", 0) + oc.get("reverted", 0)}</td>'
+            f'<td>{v["faults"]}</td><td>{_stat_pct(v["fault_rate"])}{" \u26a0" if small else ""}</td><td>{ci}</td>'
+            + _vs_avg_cells(v["fault_rate"], avg) + '</tr>')
+    return ('<div class="scroll-x"><table class="flow-table stat-sort"><thead><tr>'
+            f'<th>{html.escape(first)}</th><th>Runs</th><th>Verified</th><th>Clean</th><th>Fixed by orch.</th>'
+            '<th>Re-briefed</th><th>Partial/esc.</th><th>Fail/reverted</th><th>Faults</th><th>Fault rate</th>'
+            '<th>95% CI</th>' + ('<th>\u0394 vs avg</th><th>\u00d7 avg</th>' if avg is not None else '')
+            + f'</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
+
+
+def _heat_colour(rate) -> str:
+    if rate is None:
+        return "var(--panel-2)"
+    hue = 130 * (1 - min(rate / 0.4, 1.0))
+    return f"hsl({hue:.0f},55%,42%)"
+
+
+def _svg_heatmap(matrix: dict, title: str, min_n: int = 5, note: str = "", job_rate=None) -> str:
+    """Rows = job types, columns = models; cell colour = fault rate (green 0% -> red >= 40%), text = rate and n."""
+    jobs = sorted(matrix, key=lambda j: -sum(v["verified"] for v in matrix[j].values()))
+    jobs = [j for j in jobs if sum(v["verified"] for v in matrix[j].values())]
+    totals: dict[str, int] = {}
+    for j in jobs:
+        for m, v in matrix[j].items():
+            totals[m] = totals.get(m, 0) + v["verified"]
+    models = [m for m in sorted(totals, key=lambda m: -totals[m]) if totals[m]]
+    if not jobs or not models:
+        return ""
+    left, top, cw, chh = 130, 50, max(62, min(84, 680 // len(models))), 30
+    W, H = left + cw * len(models) + 10, top + chh * len(jobs) + 26
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>']
+    for i, m in enumerate(models):
+        parts.append(f'<text x="{left + i * cw + cw / 2:.1f}" y="{top - 8}" font-size="11" text-anchor="middle" '
+                     f'style="fill:var(--ink)">{html.escape(m)}</text>')
+    for r, j in enumerate(jobs):
+        y = top + r * chh
+        avg_txt = f' ({_stat_pct((job_rate or {}).get(j))})' if job_rate and (job_rate or {}).get(j) is not None else ''
+        parts.append(f'<text x="{left - 8}" y="{y + 19}" font-size="12" text-anchor="end" style="fill:var(--ink)">'
+                     f'{html.escape(j)}{avg_txt}</text>')
+        row_best = _best_of([(m, matrix[j][m]) for m in models if m in matrix[j]], lambda v: v["fault_rate"],
+                            lambda v: v["verified"], min_n=min_n)
+        for i, m in enumerate(models):
+            v = matrix[j].get(m)
+            x = left + i * cw
+            if not v or not v["verified"]:
+                parts.append(f'<rect x="{x + 1}" y="{y + 1}" width="{cw - 2}" height="{chh - 2}" rx="3" '
+                             f'style="fill:var(--panel-2);opacity:.45"/>')
+                continue
+            thin = v["verified"] < min_n
+            jr = (job_rate or {}).get(j)
+            rel = None if jr is None or v["fault_rate"] is None else v["fault_rate"] - jr
+            if thin:
+                fill = "var(--panel-2)"
+            elif rel is not None:
+                fill = _heat_colour(max(0.0, min(0.4, 0.2 + rel)))   # 0 pp = amber, -20 pp green, +20 pp red
+            else:
+                fill = _heat_colour(v["fault_rate"])
+            ink = "var(--ink-soft)" if thin else "#fff"
+            parts.append(
+                f'<rect x="{x + 1}" y="{y + 1}" width="{cw - 2}" height="{chh - 2}" rx="3" style="fill:{fill}">'
+                f'<title>{html.escape(j)} by {html.escape(m)}: {v["faults"]} faults / {v["verified"]} verified'
+                f'{" (too few to rank)" if thin else ""}</title></rect>'
+                f'<text x="{x + cw / 2:.1f}" y="{y + 14}" font-size="11" font-weight="600" text-anchor="middle" '
+                f'style="fill:{ink}">{"\u2605 " if m == row_best else ""}{_stat_pct(v["fault_rate"])}</text>'
+                + (_gold_box(x, y, cw, chh) if m == row_best else '') + f''
+                f'<text x="{x + cw / 2:.1f}" y="{y + 25}" font-size="9" text-anchor="middle" style="fill:{ink}">'
+                + (f'{rel * 100:+.0f}pp \u00b7 ' if rel is not None and not thin else '') + f'n={v["verified"]}</text>')
+    legend = ('Cell = fault rate and its difference from that job\'s average over all models (green = better than '
+              'the job average, amber = average, red = worse).' if job_rate else
+              'Cell = fault rate of that model on that job (green 0% \u2192 red \u2265 40%).')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {max(W, 760)} {H - 18}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg><figcaption>{legend} Grey = fewer than '
+            f'{min_n} verified runs. <b style="color:{_GOLD}">\u2605 gold box = best model in that row</b> (lowest fault rate, '
+            f'\u2265 {min_n} runs). {html.escape(note)}</figcaption></figure>')
+
+
+def _best_table(best: dict) -> str:
+    rows = []
+    medal = ["\U0001f947", "\U0001f948", "\U0001f949"]
+    for job, ranked in sorted(best.items(), key=lambda kv: -sum(r["verified"] for r in kv[1])):
+        if not ranked:
+            continue
+        cells = "".join(
+            f'<td>{medal[i]} <code>{html.escape(r["model"])}</code> {_stat_pct(r["success"])} '
+            f'<span class="muted">(n={r["verified"]}, \u2265{_stat_pct(r["success_lo"])})</span></td>'
+            for i, r in enumerate(ranked[:3]))
+        cells += "<td></td>" * (3 - min(3, len(ranked)))
+        worst = ranked[-1] if len(ranked) > 3 else None
+        cells += (f'<td><code>{html.escape(worst["model"])}</code> {_stat_pct(worst["success"])} '
+                  f'<span class="muted">(n={worst["verified"]})</span></td>' if worst else "<td></td>")
+        rows.append(f'<tr><td><b>{html.escape(job)}</b></td>{cells}</tr>')
+    return ('<div class="scroll-x"><table class="flow-table stat-sort"><thead><tr><th>Job</th><th>Best</th><th>2nd</th>'
+            '<th>3rd</th><th>Weakest</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
+            '<p class="muted">Success = verified runs without a fault. Ranked by the 95% lower bound (\u2265), so '
+            'a model needs a good rate AND enough runs; at least 5 verified runs to rank.</p>')
+
+
+def _svg_roles(roles: dict, title: str) -> str:
+    """Per model: how many verified coding jobs vs review/critic jobs it did, with the fault rate of each."""
+    items = [(m, v) for m, v in roles.items() if v["coding"]["verified"] + v["review"]["verified"]]
+    items.sort(key=lambda kv: -(kv[1]["coding"]["verified"] + kv[1]["review"]["verified"]))
+    if not items:
+        return ""
+    W, left, bar_w, row_h = 820, 130, 360, 34
+    peak = max(max(v["coding"]["verified"], v["review"]["verified"]) for _, v in items)
+    best_c = _best_of(items, lambda v: v["coding"]["fault_rate"], lambda v: v["coding"]["verified"])
+    best_r = _best_of(items, lambda v: v["review"]["fault_rate"], lambda v: v["review"]["verified"])
+    H = 46 + row_h * len(items)
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>',
+             _svg_legend([("coding (build, edit, debug, scripted)", "var(--accent)"),
+                          ("review / critic", "var(--warn)")], 32)]
+    for i, (m, v) in enumerate(items):
+        y = 42 + i * row_h
+        c, r = v["coding"], v["review"]
+        parts.append(
+            f'<text x="{left - 8}" y="{y + 17}" font-size="12" text-anchor="end" style="fill:var(--ink)">{html.escape(m)}</text>'
+            f'<rect x="{left}" y="{y}" width="{bar_w * c["verified"] / peak:.1f}" height="13" style="fill:var(--accent)">'
+            f'<title>{c["verified"]} verified coding runs</title></rect>'
+            f'<rect x="{left}" y="{y + 15}" width="{bar_w * r["verified"] / peak:.1f}" height="13" style="fill:var(--warn)">'
+            f'<title>{r["verified"]} verified review runs</title></rect>'
+            f'<text x="{left + bar_w + 10}" y="{y + 11}" font-size="11" style="fill:{_GOLD if m == best_c else "var(--ink-soft)"}">{"\u2605 best coder \u00b7 " if m == best_c else ""}coding {c["verified"]} '
+            f'\u00b7 fault {_stat_pct(c["fault_rate"])}</text>'
+            f'<text x="{left + bar_w + 10}" y="{y + 26}" font-size="11" style="fill:{_GOLD if m == best_r else "var(--ink-soft)"}">{"\u2605 best critic \u00b7 " if m == best_r else ""}review {r["verified"]} '
+            f'\u00b7 fault {_stat_pct(r["fault_rate"])}</text>')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>'
+            + (f'<figcaption><b style="color:{_GOLD}">\u2605 Best coder: {html.escape(best_c or "n/a")} \u00b7 '
+               f'best critic: {html.escape(best_r or "n/a")}</b> (lowest fault rate, \u2265 {_MIN_RANK_N} runs).</figcaption>')
+            + '</figure>')
+
+
+def _why_section(w: dict) -> str:
+    """Explain one job type's fault rate: how the faults ended, why (from the orchestrator's notes), which
+    models and repos carry them, corrections needed, and recent examples."""
+    if not w or not w.get("faults"):
+        return ""
+    job = html.escape(w["job"])
+    rate = w["faults"] / w["verified"] if w["verified"] else None
+    fo = w.get("fault_outcomes") or {}
+    label = {"fixed": "landed, orchestrator had to fix it", "partial": "partial: work left owed",
+             "fail": "failed outright", "rebriefed": "passed only after a re-brief", "reverted": "reverted"}
+    reasons = sorted((w.get("reasons") or {}).items(), key=lambda kv: -kv[1])
+    ex = "".join(
+        f'<tr><td>{html.escape(str(e["date"]))}</td><td><code>{html.escape(str(e["model"]))}</code></td>'
+        f'<td>{html.escape(str(e["outcome"]))}</td><td>{html.escape(str(e["repo"]))}</td>'
+        f'<td>{html.escape(", ".join(e["reasons"]))}</td><td>{html.escape(e["note"])}</td></tr>'
+        for e in w.get("examples") or [])
+    named = [(k, v) for k, v in reasons if k not in ("other", "no note (auto-recorded)")]
+    top = ", ".join(f"{html.escape(k)} ({v})" for k, v in named[:4])
+    return (
+        f'<h3 id="why-{job}">Why does <code>{job}</code> fail {_stat_pct(rate)} of the time?</h3>'
+        f'<p class="view-lede">{w["faults"]} faults in {w["verified"]} verified {job} runs. Most did not fail outright: '
+        f'{fo.get("fixed", 0)} landed but the orchestrator had to fix them, {fo.get("partial", 0)} were partial, '
+        f'only {fo.get("fail", 0)} failed. A faulted {job} run needed {w["corrections_fault"]} orchestrator '
+        f'corrections on average, against {w["corrections_ok"]} for a clean one. Top reasons from the orchestrator\'s '
+        f'notes: {top}.</p>'
+        + _svg_hbars([(label.get(k, k), v) for k, v in sorted(fo.items(), key=lambda kv: -kv[1])],
+                     f"How the {w['job']} faults ended", "var(--warn)")
+        + _svg_hbars(reasons, f"Why: reasons in the orchestrator's notes ({w['job']} faults; a run can have several)",
+                     "var(--bad)")
+        + _svg_rate_ci(w["by_model"], f"{w['job']} fault rate by model (95% interval)")
+        + _svg_rate_ci({k: v for k, v in w["by_repo"].items() if v["verified"] >= 5},
+                       f"{w['job']} fault rate by repo (95% interval)")
+        + (f'<h4>Recent {job} faults with the orchestrator\'s note</h4><div class="scroll-x"><table class="flow-table stat-sort">'
+           '<thead><tr><th>Date</th><th>Model</th><th>Outcome</th><th>Repo</th><th>Reasons</th><th>Note</th></tr></thead>'
+           f'<tbody>{ex}</tbody></table></div>' if ex else "")
+    )
+
+
+def _reason_matrix(reasons_by_job: dict) -> str:
+    jobs = [j for j, v in sorted(reasons_by_job.items(), key=lambda kv: -sum(kv[1].values())) if v]
+    if not jobs:
+        return ""
+    reasons = sorted({r for j in jobs for r in reasons_by_job[j]},
+                     key=lambda r: (-sum(reasons_by_job[j].get(r, 0) for j in jobs), r))
+    head = "".join(f"<th>{html.escape(j)}</th>" for j in jobs)
+    body = "".join(
+        f'<tr><td>{html.escape(r)}</td>' + "".join(
+            f'<td>{reasons_by_job[j].get(r, 0) or ""}</td>' for j in jobs) + "</tr>" for r in reasons)
+    return ('<h4>Fault reasons by job type (counts)</h4><div class="scroll-x"><table class="flow-table stat-sort"><thead><tr>'
+            f'<th>Reason</th>{head}</tr></thead><tbody>{body}</tbody></table></div>')
+
+
+def _critic_section(cr: dict) -> str:
+    if not cr:
+        return ""
+    models = cr.get("models") or {}
+    rows = "".join(
+        f'<tr><td><code>{html.escape(m)}</code></td><td>{v["review_all"]["verified"]}</td>'
+        f'<td>{_stat_pct(v["review_all"]["fault_rate"])}</td><td>{v["review_week"]["verified"]}</td>'
+        f'<td>{_stat_pct(v["review_week"]["fault_rate"])}</td><td>{v["findings"]}</td>'
+        f'<td>{v["blocker"]}/{v["major"]}/{v["minor"]}</td><td>{v["true_positive"]}</td><td>{v["caught"]}</td></tr>'
+        for m, v in sorted(models.items(), key=lambda kv: -(kv[1]["review_all"]["verified"] + kv[1]["caught"] * 10)))
+    bx = cr.get("builder_x_critic") or {}
+    critics = sorted({c for row in bx.values() for c in row}, key=lambda c: (-sum(r.get(c, 0) for r in bx.values()), c))
+    pair = "".join(
+        f'<tr><td><code>{html.escape(b)}</code></td>' + "".join(f'<td>{row.get(c, 0) or ""}</td>' for c in critics)
+        + f'<td>{sum(row.values())}</td></tr>'
+        for b, row in sorted(bx.items(), key=lambda kv: -sum(kv[1].values())))
+    return (
+        '<h4>Critic benchmark</h4><div class="scroll-x"><table class="flow-table stat-sort"><thead><tr><th>Critic</th>'
+        '<th>Review runs (all)</th><th>Review fault (all)</th><th>Review runs (7d)</th><th>Review fault (7d)</th>'
+        '<th>Findings raised</th><th>Blocker/major/minor</th><th>True pos.</th><th>Escaped defects caught</th>'
+        f'</tr></thead><tbody>{rows}</tbody></table></div>'
+        '<p class="muted">Review fault = the review itself was wrong (missed or invented an issue). Findings come from '
+        'scored review panels; escaped defects caught are matched from the defect ledger\'s found-by field.</p>'
+        + (f'<h4>Builder \u00d7 critic: who caught whose issues</h4><div class="scroll-x"><table class="flow-table stat-sort">'
+           '<thead><tr><th>Builder</th>' + "".join(f"<th>{html.escape(c)}</th>" for c in critics)
+           + f'<th>Total</th></tr></thead><tbody>{pair}</tbody></table></div>' if pair else "")
+    )
+
+
+def _teams_section(tm: dict, wk: dict, days: int = 7) -> str:
+    """Which models work well together: orchestrator -> worker pairs and builder -> reviewer pairs."""
+    pairs = {f"{o} \u2192 {w}": v for o, ws in (tm.get("orchestrator_x_worker") or {}).items() for w, v in ws.items()}
+    head = ('<h3>Teams: which models work well together</h3>'
+            f'<p class="muted">{tm.get("recorded", 0)} runs name the model that orchestrated them. This is recorded '
+            f'automatically for every subagent since {html.escape(str(tm.get("since") or "2026-11-11"))}; older runs '
+            'do not have it. A pair reads orchestrator \u2192 worker. A run only counts toward a fault rate once the '
+            'orchestrator has verified it.</p>')
+    if not pairs:
+        return head + '<p class="muted">No team runs recorded yet.</p>'
+    bx = tm.get("builder_x_reviewer") or {}
+    rev = "".join(
+        f'<tr><td><code>{html.escape(bl)}</code></td><td><code>{html.escape(c)}</code></td><td>{v["reviews"]}</td>'
+        f'<td>{html.escape(", ".join(f"{k} {n}" for k, n in sorted(v["outcomes"].items())))}</td></tr>'
+        for bl, cs in sorted(bx.items()) for c, v in sorted(cs.items(), key=lambda kv: -kv[1]["reviews"]))
+    return (head + _stat_table("Orchestrator \u2192 worker (all time)", pairs)
+            + f'<h4>Best team per job (last {days} days, pairs with \u2265 5 verified runs)</h4>'
+            + (_best_table(wk.get("best_by_job") or {}) if any((wk.get("best_by_job") or {}).values())
+               else '<p class="muted">No pair has 5 verified runs in this window yet.</p>')
+            + _svg_heatmap(tm.get("by_job") or {}, "Fault rate: job type \u00d7 team (all time)")
+            + '<h4>Reviews: whose build was checked by whom</h4>'
+            + ('<div class="scroll-x"><table class="flow-table stat-sort"><thead><tr><th>Builder</th><th>Reviewer</th>'
+               f'<th>Reviews</th><th>Review outcomes</th></tr></thead><tbody>{rev}</tbody></table></div>' if rev
+               else '<p class="muted">No recorded review of a named build yet.</p>'))
+
+
+def _svg_num_matrix(cells: dict, rows: list, cols: list, title: str, fmt, colour, tip, sub=None,
+                    caption: str = "") -> str:
+    """Generic builder x fixer matrix: cells[row][col] -> number; colour(v) -> fill; fmt(v) -> label."""
+    if not rows or not cols:
+        return ""
+    left, top, cw, chh = 120, 50, max(58, min(80, 680 // len(cols))), 30
+    W, H = max(760, left + cw * len(cols) + 10), top + chh * len(rows) + 6
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>']
+    for i, c in enumerate(cols):
+        lab = "orch/human" if c == "orchestrator/human" else c
+        parts.append(f'<text x="{left + i * cw + cw / 2:.1f}" y="{top - 8}" font-size="11" text-anchor="middle" '
+                     f'style="fill:var(--ink)">{html.escape(lab)}</text>')
+    for r_i, r in enumerate(rows):
+        y = top + r_i * chh
+        parts.append(f'<text x="{left - 8}" y="{y + 19}" font-size="12" text-anchor="end" style="fill:var(--ink)">{html.escape(r)}</text>')
+        for i, c in enumerate(cols):
+            x = left + i * cw
+            v = (cells.get(r) or {}).get(c)
+            if v is None:
+                parts.append(f'<rect x="{x + 1}" y="{y + 1}" width="{cw - 2}" height="{chh - 2}" rx="3" '
+                             f'style="fill:var(--panel-2);opacity:.45"/>')
+                continue
+            parts.append(
+                f'<rect x="{x + 1}" y="{y + 1}" width="{cw - 2}" height="{chh - 2}" rx="3" style="fill:{colour(v)}">'
+                f'<title>{html.escape(tip(r, c, v))}</title></rect>'
+                f'<text x="{x + cw / 2:.1f}" y="{y + (14 if sub else 19)}" font-size="11" font-weight="600" '
+                f'text-anchor="middle" style="fill:#fff">{html.escape(fmt(v))}</text>'
+                + (f'<text x="{x + cw / 2:.1f}" y="{y + 25}" font-size="9" text-anchor="middle" style="fill:#fff">'
+                   f'{html.escape(sub(r, c))}</text>' if sub else ""))
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>'
+            + (f'<figcaption>{caption}</figcaption>' if caption else "") + '</figure>')
+
+
+def _svg_split_bars(builders: dict, title: str) -> str:
+    """Per builder, 100% bar of WHO re-fixed its re-fixed commits: same model, another model, orchestrator/human.
+    A commit re-fixed by two kinds counts in both, so the bar is normalised to the sum."""
+    segs = [("same model", "by_same", "var(--accent)"), ("another model", "by_other", "var(--warn)"),
+            ("orchestrator/human", "by_orchestrator", "var(--bad)")]
+    items = [(b, v) for b, v in sorted(builders.items(), key=lambda kv: -kv[1]["commits"]) if v["refixed"]]
+    if not items:
+        return ""
+    W, left, bar_w, row_h = 820, 130, 400, 24
+    H = 46 + row_h * len(items)
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>',
+             _svg_legend([(l, c) for l, _, c in segs], 32)]
+    for i, (b, v) in enumerate(items):
+        y = 44 + i * row_h
+        tot = sum(v[k] for _, k, _ in segs) or 1
+        x = left
+        parts.append(f'<text x="{left - 8}" y="{y + 14}" font-size="12" text-anchor="end" style="fill:var(--ink)">{html.escape(b)}</text>')
+        for lab, k, col in segs:
+            w = bar_w * v[k] / tot
+            if w:
+                parts.append(f'<rect x="{x:.1f}" y="{y}" width="{w:.1f}" height="18" style="fill:{col}">'
+                             f'<title>{b}: {v[k]} re-fixed commits touched by {lab}</title></rect>')
+                if w > 34:
+                    parts.append(f'<text x="{x + w / 2:.1f}" y="{y + 13}" font-size="10" text-anchor="middle" '
+                                 f'style="fill:#fff">{100 * v[k] / tot:.0f}%</text>')
+            x += w
+        parts.append(f'<text x="{left + bar_w + 8}" y="{y + 14}" font-size="11" style="fill:var(--ink-soft)">'
+                     f'{v["refixed"]}/{v["commits"]} commits re-fixed ({_stat_pct(v["refix_rate"])})</text>')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg></figure>')
+
+
+def _refix_layers_section(L: dict, avg_refix) -> str:
+    if not L or not L.get("builders"):
+        return ""
+    B, F = L["builders"], L["fixers"]
+    rows = [b for b in sorted(B, key=lambda b: -B[b]["commits"]) if B[b]["commits"] >= 3]
+    cols = [f for f in sorted(F, key=lambda f: -F[f]["events"]) if F[f]["events"] >= 3]
+    ev = L.get("events") or {}
+
+    def per100_colour(v):
+        return _heat_colour(min(0.4, v / 100 * 2))          # 20 per 100 commits = red
+
+    def lift_colour(v):
+        return _heat_colour(max(0.0, min(0.4, 0.2 * v)))      # 1.0x = amber, 0 = green, >= 2x = red
+
+    heat_per100 = _svg_num_matrix(
+        L.get("per100") or {}, rows, cols,
+        "Re-fixed per 100 of the builder's commits (row = builder, column = who re-fixed)",
+        lambda v: f"{v:.1f}", per100_colour,
+        lambda r, c, v: f"{c} re-fixed {v:.1f} of every 100 {r} commits ({(ev.get(r) or {}).get(c, 0)} fix-up commits)",
+        sub=lambda r, c: f"{(ev.get(r) or {}).get(c, 0)} fix-ups",
+        caption="Normalised by the builder's volume: a builder with 270 commits and one with 40 are directly comparable. "
+                "Green = rarely, red = 20+ of every 100 commits.")
+    heat_lift = _svg_num_matrix(
+        L.get("lift") or {}, rows, cols,
+        "Pairing vs chance: observed fix-ups / expected (1.0\u00d7 = what the two volumes alone predict)",
+        lambda v: f"{v:.2f}\u00d7", lift_colour,
+        lambda r, c, v: f"{c} re-fixed {r} {v:.2f}x as often as expected from both totals",
+        caption="Normalised by BOTH totals: expected = builder's fix-ups received \u00d7 fixer's fix-ups made / all fix-ups. "
+                "Red (\u2265 2\u00d7) = this fixer lands on this builder's code far more than chance (often the same lane or a "
+                "reviewer assigned to it); green = less than chance.")
+    heat_lines = _svg_num_matrix(
+        L.get("lines100") or {}, rows, cols,
+        "Lines rewritten per 100 lines the builder added",
+        lambda v: f"{v:.2f}", lambda v: _heat_colour(min(0.4, v / 2 * 0.4)),
+        lambda r, c, v: f"{c} rewrote {v:.3f} of every 100 lines {r} added",
+        caption="Size of the rework, normalised by how much code the builder wrote (red \u2265 2 lines per 100).")
+    brow = "".join(
+        f'<tr><td><code>{html.escape(b)}</code></td><td>{v["commits"]}</td><td>{v["refixed"]}</td>'
+        f'<td>{_stat_pct(v["refix_rate"])}</td>' + _vs_avg_cells(v["refix_rate"], avg_refix)
+        + f'<td>{_stat_pct(v["by_same"] / v["commits"] if v["commits"] else None)}</td>'
+        f'<td>{_stat_pct(v["by_other"] / v["commits"] if v["commits"] else None)}</td>'
+        f'<td>{_stat_pct(v["by_orchestrator"] / v["commits"] if v["commits"] else None)}</td>'
+        f'<td>{v["events_per_commit"]}</td><td>{v["lines_per_100_added"] if v["lines_per_100_added"] is not None else "n/a"}</td>'
+        f'<td>{v["median_lines_per_fixup"] if v["median_lines_per_fixup"] is not None else "n/a"}</td>'
+        f'<td>{v["median_hours_to_first_refix"] if v["median_hours_to_first_refix"] is not None else "n/a"}</td>'
+        f'<td>{v["p75_hours_to_first_refix"] if v["p75_hours_to_first_refix"] is not None else "n/a"}</td></tr>'
+        for b, v in sorted(B.items(), key=lambda kv: -kv[1]["commits"]))
+    frow = "".join(
+        f'<tr><td><code>{html.escape(f)}</code></td><td>{v["events"]}</td><td>{_stat_pct(v["share_of_all_fixups"])}</td>'
+        f'<td>{v["own_commits"] or "\u2014"}</td>'
+        f'<td>{v["fixups_per_100_own_commits"] if v["fixups_per_100_own_commits"] is not None else "n/a"}</td>'
+        f'<td>{v["builders_fixed"]}</td><td>{_stat_pct(v["self_share"])}</td><td>{v["lines_rewritten"]}</td>'
+        f'<td>{v["median_lines_per_fixup"] if v["median_lines_per_fixup"] is not None else "n/a"}</td>'
+        f'<td>{v["median_hours_after"] if v["median_hours_after"] is not None else "n/a"}</td></tr>'
+        for f, v in sorted(F.items(), key=lambda kv: -kv[1]["events"]))
+    return (
+        '<h3>Who re-fixed whose commits (normalised)</h3>'
+        f'<p class="view-lede">{L.get("grand_events", 0)} fix-up events. Raw counts favour whoever did the most work, '
+        'so every view below is divided by volume: per 100 of the builder\'s commits, per 100 lines it added, or '
+        'against what both totals predict by chance. Builders and fixers with fewer than 3 commits/fix-ups are left '
+        'out of the matrices (still in the tables). Hover a cell for the raw count.</p>'
+        + _svg_split_bars(B, "Who re-fixed each builder's commits (share of its re-fixed commits)")
+        + heat_per100 + heat_lift + heat_lines
+        + '<h4>Builder view: how its commits got re-fixed</h4>'
+        '<div class="scroll-x"><table class="flow-table stat-sort"><thead><tr><th>Builder</th><th>Commits</th>'
+        '<th>Re-fixed</th><th>Re-fix rate</th><th>\u0394 vs avg</th><th>\u00d7 avg</th><th>by same model</th>'
+        '<th>by other model</th><th>by orch./human</th><th>Fix-ups per commit</th><th>Lines rewritten / 100 added</th>'
+        '<th>Median lines per fix-up</th><th>Median hrs to 1st re-fix</th><th>p75 hrs</th></tr></thead>'
+        f'<tbody>{brow}</tbody></table></div>'
+        '<p class="muted">"by \u2026" columns = share of ALL the builder\'s commits re-fixed by that kind of fixer (a commit '
+        'can be hit by several). Hours = time from the commit to the first later commit that rewrote its lines.</p>'
+        '<h4>Fixer view: who does the re-fixing</h4>'
+        '<div class="scroll-x"><table class="flow-table stat-sort"><thead><tr><th>Fixer</th><th>Fix-ups</th>'
+        '<th>Share of all fix-ups</th><th>Own commits</th><th>Fix-ups per 100 own commits</th><th>Builders fixed</th>'
+        '<th>Fixing its own model</th><th>Lines rewritten</th><th>Median lines per fix-up</th><th>Median hrs after</th>'
+        f'</tr></thead><tbody>{frow}</tbody></table></div>'
+        '<p class="muted">Fix-ups per 100 own commits = how much of a model\'s output is touching other commits\' lines: '
+        'high = it mostly integrates/fixes, low = it mostly writes new code.</p>'
+    )
+
+
+_BAND_COL = {"1-3 easy": "var(--ok)", "4-6 medium": "var(--warn)", "7-10 hard": "var(--bad)", "unscored": "var(--panel-2)"}
+_BANDS = ["1-3 easy", "4-6 medium", "7-10 hard"]
+
+
+def _svg_band_validation(by_band: dict, monotonic) -> str:
+    items = {b: by_band[b] for b in _BANDS if (by_band.get(b) or {}).get("verified")}
+    if not items:
+        return ""
+    cap = ("\u2713 Fault rate rises with the difficulty score, so ranking on it is justified." if monotonic else
+           "\u26a0 Fault rate does NOT rise steadily with the score at this sample size; treat the adjusted ranking "
+           "as indicative.")
+    chart = _svg_rate_ci(items, "Check: does the difficulty score predict faults? (all models, easy \u2192 hard)", mark_best=False, keep_order=True)
+    return chart.replace("</figure>", f'<figcaption>{cap}</figcaption></figure>', 1)
+
+
+def _svg_rank_index(models: dict, title: str) -> str:
+    """Difficulty-adjusted index with 95% interval, best first, medals for the top 3 (>= 20 runs)."""
+    items = [(m, v) for m, v in models.items() if v["index"] is not None and v["verified"] >= 5]
+    items.sort(key=lambda kv: (kv[1]["verified"] < _MIN_RANK_N, kv[1]["index"]))
+    if not items:
+        return ""
+    W, left, half, row_h = 820, 150, 230, 24
+    top = max(2.0, min(4.0, max(v["index_ci"][1] for _, v in items)))
+    mid = left + half
+    sx = lambda r: mid + half * (min(r, top) - 1) / (top - 1) if r >= 1 else mid - half * (1 - r)
+    H = 54 + row_h * len(items)
+    medal = ["\U0001f947", "\U0001f948", "\U0001f949"]
+    ranked = [m for m, v in items if v["verified"] >= _MIN_RANK_N]
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>',
+             f'<line x1="{mid}" y1="24" x2="{mid}" y2="{H - 16}" style="stroke:var(--ink)" stroke-width="1"/>',
+             f'<text x="{mid}" y="{H - 2}" font-size="10" text-anchor="middle" style="fill:var(--ink-soft)">1.0\u00d7 = average for equally hard work</text>',
+             f'<text x="{left}" y="{H - 2}" font-size="10" style="fill:var(--ok)">\u2190 better</text>',
+             f'<text x="{mid + half}" y="{H - 2}" font-size="10" text-anchor="end" style="fill:var(--bad)">worse \u2192</text>']
+    for i, (m, v) in enumerate(items):
+        y = 30 + i * row_h
+        rank = ranked.index(m) if m in ranked else None
+        tag = (medal[rank] + " ") if rank is not None and rank < 3 else ("" if rank is not None else "\u26a0 ")
+        x = sx(v["index"])
+        lo, hi = v["index_ci"]
+        colour = "var(--ok)" if v["index"] < 1 else "var(--bad)"
+        x0, w = (x, mid - x) if x < mid else (mid, x - mid)
+        lab_style = f"fill:{_GOLD};font-weight:700" if rank == 0 else "fill:var(--ink)"
+        if rank == 0:
+            parts.append(_gold_box(4, y - 1, W - 8, row_h - 2))
+        parts.append(
+            f'<text x="{left - 8}" y="{y + 13}" font-size="12" text-anchor="end" style="{lab_style}">{tag}{html.escape(m)}</text>'
+            f'<rect x="{x0:.1f}" y="{y + 3}" width="{max(w, 1):.1f}" height="12" style="fill:{colour};opacity:.85">'
+            f'<title>{m}: {v["faults"]} faults vs {v["expected"]} expected for its difficulty mix</title></rect>'
+            f'<line x1="{sx(lo):.1f}" y1="{y + 9}" x2="{sx(hi):.1f}" y2="{y + 9}" style="stroke:var(--ink)" stroke-width="1.3"/>'
+            f'<line x1="{sx(lo):.1f}" y1="{y + 4}" x2="{sx(lo):.1f}" y2="{y + 14}" style="stroke:var(--ink)" stroke-width="1.3"/>'
+            f'<line x1="{sx(hi):.1f}" y1="{y + 4}" x2="{sx(hi):.1f}" y2="{y + 14}" style="stroke:var(--ink)" stroke-width="1.3"/>'
+            f'<text x="{mid + half + 10}" y="{y + 13}" font-size="11" style="fill:var(--ink-soft)">'
+            f'{v["index"]:.2f}\u00d7 ({lo:.2f}\u2013{hi:.2f}) \u00b7 n={v["verified"]}</text>')
+    best = html.escape(ranked[0]) if ranked else "n/a"
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>'
+            f'<figcaption><b style="color:{_GOLD}">\U0001f947 Best: {best}</b>. '
+            'Index = actual faults \u00f7 faults expected if an average model had done the same jobs at the same '
+            'difficulty (strata = job type \u00d7 difficulty band; unscored runs compared within their job type). '
+            f'Whiskers = 95% interval. Medals only for models with \u2265 {_MIN_RANK_N} verified runs; \u26a0 = too few to rank.'
+            '</figcaption></figure>')
+
+
+def _svg_band_mix(models: dict, title: str) -> str:
+    """How hard each model's work was: share of its verified runs per difficulty band."""
+    keys = _BANDS + ["unscored"]
+    items = [(m, v) for m, v in models.items() if v["verified"] >= 5]
+    items.sort(key=lambda kv: -(kv[1]["hard_share"] or 0))
+    if not items:
+        return ""
+    W, left, bar_w, row_h = 820, 130, 400, 24
+    H = 46 + row_h * len(items)
+    parts = [f'<text x="0" y="14" font-size="13" font-weight="600" style="fill:var(--ink)">{html.escape(title)}</text>',
+             _svg_legend([(k, _BAND_COL[k]) for k in keys], 32)]
+    for i, (m, v) in enumerate(items):
+        y = 44 + i * row_h
+        x = left
+        parts.append(f'<text x="{left - 8}" y="{y + 14}" font-size="12" text-anchor="end" style="fill:var(--ink)">{html.escape(m)}</text>')
+        for k in keys:
+            n = v["mix"].get(k, 0)
+            if not n:
+                continue
+            w = bar_w * n / v["verified"]
+            parts.append(f'<rect x="{x:.1f}" y="{y}" width="{w:.1f}" height="18" style="fill:{_BAND_COL[k]}">'
+                         f'<title>{m}: {n} {k} runs</title></rect>')
+            if w > 30:
+                ink = "var(--ink)" if k == "unscored" else "#fff"
+                parts.append(f'<text x="{x + w / 2:.1f}" y="{y + 13}" font-size="10" text-anchor="middle" '
+                             f'style="fill:{ink}">{n}</text>')
+            x += w
+        ms = v["median_score"]
+        parts.append(f'<text x="{left + bar_w + 8}" y="{y + 14}" font-size="11" style="fill:var(--ink-soft)">'
+                     f'median {ms if ms is not None else "n/a"} \u00b7 {_stat_pct(v["hard_share"])} hard</text>')
+    return (f'<figure class="stat-chart"><svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>'
+            '<figcaption>Sorted by share of hard work. Score 1\u201310 from the code the run touched (files, modules, '
+            'size before the change, importers, new code); \u201cunscored\u201d = no commits to measure (reviews, lookups, ops).'
+            '</figcaption></figure>')
+
+
+def _difficulty_section(d: dict, mix: dict, label: str) -> str:
+    if not d or not d.get("models"):
+        return ""
+    models = d["models"]
+    order = sorted(models, key=lambda m: (models[m]["verified"] < _MIN_RANK_N,
+                                          models[m]["index"] if models[m]["index"] is not None else 9, m))
+    medal = ["\U0001f947", "\U0001f948", "\U0001f949"]
+    rows = []
+    rank = 0
+    for m in order:
+        v = models[m]
+        ok = v["verified"] >= _MIN_RANK_N and v["index"] is not None
+        tag = (medal[rank] if rank < 3 else str(rank + 1)) if ok else "\u26a0"
+        style = ' style="background:rgba(212,160,23,.12)"' if ok and rank == 0 else ""
+        ci = v["index_ci"]
+        ci_txt = f"{ci[0]:.2f}\u2013{ci[1]:.2f}" if ci else "n/a"
+        jm = (mix.get(m) or {}).get("index")
+        idx = f'{v["index"]}\u00d7' if v["index"] is not None else "n/a"
+        rows.append(
+            f'<tr{style}><td data-v="{rank + 1 if ok else 999}">{tag}</td><td><code>{html.escape(m)}</code></td>'
+            f'<td>{v["verified"]}</td><td>{v["scored"]}</td><td>{v["mix"]["1-3 easy"]}</td><td>{v["mix"]["4-6 medium"]}</td>'
+            f'<td>{v["mix"]["7-10 hard"]}</td><td>{v["median_score"] if v["median_score"] is not None else "n/a"}</td>'
+            f'<td>{v["faults"]}</td><td>{v["expected"]}</td><td><b>{idx}</b></td><td>{ci_txt}</td>'
+            f'<td>{v["scored_index"] if v["scored_index"] is not None else "n/a"}</td>'
+            f'<td>{jm if jm is not None else "n/a"}</td>'
+            f'<td>{_stat_pct(v["faults"] / v["verified"] if v["verified"] else None)}</td></tr>')
+        if ok:
+            rank += 1
+    bb = d.get("by_band") or {}
+    band_txt = ", ".join(f'{b}: {_stat_pct(bb[b]["fault_rate"])} (n={bb[b]["verified"]})'
+                         for b in _BANDS if (bb.get(b) or {}).get("verified"))
+    hm = {b: (d.get("band_model") or {}).get(b, {}) for b in _BANDS}
+    return (
+        f'<h3 id="difficulty-ranking-{label.split()[0]}">Ranking adjusted for difficulty ({html.escape(label)})</h3>'
+        f'<p class="view-lede">Easy work flatters a model and hard work punishes it. {d["scored"]} of {d["verified"]} verified '
+        f'runs have a difficulty score. Fault rate by band: {band_txt}. The ranking compares each model with the average '
+        'model doing the SAME job type at the SAME difficulty.</p>'
+        + _svg_rank_index(models, f"Difficulty-adjusted ranking, best first ({label})")
+        + _svg_band_validation(bb, d.get("monotonic"))
+        + _svg_band_mix(models, f"How hard was each model's work? ({label})")
+        + _svg_heatmap(hm, f"Fault rate by difficulty band \u00d7 model ({label})",
+                       job_rate={b: bb[b]["fault_rate"] for b in _BANDS if (bb.get(b) or {}).get("verified")},
+                       note="Rows are difficulty bands (band average in brackets).")
+        + '<div class="scroll-x"><table class="flow-table stat-sort"><thead><tr><th>Rank</th><th>Model</th><th>Verified</th>'
+          '<th>Scored</th><th>Easy</th><th>Medium</th><th>Hard</th><th>Median score</th><th>Faults</th><th>Expected</th>'
+          '<th>Difficulty-adj. index</th><th>95% CI</th><th>Index (scored runs only)</th><th>Job-mix index</th>'
+          f'<th>Raw fault rate</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+          '<p class="muted">Ranked by the difficulty-adjusted index (lower = better); \u26a0 = fewer than '
+          f'{_MIN_RANK_N} verified runs, not ranked. "Index (scored runs only)" leaves out runs without a difficulty score.</p>'
+    )
+
+
+def _stats_section(stats: dict) -> str:
+    """Agent-pool statistics (stats.json from .agents/bin/pool-stats): charts first, tables after."""
+    if not stats:
+        return ""
+    wk = stats.get("week") or stats
+    win = stats.get("window") or {}
+    span = f'{win.get("since", "?")} \u2192 {win.get("until", "?")}'
+    t = wk["totals"]
+    ch = stats.get("churn") or {}
+    cm = ch.get("models") or {}
+    ct = ch.get("totals") or {}
+    classes = ["cross-review", "orchestrator", "live run", "other"]
+
+    def tbl(head: str, body: str) -> str:
+        return (f'<div class="scroll-x"><table class="flow-table stat-sort"><thead><tr>{head}</tr></thead>'
+                f'<tbody>{body}</tbody></table></div>')
+
+    def ths(*c: str) -> str:
+        return "".join(f"<th>{x}</th>" for x in c)
+
+    rework_rows = "".join(
+        f'<tr><td><code>{html.escape(k)}</code></td><td>{v["commits"]}</td><td>{v["added"]}</td>'
+        f'<td>{_stat_pct(v["survival"])}</td><td>{v["refixed"]}</td><td>{_stat_pct(v["refix_rate"])}</td>'
+        f'<td>{v["lines_reworked"]}</td><td>{v["reworked_by_orchestrator"]}</td><td>{v["fixes"]}</td>'
+        f'<td>{v["fixes_refixed"]}</td><td>{_stat_pct(v["fix_refix_rate"])}</td>'
+        f'<td>{v.get("rework_per_100") if v.get("rework_per_100") is not None else "n/a"}</td>'
+        + _vs_avg_cells(v["refix_rate"], ct.get("refix_rate")) + '</tr>'
+        for k, v in sorted(cm.items(), key=lambda kv: -kv[1]["commits"]))
+    rev = "".join(
+        f'<tr><td><code>{html.escape(k)}</code></td><td>{v["findings"]}</td><td>{v["blocker"]}</td>'
+        f'<td>{v["major"]}</td><td>{v["minor"]}</td><td>{v["true_positive"]}</td>'
+        f'<td>{v["false_positive"]}</td><td>{v["unlabelled"]}</td></tr>'
+        for k, v in sorted(stats["reviewers"].items(), key=lambda kv: -kv[1]["findings"]))
+    mat = "".join(
+        f'<tr><td><code>{html.escape(k)}</code></td>'
+        + "".join(f'<td>{v.get(c, 0)}</td>' for c in classes) + f'<td>{sum(v.values())}</td></tr>'
+        for k, v in sorted(stats["defect_matrix"].items(), key=lambda kv: -sum(kv[1].values())))
+    causes = "".join(f'<tr><td><code>{html.escape(k)}</code></td><td>{v}</td></tr>'
+                     for k, v in sorted(wk["fault_causes"].items(), key=lambda kv: -kv[1]))
+    a = stats["totals"]
+    churn_note = ""
+    if ct.get("commits"):
+        churn_note = (f'<p class="view-lede">Git blame of {ct["commits"]} agent commits in '
+                      f'{len((ch.get("meta") or {}).get("repos") or {})} repos since '
+                      f'{html.escape(str((ch.get("meta") or {}).get("since", "?")))} (code only; docs, generated HTML, '
+                      f'lockfiles and assets excluded). <b>{ct["refixed"]}</b> commits '
+                      f'({_stat_pct(ct["refixed"] / ct["commits"])}) had lines rewritten later by someone else. '
+                      f'<b>{ct["fixes"]}</b> commits fixed an earlier agent commit, and <b>{ct["fixes_refixed"]}</b> '
+                      f'of those fixes had to be fixed again. Survival = share of added lines still in the code today.</p>')
+    return (
+        '<h2 id="agent-pool-statistics">Agent-pool statistics: models, success and failure, fixes</h2>'
+        f'<p class="view-lede">Last {win.get("days", 7)} days ({span}): {t["runs"]} runs recorded, '
+        f'{t["verified"]} verified by the orchestrator. <b>{t["faults"]} faults ({_stat_pct(t["fault_rate"])}, '
+        f'95% CI {_stat_pct(t["ci95"][0])}\u2013{_stat_pct(t["ci95"][1])})</b>, {t["clean"]} clean, '
+        f'{(t.get("outcomes") or {}).get("fixed", 0)} fixed by the orchestrator. Unknown/unverified/infra/stopped rows are '
+        'never in a rate. A fault is <code>model_error</code>, <code>scope_violation</code>, <code>reverted</code> or '
+        '<code>fail</code>. \u26a0 = fewer than 20 verified runs. Click any table header to sort; '
+        '\u0394 vs avg = percentage points above (red) or below (green) the average, \u00d7 avg = rate as a multiple of it. All time: '
+        f'{a["faults"]}/{a["verified"]} faults ({_stat_pct(a["fault_rate"])}).</p>'
+        + _difficulty_section(wk.get("difficulty") or {}, wk.get("mix_adjusted") or {}, f"last {win.get('days', 7)} days")
+        + _difficulty_section(stats.get("difficulty") or {}, stats.get("mix_adjusted") or {}, "all time")
+        + _svg_outcome_bars(wk["by_model"], f"What happened to each model's verified runs (last {win.get('days', 7)} days)")
+        + _svg_rate_ci(wk["by_model"], "Fault rate by model with 95% interval (models with \u2265 5 verified runs)")
+        + _svg_daily(stats.get("daily") or {}, "Verified runs per day by outcome")
+        + '<h3>Which model is best at which job</h3>'
+        + _svg_mix_index(wk.get("mix_adjusted") or {}, f"Normalised fault rate: actual vs expected for the model's job mix (last {win.get('days', 7)} days)")
+        + _svg_heatmap(wk.get("job_model") or {}, f"Fault rate vs the job average: job type (average) \u00d7 model (last {win.get('days', 7)} days)", job_rate=wk.get("job_rate"))
+        + _best_table(wk.get("best_by_job") or {})
+        + _svg_heatmap(stats.get("job_model") or {}, "Fault rate: job type \u00d7 model (all time)")
+        + '<h3>Coders vs critics</h3>'
+        + _svg_roles(wk.get("roles") or {}, f"Who did the coding and who did the reviewing (last {win.get('days', 7)} days)")
+        + _critic_section(stats.get("critics") or {})
+        + _teams_section(stats.get("teams") or {}, wk.get("teams") or {}, win.get("days", 7))
+        + ''.join(_why_section(w) for w in (wk.get("why") or {}).values())
+        + _reason_matrix(wk.get("reasons_by_job") or {})
+        + '<h3>Fixes and fixes of fixes (git)</h3>' + churn_note
+        + _svg_rework(cm, "Per model: commits re-fixed later, fixes made, fixes that had to be fixed again")
+        + (tbl(ths("Model", "Commits", "Lines added", "Survival", "Re-fixed", "Re-fix rate", "Lines reworked",
+                   "\u2026by orchestrator", "Fixes made", "Fixes re-fixed", "Fix re-fix rate", "Lines reworked / 100 added",
+                   "Re-fix \u0394 vs avg", "Re-fix \u00d7 avg"), rework_rows)
+           + (f'<p class="muted">Averages over all agent commits: re-fix rate {_stat_pct(ct.get("refix_rate"))}, survival '
+              f'{_stat_pct(ct.get("survival"))}, fix re-fix rate {_stat_pct(ct.get("fix_refix_rate"))}, '
+              f'{ct.get("rework_per_100")} lines reworked per 100 added.</p>' if ct.get("commits") else "")
+           if rework_rows else '<p class="muted">No churn cache yet: run <code>.agents/bin/pool-churn</code>.</p>')
+        + _refix_layers_section(ch.get("layers") or {}, ct.get("refix_rate"))
+        + _svg_outcome_bars(wk["by_job_type"], "Outcome by job type (last 7 days)")
+        + f'<h3>Tables: last {win.get("days", 7)} days</h3>'
+        + '<h4>By model</h4>' + _stat_table("Model", wk["by_model"], avg=wk["totals"]["fault_rate"])
+        + '<h4>By job type</h4>' + _stat_table("Job type", wk["by_job_type"], avg=wk["totals"]["fault_rate"])
+        + '<h4>By repo (top 15)</h4>' + _stat_table("Repo", wk["by_repo"], 15, avg=wk["totals"]["fault_rate"])
+        + '<h4>Fault causes</h4>' + tbl(ths("Cause", "Count"), causes)
+        + '<h3>Reviews (all time)</h3>'
+        + _svg_hbars([(k, v["findings"]) for k, v in sorted(stats["reviewers"].items(), key=lambda kv: -kv[1]["findings"])],
+                     "Cross-review findings per reviewer")
+        + f'<p class="view-lede">{stats["findings"]} findings, {stats["defects"]} escaped defects. No finding is '
+          'labelled a false positive yet, so there is no precision figure.</p>'
+        + tbl(ths("Critic", "Findings", "Blocker", "Major", "Minor", "True pos.", "False pos.", "Unlabelled"), rev)
+        + '<h4>Review-job runs by model</h4>' + _stat_table("Model", stats["review_runs_by_model"])
+        + "<h4>Who catches a builder's defects</h4>"
+        + tbl(ths("Builder", *classes, "Total"), mat)
+        + '<h3>All time by model</h3>' + _svg_outcome_bars(stats["by_model"], "All time: verified runs by outcome")
+        + _stat_table("Model", stats["by_model"], avg=stats["totals"]["fault_rate"])
+        + '<p class="muted">Source: <code>.agents/subagent-*.jsonl</code>, <code>.agents/churn-cache/</code>. '
+          'Refresh: <code>.agents/bin/pool-churn &amp;&amp; .agents/bin/pool-stats --write-stats</code>, then deploy '
+          'trading-client.</p>'
+        + _SORT_JS
+    )
+
+
+def _view_data(tickets: list[dict], graph: dict, nodes: list[dict], stats: dict | None = None) -> str:
     stores = graph.get("stores") or []
     flows = graph.get("flows") or []
     layers = _layer_map(graph)
@@ -1973,6 +2942,7 @@ def _view_data(tickets: list[dict], graph: dict, nodes: list[dict]) -> str:
         f'joined by {len(flows)} flows. A store is a collection, not a service: '
         f'the join key is the contract between the two sides.</p>'
         f'{_data_svg(stores, flows, actors, tickets, nodes, layers)}'
+        f'{_stats_section(stats or {})}'
         f'<h2>Store &amp; Collection Reference</h2>'
         f'{_store_table(stores, layers)}'
         f'<h2>Data Flow Edges</h2>'
@@ -2304,6 +3274,29 @@ def build() -> str:
                 f"{eyebrow}{_status_bar(meta)}{rendered}</section>"
             )
 
+    bench = sorted(BENCH_DIR.glob("*.md")) if BENCH_DIR.is_dir() else []
+    if bench:
+        nav_parts.append(f'<li class="part">{BENCH_PART}</li>')
+        body_parts.append(f'<div class="part-divider"><h2>{BENCH_PART}</h2></div>')
+    for path in bench:
+        md = path.read_text(encoding="utf-8")
+        bench_id = _bench_id(path.stem)
+        bench_ts = _last_touched(path)
+        touched.append(bench_ts)
+        m = re.search(r"^#\s+(.*)$", md, re.M)
+        nav_parts.append(
+            f'<li><a class="chapter" href="#{bench_id}">'
+            f'<span class="title-text">{html.escape(m.group(1).strip() if m else path.stem)}</span>'
+            f'<span class="freshness badge" data-ts="{html.escape(bench_ts)}"></span>'
+            f"</a></li>"
+        )
+        body_parts.append(
+            f'<section class="chapter" id="{bench_id}">'
+            f'<span class="freshness" data-ts="{html.escape(bench_ts)}"></span>'
+            f'<p class="eyebrow">{BENCH_PART}</p>'
+            f'{render_markdown(md, id_prefix=bench_id + "-")}</section>'
+        )
+
     return PAGE.format(
         title=html.escape(title),
         subtitle=html.escape(subtitle),
@@ -2313,7 +3306,7 @@ def build() -> str:
         project_bar=_project_bar(),
         tabs=_view_tabs(open_tickets, closed_tickets, len(chapters)),
         view_exec=_view_exec(tickets, exec_graph, stats),
-        view_data=_view_data(tickets, data_graph, nodes),
+        view_data=_view_data(tickets, data_graph, nodes, _load_stats()),
         view_tickets=_view_tickets(tickets, nodes, stats, dates),
         nav="".join(nav_parts),
         body="\n".join(body_parts),
