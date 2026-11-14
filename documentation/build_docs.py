@@ -43,11 +43,11 @@ from pathlib import Path
 DOCS_DIR = Path(__file__).resolve().parent
 CHAPTERS_DIR = DOCS_DIR / "chapters"
 OUTPUT = DOCS_DIR / "index.html"
-# Benchmark write-ups: detail moved out of a chapter to keep it under its size
-# cap. Rendered after the last chapter as an appendix, never counted as
-# chapters. A project with no bench/ directory renders exactly as before.
+# Benchmark / report write-ups: sorted newest-first and rendered right after
+# "Start Here" so fresh reports are always at the top. A project with no bench/
+# directory renders as before.
 BENCH_DIR = DOCS_DIR / "bench"
-BENCH_PART = "Benchmark write-ups"
+BENCH_PART = "Latest Reports & Benchmarks (Newest First)"
 
 # The ticket ledger. One file per PROJECT, not per repo: the trading cycle spans
 # trading-client, trading-service, lazy-agent-service and scraper-service, and a
@@ -780,6 +780,43 @@ tr.tck-row[hidden]{display:none}
   .node-facts div{grid-template-columns:1fr}
   .ticket-filters label{flex:1 1 100%}
 }
+"""
+
+# Trading-cycle-only chart classes (Ch.14 & Ch.15) — emitted only when building
+# trading-cycle so other V2 workspace projects stay byte-identical on hub checks.
+_TRADING_CHART_CSS = """/* Shared chapter SVG chart classes (Ch.14 & Ch.15) — avoids inline <style> blocks */
+.stat-chart svg{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.c14t,.c15t{fill:var(--ink,#1b2027)}
+.c14s,.c15s{fill:var(--ink-soft,#5a6472)}
+.c14buy{fill:var(--ok,#1f7a4d)}
+.c14sell,.c14blk{fill:var(--bad,#a32b25)}
+.c14hold,.c14ord,.c14new,.c14samet{fill:var(--accent,#0f6f6c)}
+.c14nd,.c14dot,.c14warnt,.c15nd{fill:var(--warn,#8a6100)}
+.c14base{fill:#8291a6}
+.c14vl{fill:var(--panel,#fff);font-size:10px;font-weight:600;text-anchor:middle}
+.c14v{font-size:10px;font-weight:600;text-anchor:middle}
+.c14vs,.c15ve{font-size:10px;font-weight:600}
+.c14ax{stroke:var(--rule,#d8dee7);stroke-width:1}
+.c14hl,.c15hl{fill:var(--accent-soft,#e2f0ef)}
+.c14ln{fill:none;stroke:var(--warn,#8a6100);stroke-width:2}
+.c14err{fill:var(--bad,#a32b25);font-size:10px;font-weight:600;text-anchor:middle}
+.c14lg,.c15vi{font-size:11px}
+.c15vi{font-weight:600;text-anchor:middle}
+.c15vl{font-size:12px;font-weight:600;text-anchor:middle}
+.c14xl{font-size:9px;fill:var(--ink-soft,#5a6472);text-anchor:end}
+.c14n{font-size:9px;fill:var(--ink-soft,#5a6472);text-anchor:middle}
+.c14cell{fill:var(--panel,#fff);stroke-width:1.6}
+.c14okb{stroke:var(--ok,#1f7a4d)}
+.c14warnb{stroke:var(--warn,#8a6100)}
+.c14badb{stroke:var(--bad,#a32b25)}
+.c14mutedb{stroke:var(--rule,#d8dee7);stroke-dasharray:3 3}
+.c14sameb{stroke:var(--accent,#0f6f6c)}
+.c14okt{fill:var(--ok,#1f7a4d)}
+.c14badt{fill:var(--bad,#a32b25)}
+.c14mutedt{fill:var(--ink-soft,#5a6472)}
+.c15box{fill:var(--panel,#fff);stroke:var(--rule,#d8dee7);stroke-width:1}
+.c15ar{fill:none;stroke:var(--ink-soft,#5a6472);stroke-width:1.5}
+.c15ah{fill:var(--ink-soft,#5a6472)}
 """
 
 PAGE = """<!doctype html>
@@ -3198,8 +3235,45 @@ def build() -> str:
         title = parts[0].strip() or title
         subtitle = parts[1].strip() if len(parts) > 1 else ""
 
+    def _bench_sort_key(path: Path) -> tuple[str, str]:
+        """Sort bench reports newest-first by front-matter date, stem date, or git/mtime."""
+        head = path.read_text(encoding="utf-8", errors="replace")[:600]
+        m_fm = re.search(r"^(?:updated|date)\s*:\s*['\"]?(\d{4}-\d{2}-\d{2})", head, re.M)
+        if m_fm:
+            return (m_fm.group(1), path.stem)
+        m_stem = re.search(r"(\d{4}-\d{2}-\d{2})", path.stem)
+        if m_stem:
+            return (m_stem.group(1), path.stem)
+        return (_last_touched(path)[:10], path.stem)
+
+    def _append_bench() -> None:
+        bench = sorted(BENCH_DIR.glob("*.md"), key=_bench_sort_key, reverse=True) if BENCH_DIR.is_dir() else []
+        if not bench:
+            return
+        nav_parts.append(f'<li class="part">{BENCH_PART}</li>')
+        body_parts.append(f'<div class="part-divider"><h2>{BENCH_PART}</h2></div>')
+        for path in bench:
+            md = path.read_text(encoding="utf-8")
+            bench_id = _bench_id(path.stem)
+            bench_ts = _last_touched(path)
+            touched.append(bench_ts)
+            m = re.search(r"^#\s+(.*)$", md, re.M)
+            nav_parts.append(
+                f'<li><a class="chapter" href="#{bench_id}">'
+                f'<span class="title-text">{html.escape(m.group(1).strip() if m else path.stem)}</span>'
+                f'<span class="freshness badge" data-ts="{html.escape(bench_ts)}"></span>'
+                f"</a></li>"
+            )
+            body_parts.append(
+                f'<section class="chapter" id="{bench_id}">'
+                f'<span class="freshness" data-ts="{html.escape(bench_ts)}"></span>'
+                f'<p class="eyebrow">{BENCH_PART}</p>'
+                f'{render_markdown(md, id_prefix=bench_id + "-")}</section>'
+            )
+
     nav_parts, body_parts, touched = [], [], []
     chap_no = 0
+    bench_rendered = False
     for group in _load_parts(chapters):
         if group["part"]:
             nav_parts.append(
@@ -3273,34 +3347,17 @@ def build() -> str:
                 f'<span class="freshness" data-ts="{html.escape(chap_ts)}"></span>'
                 f"{eyebrow}{_status_bar(meta)}{rendered}</section>"
             )
+        if not bench_rendered and (group["part"] or "").strip().lower() == "start here":
+            _append_bench()
+            bench_rendered = True
 
-    bench = sorted(BENCH_DIR.glob("*.md")) if BENCH_DIR.is_dir() else []
-    if bench:
-        nav_parts.append(f'<li class="part">{BENCH_PART}</li>')
-        body_parts.append(f'<div class="part-divider"><h2>{BENCH_PART}</h2></div>')
-    for path in bench:
-        md = path.read_text(encoding="utf-8")
-        bench_id = _bench_id(path.stem)
-        bench_ts = _last_touched(path)
-        touched.append(bench_ts)
-        m = re.search(r"^#\s+(.*)$", md, re.M)
-        nav_parts.append(
-            f'<li><a class="chapter" href="#{bench_id}">'
-            f'<span class="title-text">{html.escape(m.group(1).strip() if m else path.stem)}</span>'
-            f'<span class="freshness badge" data-ts="{html.escape(bench_ts)}"></span>'
-            f"</a></li>"
-        )
-        body_parts.append(
-            f'<section class="chapter" id="{bench_id}">'
-            f'<span class="freshness" data-ts="{html.escape(bench_ts)}"></span>'
-            f'<p class="eyebrow">{BENCH_PART}</p>'
-            f'{render_markdown(md, id_prefix=bench_id + "-")}</section>'
-        )
+    if not bench_rendered:
+        _append_bench()
 
     return PAGE.format(
         title=html.escape(title),
         subtitle=html.escape(subtitle),
-        css=CSS,
+        css=CSS + (_TRADING_CHART_CSS if ACTIVE_PROJECT == "trading-cycle" else ""),
         stamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         newest=html.escape(max(touched) if touched else ""),
         project_bar=_project_bar(),
@@ -3316,7 +3373,7 @@ def build() -> str:
 def _strip_stamp(page: str) -> str:
     """Compare pages ignoring TIMESTAMPS, so --check reports real content drift.
 
-    Two kinds of timestamp are neutralised, for the same reason:
+    Three kinds of wall-clock drift are neutralised, for the same reason:
 
     - the generation stamp, which differs on every rebuild;
     - the per-chapter ``data-ts`` freshness marks, whose SOURCE changes when a
@@ -3324,14 +3381,40 @@ def _strip_stamp(page: str) -> str:
       one by its commit date). Without this, `--check` failed immediately after
       every documentation commit and the Stop hook rebuilt, producing a fresh
       diff, which needed another commit — a loop that reported "stale" when
-      nothing a reader can see had changed.
+      nothing a reader can see had changed;
+    - open-ticket wall-clock age (``age (d)``) and ``review_by < today`` ``STALE``
+      pills in the generated ticket ledger and View 3 ticket rows, which advance
+      at UTC midnight even when neither ``chapters/`` nor ``tickets.jsonl`` moved.
+      (``REGRESSED`` pills come from git commit dates vs ``verified_by.last_run``
+      and remain unstripped so real code regressions still fail ``--check``.)
 
     Content drift still fails the check; only the clock is ignored. The marks
     refresh on the next real content rebuild, which is exactly when the thing
     they describe has actually moved.
     """
     page = re.sub(r"generated [^<]*", "", page)
-    return re.sub(r'data-ts="[^"]*"', 'data-ts=""', page)
+    page = re.sub(r'data-ts="[^"]*"', 'data-ts=""', page)
+    page = re.sub(
+        r"(<th>age \(d\)</th><th>flags</th></tr></thead><tbody>)(.*?)(</tbody>)",
+        lambda m: (
+            m.group(1)
+            + re.sub(
+                r"<td>-?\d*</td><td>(?:STALE|—)</td></tr>",
+                "<td></td><td>—</td></tr>",
+                m.group(2),
+            )
+            + m.group(3)
+        ),
+        page,
+        flags=re.DOTALL,
+    )
+    page = re.sub(
+        r'(<tr class="tck-row"[^>]*>.*?)(</tr>)',
+        lambda m: re.sub(r'<span class="pill warn">STALE</span> ', "", m.group(1)) + m.group(2),
+        page,
+        flags=re.DOTALL,
+    )
+    return page
 
 
 def status_report() -> list[dict]:
