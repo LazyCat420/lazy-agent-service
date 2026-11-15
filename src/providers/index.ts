@@ -2,8 +2,6 @@ import openaiProvider from "./openai.ts";
 import { EmbeddingGemma2Client, EMBEDDING_PROVIDER } from "../services/EmbeddingGemma2Client.ts";
 import anthropicProvider from "./anthropic.ts";
 import googleProvider from "./google.ts";
-import elevenlabsProvider from "./elevenlabs.ts";
-import inworldProvider from "./inworld.ts";
 import ActiveGenerationTracker from "../services/ActiveGenerationTracker.ts";
 import { getInstanceProvider, isInstance } from "./instance-registry.ts";
 import type { Provider } from "../types/provider.ts";
@@ -16,8 +14,6 @@ const providers: Record<string, Provider> = {
   [PROVIDERS.OPENAI]: openaiProvider as unknown as Provider,
   [PROVIDERS.ANTHROPIC]: anthropicProvider as Provider,
   [PROVIDERS.GOOGLE]: googleProvider as Provider,
-  [PROVIDERS.ELEVENLABS]: elevenlabsProvider as unknown as Provider,
-  [PROVIDERS.INWORLD]: inworldProvider as unknown as Provider,
 };
 
 /**

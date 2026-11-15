@@ -5,7 +5,7 @@ status: verified
 updated: 2026-11-13
 last-verified: 2026-11-13
 review-by: 2026-12-13
-covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:deploy.sh, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/boot/__tests__/healthProbe.test.ts, lazy-agent-service:src/services/__tests__/McpStdioGuard.test.ts, lazy-agent-service:src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts, lazy-agent-service:src/services/__tests__/TradingToolResolverIsolation.test.ts, lazy-agent-service:src/utils/__tests__/loopHonestyFields.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
+covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:deploy.sh, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/boot/__tests__/healthProbe.test.ts, lazy-agent-service:src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts, lazy-agent-service:src/services/__tests__/TradingToolResolverIsolation.test.ts, lazy-agent-service:src/utils/__tests__/loopHonestyFields.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
 ---
 
 # Verification and gates
@@ -52,7 +52,6 @@ waves that closed the CRAP tail (2026-10-31, `ded73cf`).
 
 | Behavior | Test / script |
 |---|---|
-| stdio MCP rows refused unless allowlisted; refused payloads spawn nothing; no `MONGO_*`/`*_KEY` env leaks to the allowlisted server | `src/services/__tests__/McpStdioGuard.test.ts` |
 | every caller endpoint lands on a native route (no `/prism-proxy`, no `:7777`) | `src/routes/__tests__/NativePrismExitRoutes.test.ts` |
 | request rows carry `createdAt` equal to `timestamp` + `toolApiNameCount` (prism audit shape) | `src/services/__tests__/RequestLoggerPrismParity.test.ts` |
 | shipped `tool_schemas.json` matches the `tool_schemas/<owner_app>/` shards | `src/services/__tests__/ToolSchemaExport.test.ts` + `python3 scripts/export_tool_schemas.py --check` |
@@ -62,7 +61,6 @@ waves that closed the CRAP tail (2026-10-31, `ded73cf`).
 | sandbox walls proven independently (ablation: each attack lands with its wall off, is blocked with it on) | `scripts/benchmarks/sandbox-redteam.mts` (6/6 PASS) |
 | hallucinated tool names resolve to canonical tools; string/Python-repr arg coercion | `src/core/loop/__tests__/ToolRunner.test.ts` |
 | trading-boundary: signed context required for `vllm-trading-bot`; markup-recovered calls carry it | `src/services/__tests__/NativeTradingBoundary.test.ts`, `src/providers/__tests__/` vllm/openai-compat cases |
-| `sse`/`streamable-http` rows to internal hosts, non-http(s) schemes or URL credentials → 403 on POST/PUT and `McpHttpRefusedError` at connect; allowlisted host connects (TCK-1019) | `src/services/__tests__/McpStdioGuard.test.ts` (with `McpServersPort.test.ts`, `McpGaps.test.ts` mocking `MCP_HTTP_ALLOWLIST`) |
 | Harness² library scoped per mode and per run; `- mode:`/`- run:` recorded and filtered; reserved scope names refused (TCK-1020) | `src/services/harness2/__tests__/Harness2Library.test.ts`, `src/routes/__tests__/Harness2Routes.test.ts` |
 | loop honesty fields (`answerSource`, `finalizeReason` including single-turn `CUT_OFF`, `providerAttempts`, `providerRetries`) emitted on SSE `done` and JSON `/agent` responses (`S-01`) | `src/utils/__tests__/loopHonestyFields.test.ts` |
 | deep `GET /health` probe: 2 s raced Mongo + enabled vLLM `/v1/models` checks (`ok` / `degraded` / `down`), 10 s shared-flight cache, URL credential redaction, disabled `jetson-2` excluded (`S-13`) | `src/boot/__tests__/healthProbe.test.ts` |

@@ -1,12 +1,10 @@
 /**
  * Durable conversation budget + budget pause, driven against a real
  * PromptedToolCallingHarness turn (scripted provider, real CostBudgetEnforcer,
- * real BudgetPauseRegistry, real express router). Only the Mongo collection
- * is an in-memory stand-in.
+ * real BudgetPauseRegistry, real ConversationBudgetRegistry). Only the Mongo
+ * collection is an in-memory stand-in.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import express from "express";
-import type { AddressInfo } from "node:net";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,7 +53,7 @@ vi.mock("../../config.ts", async (importOriginal) => {
 import PromptedToolCallingHarness from "../../services/harnesses/PromptedToolCallingHarness.ts";
 import AgenticLoopState from "../../services/AgenticLoopState.ts";
 import ConversationBudgetRegistry from "../../services/ConversationBudgetRegistry.ts";
-import budgetRouter from "../ConversationBudgetRoute.ts";
+import BudgetPauseRegistry from "../../services/BudgetPauseRegistry.ts";
 import type { AgenticContext, ToolSchema } from "../../services/harnesses/types.ts";
 
 const NOTE_CALL = '<tool_call>{"name": "take_note", "arguments": {"title": "T", "body": "B"}}</tool_call>';
@@ -64,29 +62,10 @@ const TOOLS: ToolSchema[] = [
 ];
 const usage = { inputTokens: 1, outputTokens: 1 }; // $2 at the mocked price
 
-let server: import("node:http").Server;
-let baseUrl = "";
-beforeAll(async () => {
-  const app = express();
-  app.use(express.json());
-  app.use("/conversations", budgetRouter);
-  await new Promise<void>((resolve) => {
-    server = app.listen(0, "127.0.0.1", resolve);
-  });
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-});
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 beforeEach(() => {
   store.clear();
   ConversationBudgetRegistry.reset();
 });
-
-const send = (method: string, id: string, body?: unknown) =>
-  fetch(`${baseUrl}/conversations/${id}/budget`, {
-    method,
-    headers: { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
 
 function provider(responses: Array<string | { text: string; usage: Record<string, number> }>) {
   return {
@@ -139,22 +118,23 @@ const notesWritten = (root: string) =>
 
 describe("conversation budget persistence", () => {
   it("is read back by a fresh registry instance (survives a restart)", async () => {
-    expect((await send("PUT", "c-persist", { maxCostDollars: 3, maxTotalTokens: 500 })).status).toBe(200);
-    expect((await send("PATCH", "c-persist", { maxCostDollars: 4 })).status).toBe(200);
+    await ConversationBudgetRegistry.set("c-persist", { maxCostDollars: 3, maxTotalTokens: 500 });
+    const current = await ConversationBudgetRegistry.get("c-persist");
+    await ConversationBudgetRegistry.set("c-persist", { ...current, maxCostDollars: 4 });
 
     vi.resetModules();
     const Fresh = (await import("../../services/ConversationBudgetRegistry.ts")).default;
     expect(Fresh).not.toBe(ConversationBudgetRegistry);
     expect(await Fresh.get("c-persist")).toEqual({ maxCostDollars: 4, maxTotalTokens: 500 });
 
-    expect((await send("DELETE", "c-persist")).status).toBe(200);
+    await ConversationBudgetRegistry.clear("c-persist");
     expect(await Fresh.get("c-persist")).toBeNull();
   });
 });
 
 describe("budget pause against a running turn", () => {
   it("pauses at the cap and resumes the SAME turn, running the tool, when the cap is raised", async () => {
-    await send("PUT", "c-resume", { maxCostDollars: 0.5 });
+    await ConversationBudgetRegistry.set("c-resume", { maxCostDollars: 0.5 });
     const { context, events } = makeContext("c-resume", provider([{ text: NOTE_CALL, usage }, "finished"]), {
       budgetPauseTimeoutMs: 10_000,
     });
@@ -167,23 +147,24 @@ describe("budget pause against a running turn", () => {
     });
     // Parked: the over-budget pass's tool has not run.
     expect(notesWritten(context.workspaceRoot!)).toBe(false);
-    expect((await (await send("GET", "c-resume")).json()).paused).toBe(true);
+    expect(BudgetPauseRegistry.isPaused("c-resume")).toBe(true);
 
     // A raise that still does not clear the spend keeps it paused.
-    expect((await (await send("PUT", "c-resume", { maxCostDollars: 1 })).json()).resumed).toBe(true);
+    await ConversationBudgetRegistry.set("c-resume", { maxCostDollars: 1 });
+    expect(BudgetPauseRegistry.raised("c-resume")).toBe(true);
     await new Promise((r) => setTimeout(r, 50));
-    expect((await (await send("GET", "c-resume")).json()).paused).toBe(true);
+    expect(BudgetPauseRegistry.isPaused("c-resume")).toBe(true);
     expect(notesWritten(context.workspaceRoot!)).toBe(false);
 
-    const raised = await send("PUT", "c-resume", { maxCostDollars: 100 });
-    expect((await raised.json()).resumed).toBe(true);
+    await ConversationBudgetRegistry.set("c-resume", { maxCostDollars: 100 });
+    expect(BudgetPauseRegistry.raised("c-resume")).toBe(true);
     await turn;
     expect(events.some((e) => e.type === "budget_resumed")).toBe(true);
     expect(notesWritten(context.workspaceRoot!)).toBe(true);
   });
 
   it("ends the turn when the pause times out unraised", async () => {
-    await send("PUT", "c-timeout", { maxCostDollars: 0.5 });
+    await ConversationBudgetRegistry.set("c-timeout", { maxCostDollars: 0.5 });
     const { context, events } = makeContext("c-timeout", provider([{ text: NOTE_CALL, usage }, "never"]), {
       budgetPauseTimeoutMs: 60,
     });
@@ -195,14 +176,14 @@ describe("budget pause against a running turn", () => {
   });
 
   it("ends a paused turn when the budget is deleted", async () => {
-    await send("PUT", "c-delete", { maxCostDollars: 0.5 });
+    await ConversationBudgetRegistry.set("c-delete", { maxCostDollars: 0.5 });
     const { context, events } = makeContext("c-delete", provider([{ text: NOTE_CALL, usage }, "never"]), {
       budgetPauseTimeoutMs: 10_000,
     });
     const turn = startTurn(context);
     await waitFor(() => events.some((e) => e.type === "budget_paused"));
-    const res = await send("DELETE", "c-delete");
-    expect((await res.json()).stopped).toBe(true);
+    await ConversationBudgetRegistry.clear("c-delete");
+    expect(BudgetPauseRegistry.stop("c-delete")).toBe(true);
     await turn;
     expect(notesWritten(context.workspaceRoot!)).toBe(false);
   });

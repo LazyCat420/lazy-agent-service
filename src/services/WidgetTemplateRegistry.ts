@@ -103,47 +103,8 @@ updateClock();
     ]
   ]);
 
-  static get(type: string): WidgetTemplate | undefined {
-    return this.templates.get(type);
-  }
-
   static list(): WidgetTemplate[] {
     return Array.from(this.templates.values());
-  }
-
-  /**
-   * Scope CSS rules by prefixing them with a widget container selector.
-   * e.g., `.clock-widget { ... }` becomes `#widget-1234 .clock-widget { ... }`
-   */
-  static scopeCSS(css: string, containerId: string): string {
-    if (!css) return "";
-    const prefix = `#${containerId}`;
-    
-    // Simple parser: prefix selectors not starting with @ or media queries
-    return css
-      .split("}")
-      .map((rule) => {
-        const parts = rule.split("{");
-        if (parts.length < 2) return rule;
-        const selector = parts[0].trim();
-        const body = parts[1];
-        
-        if (!selector || selector.startsWith("@") || selector.startsWith("from") || selector.startsWith("to")) {
-          return `${selector} {${body}`;
-        }
-        
-        const scopedSelector = selector
-          .split(",")
-          .map((subSelector) => {
-            const trimmed = subSelector.trim();
-            if (trimmed === ":root") return prefix;
-            return `${prefix} ${trimmed}`;
-          })
-          .join(", ");
-        
-        return `${scopedSelector} {${body}`;
-      })
-      .join("}");
   }
 
   /**

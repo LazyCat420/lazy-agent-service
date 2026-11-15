@@ -1,14 +1,13 @@
 /**
- * VisionLanguageHarness.run and ReActHarness.run — coverage of the loop bodies:
+ * ReActHarness.run — coverage of the loop body:
  * delegation to the branching strategies, first-iteration hooks, tool turns,
  * thinking-only re-prompts, truncation recovery, exhaustion recovery and the
  * error path. Every lifecycle collaborator (pressure, hooks, tools, planning,
- * reminders, budget, strategies, live frames) is a fake; the harness classes,
+ * reminders, budget, strategies) is a fake; the harness class,
  * AgenticLoopState and the loop control flow are real, and assertions read the
  * emitted events, injected messages and mutated loop state.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SERVER_SENT_EVENT_TYPES, STATUS_MESSAGES } from "@rodrigo-barraza/utilities-library/taxonomy";
 
 const fakes = vi.hoisted(() => ({
   createStandardHooks: vi.fn(),
@@ -31,7 +30,6 @@ const fakes = vi.hoisted(() => ({
   checkForPlanModeEntry: vi.fn(),
   injectToolDiscoveryNudge: vi.fn(),
   finalizePassTracker: vi.fn(),
-  getFrames: vi.fn(),
   injectPlanningInstruction: vi.fn(),
   localeGet: vi.fn(),
   getDefaultLocale: vi.fn(),
@@ -74,7 +72,6 @@ vi.mock("../harnesses/lifecycle/ToolDiscoveryNudge.ts", () => ({ injectToolDisco
 vi.mock("../harnesses/lifecycle/TrackerFinalizer.ts", () => ({ finalizePassTracker: fakes.finalizePassTracker }));
 vi.mock("../harnesses/strategies/TreeOfThoughtsStrategy.ts", () => ({ runTreeOfThoughts: fakes.runTreeOfThoughts }));
 vi.mock("../harnesses/strategies/GraphOfThoughtsStrategy.ts", () => ({ runGraphOfThoughts: fakes.runGraphOfThoughts }));
-vi.mock("../../LiveFrameService.ts", () => ({ default: { getFrames: fakes.getFrames } }));
 vi.mock("../PromptLocaleService.ts", () => ({
   default: {
     get: fakes.localeGet,
@@ -93,7 +90,6 @@ vi.mock("../../utils/logger.ts", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), success: vi.fn() },
 }));
 
-import VisionLanguageHarness from "../harnesses/VisionLanguageHarness.ts";
 import ReActHarness from "../harnesses/ReActHarness.ts";
 import AgenticLoopState from "../AgenticLoopState.ts";
 
@@ -152,100 +148,9 @@ beforeEach(() => {
   fakes.runPlanningPhase.mockResolvedValue({ planApproved: true });
   fakes.checkForPlanModeEntry.mockResolvedValue(undefined);
   fakes.injectPlanningInstruction.mockResolvedValue(undefined);
-  fakes.getFrames.mockReturnValue([]);
   fakes.localeGet.mockImplementation((_locale: string, key: string) => `locale:${key}`);
   fakes.getDefaultLocale.mockReturnValue("en");
   fakes.extractSteps.mockReturnValue(["step 1"]);
-});
-
-describe("VisionLanguageHarness.run", () => {
-  const makeVisionHarness = (passes: Any[], overrides: Any = {}) => {
-    const context = makeContext(overrides);
-    const state = new AgenticLoopState({ originalMessageCount: 1, planModeActive: false } as never) as Any;
-    state.loadedTools = new Set<string>();
-    const tools = { finalTools: [{ name: "read_file" }], resolvedEnabledTools: ["read_file"] };
-    const harness = new VisionLanguageHarness(context as never, state as never, tools as never) as Any;
-
-    let index = 0;
-    harness.createPassState = vi.fn(() => passes[index++] ?? makePass());
-    harness.registerTrackerRequest = vi.fn();
-    harness.createProviderStream = vi.fn(async () => streamOf([]));
-    harness.consumeStream = vi.fn(async () => {});
-    harness.logIteration = vi.fn();
-    harness.enforceContextWindow = vi.fn((messages: unknown[]) => messages);
-    harness.emitGenerationProgress = vi.fn();
-    harness.emitUsageUpdate = vi.fn();
-    harness.finalize = vi.fn(async () => {});
-    harness.checkAndApplyToolSetChanges = vi.fn();
-    return { harness, context, state };
-  };
-
-  it("injects the vision instruction, runs a text-only iteration and finalizes", async () => {
-    const { harness, context } = makeVisionHarness([makePass({ streamedText: "I see a cat" })], {
-      options: { maxIterations: 2, planFirst: true },
-    });
-
-    const result = await harness.run();
-
-    expect(context.emit).toHaveBeenCalledWith({ type: SERVER_SENT_EVENT_TYPES.STATUS, message: STATUS_MESSAGES.PLAN_MODE_ENTERED });
-    expect(result.messages[0]).toEqual({ role: "system", content: "locale:harness.visionFeed.instruction" });
-    expect(fakes.handleCodexPlanningResponse).toHaveBeenCalled();
-    expect(harness.finalize).toHaveBeenCalledWith(result.messages, expect.any(Object));
-    expect(fakes.logKVCacheHitRate).toHaveBeenCalledWith({}, 1, "VisionLanguageHarness");
-  });
-
-  it("appends the vision instruction to an existing system message", async () => {
-    const { harness, context } = makeVisionHarness([makePass({ streamedText: "done" })], {
-      options: { maxIterations: 1 },
-      messages: [{ role: "system", content: "existing" }],
-    });
-    await harness.run();
-    expect(context.messages[0].content).toBe("existinglocale:harness.visionFeed.instruction");
-  });
-
-  it("re-prompts on a thinking-only pass then breaks on empty output", async () => {
-    const { harness, state } = makeVisionHarness(
-      [makePass({ streamedThinking: "hmm" }), makePass()],
-      { options: { maxIterations: 3 } },
-    );
-    const result = await harness.run();
-    expect(result.messages).toContainEqual(
-      expect.objectContaining({ role: "user", content: expect.stringContaining("Do not repeat your reasoning") }),
-    );
-    expect(state.iterations).toBe(2);
-    expect(harness.finalize).toHaveBeenCalled();
-  });
-
-  it("recovers from truncation by escalating maxTokens", async () => {
-    fakes.isOutputTruncated.mockReturnValue(true);
-    const { harness, context } = makeVisionHarness([makePass()], { options: { maxIterations: 1, maxTokens: 2048 } });
-    await harness.run();
-    expect(context.options.maxTokens).toBe(3072);
-    expect(harness.finalize).toHaveBeenCalled();
-  });
-
-  it("executes a tool turn and returns early when the plan is rejected", async () => {
-    const { harness, context } = makeVisionHarness(
-      [makePass({ pendingToolCalls: [{ id: "t1", name: "exit_plan_mode" }] })],
-      { options: { maxIterations: 2, unattended: true } },
-    );
-    fakes.executeToolBatch.mockResolvedValue([{ id: "t1", name: "exit_plan_mode", result: {} }]);
-    const result = await harness.run();
-    expect(fakes.executeToolBatch).toHaveBeenCalled();
-    expect(context.emit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: SERVER_SENT_EVENT_TYPES.DONE }),
-    );
-    expect(result.messages.length).toBeGreaterThan(0);
-    expect(harness.finalize).not.toHaveBeenCalled();
-  });
-
-  it("persists the error path and rethrows", async () => {
-    const { harness, state } = makeVisionHarness([], { options: { maxIterations: 1 } });
-    harness.createProviderStream.mockRejectedValue(new Error("vision provider down"));
-    harness.finalize.mockRejectedValue(new Error("persist failed"));
-    await expect(harness.run()).rejects.toThrow("vision provider down");
-    expect(state.conversationOutcome).toBe("error");
-  });
 });
 
 describe("ReActHarness.run", () => {

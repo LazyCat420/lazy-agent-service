@@ -45,8 +45,7 @@ import PromptedToolCallingHarness from "../../services/harnesses/PromptedToolCal
 import AgenticLoopState from "../../services/AgenticLoopState.ts";
 import ConversationBudgetRegistry from "../../services/ConversationBudgetRegistry.ts";
 import { pendingApprovals, pendingQuestions } from "../../services/ApprovalRegistry.ts";
-import conversationRouter from "../ConversationExecutionRoute.ts";
-import budgetRouter from "../ConversationBudgetRoute.ts";
+import agentRouter from "../AgentRoutes.ts";
 import type { AgenticContext, ToolSchema } from "../../services/harnesses/types.ts";
 
 const NOTE_CALL = '<tool_call>{"name": "take_note", "arguments": {"title": "T", "body": "B"}}</tool_call>';
@@ -64,8 +63,7 @@ let baseUrl = "";
 beforeAll(async () => {
   const app = express();
   app.use(express.json());
-  app.use("/conversations", budgetRouter);
-  app.use("/conversation", conversationRouter);
+  app.use("/agent", agentRouter);
   await new Promise<void>((resolve) => {
     server = app.listen(0, "127.0.0.1", resolve);
   });
@@ -144,7 +142,7 @@ describe("POST /conversation/approve against a parked turn", () => {
     expect(events.some((e) => e.type === "approval_required")).toBe(true);
     expect(notesWritten(context.workspaceRoot!)).toBe(false);
 
-    const res = await post("/conversation/approve", { conversationId: "c-allow", decision: "allow" });
+    const res = await post("/agent/approve", { conversationId: "c-allow", decision: "allow" });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, approved: true, decision: "allow" });
     await turn;
@@ -159,7 +157,7 @@ describe("POST /conversation/approve against a parked turn", () => {
     const turn = startTurn(context);
     await waitFor(() => pendingApprovals.has("c-deny"));
 
-    const res = await post("/conversation/approve", { conversationId: "c-deny", approved: false, reason: "no" });
+    const res = await post("/agent/approve", { conversationId: "c-deny", approved: false, reason: "no" });
     expect(res.status).toBe(200);
     await turn;
     expect(notesWritten(context.workspaceRoot!)).toBe(false);
@@ -167,12 +165,12 @@ describe("POST /conversation/approve against a parked turn", () => {
   });
 
   it("rejects a body with no decision (400) and an unknown conversation (404)", async () => {
-    expect((await post("/conversation/approve", { conversationId: "x", approved: "yes" })).status).toBe(400);
-    expect((await post("/conversation/approve", { conversationId: "nobody", decision: "allow" })).status).toBe(404);
+    expect((await post("/agent/approve", { conversationId: "x", approved: "yes" })).status).toBe(400);
+    expect((await post("/agent/approve", { conversationId: "nobody", decision: "allow" })).status).toBe(404);
   });
 });
 
-describe("POST /conversation/answer against a parked ask_user turn", () => {
+describe("POST /agent/answer against a parked ask_user turn", () => {
   it("continues the turn with the posted answer", async () => {
     const calls: Array<Array<{ content: unknown }>> = [];
     const { context, events } = makeContext("c-ask", provider([ASK_CALL, "deploying to dev"], calls as unknown[]), {
@@ -183,31 +181,25 @@ describe("POST /conversation/answer against a parked ask_user turn", () => {
     const card = events.find((e) => e.type === "user_question") as { questionId: string };
     expect(card.questionId).toBeTruthy();
 
-    const wrongCard = await post("/conversation/answer", { conversationId: "c-ask", questionId: "q-other", answer: "dev" });
+    const wrongCard = await post("/agent/answer", { conversationId: "c-ask", questionId: "q-other", answer: "dev" });
     expect(wrongCard.status).toBe(404);
 
-    const res = await post("/conversation/answer", { conversationId: "c-ask", questionId: card.questionId, answer: "dev" });
+    const res = await post("/agent/answer", { conversationId: "c-ask", questionId: card.questionId, answer: "dev" });
     expect(res.status).toBe(200);
     await turn;
     expect(JSON.stringify(calls[1])).toMatch(/\\"answer\\": \\"dev\\"/);
 
-    const again = await post("/conversation/answer", { conversationId: "c-ask", questionId: card.questionId, answer: "prod" });
+    const again = await post("/agent/answer", { conversationId: "c-ask", questionId: card.questionId, answer: "prod" });
     expect(again.status).toBe(409);
   });
 });
 
-describe("PUT /conversations/:id/budget against a running turn", () => {
+describe("ConversationBudgetRegistry against a running turn", () => {
   const usage = { inputTokens: 1, outputTokens: 1 };
 
   it("stops the turn after the pass that exceeds the cap", async () => {
-    const put = await fetch(`${baseUrl}/conversations/c-budget/budget`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ maxCostDollars: 0.5 }),
-    });
-    expect(put.status).toBe(200);
-    const got = await (await fetch(`${baseUrl}/conversations/c-budget/budget`)).json();
-    expect(got).toEqual({ conversationId: "c-budget", budget: { maxCostDollars: 0.5 }, paused: false });
+    await ConversationBudgetRegistry.set("c-budget", { maxCostDollars: 0.5 });
+    expect(await ConversationBudgetRegistry.get("c-budget")).toEqual({ maxCostDollars: 0.5 });
 
     const calls: unknown[] = [];
     const { context, events } = makeContext(
@@ -228,14 +220,5 @@ describe("PUT /conversations/:id/budget against a running turn", () => {
     await startTurn(context);
     expect(calls).toHaveLength(2);
     expect(notesWritten(context.workspaceRoot!)).toBe(true);
-  });
-
-  it("rejects a non-positive cap", async () => {
-    const res = await fetch(`${baseUrl}/conversations/c-bad/budget`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ maxCostDollars: 0 }),
-    });
-    expect(res.status).toBe(400);
   });
 });

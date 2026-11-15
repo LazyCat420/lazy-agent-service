@@ -256,5 +256,3 @@ async function invokeDelegateLoop(params: DelegateLoopParams): Promise<unknown> 
     };
   }
 }
-
-export default DelegateTool;

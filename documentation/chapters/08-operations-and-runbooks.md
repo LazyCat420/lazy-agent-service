@@ -67,15 +67,8 @@ and the `PRISM_MCP_*` compose variables are deleted and nothing forwards to `:77
 see a `PrismMcpRedial` or `prism-proxy` line in a current deploy, that is a regression —
 open a P1 ticket.
 
-Current MCP operations:
-
-```bash
-curl -s http://10.0.0.16:5591/mcp-servers | python3 -m json.tool   # registry rows: enabled/connected
-curl -s -X POST http://10.0.0.16:5591/mcp-servers/<id>/connect     # re-dial an sse/http row
-```
-
-A stdio row will be refused unless its exact command is in `MCP_STDIO_COMMANDS` (ch.12).
-Boot auto-connect runs `connectAllFromDB` through the same guard.
+Note: outbound MCP client rows (`/mcp-servers`, `MCPClientService`, `/mcp/oauth`) were retired
+in Wave 4C; only the inbound `McpAdapter` transport (`/mcp/sse`, `/mcp/messages`) remains.
 
 ## Diagnosing a tool timeout / stuck run
 
@@ -106,13 +99,10 @@ stdout retention is ~1–1.5 h (`max-size=10m, max-file=3`); anything older come
 durable sources above. Long agent sessions keep running when the SSE client disconnects —
 stop one deliberately via `POST /agent/stop`, never by killing the container.
 
-## MCP network rows after TCK-1019
+## MCP inbound server (`McpAdapter`)
 
-An `sse`/`streamable-http` row that pointed at a LAN host (`10.0.0.x`) or at the NAS itself now
-gets `403` on save and is skipped at boot. To keep one, add its host or origin to
-`MCP_HTTP_ALLOWLIST` (comma-separated) in the deploy environment and redeploy; then
-`POST /mcp-servers/<id>/connect`. A `403` on that route names the refusal reason. URL
-credentials are never accepted — move them to headers or OAuth.
+Outbound MCP client rows (`/mcp-servers`, `MCP_HTTP_ALLOWLIST`) were removed in Wave 4C. Inbound
+MCP clients connect to `GET /mcp/sse` + `POST /mcp/messages`.
 
 ## scraper-service runbooks
 

@@ -410,20 +410,18 @@ describe("onListening", () => {
       evalChaosEnabled: () => false,
       registerEvalChaos: vi.fn(async () => undefined),
       syncPersonas: vi.fn(async () => undefined),
-      connectMcpServers: vi.fn(async () => undefined),
       ...overrides,
     };
     return Object.assign(deps, { cleanups });
   }
 
-  it("logs the banner, syncs personas and reconnects MCP servers", async () => {
+  it("logs the banner and syncs personas", async () => {
     const deps = makeListening();
 
     await onListening(deps);
 
     expect(deps.logger.info).toHaveBeenCalled();
     expect(deps.syncPersonas).toHaveBeenCalled();
-    expect(deps.connectMcpServers).toHaveBeenCalled();
   });
 
   it("keeps going when profile loading fails", async () => {
@@ -450,17 +448,5 @@ describe("onListening", () => {
     await onListening(on);
     expect(on.registerEvalChaos).toHaveBeenCalled();
     expect(on.logger.warn).toHaveBeenCalledWith(expect.stringContaining("[EvalChaos]"));
-  });
-
-  it("logs a failed MCP reconnect without failing boot", async () => {
-    const deps = makeListening({
-      connectMcpServers: async () => {
-        throw new Error("mcp down");
-      },
-    });
-
-    await onListening(deps);
-
-    expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining("MCP auto-connect failed"));
   });
 });

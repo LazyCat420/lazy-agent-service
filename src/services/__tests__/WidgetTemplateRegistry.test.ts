@@ -2,25 +2,6 @@ import { describe, it, expect } from "vitest";
 import { WidgetTemplateRegistry } from "../WidgetTemplateRegistry.ts";
 
 describe("WidgetTemplateRegistry", () => {
-  describe("scopeCSS", () => {
-    const css = `.clock-widget { color: red; }
-.time, .date { font-weight: bold; }
-@keyframes fade { from { opacity: 0; } }`;
-    const scopedCss = WidgetTemplateRegistry.scopeCSS(css, "widget-123");
-
-    it("prefixes class selectors with the widget id", () => {
-      expect(scopedCss).toContain("#widget-123 .clock-widget");
-    });
-
-    it("prefixes every selector in a comma-separated list", () => {
-      expect(scopedCss).toContain("#widget-123 .time, #widget-123 .date");
-    });
-
-    it("leaves @ rules untouched", () => {
-      expect(scopedCss).toContain("@keyframes fade");
-    });
-  });
-
   describe("validateHTML", () => {
     it("accepts well-formed HTML", () => {
       const validation = WidgetTemplateRegistry.validateHTML(

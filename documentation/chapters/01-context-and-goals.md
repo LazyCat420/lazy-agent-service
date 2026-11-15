@@ -25,8 +25,8 @@ covers: lazy-agent-service:src/index.ts, lazy-agent-service:src/services/Agentic
 2. **An MCP tool server + registry.** `tool_schemas.json` — **78 tools** across
    `trading` (market data, screener, execution, whiteboard, watch desk, parameter
    governance, research scheduling), `html-notes` (21 + 5), `shared` (web search/extract,
-   news, quality) and `treesearch` (cannabis research, 8) — is served over `/mcp-servers`
-   MCP transports and routed locally by `ToolOrchestratorService` / `LocalToolRouter`.
+   news, quality) and `treesearch` (cannabis research, 8) — is exposed over `McpAdapter`
+   `/mcp/sse` + `/execute` and routed locally by `ToolOrchestratorService` / `LocalToolRouter`.
 3. **A local-LLM router.** `DynamicModelResolver` admits requests to the vLLM cluster
    (DGX Spark DeepSeek/GLM, Dell Qwen, Jetson Nemotron) with health-based fallback;
    `wallgarden/JetsonGate` protects the 2-slot Jetson; the shared `/embed` endpoint fronts

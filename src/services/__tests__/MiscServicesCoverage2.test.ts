@@ -1,7 +1,7 @@
 /**
  * Miscellaneous services — RequestLogger background-call logging, the custom
- * persona registry, ChangeStream event fan-out, background housekeeping, the
- * experiment engine and web extract Q&A.
+ * persona registry, ChangeStream event fan-out, background housekeeping and web
+ * extract Q&A.
  *
  * All persistence, MinIO, filesystem, provider and settings boundaries are
  * fakes; the services themselves are real and assertions read the documents
@@ -20,7 +20,6 @@ const fakes = vi.hoisted(() => ({
   readdir: vi.fn(),
   stat: vi.fn(),
   rm: vi.fn(),
-  runSingleModel: vi.fn(),
   getModelByName: vi.fn(),
   settingsGetSection: vi.fn(),
   resolveAuxModel: vi.fn(),
@@ -51,7 +50,6 @@ vi.mock("node:fs/promises", () => ({
   mkdir: vi.fn(),
   writeFile: vi.fn(),
 }));
-vi.mock("../BenchmarkService.ts", () => ({ runSingleModel: fakes.runSingleModel }));
 vi.mock("../SettingsService.ts", () => ({ default: { getSection: fakes.settingsGetSection } }));
 vi.mock("../DynamicModelResolver.ts", () => ({
   DynamicModelResolver: {
@@ -74,7 +72,6 @@ import RequestLogger from "../RequestLogger.ts";
 import AgentPersonaRegistry from "../AgentPersonaRegistry.ts";
 import ChangeStreamService from "../ChangeStreamService.ts";
 import BackgroundHousekeepingService from "../BackgroundHousekeepingService.ts";
-import { ExperimentService } from "../ExperimentService.ts";
 import { webExtractAnswered, __resetWebExtractForTests } from "../WebExtractService.ts";
 
 type Any = Record<string, unknown>;
@@ -798,90 +795,6 @@ describe("BackgroundHousekeepingService.run", () => {
 
     expect(result.minioOrphans).toEqual({ removed: 0 });
     expect(fakes.minioListObjects).not.toHaveBeenCalled();
-  });
-});
-
-describe("ExperimentService.runExperiment", () => {
-  const request = (overrides: Any = {}) => ({
-    benchmark: { id: "b1", name: "bench", prompt: "do it" },
-    baseline: { provider: "lm-studio", model: "base-model" },
-    candidate: { provider: "lm-studio", model: "candidate-model", display_name: "Candidate" },
-    trials: 20,
-    minDetectableEffect: 0.2,
-    ...overrides,
-  });
-
-  it("reports improved when the candidate wins every trial with enough power", async () => {
-    fakes.runSingleModel.mockImplementation(async (_benchmark: Any, entry: Any) => ({
-      passed: entry.model === "candidate-model",
-      latency: 100,
-      usage: { total_tokens: 10 },
-    }));
-
-    const result = await ExperimentService.runExperiment(request() as never);
-
-    expect(result).toMatchObject({
-      powerOk: true,
-      requiredTrials: 20,
-      delta: 1,
-      outcome: "improved",
-    });
-    expect(result.baseline).toMatchObject({ trials: 20, passed: 0, passRate: 0, meanLatencyMs: 100 });
-    expect(result.candidate).toMatchObject({ trials: 20, passed: 20, passRate: 1 });
-    expect(result.candidate.target).toMatchObject({ display_name: "Candidate" });
-    expect(result.pairedDeltas).toHaveLength(20);
-    expect(result.ciLower).toBeGreaterThan(0);
-  });
-
-  it("reports regressed when the candidate loses every trial", async () => {
-    fakes.runSingleModel.mockImplementation(async (_benchmark: Any, entry: Any) => ({
-      passed: entry.model === "base-model",
-    }));
-
-    const result = await ExperimentService.runExperiment(request() as never);
-    expect(result.outcome).toBe("regressed");
-    expect(result.ciUpper).toBeLessThan(0);
-  });
-
-  it("reports inconclusive below the power requirement", async () => {
-    fakes.runSingleModel.mockResolvedValue({ passed: true });
-    const result = await ExperimentService.runExperiment(request({ trials: 3 }) as never);
-    expect(result).toMatchObject({ powerOk: false, outcome: "inconclusive", requiredTrials: 20 });
-  });
-
-  it("reports neutral when both arms perform identically", async () => {
-    fakes.runSingleModel.mockResolvedValue({ passed: true });
-    const result = await ExperimentService.runExperiment(
-      request({ trials: 20, minDetectableEffect: 0.2 }) as never,
-    );
-    expect(result.powerOk).toBe(true);
-    expect(result.delta).toBe(0);
-    expect(result.ciLower).toBe(0);
-    expect(result.ciUpper).toBe(0);
-    expect(result.outcome).toBe("neutral");
-  });
-
-  it("stops early when the signal is aborted", async () => {
-    const controller = new AbortController();
-    fakes.runSingleModel.mockImplementation(async () => {
-      controller.abort();
-      return { passed: true };
-    });
-    const result = await ExperimentService.runExperiment(request({ signal: controller.signal }) as never);
-    expect(result.baseline.trials).toBe(1);
-    expect(result.candidate.trials).toBe(1);
-  });
-
-  it("collects failure reasons and defaults missing usage to zero", async () => {
-    fakes.runSingleModel.mockImplementation(async (_benchmark: Any, entry: Any) => ({
-      passed: false,
-      error: `${entry.model} failed`,
-    }));
-    const result = await ExperimentService.runExperiment(request({ trials: 20 }) as never);
-    expect(result.baseline.failures).toHaveLength(10);
-    expect(result.baseline.failures[0]).toBe("base-model failed");
-    expect(result.baseline.meanTokens).toBe(0);
-    expect(result.label).toMatch(/^experiment-/);
   });
 });
 

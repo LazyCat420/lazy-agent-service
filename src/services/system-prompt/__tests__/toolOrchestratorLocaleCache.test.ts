@@ -27,14 +27,6 @@ vi.mock("../../../config.ts", async (importOriginal) => ({
   TOOLS_SERVICE_URL: "http://mock-tools-service:9999",
 }));
 
-vi.mock("../../MCPClientService.ts", () => ({
-  default: {
-    getConnectedClients: vi.fn().mockReturnValue([]),
-    getAllToolSchemas: vi.fn().mockReturnValue([]),
-    getToolSchemas: vi.fn().mockReturnValue([]),
-  },
-}));
-
 vi.mock("../../AgentPersonaRegistry.ts", () => ({
   default: {
     get: vi.fn().mockReturnValue(null),

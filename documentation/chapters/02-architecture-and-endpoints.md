@@ -5,16 +5,15 @@ status: verified
 updated: 2026-11-15
 last-verified: 2026-11-15
 review-by: 2026-12-15
-covers: lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/routes/AgentRoutes.ts, lazy-agent-service:src/routes/Harness2Routes.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:src/services/AgentSessionRegistry.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/utils/LoopHonestyFields.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
+covers: lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/routes/AgentRoutes.ts, lazy-agent-service:src/routes/Harness2Routes.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:src/services/AgentSessionRegistry.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/utils/LoopHonestyFields.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
 ---
 
 # Architecture and endpoints
 
 One Express process (`src/index.ts` → `src/boot/server.ts`), listening on `PORT` (NAS `:5591`),
 with a single endpoint registry used by the health check and boot log. All mounts live in
-`src/boot/server.ts`; identity middleware (`AuthMiddleware`, which copies `x-project` /
-`x-username` for scoping) applies after `/files`, `/mcp/oauth` and before everything
-else.
+`src/boot/server.ts`; `AuthMiddleware` (which copies `x-project` / `x-username` for scoping)
+applies before all authenticated REST routers.
 
 ## Core HTTP & SSE endpoints
 
@@ -28,9 +27,9 @@ else.
 | `/chat` | POST (+ static `public/chat`) | First-party chat UI and OpenAI-style chat turns on the same loop |
 | `/embed` | POST | Shared EmbeddingGemma 2 embeddings, single text or `texts` batch 1–32 (ch.06) |
 | `/v1/embeddings` | POST | OpenAI-shaped wrapper over the same model/queue/spaces |
-| `/mcp-servers` | CRUD + POST `/:id/connect` | MCP server registry rows and connect; **stdio rows refused unless the command is on `MCP_STDIO_COMMANDS`** (ch.12). `POST /mcp` is the MCP transport surface (`/mcp/oauth` for OAuth flows). |
+| `/mcp/sse`, `/mcp/messages` | GET/POST | Inbound MCP server transport (`McpAdapter.ts`) exposing local/trading tools |
 | `/custom-agents` | GET/POST/PUT | The shared agent registry (`prism.custom_agents` collection; all trading V3 agents included) |
-| `/conversations`, `/agent-memories` | various | Conversation history, agent memories |
+| `/conversations` | various | Conversation history |
 | `/obsidian-completions(/:id)` | PUT/GET | Durable model completions for the LLMSortObsidian plugin; SSE push on GET (ch.03) |
 | `/api/wallgarden/*` | POST/GET | youtube-wallgarden LLM jobs behind `JetsonGate` (ch.04) |
 | `/config`, `/config/agents` | GET | `textToText.models` provider map consumed by lazycat-sdk |
@@ -50,10 +49,13 @@ first-party chat UI re-attaches to the durable record.
 
 ## MCP surface and the Prism history
 
-Today: `MCPClientService` connects outbound MCP servers (sse / streamable-http; stdio only via
-the allowlist) from the `prism.mcp_servers` collection, exposes this service's 78 tools as an
-MCP server itself, and `LocalToolRouter` answers the local families (`html_notes_*`,
-`canvas_*`, `strain_*`, `lazy_web_search`) without leaving the process.
+Today: the outbound MCP client (`MCPClientService`, `/mcp-servers`, `/mcp/oauth`), built-in TTS
+(`/text-to-audio`, `elevenlabs`, `inworld`), live video frame streaming (`VisionLanguageHarness`,
+`LiveFrameService`), unused non-vLLM local providers (`lm-studio`, `llama-cpp`, `ollama`), and
+other zero-caller REST routers were removed in Wave 4C. The service exposes its own tools as an
+inbound MCP server via `McpAdapter.ts` (`/mcp/sse`, `/mcp/messages`), and `LocalToolRouter`
+answers the local families (`html_notes_*`, `canvas_*`, `strain_*`, `lazy_web_search`) without
+leaving the process.
 
 **Prism MCP redial & registration (historical).** Until 2026-10-31 prism-service dialed this
 service's MCP server once at its own boot, so after every lazy-agent-service deploy the trading
@@ -99,7 +101,7 @@ caller → AuthMiddleware → AgentRoutes POST /agent
   → AgenticLoopService → core loop (ch.03)
       → DynamicModelResolver (ch.04) → vLLM box
       → ToolRunner → decideToolCall → ToolOrchestratorService
-          → LocalToolRouter | MCP client | trading bridge (ch.05)
+          → LocalToolRouter | trading bridge (ch.05)
   → SSE frames back to caller; request row + spans recorded (ch.07)
 ```
 

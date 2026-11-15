@@ -185,9 +185,9 @@ describe("config.ts — resolveRecommendedDefault priority ladder", () => {
   });
 
   it("walks to any provider that has an eligible model", () => {
-    expect(resolveRecommendedDefault(TYPES.TEXT, TYPES.AUDIO, new Set(["inworld"]))).toMatchObject({
-      provider: "inworld",
-      model: "inworld-tts-2",
+    expect(resolveRecommendedDefault(TYPES.TEXT, TYPES.AUDIO, new Set(["elevenlabs"]))).toMatchObject({
+      provider: "elevenlabs",
+      model: "eleven_turbo_v2",
     });
   });
 

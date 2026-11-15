@@ -7,7 +7,6 @@ import { newsSearch, newsProviderStatus } from "./NewsSearchService.ts";
 import { filterResultsByDomain, webSearch, webSearchStatus, withSiteSearch } from "./WebSearchService.ts";
 import { CATEGORIES } from "./EditorialHeadlinesService.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
-import MCPClientService from "./MCPClientService.ts";
 import {
   chargeScrape,
   deadUrlRefusal,
@@ -679,11 +678,6 @@ export async function routeLocalTool(
 ): Promise<unknown> {
   const tName = stripMcpPrefix(toolName);
   const cycleId = context.cycleId || "";
-
-  const remote = MCPClientService.parseMCPToolName(toolName);
-  if (remote && MCPClientService.isConnected(remote.serverName)) {
-    return MCPClientService.callTool(remote.serverName, remote.toolName, toolArguments);
-  }
 
   if (tName.startsWith("strain_")) {
     return await routeStrainTool(tName, toolArguments);

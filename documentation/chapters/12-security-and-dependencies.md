@@ -5,7 +5,7 @@ status: verified
 updated: 2026-11-15
 last-verified: 2026-11-15
 review-by: 2026-12-15
-covers: lazy-agent-service:src/services/MCPClientService.ts, lazy-agent-service:src/services/AgenticToolResolver.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/routes/ExecuteRoutes.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:package.json, lazy-agent-service:Dockerfile, lazy-agent-service:scripts/rotate-execute-key.sh, lazy-agent-service:config.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, scraper-service:scraper_main.py, scraper-service:requirements.txt, spark-console:requirements.txt, tts-service:requirements.txt
+covers: lazy-agent-service:src/services/AgenticToolResolver.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/routes/ExecuteRoutes.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:package.json, lazy-agent-service:Dockerfile, lazy-agent-service:scripts/rotate-execute-key.sh, lazy-agent-service:config.ts, scraper-service:scraper_main.py, scraper-service:requirements.txt, spark-console:requirements.txt, tts-service:requirements.txt
 ---
 
 # Security and dependencies
@@ -23,50 +23,16 @@ each capability, not a login:
 
 | Capability | Boundary | Proof |
 |---|---|---|
-| Spawn a process | stdio MCP allowlist | `McpStdioGuard.test.ts` |
 | Run arbitrary JS | permission-locked sandbox child, fails closed | `sandbox-redteam.mts` |
 | Spend external API budget | `EXECUTE_API_KEY` on `/execute`; per-run scrape/tool budgets on trading runs | `ExecuteApiKey.test.ts`, budget tests in `src/core/loop/__tests__/` |
 | Trade | signed `_lazy_trading_context`; unsigned/forged → `PERMISSION_DENIED` | `NativeTradingBoundary.test.ts` |
 | Trading tool-surface isolation | `AgenticToolResolver` unlocks core tools and strips unrequested `CORE_AGENTIC_TOOLS` (`search_web`), `CORE_ORCHESTRATOR_TOOLS`, and `system` tools in trading contexts (`T3`, `f10b64d`) | `TradingToolResolverIsolation.test.ts` |
-| Read every env var | sandbox gets an empty env; allowlisted stdio servers get a sentinel-checked env, never `process.env` wholesale | `McpStdioGuard.test.ts`, `buildStdioEnv` |
+| Read every env var | sandbox gets an empty env | `sandbox-redteam.mts` |
 | Reach internals via URL | `url_guard` private-address checks + redirect re-checks | see SSRF below |
-| Point an MCP row at an internal URL | `httpRefusalReason` + `MCP_HTTP_ALLOWLIST` | `McpStdioGuard.test.ts` (TCK-1019) |
 
-## stdio MCP guard
+## Outbound MCP client (retired Wave 4C)
 
-One guard: `assertStdioAllowed` in `MCPClientService.connect()` — called by the `/:id/connect`
-route, boot auto-connect (`connectAllFromDB`), `reconnect`, `authenticate` and the OAuth
-callback — and repeated in `createTransport` right before `StdioClientTransport` is built. A row
-is refused unless its exact `command` is on `MCP_STDIO_COMMANDS` (comma-separated absolute paths,
-documented in `.env.example`). Never list an interpreter (`node`, `npx`, `python`, `sh`, `bash`):
-a row's `args` stay caller-controlled and `-e` re-opens code execution. `PUT enabled:false` on a
-refused row is still allowed so an owner can turn someone else's row off. The refused-path tests
-use a payload that would write a marker file and prove nothing was spawned; the allowlisted test
-spawns a real fixture server and asserts no `MONGO_*`, `DATABASE_URL` or `*_KEY` variable reaches
-it.
-
-## sse / streamable-http MCP guard (SSRF, TCK-1019)
-
-The same shape guards the network transports. `httpRefusalReason(row)` in
-`MCPClientService.ts` refuses an `sse` or `streamable-http` row when its URL is missing or
-unparseable, is not `http:`/`https:`, carries credentials (`user:pass@`), or names an internal
-host: `localhost`, `*.localhost`, `*.internal`, `0.0.0.0/8`, `127/8`, `10/8`, `172.16/12`,
-`192.168/16`, `169.254/16` (cloud metadata), `::1`, `::`, `fc00::/7`, `fe80::/10` and
-IPv4-mapped IPv6 forms of all of these. Scheme and credential refusals are absolute; the only
-way past the internal-host check is `MCP_HTTP_ALLOWLIST` in
-`config.ts`: comma-separated hosts or origins from the `MCP_HTTP_ALLOWLIST` env var, plus the
-origin of `LAZY_AGENT_SERVICE_PUBLIC_URL`. A refused URL gets:
-
-- `403` on `POST /mcp-servers` and on `PUT /mcp-servers/:id` when the effective row (stored
-  values plus the update) would be refused — `PUT enabled:false` without a URL change stays
-  allowed, as for stdio rows;
-- `McpHttpRefusedError` from `connect()` and again in `createTransport` (mapped to `403` on
-  `/:id/connect`); boot auto-connect (`connectAllFromDB`) skips refused rows.
-
-LAN MCP servers (`10.0.0.x`) therefore need their host on `MCP_HTTP_ALLOWLIST` before they will
-connect. Proof: the `sse / streamable-http SSRF guard (TCK-1019)` block in
-`McpStdioGuard.test.ts` (refused URL shapes on POST/PUT/connect, and an allowlisted stub that
-does connect).
+`MCPClientService`, `/mcp-servers`, and `/mcp/oauth` were removed completely in Wave 4C (the process no longer spawns stdio MCP subprocesses or dials external MCP servers). Only the inbound `McpAdapter` `/mcp/sse` endpoint remains.
 
 ## /execute and the execute key
 
@@ -82,7 +48,7 @@ verifies 401/200, copies to clipboard, never prints the secret (`--no-deploy` wr
 ## SSRF: fetch and scrape
 
 Outbound fetch (web extract, scrape_url) resolves against private-address blocks before the
-request, and MCP `sse`/`streamable-http` rows pass the guard above; the trading bridge additionally enforces per-run scrape budgets —
+request; the trading bridge additionally enforces per-run scrape budgets —
 dead URLs are recorded dead for the run, refused without re-charging, and the per-run maps
 (including known-dead entries) are pruned with the other run state (`a989f16`). Text that is not
 a URL is not charged to the budget (`174db2a`). Redirect hops are re-checked on the scraper side

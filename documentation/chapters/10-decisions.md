@@ -5,7 +5,7 @@ status: verified
 updated: 2026-11-07
 last-verified: 2026-11-07
 review-by: 2026-12-07
-covers: lazy-agent-service:src/services/ToolAuthorization.ts, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:src/services/MCPClientService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/services/harness2/Library.ts, spark-console:console.py
+covers: lazy-agent-service:src/services/ToolAuthorization.ts, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/services/harness2/Library.ts, spark-console:console.py
 ---
 
 # Decisions
@@ -67,9 +67,9 @@ and a repeat is not a `TOOL_STALL` failure. The guards no longer protect prism's
 protect the model's context window and the external APIs' rate limits — the same reason the
 trading-run scrape/tool budgets exist (ch.03).
 
-## ADR-06 — stdio MCP only from an operator allowlist (2026-10-22)
+## ADR-06 — stdio MCP only from an operator allowlist (2026-10-22; retired Wave 4C)
 
-**Decision.** `POST /mcp-servers` + `connect` were unauthenticated remote code execution: any
+**Decision.** *(Superseded in Wave 4C: outbound MCP client, `/mcp-servers`, and `MCPClientService` were removed entirely; only the inbound `McpAdapter` `/mcp/sse` server remains.)* `POST /mcp-servers` + `connect` were unauthenticated remote code execution: any
 caller could have the service spawn a command with the whole process environment. The fix is one
 guard — `assertStdioAllowed` in `MCPClientService.connect()` (repeated in `createTransport`) —
 and `MCP_STDIO_COMMANDS`: comma-separated **absolute paths, exact match**. Never list an
@@ -140,9 +140,9 @@ trading cycle with 0 denials after). Rotation is a script that never prints the 
 `scripts/rotate-execute-key.sh` (`a3944c3`, enforcement `0c1c2b3`). Rollout items that depend on
 a stopped container or a human paste are reported open, never silently skipped.
 
-## ADR-13 — Network MCP rows: refuse internal hosts unless allowlisted (2026-11-07)
+## ADR-13 — Network MCP rows: refuse internal hosts unless allowlisted (2026-11-07; retired Wave 4C)
 
-**Decision.** ADR-06 closed stdio; `sse`/`streamable-http` rows could still point the service at
+**Decision.** *(Superseded in Wave 4C: outbound MCP client and `/mcp-servers` were removed.)* ADR-06 closed stdio; `sse`/`streamable-http` rows could still point the service at
 `127.0.0.1`, the NAS's own admin ports or `169.254.169.254`. The guard mirrors ADR-06 exactly:
 one predicate, `httpRefusalReason`, applied at the route (`403` on `POST`/`PUT /mcp-servers`), at
 `connect()`/`createTransport` (`McpHttpRefusedError`) and in boot auto-connect. Non-http(s)

@@ -30,12 +30,7 @@ import {
 } from "../constants.ts";
 
 import SettingsService from "./SettingsService.ts";
-import MCPClientService from "./MCPClientService.ts";
 import PromptLocaleService from "./PromptLocaleService.ts";
-import {
-  injectVoiceCatalog,
-  TTS_VOICE_CATALOG_PLACEHOLDER,
-} from "../utils/VoiceCatalog.ts";
 import type { OrchestratorContext, TeamMember } from "../types/orchestrator.ts";
 import type { PolicyRule } from "./PolicyEngine.ts";
 import type { ConversationMessage } from "./harnesses/types.ts";
@@ -1285,53 +1280,9 @@ export default class ToolOrchestratorService {
 
   /** AI-clean schemas (no endpoint/domain/dataSource) — for LLM tool arrays */
   static getToolSchemas(defaultTopology?: string, locale?: string) {
-    const creativeSettings = SettingsService.getCached().creative;
-    const textToSpeechProvider =
-      creativeSettings?.textToSpeechProvider || "elevenlabs";
-    const textToSpeechModel = creativeSettings?.textToSpeechModel || "";
-
     const localeAISchemas = (locale && locale !== "en" && localizedAISchemasCache.has(locale))
       ? localizedAISchemasCache.get(locale)!
       : cachedAISchemas;
-
-    const resolvedSchemas = localeAISchemas.map((schema) => {
-      if (schema.name !== "synthesize_speech") return schema;
-
-      const parameters = schema.parameters as
-        | Record<string, unknown>
-        | undefined;
-      const properties = parameters?.properties as
-        | Record<string, Record<string, unknown>>
-        | undefined;
-      const voiceDescription = properties?.voice?.description as
-        | string
-        | undefined;
-
-      if (
-        !voiceDescription ||
-        !voiceDescription.includes(TTS_VOICE_CATALOG_PLACEHOLDER)
-      ) {
-        return schema;
-      }
-
-      return {
-        ...schema,
-        parameters: {
-          ...parameters,
-          properties: {
-            ...properties,
-            voice: {
-              ...properties!.voice,
-              description: injectVoiceCatalog(
-                voiceDescription,
-                textToSpeechProvider,
-                textToSpeechModel,
-              ),
-            },
-          },
-        },
-      };
-    });
 
     const activeLocale = locale
       || (typeof SettingsService.getCached === "function"
@@ -1339,7 +1290,7 @@ export default class ToolOrchestratorService {
         : "en");
 
     return [
-      ...resolvedSchemas,
+      ...localeAISchemas,
 
       ...getOrchestratorToolSchemas(defaultTopology, activeLocale),
     ];
@@ -1943,10 +1894,8 @@ export default class ToolOrchestratorService {
     args: Record<string, unknown> = {},
     context: ToolExecutionContext = {},
   ) {
-    const remote = MCPClientService.parseMCPToolName(fullName);
-    const isLocal = fullName.startsWith(LOCAL_MCP_PREFIX);
-    if (!isLocal && !(remote && MCPClientService.isConnected(remote.serverName))) {
-      return { error: `MCP server for tool "${fullName}" is not connected. Only ${LOCAL_MCP_PREFIX}* tools and tools of connected MCP servers are available.` };
+    if (!fullName.startsWith(LOCAL_MCP_PREFIX)) {
+      return { error: `Unknown MCP tool "${fullName}". Only ${LOCAL_MCP_PREFIX}* tools are available.` };
     }
     const { routeLocalTool } = await import("./LocalToolRouter.js");
     try {
@@ -2281,11 +2230,8 @@ export default class ToolOrchestratorService {
     description?: string;
     parameters?: unknown;
     domain?: string;
-    _mcpServer?: string;
-    _mcpOriginalName?: string;
   }> {
-    // Tools of servers connected through /mcp-servers join the local catalog.
-    return [...ToolOrchestratorService.getLocalMCPToolSchemas(), ...MCPClientService.getToolSchemas()];
+    return ToolOrchestratorService.getLocalMCPToolSchemas();
   }
 
   private static getLocalMCPToolSchemas(): Array<{

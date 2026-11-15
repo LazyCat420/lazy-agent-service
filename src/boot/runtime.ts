@@ -88,9 +88,7 @@ function lazyDaemon(name: string, load: () => Promise<{ init: () => Promise<void
 
 /** The real daemon set. Every entry imports its module lazily: a broken module must not stop boot. */
 export const DEFAULT_DAEMONS: DaemonSpec[] = [
-  lazyDaemon("Scheduled Tasks", () => import("../services/ScheduledTaskService.ts").then((m) => m.default)),
   lazyDaemon("Conversation Timers", () => import("../services/ConversationTimerService.ts").then((m) => m.default)),
-  lazyDaemon("Webhook Dispatcher", () => import("../services/WebhookDispatcher.ts").then((m) => m.default)),
   lazyDaemon("vLLM Model Sync", () => import("../services/VllmModelSyncService.ts").then((m) => m.VllmModelSyncService)),
   {
     name: "Embedding Corpus",
@@ -390,12 +388,11 @@ export interface ListeningDeps {
   evalChaosEnabled: () => boolean;
   registerEvalChaos: () => Promise<void>;
   syncPersonas: () => Promise<void>;
-  connectMcpServers: () => Promise<void>;
 }
 
 /**
  * Work that only makes sense once the port is accepting connections: the
- * startup banner, profiles, eval-chaos, personas and the MCP server reconnects.
+ * startup banner, profiles, eval-chaos and personas.
  * Nothing here throws; one broken step never blocks the next.
  */
 export async function onListening(deps: ListeningDeps): Promise<void> {
@@ -418,14 +415,6 @@ export async function onListening(deps: ListeningDeps): Promise<void> {
   // 2026-10-16 — prism-service is no longer registered with or called; the
   // personas live in our own custom_agents collection and the live registry.
   await deps.syncPersonas();
-
-  // Reconnect every enabled MCP server so its tools are in the catalog
-  // (connections are in-memory; prism does the same on boot).
-  try {
-    await deps.connectMcpServers();
-  } catch (error: unknown) {
-    deps.logger.warn(`MCP auto-connect failed: ${errorMessage(error)}`);
-  }
 }
 
 export function defaultListeningDeps(runtime: HttpRuntime): ListeningDeps {
@@ -446,10 +435,6 @@ export function defaultListeningDeps(runtime: HttpRuntime): ListeningDeps {
     syncPersonas: async () => {
       const { syncClientPersonas } = await import("../services/ClientPersonaSync.ts");
       await syncClientPersonas();
-    },
-    connectMcpServers: async () => {
-      const { default: MCPClientService } = await import("../services/MCPClientService.ts");
-      await MCPClientService.connectAllFromDB(MongoWrapper.getDb(MONGO_DB_NAME));
     },
   };
 }

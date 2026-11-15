@@ -1,7 +1,6 @@
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import express, { Request, Response, NextFunction } from "express";
 import AgentSessionRegistry from "../services/AgentSessionRegistry.ts";
-import LiveFrameService from "../services/LiveFrameService.ts";
 import { handleAgent } from "../core/chat/ChatGeneration.ts";
 import { handleApprovalDecision } from "./ApprovalDecisionRoute.ts";
 import { handleQuestionAnswer } from "./QuestionAnswerHandler.ts";
@@ -27,37 +26,6 @@ const router = express.Router();
 // POST /agent/approve — see ApprovalDecisionRoute; POST /agent/answer — see QuestionAnswerHandler.
 router.post("/approve", handleApprovalDecision("[agent/approve]"));
 router.post("/answer", handleQuestionAnswer("agent/answer"));
-
-// ─── live vision frame streaming ────────────────────────────
-
-/**
- * POST /agent/conversation/:conversationId/frame
- *
- * Body:
- *   { frameDataUrl: string } // base64 JPEG data URL
- *
- * Receives the latest frame for a conversation and adds it to the rolling buffer.
- */
-router.post(
-  "/conversation/:conversationId/frame",
-  asyncHandler(async (request: Request, response: Response) => {
-    const { conversationId } = request.params;
-    const { frameDataUrl } = request.body;
-
-    if (!conversationId) {
-      return response.status(400).json({ error: "Missing conversationId" });
-    }
-    if (!frameDataUrl) {
-      return response.status(400).json({ error: "Missing frameDataUrl" });
-    }
-
-    LiveFrameService.pushFrame(
-      conversationId as string,
-      frameDataUrl as string,
-    );
-    response.json({ ok: true });
-  }),
-);
 
 // ─── explicit session stop ──────────────────────────────────
 

@@ -20,33 +20,8 @@ import audioRouter from "../routes/AudioRoutes.ts";
 import embedRouter from "../routes/EmbedRoutes.ts";
 import configRouter, { localConfigRouter } from "../routes/ConfigRoutes.ts";
 import conversationsRouter from "../routes/ConversationsRoutes.ts";
-import conversationBudgetRouter from "../routes/ConversationBudgetRoute.ts";
-import filesRouter from "../routes/FilesRoutes.ts";
-import mediaRouter from "../routes/MediaRoutes.ts";
-import textRouter from "../routes/TextRoutes.ts";
-import lmStudioRouter from "../routes/LmStudioRoutes.ts";
-import ollamaRouter from "../routes/OllamaRoutes.ts";
-import skillsRouter from "../routes/SkillsRoutes.ts";
-import rulesRouter from "../routes/RulesRoutes.ts";
-import agentMemoriesRouter from "../routes/AgentMemoriesRoutes.ts";
-import mcpServersRouter from "../routes/McpServersRoutes.ts";
-import mcpOAuthRouter from "../routes/McpOAuthRoutes.ts";
-import favoritesRouter from "../routes/FavoritesRoutes.ts";
-import conversationRouter from "../routes/ConversationExecutionRoute.ts";
-import statsRouter from "../routes/StatsRoutes.ts";
-import benchmarkRouter from "../routes/BenchmarkRoutes.ts";
-import experimentRouter from "../routes/ExperimentRoutes.ts";
 import harness2Router from "../routes/Harness2Routes.ts";
-import synthesisRouter from "../routes/SynthesisRoutes.ts";
-import vramBenchmarksRouter from "../routes/VramBenchmarksRoutes.ts";
-import orchestratorRouter from "../routes/OrchestratorRoutes.ts";
-import topologyRouter from "../routes/TopologyRoutes.ts";
-import thoughtStructureRouter from "../routes/ThoughtStructureRoutes.ts";
-import settingsRouter from "../routes/SettingsRoutes.ts";
 import customAgentsRouter from "../routes/CustomAgentsRoutes.ts";
-import workspacesRouter from "../routes/WorkspacesRoutes.ts";
-import scheduledTasksRouter from "../routes/ScheduledTasksRoutes.ts";
-import promptsRouter from "../routes/PromptsRoutes.ts";
 import webhookRouter from "../routes/WebhookRoutes.ts";
 import platformRouter from "../routes/PlatformRoutes.ts";
 import executeRouter from "../routes/ExecuteRoutes.ts";
@@ -64,34 +39,10 @@ export const ENDPOINTS = {
     "/config-local",
     "/chat",
     "/agent",
-    "/text-to-audio",
     "/audio-to-text",
     "/embed",
     "/conversations",
-    "/files",
-    "/media",
-    "/text",
-    "/lm-studio",
-    "/ollama",
-    "/skills",
-    "/rules",
-    "/agent-memories",
-    "/mcp-servers",
-    "/favorites",
-    "/conversation",
-
-    "/stats",
-    "/benchmark",
-    "/synthesis",
-    "/vram-benchmarks",
-    "/orchestrator",
-    "/topologies",
-    "/thought-structures",
-    "/settings",
     "/custom-agents",
-    "/workspaces",
-    "/scheduled-tasks",
-    "/prompts",
     "/webhooks",
     "/v1/runs",
     "/v1/embeddings",
@@ -183,12 +134,6 @@ function installHealthRoutes(app: Express): void {
   });
 }
 
-function installPublicRoutes(app: Express): void {
-  app.use("/files", filesRouter);
-  // MCP OAuth callback: a browser redirect carries no identity headers (the flow is found by its `state`)
-  app.use("/mcp/oauth", mcpOAuthRouter);
-}
-
 function installAuthenticatedRoutes(app: Express): void {
   app.use(authMiddleware);
 
@@ -201,36 +146,11 @@ function installAuthenticatedRoutes(app: Express): void {
   app.use("/chat", chatRouter);
   app.use("/agent", agentRouter);
   app.use("/obsidian-completions", createObsidianCompletionRouter());
-  app.use("/text-to-audio", audioRouter);
   app.use("/audio-to-text", audioRouter);
   app.use("/embed", embedRouter);
-  app.use("/conversations", conversationBudgetRouter);
   app.use("/conversations", conversationsRouter);
-  app.use("/media", mediaRouter);
-  app.use("/text", textRouter);
-  app.use("/lm-studio", lmStudioRouter);
-  app.use("/ollama", ollamaRouter);
-  app.use("/skills", skillsRouter);
-  app.use("/rules", rulesRouter);
-  app.use("/agent-memories", agentMemoriesRouter);
-  app.use("/mcp-servers", mcpServersRouter);
-  app.use("/favorites", favoritesRouter);
-  app.use("/conversation", conversationRouter);
-
-  app.use("/stats", statsRouter);
-  app.use("/benchmark", benchmarkRouter);
-  app.use("/experiment", experimentRouter);
   app.use("/harness2", harness2Router);
-  app.use("/synthesis", synthesisRouter);
-  app.use("/vram-benchmarks", vramBenchmarksRouter);
-  app.use("/orchestrator", orchestratorRouter);
-  app.use("/topologies", topologyRouter);
-  app.use("/thought-structures", thoughtStructureRouter);
-  app.use("/settings", settingsRouter);
   app.use("/custom-agents", customAgentsRouter);
-  app.use("/workspaces", workspacesRouter);
-  app.use("/scheduled-tasks", scheduledTasksRouter);
-  app.use("/prompts", promptsRouter);
   app.use("/webhooks", webhookRouter);
   app.use("/execute", executeRouter);
   app.use("/platform", platformRouter);
@@ -285,7 +205,6 @@ export function createHttpRuntime(): HttpRuntime {
 
   installMiddleware(app);
   installHealthRoutes(app);
-  installPublicRoutes(app);
   installAuthenticatedRoutes(app);
   installCompatRoutes(app, mcpAdapter);
 

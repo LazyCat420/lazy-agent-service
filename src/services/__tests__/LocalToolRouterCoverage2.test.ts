@@ -15,9 +15,6 @@ const fakes = vi.hoisted(() => ({
   newsProviderStatus: vi.fn(),
   webSearch: vi.fn(),
   webSearchStatus: vi.fn(),
-  parseMCPToolName: vi.fn(),
-  isConnected: vi.fn(),
-  callTool: vi.fn(),
   scrapeTargetGuard: vi.fn(),
   chargeScrape: vi.fn(),
   scrapeBudgetStatus: vi.fn(),
@@ -54,13 +51,6 @@ vi.mock("../WebSearchService.ts", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   webSearch: fakes.webSearch,
   webSearchStatus: fakes.webSearchStatus,
-}));
-vi.mock("../MCPClientService.ts", () => ({
-  default: {
-    parseMCPToolName: fakes.parseMCPToolName,
-    isConnected: fakes.isConnected,
-    callTool: fakes.callTool,
-  },
 }));
 vi.mock("../UnscrapableDomains.ts", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -109,9 +99,6 @@ beforeEach(() => {
     results: [{ url: "https://a.test/x" }, { url: "https://b.test/y" }],
   });
   fakes.webSearchStatus.mockReturnValue({ provider: "exa", calls: 1 });
-  fakes.parseMCPToolName.mockReturnValue(null);
-  fakes.isConnected.mockReturnValue(false);
-  fakes.callTool.mockResolvedValue({ content: "remote" });
   fakes.scrapeTargetGuard.mockReturnValue(null);
   fakes.chargeScrape.mockReturnValue(null);
   fakes.scrapeBudgetStatus.mockReturnValue({ used: 1, budget: 4, remaining: 3 });
@@ -481,22 +468,6 @@ describe("routeLocalTool — scrape_url and remote MCP", () => {
     expect(fakes.scrapeTargetGuard).toHaveBeenCalledWith("https://blog.test/post", expect.anything());
     expect(fakes.chargeScrape).toHaveBeenCalledWith("https://blog.test/post", expect.anything());
     expect(fakes.executeWebExtract).toHaveBeenCalledWith({ url: "https://blog.test/post" });
-  });
-
-  it("delegates a connected remote MCP tool", async () => {
-    fakes.parseMCPToolName.mockReturnValue({ serverName: "obsidian", toolName: "search" });
-    fakes.isConnected.mockReturnValue(true);
-    expect(await routeLocalTool("mcp__obsidian__search", { q: "x" })).toEqual({ content: "remote" });
-    expect(fakes.callTool).toHaveBeenCalledWith("obsidian", "search", { q: "x" });
-  });
-
-  it("falls through to the bridge for a disconnected remote MCP tool", async () => {
-    fakes.parseMCPToolName.mockReturnValue({ serverName: "obsidian", toolName: "search" });
-    fakes.isConnected.mockReturnValue(false);
-    const result = await routeLocalTool("mcp__obsidian__search", { q: "x" });
-    expect(result).toEqual({ status: "success" });
-    expect(fakes.callTool).not.toHaveBeenCalled();
-    expect(fetchCalls[0].url).toBe("http://trading.test/api/v1/agent-tools/execute");
   });
 
   it("filters and registers lazy_web_search results", async () => {

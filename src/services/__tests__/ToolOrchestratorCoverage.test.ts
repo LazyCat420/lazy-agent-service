@@ -17,15 +17,6 @@ vi.mock("../../../config.ts", async (importOriginal) => ({
   ...(await importOriginal<Promise<typeof ConfigModule>>()),
   TOOLS_SERVICE_URL: "http://tools.test",
 }));
-vi.mock("../MCPClientService.ts", () => ({
-  default: {
-    getConnectedClients: vi.fn().mockReturnValue([]),
-    getAllToolSchemas: vi.fn().mockReturnValue([]),
-    getToolSchemas: vi.fn().mockReturnValue([]),
-    parseMCPToolName: vi.fn(),
-    isConnected: vi.fn().mockReturnValue(false),
-  },
-}));
 vi.mock("../AgentPersonaRegistry.ts", () => ({
   default: { get: vi.fn().mockReturnValue(null), list: vi.fn().mockReturnValue([]) },
 }));

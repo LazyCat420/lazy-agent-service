@@ -59,7 +59,7 @@ import PendingApprovalStore from "../../services/PendingApprovalStore.ts";
 import AgenticLoopService from "../../services/AgenticLoopService.ts";
 import { pendingApprovals, pendingQuestions } from "../../services/ApprovalRegistry.ts";
 import { handleExitPlanMode } from "../../services/harnesses/lifecycle/PlanModeController.ts";
-import conversationRouter from "../ConversationExecutionRoute.ts";
+import agentRouter from "../AgentRoutes.ts";
 import type { AgenticContext, ToolSchema } from "../../services/harnesses/types.ts";
 
 const NOTE_CALL = '<tool_call>{"name": "take_note", "arguments": {"title": "T", "body": "B"}}</tool_call>';
@@ -84,7 +84,7 @@ let baseUrl = "";
 beforeAll(async () => {
   const app = express();
   app.use(express.json());
-  app.use("/conversation", conversationRouter);
+  app.use("/agent", agentRouter);
   await new Promise<void>((resolve) => {
     server = app.listen(0, "127.0.0.1", resolve);
   });
@@ -99,7 +99,7 @@ beforeEach(() => {
 });
 
 const post = (body: unknown) =>
-  fetch(`${baseUrl}/conversation/approve`, {
+  fetch(`${baseUrl}/agent/approve`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -149,7 +149,7 @@ function startTurn(context: AgenticContext) {
 }
 
 const postAnswer = (body: unknown) =>
-  fetch(`${baseUrl}/conversation/answer`, {
+  fetch(`${baseUrl}/agent/answer`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

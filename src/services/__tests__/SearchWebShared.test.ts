@@ -15,9 +15,6 @@ vi.mock("../../../config.ts", async (importOriginal) => ({
   ...(await importOriginal<Promise<typeof ConfigModule>>()),
   TOOLS_SERVICE_URL: "http://tools-service.invalid",
 }));
-vi.mock("../MCPClientService.ts", () => ({
-  default: { getConnectedClients: vi.fn(() => []), getAllToolSchemas: vi.fn(() => []), getToolSchemas: vi.fn(() => []) },
-}));
 vi.mock("../AgentPersonaRegistry.ts", () => ({ default: { get: vi.fn(() => null), list: vi.fn(() => []) } }));
 vi.mock("../local-tools/InternalToolRegistry.ts", () => ({
   default: { getClientSchemas: vi.fn(() => []), getAISchemas: vi.fn(() => []), getSchemas: vi.fn(() => []) },

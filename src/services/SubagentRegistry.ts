@@ -164,5 +164,3 @@ export const SubagentRegistry = {
     return true;
   },
 };
-
-export default SubagentRegistry;

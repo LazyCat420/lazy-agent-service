@@ -7,7 +7,7 @@ import AgenticLoopService from "./AgenticLoopService.ts";
 import ConversationService from "./ConversationService.ts";
 import { getProvider } from "../providers/index.ts";
 import { getModelByName } from "../config.ts";
-import { matchCron } from "./ScheduledTaskService.ts";
+import { matchCron } from "../utils/CronMatcher.ts";
 import { InternalLoopRunner } from "./InternalLoopRunner.ts";
 import { registerCleanup } from "../utils/CleanupRegistry.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";

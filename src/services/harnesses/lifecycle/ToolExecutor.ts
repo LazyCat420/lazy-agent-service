@@ -6,7 +6,7 @@ import { HarnessInstrumenter } from "../../../platform/trace/HarnessInstrumenter
 import type { SideEffectClass } from "../../../platform/contracts/telemetry.ts";
 
 import type AgenticLoopState from "../../AgenticLoopState.ts";
-import SkillRegistry from "../../../platform/skills/SkillRegistry.ts";
+import { SkillRegistry } from "../../../platform/skills/SkillRegistry.ts";
 
 import { normalizeEmptyToolContent } from "../../ToolResult.ts";
 function classifySideEffect(toolName: string): SideEffectClass {

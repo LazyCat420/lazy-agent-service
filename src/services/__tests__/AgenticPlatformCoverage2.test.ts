@@ -1,47 +1,27 @@
 /**
  * Agentic platform helpers — tool resolution (persona and disabled-tools
- * modes), agentic-loop settings application, live host probing and MCP
- * authentication. Registries, Mongo, the MCP SDK client and transports are
- * fakes; resolution logic runs for real.
+ * modes), agentic-loop settings application and live host probing.
+ * Registries and Mongo are fakes; resolution logic runs for real.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fakes = vi.hoisted(() => {
-  class FakeClient {
-    async connect() {}
-    async listTools() {
-      return {
-        tools: [
-          { name: "echo", description: "Echoes", inputSchema: { type: "object" } },
-          { name: "ping", description: "Pings", inputSchema: { type: "object" } },
-        ],
-      };
-    }
-    async close() {}
-  }
-  class FakeTransport {
-    async close() {}
-  }
-  return {
-    FakeClient,
-    FakeTransport,
-    getSection: vi.fn(),
-    getToolSchemas: vi.fn(),
-    getMCPToolSchemas: vi.fn(),
-    getClientToolSchemas: vi.fn(),
-    ensureSchemas: vi.fn(),
-    isTradingRequest: vi.fn(),
-    personaGet: vi.fn(),
-    toolContextGet: vi.fn(),
-    toolContextGetStore: vi.fn(),
-    toolContextSet: vi.fn(),
-    toolContextEnsureLoaded: vi.fn(),
-    startRun: vi.fn(),
-    harnessGet: vi.fn(),
-    getProvider: vi.fn(),
-    getInstancesByType: vi.fn(),
-  };
-});
+const fakes = vi.hoisted(() => ({
+  getSection: vi.fn(),
+  getToolSchemas: vi.fn(),
+  getMCPToolSchemas: vi.fn(),
+  getClientToolSchemas: vi.fn(),
+  ensureSchemas: vi.fn(),
+  isTradingRequest: vi.fn(),
+  personaGet: vi.fn(),
+  toolContextGet: vi.fn(),
+  toolContextGetStore: vi.fn(),
+  toolContextSet: vi.fn(),
+  toolContextEnsureLoaded: vi.fn(),
+  startRun: vi.fn(),
+  harnessGet: vi.fn(),
+  getProvider: vi.fn(),
+  getInstancesByType: vi.fn(),
+}));
 
 vi.mock("../SettingsService.ts", () => ({ default: { getSection: fakes.getSection } }));
 vi.mock("../SettingsService.js", () => ({ default: { getSection: fakes.getSection } }));
@@ -85,29 +65,10 @@ vi.mock("../../providers/instance-registry.ts", () => ({
 vi.mock("../../wrappers/MongoWrapper.ts", () => ({
   default: { getDb: () => null, getCollection: () => null },
 }));
-vi.mock("../../../config.ts", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  MCP_STDIO_COMMANDS: ["npx"],
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({ Client: fakes.FakeClient }));
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
-  StdioClientTransport: fakes.FakeTransport,
-}));
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: fakes.FakeTransport,
-}));
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: fakes.FakeTransport,
-}));
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
-  UnauthorizedError: class UnauthorizedError extends Error {},
-}));
 
 import AgenticToolResolver from "../AgenticToolResolver.ts";
 import AgenticLoopService from "../AgenticLoopService.ts";
 import { DynamicModelResolver } from "../DynamicModelResolver.ts";
-import MCPClientService from "../MCPClientService.ts";
 
 const tool = (name: string, domain?: string) => ({ name, description: name, domain });
 
@@ -358,114 +319,5 @@ describe("DynamicModelResolver.queryLiveHosts", () => {
       "org/GLM-5.3-Flash-EXL3-TF",
     );
     expect(DynamicModelResolver.normalizeModelId("other")).toBe("other");
-  });
-});
-
-describe("MCPClientService.authenticate", () => {
-  it("reports an unknown server", async () => {
-    const result = await MCPClientService.authenticate("never-connected");
-    expect(result).toEqual({ error: 'MCP server "never-connected" is not connected' });
-  });
-
-  it("merges bearer, API-key and custom headers for an HTTP server", async () => {
-    await MCPClientService.connect({
-      name: "http-srv",
-      transport: "streamable-http",
-      url: "https://mcp.test/mcp",
-      headers: { "X-Existing": "1" },
-    });
-    const connectSpy = vi
-      .spyOn(MCPClientService, "connect")
-      .mockResolvedValue({ tools: [{}, {}], serverName: "http-srv", quarantinedTools: [] });
-
-    const result = await MCPClientService.authenticate("http-srv", {
-      token: "tok",
-      apiKey: "key",
-      apiKeyHeader: "X-Custom-Key",
-      headers: { "X-Extra": "yes" },
-    });
-
-    expect(result).toEqual({
-      acknowledged: true,
-      serverName: "http-srv",
-      toolCount: 2,
-      message: 'Successfully authenticated with "http-srv". 2 tools available.',
-    });
-    const updated = connectSpy.mock.calls[0][0] as { headers: Record<string, string> };
-    expect(updated.headers).toEqual({
-      "X-Existing": "1",
-      Authorization: "Bearer tok",
-      "X-Custom-Key": "key",
-      "X-Extra": "yes",
-    });
-
-    connectSpy.mockRestore();
-  });
-
-  it("uses the default API-key header and injects stdio env vars", async () => {
-    await MCPClientService.connect({
-      name: "stdio-srv",
-      transport: "stdio",
-      command: "npx",
-      args: ["server"],
-      env: { EXISTING: "1" },
-    });
-    const connectSpy = vi
-      .spyOn(MCPClientService, "connect")
-      .mockResolvedValue({ tools: [{}], serverName: "stdio-srv", quarantinedTools: [] });
-
-    const result = await MCPClientService.authenticate("stdio-srv", {
-      token: "tok",
-      apiKey: "key",
-      env: { EXTRA: "2" },
-    });
-
-    expect(result).toMatchObject({ acknowledged: true, toolCount: 1 });
-    const updated = connectSpy.mock.calls[0][0] as { env: Record<string, string> };
-    expect(updated.env).toEqual({
-      EXISTING: "1",
-      MCP_AUTH_TOKEN: "tok",
-      MCP_API_KEY: "key",
-      EXTRA: "2",
-    });
-
-    connectSpy.mockRestore();
-  });
-
-  it("uses the default X-API-Key header for HTTP servers", async () => {
-    await MCPClientService.connect({
-      name: "http-default",
-      transport: "streamable-http",
-      url: "https://mcp.test/mcp",
-    });
-    const connectSpy = vi
-      .spyOn(MCPClientService, "connect")
-      .mockResolvedValue({ tools: [{}], serverName: "http-default", quarantinedTools: [] });
-
-    await MCPClientService.authenticate("http-default", { apiKey: "key" });
-
-    const updated = connectSpy.mock.calls[0][0] as { headers: Record<string, string> };
-    expect(updated.headers["X-API-Key"]).toBe("key");
-
-    connectSpy.mockRestore();
-  });
-
-  it("returns an error when the reconnect fails", async () => {
-    await MCPClientService.connect({
-      name: "http-fail",
-      transport: "streamable-http",
-      url: "https://mcp.test/mcp",
-    });
-    const connectSpy = vi
-      .spyOn(MCPClientService, "connect")
-      .mockRejectedValue(new Error("upstream down"));
-
-    const result = await MCPClientService.authenticate("http-fail", { token: "t" });
-
-    expect(result).toEqual({
-      error: 'Authentication failed for "http-fail": upstream down',
-    });
-
-    connectSpy.mockRestore();
   });
 });

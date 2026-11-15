@@ -26,7 +26,7 @@ vi.mock("../conversation/ConversationService.ts", () => ({
 }));
 vi.mock("../../providers/index.ts", () => ({ getProvider: fakes.getProvider }));
 vi.mock("../config.ts", () => ({ getModelByName: fakes.getModelByName }));
-vi.mock("../ScheduledTaskService.ts", () => ({ matchCron: fakes.matchCron }));
+vi.mock("../../utils/CronMatcher.ts", () => ({ matchCron: fakes.matchCron }));
 vi.mock("../InternalLoopRunner.ts", () => ({ InternalLoopRunner: { admit: fakes.admit } }));
 vi.mock("../../utils/CleanupRegistry.ts", () => ({ registerCleanup: vi.fn() }));
 vi.mock("../../utils/logger.ts", () => ({

@@ -1,11 +1,9 @@
 /**
- * Platform helpers — FileService uploads, webhook dispatch (signature, retries,
- * filters), cron matching, memory batching and the
- * global classify capability. Mongo, MinIO and the webhook HTTP endpoint are
- * fakes; every other module is real.
+ * Platform helpers — FileService uploads, cron matching, memory batching and
+ * the global classify capability. Mongo and MinIO are fakes; every other module
+ * is real.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import crypto from "node:crypto";
 
 const fakes = vi.hoisted(() => ({
   getDb: vi.fn(),
@@ -24,9 +22,7 @@ vi.mock("../../wrappers/MinioWrapper.ts", () => ({
 }));
 
 import FileService from "../FileService.ts";
-import WebhookDispatcher from "../WebhookDispatcher.ts";
-import WebhookEventBus from "../WebhookEventBus.ts";
-import { matchCron } from "../ScheduledTaskService.ts";
+import { matchCron } from "../../utils/CronMatcher.ts";
 import { buildBatches, BATCH_MAX_CLUSTERS, BATCH_MAX_STALE } from "../memory/BatchBuilder.ts";
 import { GlobalCapabilityExecutor } from "../GlobalCapabilityExecutor.ts";
 import type { MemoryDoc } from "../memory/types.ts";
@@ -35,8 +31,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-afterEach(async () => {
-  await WebhookDispatcher.destroy();
+afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -114,117 +109,6 @@ describe("FileService.uploadFile", () => {
 
     expect(result.contentType).toBe("application/x-custom");
     expect(result.ref).toMatch(/^minio:\/\/uploads\/[0-9a-f-]+\.bin$/);
-  });
-});
-
-describe("WebhookDispatcher", () => {
-  const subscription = {
-    id: "sub-1",
-    url: "https://hooks.test/one",
-    secret: "s3cret", /* # secret-ok */
-    events: ["agent.completed"],
-    filter: { agent: "coding" },
-    enabled: true,
-  };
-
-  function mockSubscriptions(rows: unknown[]) {
-    const toArray = vi.fn(async () => rows);
-    const find = vi.fn(() => ({ toArray }));
-    fakes.getDb.mockReturnValue({ collection: () => ({ find }) });
-    return { find, toArray };
-  }
-
-  it("delivers a matching event with a valid HMAC signature", async () => {
-    mockSubscriptions([subscription]);
-    const fetchMock = vi.fn(async () => ({ ok: true, status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await WebhookDispatcher.init();
-    WebhookEventBus.emit("agent.completed", { agent: "coding" });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [
-      string,
-      { body: string; headers: Record<string, string> },
-    ];
-    expect(url).toBe("https://hooks.test/one");
-    const payload = JSON.parse(init.body) as { eventType: string; data: Record<string, unknown> };
-    expect(payload.eventType).toBe("agent.completed");
-    expect(payload.data.agent).toBe("coding");
-    expect(init.headers["X-Webhook-Signature"]).toBe(
-      `sha256=${crypto.createHmac("sha256", "s3cret").update(init.body).digest("hex")}`,
-    );
-    expect(init.headers["X-Webhook-Event"]).toBe("agent.completed");
-  });
-
-  it("skips subscriptions whose filter does not match", async () => {
-    mockSubscriptions([subscription]);
-    const fetchMock = vi.fn(async () => ({ ok: true, status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await WebhookDispatcher.init();
-    WebhookEventBus.emit("agent.completed", { agent: "other" });
-
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("skips subscriptions that do not subscribe to the event type", async () => {
-    mockSubscriptions([{ ...subscription, events: ["other.event"] }]);
-    const fetchMock = vi.fn(async () => ({ ok: true, status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await WebhookDispatcher.init();
-    WebhookEventBus.emit("agent.completed", { agent: "coding" });
-
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("accepts a wildcard event subscription", async () => {
-    mockSubscriptions([{ ...subscription, events: ["*"], filter: {} }]);
-    const fetchMock = vi.fn(async () => ({ ok: true, status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await WebhookDispatcher.init();
-    WebhookEventBus.emit("anything", {});
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-  });
-
-  it("retries failed deliveries with backoff", async () => {
-    vi.useFakeTimers();
-    mockSubscriptions([subscription]);
-    const fetchMock = vi.fn(async () => ({ ok: false, status: 500 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await WebhookDispatcher.init();
-    WebhookEventBus.emit("agent.completed", { agent: "coding" });
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("retries when the request throws and gives up after the attempt cap", async () => {
-    vi.useFakeTimers();
-    mockSubscriptions([subscription]);
-    const fetchMock = vi.fn(async () => {
-      throw new Error("connection reset");
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await WebhookDispatcher.init();
-    WebhookEventBus.emit("agent.completed", { agent: "coding" });
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps running when the subscription query fails", async () => {
-    fakes.getDb.mockReturnValue(null);
-
-    await WebhookDispatcher.init();
-    expect(WebhookDispatcher.activeSubscriptionCount).toBe(0);
-
-    WebhookDispatcher.destroy();
-    expect(WebhookDispatcher.activeSubscriptionCount).toBe(0);
   });
 });
 

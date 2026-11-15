@@ -1,5 +1,4 @@
 import ReActHarness from "./ReActHarness.ts";
-import VisionLanguageHarness from "./VisionLanguageHarness.ts";
 import PromptedToolCallingHarness from "./PromptedToolCallingHarness.ts";
 import type { ConversationMessage } from "./types.ts";
 import logger from "../../utils/logger.ts";
@@ -44,7 +43,6 @@ function register(HarnessClass: HarnessConstructor) {
 
 // ── Built-in harnesses ───────────────────────────────────────
 register(ReActHarness as unknown as HarnessConstructor);
-register(VisionLanguageHarness as unknown as HarnessConstructor);
 register(PromptedToolCallingHarness as unknown as HarnessConstructor);
 
 const HarnessRegistry = {

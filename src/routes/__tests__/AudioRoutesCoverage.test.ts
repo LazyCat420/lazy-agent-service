@@ -1,14 +1,12 @@
 /**
- * AudioRoutes — text-to-audio streaming (binary and dataUrl), the shared
- * handleVoice core, and audio transcription with conversation persistence.
+ * AudioRoutes — audio transcription with conversation persistence.
  *
  * Providers, file storage, conversation writes and request logging are stubs;
- * assertions are on the HTTP response, the emitted events and the messages the
- * route hands to ConversationService.
+ * assertions are on the HTTP response and the messages the route hands to
+ * ConversationService.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Readable } from "node:stream";
-import router, { handleVoice } from "../AudioRoutes.ts";
+import router from "../AudioRoutes.ts";
 
 const stub = vi.hoisted(() => ({
   providers: {} as Record<string, Record<string, unknown>>,
@@ -60,7 +58,6 @@ vi.mock("../../utils/logger.ts", () => ({
   },
 }));
 
-/** Two POST "/" routes exist (text-to-audio and audio-to-text); `index` picks one. */
 const handlerFor = (method: string, path: string, index = 0) => {
   const layers = (router as any).stack.filter(
     (entry: any) => entry.route?.path === path && entry.route.methods[method],
@@ -124,28 +121,8 @@ const invoke = async (method: string, path: string, req: any, index = 0) => {
   return { res, errors };
 };
 
-/** The audio-to-text handler is the second POST "/" registration. */
-const invokeTranscription = (req: any) => invoke("post", "/", req, 1);
-
-const webStream = (chunks: Uint8Array[]) => ({
-  getReader() {
-    let index = 0;
-    return {
-      async read() {
-        if (index >= chunks.length) return { done: true, value: undefined };
-        return { done: false, value: chunks[index++] };
-      },
-    };
-  },
-});
-
-const nodeStream = (chunks: Buffer[]) => Readable.from(chunks);
-
-const speechProvider = (stream: unknown, contentType = "audio/mpeg") => ({
-  async generateSpeech() {
-    return { stream, contentType };
-  },
-});
+/** The audio-to-text handler is the sole POST "/" registration. */
+const invokeTranscription = (req: any) => invoke("post", "/", req, 0);
 
 const transcribeProvider = (result: Record<string, unknown>) => ({
   async transcribeAudio() {
@@ -160,187 +137,6 @@ beforeEach(() => {
   stub.generating = [];
   stub.requestLogs = [];
   stub.appendThrows = false;
-});
-
-describe("handleVoice — validation", () => {
-  const events: Array<Record<string, unknown>> = [];
-  const collect = (event: Record<string, unknown>) => events.push(event);
-
-  beforeEach(() => {
-    events.length = 0;
-  });
-
-  it("rejects a missing provider with a 400 ProviderError", async () => {
-    await expect(
-      handleVoice({ provider: "", text: "hello" }, () => {}, collect),
-    ).rejects.toMatchObject({ statusCode: 400, message: "Missing required field: provider" });
-    expect(events.at(-1)).toEqual({ type: "error", message: "Missing required field: provider" });
-  });
-
-  it("rejects a missing text", async () => {
-    await expect(
-      handleVoice({ provider: "openai", text: "" }, () => {}, collect),
-    ).rejects.toMatchObject({ statusCode: 400, message: "Missing required field: text" });
-  });
-
-  it("rejects a provider without text-to-speech support", async () => {
-    stub.providers.openai = {};
-    await expect(
-      handleVoice({ provider: "openai", text: "hello" }, () => {}, collect),
-    ).rejects.toMatchObject({ statusCode: 400, message: 'Provider "openai" does not support text-to-speech' });
-  });
-
-  it("rejects a provider whose speech call throws and clears isGenerating", async () => {
-    stub.providers.openai = {
-      async generateSpeech() {
-        throw new Error("upstream 500");
-      },
-    };
-    await expect(
-      handleVoice({ provider: "openai", text: "hello", conversationId: "c1" }, () => {}, collect),
-    ).rejects.toThrow("upstream 500");
-
-    expect(stub.requestLogs.at(-1)).toMatchObject({ success: false, errorMessage: "upstream 500", provider: "openai" });
-    expect(stub.generating).toContainEqual({ id: "c1", value: false });
-    expect(events.at(-1)).toEqual({ type: "error", message: "upstream 500" });
-  });
-});
-
-describe("handleVoice — streaming and persistence", () => {
-  it("streams a web ReadableStream and persists the audio turn", async () => {
-    stub.providers.openai = speechProvider(webStream([new Uint8Array([1, 2]), new Uint8Array([3])]), "audio/ogg");
-    const binary: Buffer[] = [];
-    const events: Array<Record<string, unknown>> = [];
-
-    const contentType = await handleVoice(
-      { provider: "openai", text: "say hi", voice: "alloy", model: "gpt-4o-mini-tts", conversationId: "c1", conversationMeta: { title: "Greeting" }, traceId: "t1" },
-      (chunk) => binary.push(Buffer.from(chunk)),
-      (event) => events.push(event),
-    );
-
-    expect(contentType).toBe("audio/ogg");
-    expect(Buffer.concat(binary)).toEqual(Buffer.from([1, 2, 3]));
-    expect(events).toEqual([{ type: "done" }]);
-    expect(stub.requestLogs.at(-1)).toMatchObject({ success: true, endpoint: "text-to-audio", conversationId: "c1", traceId: "t1" });
-
-    expect(stub.appended).toHaveLength(1);
-    const [appended] = stub.appended;
-    expect(appended.id).toBe("c1");
-    expect(appended.messages[0]).toMatchObject({ role: "user", content: "say hi" });
-    expect(appended.messages[1]).toMatchObject({ role: "assistant", provider: "openai", model: "gpt-4o-mini-tts", voice: "alloy" });
-    expect((appended.messages[1] as Record<string, unknown>).audio).toMatch(/^minio:\/\/files\//);
-    expect(appended.meta).toMatchObject({ title: "Greeting", traceId: "t1", settings: { provider: "openai", model: "gpt-4o-mini-tts" } });
-    expect(stub.generating).toContainEqual({ id: "c1", value: true });
-  });
-
-  it("streams a Node readable without buffering when the conversation is skipped", async () => {
-    stub.providers.openai = speechProvider(nodeStream([Buffer.from([4]), Buffer.from([5])]));
-    const binary: Buffer[] = [];
-    const events: Array<Record<string, unknown>> = [];
-
-    await handleVoice(
-      { provider: "openai", text: "skip me", skipConversation: true, traceId: "t2" },
-      (chunk) => binary.push(Buffer.from(chunk)),
-      (event) => events.push(event),
-    );
-
-    expect(binary).toEqual([Buffer.from([4]), Buffer.from([5])]);
-    expect(stub.appended).toHaveLength(0);
-    expect(stub.generating).toHaveLength(0);
-    expect(stub.requestLogs.at(-1)).toMatchObject({ conversationId: null, traceId: "t2" });
-  });
-
-  it("derives the conversation title from the text, falling back to a default", async () => {
-    stub.providers.openai = speechProvider(webStream([new Uint8Array([1])]));
-    await handleVoice({ provider: "openai", text: "   " }, () => {}, () => {});
-    expect(stub.appended.at(-1)!.meta).toMatchObject({ title: "TTS Request" });
-
-    stub.appended = [];
-    await handleVoice({ provider: "openai", text: "hello there" }, () => {}, () => {});
-    expect(stub.appended.at(-1)!.meta).toMatchObject({ title: "hello there" });
-  });
-
-  it("keeps the turn when the audio upload fails", async () => {
-    stub.uploadThrows = true;
-    stub.providers.openai = speechProvider(webStream([new Uint8Array([1])]));
-    await handleVoice({ provider: "openai", text: "hi", conversationId: "c1" }, () => {}, () => {});
-
-    const assistant = stub.appended[0].messages[1] as Record<string, unknown>;
-    expect(assistant.audio).toBeUndefined();
-    expect(assistant.provider).toBe("openai");
-  });
-
-  it("throws when the provider returns no stream", async () => {
-    stub.providers.openai = speechProvider(null);
-    await expect(
-      handleVoice({ provider: "openai", text: "hi", skipConversation: true }, () => {}, () => {}),
-    ).rejects.toThrow("Speech generation returned no stream");
-    expect(stub.requestLogs.at(-1)).toMatchObject({ success: false });
-  });
-
-  it("logs a failed append without failing the stream", async () => {
-    stub.appendThrows = true;
-    stub.providers.openai = speechProvider(webStream([new Uint8Array([1])]));
-    const contentType = await handleVoice({ provider: "openai", text: "hi", conversationId: "c1" }, () => {}, () => {});
-    expect(contentType).toBe("audio/mpeg");
-    expect(stub.appended).toHaveLength(0);
-  });
-});
-
-describe("POST /text-to-audio", () => {
-  it("returns a data URL when format=dataUrl", async () => {
-    stub.providers.openai = speechProvider(webStream([new Uint8Array([1, 2])]), "audio/mpeg");
-    const { res, errors } = await invoke("post", "/", fakeReq({ body: { provider: "openai", text: "hi", skipConversation: true }, query: { format: "dataUrl" } }));
-
-    expect(errors).toEqual([]);
-    expect(res.body.contentType).toBe("audio/mpeg");
-    expect(res.body.audioDataUrl).toBe(`data:audio/mpeg;base64,${Buffer.from([1, 2]).toString("base64")}`);
-  });
-
-  it("streams binary chunks with chunked headers by default", async () => {
-    stub.providers.openai = speechProvider(webStream([new Uint8Array([7]), new Uint8Array([8])]));
-    const { res, errors } = await invoke("post", "/", fakeReq({ body: { provider: "openai", text: "hi", skipConversation: true } }));
-
-    expect(errors).toEqual([]);
-    expect(res.headers["Content-Type"]).toBe("audio/mpeg");
-    expect(res.headers["Transfer-Encoding"]).toBe("chunked");
-    expect(res.chunks).toEqual([new Uint8Array([7]), new Uint8Array([8])]);
-    expect(res.ended).toBe(true);
-  });
-
-  it("forwards validation errors before any bytes are sent", async () => {
-    const { res, errors } = await invoke("post", "/", fakeReq({ body: { text: "hi" } }));
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({ statusCode: 400 });
-    expect(res.headersSent).toBe(false);
-  });
-
-  it("swallows a failure once the stream has started", async () => {
-    let reads = 0;
-    stub.providers.openai = speechProvider({
-      getReader() {
-        return {
-          async read() {
-            reads += 1;
-            if (reads === 1) return { done: false, value: new Uint8Array([1]) };
-            throw new Error("stream broke");
-          },
-        };
-      },
-    });
-    const { res, errors } = await invoke("post", "/", fakeReq({ body: { provider: "openai", text: "hi", skipConversation: true } }));
-
-    expect(errors).toEqual([]);
-    expect(res.headersSent).toBe(true);
-    expect(res.chunks).toEqual([new Uint8Array([1])]);
-  });
-
-  it("skips the handler when mounted under audio-to-text", async () => {
-    const { res, errors } = await invoke("post", "/", fakeReq({ baseUrl: "/audio-to-text", body: { provider: "openai", text: "hi" } }), 0);
-    expect(errors).toEqual([]);
-    expect(res.body).toBeUndefined();
-    expect(res.chunks).toEqual([]);
-  });
 });
 
 describe("POST /audio-to-text", () => {

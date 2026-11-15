@@ -468,11 +468,8 @@ export default class AgenticToolResolver {
 
     const mcpTools = ToolOrchestratorService.getMCPToolSchemas();
     if (mcpTools.length > 0) {
-      for (const tool of mcpTools) {
-        const { _mcpServer, _mcpOriginalName, ...schema } = tool;
-        dynamicTools.push(schema);
-      }
-      logger.info(`[AgenticLoop] Merged ${mcpTools.length} MCP tools from connected servers`);
+      dynamicTools.push(...mcpTools);
+      logger.info(`[AgenticLoop] Merged ${mcpTools.length} local MCP tools`);
     }
 
     if (ToolOrchestratorService.isTradingRequest(project)) {

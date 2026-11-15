@@ -78,7 +78,7 @@ Every test, build or server run on `main` goes through
 | Path | What lives there |
 |---|---|
 | `src/boot/server.ts`, `src/boot/healthProbe.ts` | Express bootstrap, route mounts, endpoint registry, and deep `/health` Mongo + vLLM box probe |
-| `src/routes/` | One file per mounted router (`AgentRoutes`, `Harness2Routes`, `McpServersRoutes`, …) |
+| `src/routes/` | One file per mounted router (`AgentRoutes`, `Harness2Routes`, `ExecuteRoutes`, …) |
 | `src/core/loop/` | The core loop: `CoreLoop.ts`, `ToolRunner.ts`, `MessageCompactor.ts`, `RunawayStreamWatch.ts` |
 | `src/services/` | `AgenticLoopService.ts`, `AgenticToolResolver.ts`, `ToolOrchestratorService.ts`, `LocalToolRouter.ts`, `DynamicModelResolver.ts`, `vllm/VllmShimService.ts`, `WebSearchService.ts`, `WebExtractService.ts`, `EmbeddingGemma2Client.ts`, `TradingToolStream.ts`, `harness2/`, `wallgarden/` |
 | `src/utils/LoopHonestyFields.ts` | Canonical `answerSource`, `finalizeReason`, `providerAttempts`, `providerRetries` derivation |

@@ -59,25 +59,7 @@ export const INDEX_DEFINITIONS: IndexDefinition[] = [
   { collection: COLLECTIONS.BENCHMARKS, keys: { project: 1, updatedAt: -1 } },
   { collection: COLLECTIONS.BENCHMARK_RUNS, keys: { id: 1 }, options: { unique: true } },
   { collection: COLLECTIONS.BENCHMARK_RUNS, keys: { benchmarkId: 1, project: 1, startedAt: -1 } },
-  // synthesis
-  { collection: COLLECTIONS.SYNTHESIS, keys: { id: 1 }, options: { unique: true } },
-  { collection: COLLECTIONS.SYNTHESIS, keys: { project: 1, username: 1, updatedAt: -1 } },
   { collection: COLLECTIONS.AGENT_SKILLS, keys: { project: 1, username: 1 } },
-  // agent_rules
-  { collection: COLLECTIONS.AGENT_RULES, keys: { project: 1, username: 1, agent: 1 } },
-  // mcp_servers
-  { collection: COLLECTIONS.MCP_SERVERS, keys: { project: 1, username: 1 } },
-  // mcp_servers — compound for enabled filter (5+ query sites)
-  { collection: COLLECTIONS.MCP_SERVERS, keys: { project: 1, username: 1, enabled: 1 } },
-  // workspaces
-  { collection: COLLECTIONS.WORKSPACES, keys: { project: 1, username: 1 } },
-  { collection: COLLECTIONS.WORKSPACES, keys: { id: 1 }, options: { unique: true } },
-  // prompts
-  { collection: COLLECTIONS.PROMPTS, keys: { project: 1, username: 1, updatedAt: -1 } },
-  { collection: COLLECTIONS.PROMPTS, keys: { id: 1 }, options: { unique: true } },
-  // webhook_subscriptions
-  { collection: COLLECTIONS.WEBHOOK_SUBSCRIPTIONS, keys: { id: 1 }, options: { unique: true } },
-  { collection: COLLECTIONS.WEBHOOK_SUBSCRIPTIONS, keys: { enabled: 1 } },
   // workflow_memories — retrieval query index
   { collection: COLLECTIONS.WORKFLOW_MEMORIES, keys: { agent: 1, project: 1, createdAt: -1 } },
   // pending_decisions — durable approvals (settled records expire via expiresAt)

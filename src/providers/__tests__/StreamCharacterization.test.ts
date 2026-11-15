@@ -18,7 +18,6 @@ vi.hoisted(() => {
 import anthropicProvider from "../anthropic.ts";
 import openaiProvider from "../openai.ts";
 import googleProvider from "../google.ts";
-import { createLlamaCppProvider } from "../llama-cpp.ts";
 
 type Chunk = Record<string, unknown> | string;
 
@@ -52,7 +51,6 @@ beforeAll(() => {
       }
     }
     requests.push({ url, body });
-    if (url.includes("llama-box")) return sseResponse(llamaCppSseBody);
     if (url.includes("anthropic")) return sseResponse(anthropicSseBody);
     if (url.includes("/responses")) return sseResponse(openaiResponsesSseBody);
     if (url.includes("generativelanguage")) return sseResponse(googleSseBody);
@@ -304,32 +302,6 @@ describe("google streamed completion", () => {
         type: "usage",
         usage: { inputTokens: 5, outputTokens: 3, cacheReadInputTokens: 4 },
       },
-    ]);
-  });
-});
-
-const llamaCppSseBody = [
-  { id: "l1", object: "chat.completion.chunk", model: "local", choices: [{ index: 0, delta: { content: "Hel" }, finish_reason: null }] },
-  { id: "l1", object: "chat.completion.chunk", model: "local", choices: [{ index: 0, delta: { content: "lo" }, finish_reason: null }] },
-  { id: "l1", object: "chat.completion.chunk", model: "local", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 }, timings: { predicted_per_second: 12.34 } },
-]
-  .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
-  .join("") + "data: [DONE]\n\n";
-
-describe("llama.cpp streamed completion", () => {
-  it("emits text and the final usage with timings", async () => {
-    const provider = createLlamaCppProvider("http://llama-box:8080");
-    const chunks = await collect(
-      provider.generateTextStream!(
-        [{ role: "user", content: "hi" }],
-        "local",
-        {},
-      ) as AsyncGenerator<Chunk>,
-    );
-
-    expect(textOf(chunks)).toBe("Hello");
-    expect(eventsOf(chunks, "usage")).toEqual([
-      { type: "usage", usage: { inputTokens: 4, outputTokens: 2, tokensPerSec: 12.3 } },
     ]);
   });
 });
