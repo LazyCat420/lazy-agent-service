@@ -2,10 +2,10 @@
 part: Architecture
 type: spec
 status: verified
-updated: 2026-11-13
-last-verified: 2026-11-13
-review-by: 2026-12-13
-covers: lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/AgenticToolResolver.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/core/loop/CoreLoop.ts, lazy-agent-service:src/core/loop/MessageCompactor.ts, lazy-agent-service:src/core/loop/RunawayStreamWatch.ts, lazy-agent-service:src/core/loop/ToolRunner.ts, lazy-agent-service:src/services/TradingToolStream.ts, lazy-agent-service:src/utils/LoopHonestyFields.ts, lazy-agent-service:src/services/harness2/Harness2Service.ts, lazy-agent-service:src/services/harness2/Library.ts, spark-console:console.py
+updated: 2026-11-14
+last-verified: 2026-11-14
+review-by: 2026-12-14
+covers: lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/AgenticToolResolver.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/services/CanonicalProviderBudget.ts, lazy-agent-service:src/core/loop/CoreLoop.ts, lazy-agent-service:src/core/loop/MessageCompactor.ts, lazy-agent-service:src/core/loop/RunawayStreamWatch.ts, lazy-agent-service:src/core/loop/ToolRunner.ts, lazy-agent-service:src/services/TradingToolStream.ts, lazy-agent-service:src/utils/LoopHonestyFields.ts, lazy-agent-service:src/services/harness2/Harness2Service.ts, lazy-agent-service:src/services/harness2/Library.ts, spark-console:console.py
 ---
 
 # The harness execution loop
@@ -52,6 +52,7 @@ after compaction instead of failing the run.
 | Guard | Fires when | Behaviour |
 |---|---|---|
 | `RunawayStreamWatch` | a stream produces nothing / loops | ends the stream; retry timing is measured with `performance.now` (`c4b18a9`) |
+| `CanonicalProviderBudget` (`reconcileStreamBudget`) | a wrapped stream throws or aborts before yielding any output or usage telemetry (`emittedBytes === 0`) | releases the entire speculative `reservation` (`inputReserve + outputReserve`) instead of retaining `inputReserve`, so `CoreLoop` `PROVIDER_RETRY` attempts do not trip `TOKEN_BUDGET_FINALIZE` and finalize prematurely as `TOKEN_BUDGET` (`e54d523`); mid-stream failures with `emittedBytes > 0` and no usage telemetry still retain `inputReserve + min(outputReserve, emittedBytes)` |
 | `REPEAT_GUARDED_TOOLS` & `READ_ONLY_TOOLS` (`LocalToolRouter`) | an idempotent desk tool (`whiteboard_read`, `peer_comparison`, `data_completeness`, `get_earnings_data`, `get_upcoming_events`, `get_market_data`) is called twice with identical args in one run, or a read-only desk query (`whiteboard_find`, `read_ledger_entry`, `T2` `f10b64d`) hits a transient 5xx | repeat calls reuse the first result (`1003bb2`; `run_tool_chain` repeat is reused rather than failing with `TOOL_STALL`, `260c020`), and `READ_ONLY_TOOLS` classify ledger/whiteboard reads as safe idempotent reads rather than state-mutating writes |
 | Trading tool budget | a trading run exhausts its tool budget | closed-budget tools and `scrape_url` stop being offered (`e7003c8`), the run finalizes when no tool remains after budget close (`fb2ea8a`); the budget counts resolved `{error,is_error}` payloads and bridge timeouts (`e5611e9`) |
 | Scrape budget | per-run `scrape_url` limit | enforced per run (`02b24a4`); known-dead URLs are refused without spending budget, malformed URLs get one search-first hint (`7c279f5`, `f32f98f`) |

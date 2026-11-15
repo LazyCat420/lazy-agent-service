@@ -5,7 +5,7 @@ status: verified
 updated: 2026-11-14
 last-verified: 2026-11-14
 review-by: 2026-12-14
-covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:deploy.sh, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/boot/__tests__/healthProbe.test.ts, lazy-agent-service:src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts, lazy-agent-service:src/services/__tests__/TradingToolResolverIsolation.test.ts, lazy-agent-service:src/utils/__tests__/loopHonestyFields.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
+covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:deploy.sh, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/boot/__tests__/healthProbe.test.ts, lazy-agent-service:src/services/__tests__/CanonicalProviderBudget.finalize.test.ts, lazy-agent-service:src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts, lazy-agent-service:src/services/__tests__/TradingToolResolverIsolation.test.ts, lazy-agent-service:src/utils/__tests__/loopHonestyFields.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
 ---
 
 # Verification and gates
@@ -66,6 +66,7 @@ waves that closed the CRAP tail (2026-10-31, `ded73cf`).
 | deep `GET /health` probe: 2 s raced Mongo + enabled vLLM `/v1/models` checks (`ok` / `degraded` / `down`), 10 s shared-flight cache, URL credential redaction, disabled `jetson-2` excluded (`S-13`) | `src/boot/__tests__/healthProbe.test.ts` |
 | `/vllm-shim` `404` model-swap auto-heal (`X-Vllm-Shim-Live-Model` header + non-stream JSON `"model"` stamp, `S-10`) and `read_ledger_entry` in `LocalToolRouter.READ_ONLY_TOOLS` (`T2`) | `src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts` |
 | trading tool-resolution isolation: `AgenticToolResolver` unlocks core tools and strips unrequested `CORE_AGENTIC_TOOLS` / `search_web` / `CORE_ORCHESTRATOR_TOOLS` / `system` tools (`T3`) | `src/services/__tests__/TradingToolResolverIsolation.test.ts` |
+| zero-byte failed stream refunds speculative token reservation in `CanonicalProviderBudget.reconcileStreamBudget` so `CoreLoop` `PROVIDER_RETRY` does not trigger premature `TOKEN_BUDGET` finalization (`TCK-1028`, `e54d523`) | `src/services/__tests__/CanonicalProviderBudget.finalize.test.ts` |
 
 ## Audit and boundary scripts
 
@@ -115,6 +116,8 @@ everything else. Counts below are the runs recorded on 2026-11-07 for the ledger
 | tts-service | `python3 -m pytest -q tests/test_synth_engine.py` | 6 passed | reciter/prosody, frames, Klatt voice controls, post-conditioning of every preset, and the HTTP endpoints (TCK-1023) |
 
 Stale contract tests covering deleted Wave 4C modules (`test/contract/AttributionAnalyzer.test.ts` and `test/contract/ExperimentStats.test.ts`) were removed alongside `AttributionAnalyzer.ts` and `ExperimentService.ts`, and `documentation/build_docs.py` + `documentation/index.html` were synced with `--project agent` (`b6ed40e`) so cross-project staging validates cleanly. `spark-console` also has DOM checks (`node tests/dashboard-ui.cjs`, `node tests/throughput-max-ui.cjs`) for the dashboard.
+
+Wave 5 cleanup (`TCK-1028`, `e54d523`) removed four zero-caller modules (`src/data/benchmarkPresets.ts`, `src/services/orchestrator/definitionRegistry.ts`, `src/services/orchestrator/TopologyRegistry.ts`, and `src/services/harnesses/strategies/ThoughtStructureRegistry.ts`) along with their stale doc-comment cross-references across `ReActHarness.ts`, `GraphOfThoughtsStrategy.ts`, `TreeOfThoughtsStrategy.ts`, and the eight `src/services/orchestrator/routers/*Router.ts` files, while retaining `WorkflowMemoryService.ts` (active in `src/services/system-prompt/index.ts` and `HookInitializer.ts` for `prism-chat`/non-trading projects) and `src/services/harnesses/RunningSummary.ts` (active in `PromptedToolCallingHarness.ts`). The same change also fixed `CanonicalProviderBudget.reconcileStreamBudget` to release zero-byte failed stream reservations before `CoreLoop` `PROVIDER_RETRY`.
 
 Named sibling proofs:
 
