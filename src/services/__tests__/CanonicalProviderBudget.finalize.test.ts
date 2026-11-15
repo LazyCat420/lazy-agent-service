@@ -85,4 +85,32 @@ describe("CanonicalProviderBudget finalize reserve", () => {
     const freshProvider = fresh.wrap(fakeProvider([["final", USAGE]]));
     await drain(freshProvider.generateTextStream([{ role: "user", content: "x".repeat(3500) }], "m", {}));
   });
+
+  it("refunds reservation when a stream fails before yielding output so retries can proceed", async () => {
+    const budget = new CanonicalProviderBudget(4000, new AbortController().signal);
+    const failingThenOk = {
+      attempt: 0,
+      generateTextStream() {
+        this.attempt += 1;
+        if (this.attempt === 1) {
+          return (async function* () {
+            yield* ([] as never[]);
+            throw Object.assign(new Error("transient upstream failure"), { code: "PROVIDER_ERROR" });
+          })();
+        }
+        return (async function* () {
+          yield "ok";
+          yield USAGE;
+        })();
+      },
+    };
+    const provider = budget.wrap(failingThenOk);
+    await expect(
+      drain(provider.generateTextStream([{ role: "user", content: "hi" }], "m", {})),
+    ).rejects.toThrow("transient upstream failure");
+    expect(budget.chargedTokens).toBe(0);
+
+    await drain(provider.generateTextStream([{ role: "user", content: "hi" }], "m", {}));
+    expect(budget.chargedTokens).toBe(150);
+  });
 });

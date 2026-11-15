@@ -11,8 +11,6 @@
  * Branch generation, scoring and the shared validation plumbing live
  * in ./shared.ts; this file keeps the GoT-specific synthesis pass.
  *
- * See ThoughtStructureRegistry.ts → THOUGHT_STRUCTURE_DEFINITIONS
- * (id: "graph_of_thoughts") for full paper-alignment metadata.
  */
 import type AgentHooks from "../../AgentHooks.ts";
 import type BaseAgenticHarness from "../BaseAgenticHarness.ts";

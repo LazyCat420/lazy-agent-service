@@ -126,8 +126,6 @@ interface SynthesisLayerOutcome {
  * Paper: "Mixture-of-Agents Enhances Large Language Model Capabilities"
  * (arxiv.org/abs/2406.04692)
  *
- * See TopologyRegistry.ts → TOPOLOGY_DEFINITIONS (id: "hierarchical-aggregation")
- * for full paper-alignment metadata and config option documentation.
  */
 export class HierarchicalAggregationRouter implements TopologyRouter {
   async execute(

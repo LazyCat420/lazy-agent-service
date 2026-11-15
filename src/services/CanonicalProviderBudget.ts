@@ -106,6 +106,14 @@ export class CanonicalProviderBudget {
     } else if (streamCompleted) {
       this.chargedTokens +=
         inputReserve + Math.min(outputReserve, emittedBytes) - reservation;
+    } else if (emittedBytes === 0) {
+      // Failed before yielding any output and without usage telemetry: release the
+      // speculative reservation so retries (e.g. PROVIDER_RETRY) can run.
+      this.chargedTokens -= reservation;
+    } else {
+      // Interrupted mid-stream without usage telemetry: keep input + partial output.
+      this.chargedTokens +=
+        inputReserve + Math.min(outputReserve, emittedBytes) - reservation;
     }
   }
 

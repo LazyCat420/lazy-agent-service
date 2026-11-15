@@ -23,8 +23,6 @@ import { GitWorktreeHelper } from "../GitWorktreeHelper.ts";
  * from single-prompt reasoning to multi-agent orchestration.
  * Each sub-agent receives accumulated prior outputs as context.
  *
- * See TopologyRegistry.ts → TOPOLOGY_DEFINITIONS (id: "sequential")
- * for full paper-alignment metadata and config option documentation.
  */
 export class SequentialRouter implements TopologyRouter {
   async execute(

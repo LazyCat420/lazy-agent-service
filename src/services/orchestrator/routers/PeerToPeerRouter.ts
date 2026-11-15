@@ -323,8 +323,6 @@ function recordTurnOutput(params: TurnOutputParams): TurnOutputOutcome {
  * Paper: "Improving Factuality and Reasoning in Language Models
  * through Multiagent Debate" (arxiv.org/abs/2305.14325)
  *
- * See TopologyRegistry.ts → TOPOLOGY_DEFINITIONS (id: "peer-to-peer")
- * for full paper-alignment metadata and config option documentation.
  */
 export class PeerToPeerRouter implements TopologyRouter {
   async execute(

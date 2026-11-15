@@ -30,8 +30,6 @@
  * Branch generation, scoring, exploration wrappers and the shared
  * validation/reflexion plumbing live in ./shared.ts.
  *
- * See ThoughtStructureRegistry.ts → THOUGHT_STRUCTURE_DEFINITIONS
- * (id: "tree_of_thoughts") for full paper-alignment metadata.
  */
 import type AgentHooks from "../../AgentHooks.ts";
 import type BaseAgenticHarness from "../BaseAgenticHarness.ts";

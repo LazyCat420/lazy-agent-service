@@ -285,8 +285,6 @@ export function buildDependencyContextPrefix(
  * Paper: "Recursive Decomposition with Dependencies for Generic
  * Divide-and-Conquer Reasoning" (arxiv.org/abs/2505.02576)
  *
- * See TopologyRegistry.ts → TOPOLOGY_DEFINITIONS (id: "divide-and-conquer")
- * for full paper-alignment metadata and config option documentation.
  */
 export class DivideAndConquerRouter implements TopologyRouter {
   private async runTaskDecompositionPass(

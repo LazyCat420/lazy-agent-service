@@ -293,8 +293,6 @@ function detectDegenerationOfThought(
  * Paper: "Self-Refine: Iterative Refinement with Self-Feedback"
  * (arxiv.org/abs/2303.17651)
  *
- * See TopologyRegistry.ts → TOPOLOGY_DEFINITIONS (id: "critic-loop")
- * for full paper-alignment metadata and config option documentation.
  */
 export class CriticLoopRouter implements TopologyRouter {
   async execute(

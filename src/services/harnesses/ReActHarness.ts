@@ -165,8 +165,6 @@ function computeToolCallSignature(toolCalls: ToolCall[]): string {
  *   - Tree of Thoughts: branching tree — parallel branches, score, select best
  *   - Graph of Thoughts: merging graph — parallel branches, score, synthesize all
  *
- * See ThoughtStructureRegistry.ts → THOUGHT_STRUCTURE_DEFINITIONS
- * for full paper-alignment metadata and config option documentation.
  *
  * Control flow (Chain of Thought):
  *   1. Stream LLM response (Reason)

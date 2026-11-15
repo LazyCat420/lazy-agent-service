@@ -167,8 +167,6 @@ interface TournamentJudgeParams {
  * Paper: "Large Language Monkeys: Scaling Inference Compute
  * with Repeated Sampling" (arxiv.org/abs/2407.21787)
  *
- * See TopologyRegistry.ts → TOPOLOGY_DEFINITIONS (id: "tournament")
- * for full paper-alignment metadata and config option documentation.
  */
 export class TournamentRouter implements TopologyRouter {
   async execute(

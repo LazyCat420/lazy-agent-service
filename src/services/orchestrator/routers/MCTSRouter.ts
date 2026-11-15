@@ -324,8 +324,6 @@ export function extractNodeOutput(result: SubAgentResult): string {
  * expand — allowing re-visitation of previously unexplored siblings
  * when the current best path plateaus.
  *
- * See TopologyRegistry.ts → TOPOLOGY_DEFINITIONS (id: "mcts")
- * for full paper-alignment metadata and config option documentation.
  */
 export class MCTSRouter implements TopologyRouter {
   private selectExpansionTargetForIteration(
