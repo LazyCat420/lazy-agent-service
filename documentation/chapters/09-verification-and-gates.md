@@ -114,7 +114,7 @@ everything else. Counts below are the runs recorded on 2026-11-07 for the ledger
 | spark-console | `python3 -m pytest -q tests/test_solo_throughput.py tests/test_live_throughput.py tests/test_spark_console_telemetry.py tests/test_health_monitor.py` | 125 passed | solo/aggregate throughput rules, live TensorFold counters, per-model series alignment and summing, temperature history, remote-LLM reconciliation, monitoring views (TCK-1022) |
 | tts-service | `python3 -m pytest -q tests/test_synth_engine.py` | 6 passed | reciter/prosody, frames, Klatt voice controls, post-conditioning of every preset, and the HTTP endpoints (TCK-1023) |
 
-Stale contract tests covering deleted Wave 4C modules (`test/contract/AttributionAnalyzer.test.ts` and `test/contract/ExperimentStats.test.ts`) were removed alongside `AttributionAnalyzer.ts` and `ExperimentService.ts`. `spark-console` also has DOM checks (`node tests/dashboard-ui.cjs`, `node tests/throughput-max-ui.cjs`) for the dashboard.
+Stale contract tests covering deleted Wave 4C modules (`test/contract/AttributionAnalyzer.test.ts` and `test/contract/ExperimentStats.test.ts`) were removed alongside `AttributionAnalyzer.ts` and `ExperimentService.ts`, and `documentation/build_docs.py` + `documentation/index.html` were synced with `--project agent` (`b6ed40e`) so cross-project staging validates cleanly. `spark-console` also has DOM checks (`node tests/dashboard-ui.cjs`, `node tests/throughput-max-ui.cjs`) for the dashboard.
 
 Named sibling proofs:
 
