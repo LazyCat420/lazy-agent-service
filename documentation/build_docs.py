@@ -1440,9 +1440,9 @@ def _load_parts(records: list[dict]) -> list[dict]:
     A chapter normally declares its OWN part in front matter (``part: Plans``).
     That is the point: adding a chapter is adding one file, and the page
     reorganises itself around it. ``chapters/_parts.json`` stays supported and,
-    when present, fixes the ORDER of the parts and carries their blurbs; it may
-    also list chapters explicitly to pin their order within a part, which is how
-    the hand-curated repos already read.
+    when present, carries the parts' blurbs and may list chapters explicitly to
+    file them under a part. The page itself is ordered newest-first by
+    ``_newest_first``; manifest order only breaks ties between parts.
 
     Still **fail-closed**: a chapter that declares no ``part:`` and appears in no
     manifest is a hard build error naming the file, not a silent omission. On
@@ -1527,6 +1527,41 @@ def _load_parts(records: list[dict]) -> list[dict]:
         )
 
     return [g for g in grouped if g["chapters"]]
+
+
+def _chapter_date(path: Path, meta: dict) -> str:
+    """The YYYY-MM-DD a chapter sorts by: front-matter `updated`, else the date
+    of the last commit that touched the file, else the file's mtime."""
+    updated = (meta.get("updated") or "").strip()
+    try:
+        return datetime.strptime(updated, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        pass
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(path.parent), "log", "-1", "--format=%ad",
+             "--date=short", "--", path.name],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if out:
+            return out
+    except Exception:
+        pass
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d")
+
+
+def _newest_first(groups: list[dict]) -> list[dict]:
+    """Order the page newest-first: the first thing a reader sees is the most
+    recently updated chapter. Chapters sort by `_chapter_date` descending within
+    their part (filename order breaks ties); parts sort by their newest chapter
+    descending (manifest order breaks ties). Both sorts are stable, so the
+    output stays deterministic. Each record gains a `date` key."""
+    for group in groups:
+        for record in group["chapters"]:
+            record["date"] = _chapter_date(record["path"], record["meta"])
+        by_name = sorted(group["chapters"], key=lambda r: r["path"].name)
+        group["chapters"] = sorted(by_name, key=lambda r: r["date"], reverse=True)
+    return sorted(groups, key=lambda g: g["chapters"][0]["date"], reverse=True)
 
 
 # ------------------------------------------------------------------ taxonomy
@@ -1646,19 +1681,29 @@ _TREE_JS = """
 </script>"""
 
 
-def _tree_nav(tax: dict, buckets: dict[str, dict[str, list[str]]],
-              changelog_items: list[str], archive_items: list[str],
+def _tree_nav(tax: dict, buckets: dict[str, dict[str, list[tuple[str, str]]]],
+              changelog_items: list[tuple[str, str]],
+              archive_items: list[tuple[str, str]],
               bench_items: list[str]) -> str:
     """Assemble the grouped sidebar from the buckets build() filled while it
-    rendered chapters. Order: taxonomy's `parts` then their `groups`; anything
-    the taxonomy never named is appended at the end in encounter order rather
-    than dropped. Part and group headers carry their chapter count. Parts in
+    rendered chapters. Every item is a ``(date, html)`` pair. Order is
+    newest-first: chapters by date descending, groups and parts by their newest
+    chapter descending; ties keep taxonomy order (`parts`, then their `groups`,
+    then anything the taxonomy never named, in encounter order rather than
+    dropped). Part and group headers carry their chapter count. Parts in
     `collapsed_parts` start closed; groups are open exactly when their part is.
-    The changelog shelf and the Archive shelf close by default, bottom-most."""
+    The changelog shelf and the Archive shelf close by default, bottom-most,
+    each listed newest-first."""
     collapsed = {str(p).casefold() for p in (tax.get("collapsed_parts") or [])}
 
-    def count(groups: dict[str, list[str]]) -> int:
+    def count(groups: dict[str, list[tuple[str, str]]]) -> int:
         return sum(len(v) for v in groups.values())
+
+    def newest(items: list[tuple[str, str]]) -> str:
+        return max((d for d, _ in items), default="")
+
+    def html_of(items: list[tuple[str, str]]) -> str:
+        return "".join(h for _, h in sorted(items, key=lambda it: it[0], reverse=True))
 
     order: list[tuple[str, list[str]]] = []
     seen: set[str] = set()
@@ -1671,6 +1716,10 @@ def _tree_nav(tax: dict, buckets: dict[str, dict[str, list[str]]],
         if name not in seen:
             order.append((name, []))
             seen.add(name)
+    order.sort(
+        key=lambda o: newest([it for v in (buckets.get(o[0]) or {}).values() for it in v]),
+        reverse=True,
+    )
 
     out: list[str] = []
     for name, declared in order:
@@ -1681,6 +1730,7 @@ def _tree_nav(tax: dict, buckets: dict[str, dict[str, list[str]]],
         open_attr = "" if name.casefold() in collapsed else " open"
         inner: list[str] = []
         listed = declared + [g for g in groups if g not in declared]
+        listed.sort(key=lambda g: newest(groups.get(g) or []), reverse=True)
         for gname in listed:
             items = groups.get(gname) or []
             if not items:
@@ -1688,7 +1738,7 @@ def _tree_nav(tax: dict, buckets: dict[str, dict[str, list[str]]],
             inner.append(
                 f'<details class="toc-group"{open_attr}>'
                 f'<summary>{html.escape(gname)} <span class="toc-count">({len(items)})</span></summary>'
-                f'<ol class="toc-chapters">{"".join(items)}</ol></details>'
+                f'<ol class="toc-chapters">{html_of(items)}</ol></details>'
             )
         out.append(
             f'<li class="toc-part"><details class="toc-part"{open_attr}>'
@@ -1701,7 +1751,7 @@ def _tree_nav(tax: dict, buckets: dict[str, dict[str, list[str]]],
         out.append(
             f'<li class="toc-fold"><details class="toc-fold">'
             f'<summary>{html.escape(label)} <span class="toc-count">({len(items)})</span></summary>'
-            f'<ol class="toc-chapters">{"".join(items)}</ol></details></li>'
+            f'<ol class="toc-chapters">{html_of(items)}</ol></details></li>'
         )
     out.extend(bench_items)
     return "".join(out)
@@ -3719,16 +3769,18 @@ def build() -> str:
 
     nav_parts, body_parts, touched = [], [], []
     enhanced_nav = ACTIVE_PROJECT == "trading-cycle"
-    groups = _load_parts(chapters)
+    # Newest-first: nav, body and the prev/next reading order all follow this.
+    groups = _newest_first(_load_parts(chapters))
     # Optional grouped-tree nav. With no _taxonomy.json in this docs dir every
     # line below behaves exactly as it did before the taxonomy existed.
     tax = _load_taxonomy()
     # canonical part -> group -> rendered <li> items. Chapters moved to the
     # changelog or archive shelf leave their group, so a header's count always
     # matches what opening it reveals.
-    buckets: dict[str, dict[str, list[str]]] = {}
-    tax_changelog: list[str] = []
-    tax_archive: list[str] = []
+    # Items are (date, html) so _tree_nav can order every level newest-first.
+    buckets: dict[str, dict[str, list[tuple[str, str]]]] = {}
+    tax_changelog: list[tuple[str, str]] = []
+    tax_archive: list[tuple[str, str]] = []
     tax_bench: list[str] = []
     seen_ids: dict[str, str] = {}
     # Flat reading order for the prev/next pager. Bench reports are inserted
@@ -3850,14 +3902,15 @@ def build() -> str:
                 + "</li>"
             )
             if tax:
+                dated = (record["date"], item)
                 if tax_fold == CHANGELOG_GROUP.lower():
-                    tax_changelog.append(item)
+                    tax_changelog.append(dated)
                 elif tax_fold:
-                    tax_archive.append(item)
+                    tax_archive.append(dated)
                 else:
                     cpart = _tax_part(tax, (group["part"] or "").strip())
                     gname = _tax_group_of(tax, chap_id) or cpart
-                    buckets.setdefault(cpart, {}).setdefault(gname, []).append(item)
+                    buckets.setdefault(cpart, {}).setdefault(gname, []).append(dated)
             elif enhanced_nav:
                 (changelog_items if is_changelog else chapter_items).append(item)
             else:
