@@ -2,9 +2,9 @@
 part: Operations & Quality
 type: reference
 status: verified
-updated: 2026-11-15
-last-verified: 2026-11-15
-review-by: 2026-12-15
+updated: 2026-11-14
+last-verified: 2026-11-14
+review-by: 2026-12-14
 covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:deploy.sh, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/boot/__tests__/healthProbe.test.ts, lazy-agent-service:src/services/__tests__/CanonicalProviderBudget.finalize.test.ts, lazy-agent-service:src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts, lazy-agent-service:src/services/__tests__/TradingToolResolverIsolation.test.ts, lazy-agent-service:src/utils/__tests__/loopHonestyFields.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
 ---
 
@@ -67,7 +67,7 @@ waves that closed the CRAP tail (2026-10-31, `ded73cf`).
 | `/vllm-shim` `404` model-swap auto-heal (`X-Vllm-Shim-Live-Model` header + non-stream JSON `"model"` stamp, `S-10`) and `read_ledger_entry` in `LocalToolRouter.READ_ONLY_TOOLS` (`T2`) | `src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts` |
 | trading tool-resolution isolation: `AgenticToolResolver` unlocks core tools and strips unrequested `CORE_AGENTIC_TOOLS` / `search_web` / `CORE_ORCHESTRATOR_TOOLS` / `system` tools (`T3`) | `src/services/__tests__/TradingToolResolverIsolation.test.ts` |
 | zero-byte failed stream with no usage chunks refunds the full speculative token reservation in `CanonicalProviderBudget.reconcileStreamBudget` so `CoreLoop` `PROVIDER_RETRY` does not trigger premature `TOKEN_BUDGET` finalization (`TCK-1028`, `e54d523`, `ed4b40c`) | `src/services/__tests__/CanonicalProviderBudget.finalize.test.ts` |
-| mid-stream failure after yielding text chunks without usage telemetry retains `inputReserve + emittedBytes` while allowing follow-up streams to complete (`R1-F2`, `ed4b40c`) | `src/services/__tests__/CanonicalProviderBudget.finalize.test.ts` |
+| mid-stream failure after yielding text chunks without usage telemetry retains `inputReserve + min(outputReserve, emittedBytes)` while allowing follow-up streams to complete (`R1-F2`, `ed4b40c`) | `src/services/__tests__/CanonicalProviderBudget.finalize.test.ts` |
 | stream yielding a partial/empty usage chunk (`sawUsageChunk`) with zero text bytes before failing retains `inputReserve` instead of refunding to `0` (`R1-F3`, `ed4b40c`) | `src/services/__tests__/CanonicalProviderBudget.finalize.test.ts` |
 
 ## Audit and boundary scripts

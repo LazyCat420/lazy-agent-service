@@ -2,9 +2,9 @@
 part: Governance
 type: ledger
 status: verified
-updated: 2026-11-15
-last-verified: 2026-11-15
-review-by: 2026-12-15
+updated: 2026-11-14
+last-verified: 2026-11-14
+review-by: 2026-12-14
 covers: lazy-agent-service:documentation/tickets.jsonl
 ---
 

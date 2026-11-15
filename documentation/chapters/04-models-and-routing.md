@@ -2,9 +2,9 @@
 part: Runtime & Pipeline
 type: spec
 status: verified
-updated: 2026-11-15
-last-verified: 2026-11-15
-review-by: 2026-12-15
+updated: 2026-11-14
+last-verified: 2026-11-14
+review-by: 2026-12-14
 covers: lazy-agent-service:src/services/DynamicModelResolver.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:src/services/wallgarden/JetsonGate.ts, lazy-agent-service:src/services/wallgarden/WallgardenService.ts, lazy-agent-service:src/services/CanonicalProviderBudget.ts, lazy-agent-service:src/services/VllmModelSyncService.ts, spark-console:console.py, spark-console:boxes.json, spark-console:dsv41-start.sh
 ---
 
