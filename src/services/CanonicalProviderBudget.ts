@@ -74,6 +74,7 @@ export class CanonicalProviderBudget {
     measuredInput?: number;
     measuredOutput?: number;
     emittedBytes: number;
+    sawUsageChunk: boolean;
   } {
     if (chunk?.type === "usage") {
       const u = chunk.usage || {};
@@ -83,10 +84,14 @@ export class CanonicalProviderBudget {
         measuredInput: Number.isFinite(input) && input >= 0 ? input : undefined,
         measuredOutput: Number.isFinite(output) && output >= 0 ? output : undefined,
         emittedBytes: 0,
+        sawUsageChunk: true,
       };
     }
     const serialized = typeof chunk === "string" ? chunk : JSON.stringify(chunk);
-    return { emittedBytes: Buffer.byteLength(serialized, "utf8") };
+    return {
+      emittedBytes: Buffer.byteLength(serialized, "utf8"),
+      sawUsageChunk: false,
+    };
   }
 
   private reconcileStreamBudget(
@@ -97,21 +102,20 @@ export class CanonicalProviderBudget {
     outputReserve: number,
     reservation: number,
     emittedBytes: number,
+    sawUsageChunk: boolean,
   ): void {
     if (measuredInput !== undefined) this.inputTokens += measuredInput;
     if (measuredOutput !== undefined) this.outputTokens += measuredOutput;
     if (measuredInput !== undefined && measuredOutput !== undefined) {
       this.measuredCalls++;
       this.chargedTokens += measuredInput + measuredOutput - reservation;
-    } else if (streamCompleted) {
-      this.chargedTokens +=
-        inputReserve + Math.min(outputReserve, emittedBytes) - reservation;
-    } else if (emittedBytes === 0) {
-      // Failed before yielding any output and without usage telemetry: release the
+    } else if (!streamCompleted && emittedBytes === 0 && !sawUsageChunk) {
+      // Failed before yielding any output or usage chunks: release the
       // speculative reservation so retries (e.g. PROVIDER_RETRY) can run.
       this.chargedTokens -= reservation;
     } else {
-      // Interrupted mid-stream without usage telemetry: keep input + partial output.
+      // Completed stream or failure after output / usage chunks without full
+      // usage telemetry: retain inputReserve + capped emitted bytes.
       this.chargedTokens +=
         inputReserve + Math.min(outputReserve, emittedBytes) - reservation;
     }
@@ -128,6 +132,7 @@ export class CanonicalProviderBudget {
       this.reserveTokensForStream(messages, options);
     let emittedBytes = 0;
     let streamCompleted = false;
+    let sawUsageChunk = false;
     let measuredInput: number | undefined;
     let measuredOutput: number | undefined;
     const callSignal = options.signal
@@ -147,6 +152,7 @@ export class CanonicalProviderBudget {
         const metrics = this.extractChunkUsageMetrics(chunk);
         if (metrics.measuredInput !== undefined) measuredInput = metrics.measuredInput;
         if (metrics.measuredOutput !== undefined) measuredOutput = metrics.measuredOutput;
+        if (metrics.sawUsageChunk) sawUsageChunk = true;
         emittedBytes += metrics.emittedBytes;
         yield chunk;
       }
@@ -160,6 +166,7 @@ export class CanonicalProviderBudget {
         outputReserve,
         reservation,
         emittedBytes,
+        sawUsageChunk,
       );
     }
     if (!finalizing && this.chargedTokens > this.limit) {

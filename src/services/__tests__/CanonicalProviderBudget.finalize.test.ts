@@ -113,4 +113,63 @@ describe("CanonicalProviderBudget finalize reserve", () => {
     await drain(provider.generateTextStream([{ role: "user", content: "hi" }], "m", {}));
     expect(budget.chargedTokens).toBe(150);
   });
+
+  it("retains inputReserve + emittedBytes when a stream fails mid-stream after yielding chunks", async () => {
+    const messages = [{ role: "user", content: "hi" }];
+    const expectedInputReserve =
+      Math.ceil(JSON.stringify({ messages, tools: [] }).length / 3.5) + 256;
+    const partialChunk = "partial";
+    const emittedBytes = Buffer.byteLength(partialChunk, "utf8");
+    const budget = new CanonicalProviderBudget(4000, new AbortController().signal);
+    const midStreamFailThenOk = {
+      attempt: 0,
+      generateTextStream() {
+        this.attempt += 1;
+        if (this.attempt === 1) {
+          return (async function* () {
+            yield partialChunk;
+            throw Object.assign(new Error("mid-stream failure"), { code: "PROVIDER_ERROR" });
+          })();
+        }
+        return (async function* () {
+          yield "ok";
+          yield USAGE;
+        })();
+      },
+    };
+    const provider = budget.wrap(midStreamFailThenOk);
+    await expect(
+      drain(provider.generateTextStream(messages, "m", {})),
+    ).rejects.toThrow("mid-stream failure");
+    expect(budget.chargedTokens).toBe(expectedInputReserve + emittedBytes);
+    expect(budget.chargedTokens).toBe(279);
+
+    await drain(provider.generateTextStream(messages, "m", {}));
+    expect(budget.chargedTokens).toBe(279 + 150);
+    expect(budget.measuredCalls).toBe(1);
+  });
+
+  it("retains inputReserve when a stream yields a partial usage chunk before failing with 0 text bytes", async () => {
+    const messages = [{ role: "user", content: "hi" }];
+    const expectedInputReserve =
+      Math.ceil(JSON.stringify({ messages, tools: [] }).length / 3.5) + 256;
+    const budget = new CanonicalProviderBudget(4000, new AbortController().signal);
+    const partialUsageFail = {
+      generateTextStream() {
+        return (async function* () {
+          yield { type: "usage", usage: { inputTokens: 12 } };
+          throw Object.assign(new Error("upstream abort after partial usage"), { code: "PROVIDER_ERROR" });
+        })();
+      },
+    };
+    const provider = budget.wrap(partialUsageFail);
+    await expect(
+      drain(provider.generateTextStream(messages, "m", {})),
+    ).rejects.toThrow("upstream abort after partial usage");
+    expect(budget.inputTokens).toBe(12);
+    expect(budget.outputTokens).toBe(0);
+    expect(budget.chargedTokens).toBeGreaterThan(0);
+    expect(budget.chargedTokens).toBe(expectedInputReserve);
+    expect(budget.measuredCalls).toBe(0);
+  });
 });
