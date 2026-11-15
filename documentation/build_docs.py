@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
 import subprocess
 import sys
@@ -56,6 +57,11 @@ BENCH_PART = "Latest Reports & Benchmarks (Newest First)"
 # ledger next to their own chapters; nothing is shared between projects.
 TICKETS = DOCS_DIR / "tickets.jsonl"
 LEDGER_CHAPTER = "11-tickets.md"
+# Trading-cycle sidebar: chapters whose filename or title matches this are
+# changelog-style records. They stay in the page but fold away (a nav
+# <details> group and a <details> body), so they do not sit in the reading flow.
+CHANGELOG_RE = re.compile(r"changelog|ledger|register|history", re.I)
+CHANGELOG_GROUP = "Changelogs and ledgers"
 
 # The two graph sources rendered as views 1 and 2. They are validated by
 # check_graphs.py; the builder only renders them and maps tickets onto their
@@ -67,6 +73,25 @@ DATA_GRAPH = DOCS_DIR / "data_flow_graph.json"
 # can mark "Trading Cycle" as the page you are already on.
 PROJECTS_JSON = DOCS_DIR / "_projects.json"
 ACTIVE_PROJECT = "trading-cycle"
+
+# The navigation taxonomy, read from the documentation/ tree being built so
+# every project can carry its own (or none). Optional: with no file the nav
+# renders exactly as before. Shape:
+#
+#   {"parts": [{"name": <part>, "groups": [<group>, ...]}, ...],
+#    "part_of": {<old part string>: <canonical part>},
+#    "group_of": {<chapter id>: <group>},
+#    "archive": {"statuses": [...], "before": "YYYY-MM-DD"},
+#    "collapsed_parts": [<part>, ...],
+#    "collapsed_patterns": [<substring>, ...]}
+#
+# <chapter id> is the FULL filename stem including the numeric prefix
+# (`03-decisions`, `10-decisions`) — the same string the builder uses for the
+# section id and the nav href, because stripped stems collide (03-decisions
+# and 10-decisions both strip to `decisions`). The prefix-stripped stem is
+# accepted as a fallback key so a hand-written map does not have to repeat
+# prefixes.
+TAXONOMY = DOCS_DIR / "_taxonomy.json"
 
 # Where a `repo:path` covers entry is resolved from. Relative to the repo root
 # that holds this documentation/ tree.
@@ -93,7 +118,7 @@ WORKSPACE_PROJECTS = "finance/trading/trading-client/documentation/_projects.jso
 def _use_docs_dir(docs_dir: Path) -> None:
     """Point every DOCS_DIR-derived path at another project's documentation/."""
     global DOCS_DIR, CHAPTERS_DIR, BENCH_DIR, OUTPUT, TICKETS, EXEC_GRAPH, DATA_GRAPH
-    global PROJECTS_JSON, _DOCS_DIR
+    global PROJECTS_JSON, TAXONOMY, _DOCS_DIR
     DOCS_DIR = docs_dir
     CHAPTERS_DIR = DOCS_DIR / "chapters"
     BENCH_DIR = DOCS_DIR / "bench"
@@ -102,6 +127,7 @@ def _use_docs_dir(docs_dir: Path) -> None:
     EXEC_GRAPH = DOCS_DIR / "execution_graph.json"
     DATA_GRAPH = DOCS_DIR / "data_flow_graph.json"
     PROJECTS_JSON = DOCS_DIR / "_projects.json"
+    TAXONOMY = DOCS_DIR / "_taxonomy.json"
     _DOCS_DIR = DOCS_DIR
 
 
@@ -819,6 +845,241 @@ _TRADING_CHART_CSS = """/* Shared chapter SVG chart classes (Ch.14 & Ch.15) — 
 .c15ah{fill:var(--ink-soft,#5a6472)}
 """
 
+# Trading-cycle-only navigation polish: prev/next chapter pagers and clickable
+# part headings. Kept out of the shared CSS so the same builder still produces
+# byte-identical pages for every other project (stage_project_docs.py --check
+# compares those pages).
+_PAGER_CSS = """/* Part headings are links to the part divider in the body, so a reader can jump
+   to a whole shelf without scrolling. */
+nav.toc li.part a{
+  color:inherit;text-decoration:none;display:inline;padding:0;border:0;
+  border-left:0;border-radius:0;
+}
+nav.toc li.part a:hover{color:var(--accent);background:transparent}
+/* Chapter pager: the sidebar is hidden on narrow screens and in print, so every
+   chapter ends with explicit prev/next links. They carry the title, not just an
+   arrow, so a reader knows what they are moving to before they click. */
+.chapter-pager{
+  display:flex;gap:1rem;margin:2.2rem 0 0;padding:1rem 0 0;
+  border-top:1px solid var(--rule);font-family:system-ui,sans-serif;font-size:.82rem;
+}
+.chapter-pager a{
+  color:var(--ink-soft);text-decoration:none;border:1px solid var(--rule);
+  border-radius:6px;padding:.45rem .7rem;max-width:48%;
+}
+.chapter-pager a:hover{color:var(--ink);background:var(--panel-2)}
+.chapter-pager a.next{margin-left:auto;text-align:right}
+.chapter-pager .dir{
+  display:block;font-size:.62rem;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--ink-soft);opacity:.8;margin-bottom:.15rem;
+}
+.part-divider{scroll-margin-top:3.5rem}
+section.chapter{scroll-margin-top:3.5rem}
+@media(max-width:720px){
+  .chapter-pager{flex-direction:column}
+  .chapter-pager a{max-width:100%}
+}
+"""
+
+# Trading-cycle-only sidebar layer: a wider, nested, scroll-spied contents list.
+# Same switch as _PAGER_CSS (the css= concat and the sidebar_js= value of
+# PAGE.format), so every other project's page stays byte-identical. Both are
+# format VALUES, not template text, so they use single braces.
+_SIDEBAR_CSS = """/* Sidebar box: wider column, larger type and click targets. */
+.shell{grid-template-columns:272px minmax(0,1fr)}
+nav.toc{font-size:.9rem}
+nav.toc a{padding:.5rem .75rem;min-height:2.25rem}
+nav.toc a.chapter .title-text{
+  flex:1;min-width:0;overflow:hidden;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
+}
+/* A part <li> now WRAPS its chapters, so the shelf typography moves from the
+   <li> onto the part label; the chapters inside read at normal size. */
+nav.toc li.part{
+  font-size:inherit;text-transform:none;letter-spacing:normal;font-weight:inherit;
+  font-family:inherit;color:inherit;cursor:auto;margin:1rem 0 0;padding:0;
+}
+nav.toc li.part:first-child{margin-top:0}
+nav.toc li.part > a,nav.toc li.part > .part-label,nav.toc details.toc-fold > summary{
+  display:block;width:100%;padding:.5rem .75rem;min-height:2.25rem;border-radius:6px;
+  font-size:.74rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
+  font-family:system-ui,sans-serif;color:var(--ink-soft);
+}
+nav.toc li.part > a:hover{color:var(--accent);background:var(--panel-2)}
+nav.toc li.part > a[aria-current="true"]{color:var(--accent);background:var(--accent-soft)}
+/* Depth: part > chapters (solid guide) > sub-headings (dashed guide). */
+nav.toc ol.toc-chapters{margin:.2rem 0 .1rem .75rem;padding:0 0 0 .5rem;border-left:1px solid var(--rule)}
+nav.toc ol.toc-subs{margin:.1rem 0 .2rem .75rem;padding:0 0 0 .5rem;border-left:1px dashed var(--rule)}
+nav.toc ol.toc-subs a.sub{padding-left:.75rem;font-size:.84rem}
+nav.toc ol.toc-chapters:has(a[aria-current="true"]),
+nav.toc ol.toc-subs:has(a[aria-current="true"]){border-left-color:var(--accent)}
+/* Sub-headings show only for the current chapter, or while a chapter is
+   hovered or holds keyboard focus. */
+nav.toc ol.toc-subs{display:none}
+nav.toc li:has(> a.chapter[aria-current="true"]) > ol.toc-subs,
+nav.toc li:hover > ol.toc-subs,
+nav.toc li:focus-within > ol.toc-subs{display:flex}
+/* Persistent active state: the shared 2px transparent left border turns accent. */
+nav.toc a.chapter[aria-current="true"]{
+  color:var(--accent);background:var(--accent-soft);border-left-color:var(--accent);
+}
+nav.toc a.sub[aria-current="true"]{color:var(--accent);border-left-color:var(--accent)}
+/* Changelogs and ledgers: folded in the sidebar and in the body. */
+nav.toc li.toc-fold{margin-top:1rem}
+nav.toc details.toc-fold > summary{cursor:pointer}
+nav.toc details.toc-fold > summary:hover{color:var(--accent);background:var(--panel-2)}
+details.chapter-fold > summary{
+  cursor:pointer;font-family:system-ui,sans-serif;font-weight:600;
+  padding:.5rem 0;color:var(--ink-soft);
+}
+details.chapter-fold > summary:hover{color:var(--accent)}
+/* Glow when the current chapter changes; never on first paint. */
+@keyframes toc-glow{
+  0%{box-shadow:0 0 0 3px var(--accent-soft),0 0 14px 3px var(--accent-soft)}
+  100%{box-shadow:0 0 0 0 transparent}
+}
+nav.toc a.chapter.toc-glow{animation:toc-glow 900ms ease-out}
+@media (prefers-reduced-motion:reduce){
+  nav.toc a.chapter.toc-glow{animation:none}
+}
+"""
+
+_SIDEBAR_JS = """
+<script>
+/* Sidebar scroll-spy. Chapters are anchors inside one long view (#view-ref).
+   The IntersectionObserver only signals that something crossed the line;
+   sync() recomputes the current target from geometry, so fast scrolls and
+   hash jumps that deliver many crossings in one frame stay correct. */
+(function () {
+  var toc = document.querySelector("nav.toc");
+  var view = document.getElementById("view-ref");
+  if (!toc || !view || !("IntersectionObserver" in window)) return;
+  var sections = Array.prototype.slice.call(view.querySelectorAll("section.chapter"));
+  if (!sections.length) return;
+
+  /* 56px == 3.5rem: section.chapter{scroll-margin-top:3.5rem}, the line anchor
+     jumps land on under the sticky .sun-project-bar. */
+  var LINE = 58; /* 56px + 2px rounding tolerance */
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  function linkFor(kind, id) {
+    return toc.querySelector("a." + kind + '[href="#' + id + '"]');
+  }
+
+  /* Document-order targets: each chapter section, then its h2 headings that
+     have a sidebar link. */
+  var targets = [];
+  sections.forEach(function (sec) {
+    targets.push({ chap: sec.id, sub: null, el: sec });
+    Array.prototype.forEach.call(sec.querySelectorAll("h2[id]"), function (h) {
+      if (linkFor("sub", h.id)) targets.push({ chap: sec.id, sub: h.id, el: h });
+    });
+  });
+
+  var currentChapter = null;
+  var currentSub = null;
+  var glowTimer = null;
+  var started = false; /* the first sync is silent: no glow on load */
+
+  function shown(el) {
+    return el.getClientRects().length > 0 && !el.closest("details:not([open])");
+  }
+
+  /* Keep the current link inside the self-scrolling sidebar. */
+  function reveal(link) {
+    if (!link || !shown(link)) return;
+    var lr = link.getBoundingClientRect();
+    var nr = toc.getBoundingClientRect();
+    if (lr.top < nr.top + 4) toc.scrollTop += lr.top - nr.top - 12;
+    else if (lr.bottom > nr.bottom - 4) toc.scrollTop += lr.bottom - nr.bottom + 12;
+  }
+
+  function flash(link) {
+    if (reduceMotion.matches) return;
+    link.classList.remove("toc-glow");
+    void link.offsetWidth; /* restart the animation on rapid changes */
+    link.classList.add("toc-glow");
+    if (glowTimer) clearTimeout(glowTimer);
+    glowTimer = setTimeout(function () { link.classList.remove("toc-glow"); }, 950);
+  }
+
+  function mark(target) {
+    var chap = target ? target.chap : null;
+    var sub = target ? target.sub : null;
+    var link = null;
+    var changed = chap !== currentChapter || sub !== currentSub;
+    if (chap !== currentChapter) {
+      var marked = toc.querySelectorAll('[aria-current="true"]');
+      for (var i = 0; i < marked.length; i++) {
+        if (!marked[i].classList.contains("sub")) marked[i].removeAttribute("aria-current");
+      }
+      currentChapter = chap;
+      link = chap ? linkFor("chapter", chap) : null;
+      if (link) {
+        link.setAttribute("aria-current", "true");
+        var part = link.closest("li.part");
+        var partLink = part ? part.querySelector(":scope > a") : null;
+        if (partLink) partLink.setAttribute("aria-current", "true");
+        if (started) flash(link);
+      }
+    }
+    if (sub !== currentSub) {
+      var oldSub = currentSub ? linkFor("sub", currentSub) : null;
+      if (oldSub) oldSub.removeAttribute("aria-current");
+      currentSub = sub;
+      var subLink = sub ? linkFor("sub", sub) : null;
+      if (subLink) subLink.setAttribute("aria-current", "true");
+    }
+    if (changed) reveal((currentSub && linkFor("sub", currentSub)) || linkFor("chapter", currentChapter));
+  }
+
+  function sync() {
+    /* Hidden view: every rect is zero and every target would "win". */
+    if (!view.classList.contains("active")) return;
+    var current = null;
+    for (var i = 0; i < targets.length; i++) {
+      var el = targets[i].el;
+      if (el.closest("details:not([open])")) continue;
+      if (el.getBoundingClientRect().top <= LINE) current = targets[i];
+    }
+    if (!current) current = targets[0];
+    mark(current);
+    started = true; /* only a sync that ran while #view-ref was visible counts */
+  }
+
+  /* A deep link into a folded changelog chapter: open the fold and scroll again
+     (the view client scrolled while the target was still hidden). */
+  function openFold() {
+    var id = (location.hash || "").slice(1);
+    var target = id ? document.getElementById(id) : null;
+    if (!target || !view.contains(target)) return;
+    var fold = target.closest("details:not([open])") ||
+      target.querySelector(":scope > details.chapter-fold:not([open])");
+    if (!fold) return;
+    while (fold) {
+      fold.open = true;
+      fold = fold.parentElement ? fold.parentElement.closest("details:not([open])") : null;
+    }
+    target.scrollIntoView({ block: "start" });
+  }
+
+  var observer = new IntersectionObserver(function () { sync(); }, {
+    root: null,
+    rootMargin: "-56px 0px -65% 0px",
+    threshold: 0
+  });
+  targets.forEach(function (t) { observer.observe(t.el); });
+
+  window.addEventListener("hashchange", function () {
+    openFold();
+    setTimeout(sync, 0);
+  });
+
+  openFold();
+  sync();
+})();
+</script>"""
+
 PAGE = """<!doctype html>
 <html lang="en">
 <head>
@@ -1018,7 +1279,7 @@ PAGE = """<!doctype html>
   window.addEventListener("hashchange", applyHash);
   applyHash();
 }})();
-</script>
+</script>{sidebar_js}
 </body>
 </html>
 """
@@ -1268,6 +1529,184 @@ def _load_parts(records: list[dict]) -> list[dict]:
     return [g for g in grouped if g["chapters"]]
 
 
+# ------------------------------------------------------------------ taxonomy
+#
+# The optional _taxonomy.json turns the flat per-part sidebar into a grouped,
+# collapsible tree: canonical parts, named groups inside them, an Archive shelf
+# for finished chapters, and a "Changelogs and ledgers" shelf for record-style
+# files. The builder stays the single source of truth for navigation: a chapter
+# always lands in exactly one nav slot (its group, the changelog shelf, or the
+# archive shelf), and a chapter that cannot be reached from the sidebar is a
+# build error — the same fail-closed rule _load_parts applies to parts.
+
+def _load_taxonomy() -> dict | None:
+    """The navigation taxonomy, or None when this docs dir carries none (the
+    flat nav then renders exactly as it did before the taxonomy existed).
+
+    A malformed file is a hard error, not a silent downgrade to flat: a tree
+    that quietly half-resolves hides chapters behind a nav that looks fine."""
+    import json
+
+    if not TAXONOMY.exists():
+        return None
+    try:
+        tax = json.loads(TAXONOMY.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"{TAXONOMY.name} is not valid JSON: {e}")
+    if not isinstance(tax, dict) or not isinstance(tax.get("parts"), list) or not tax["parts"]:
+        raise SystemExit(f"{TAXONOMY.name} must declare a non-empty 'parts' list.")
+    for entry in tax["parts"]:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            raise SystemExit(f"{TAXONOMY.name}: every part needs a 'name'.")
+    return tax
+
+
+def _tax_chapter_id(path: Path) -> str:
+    """The section id / nav href of a chapter: its FULL filename stem, numeric
+    prefix included. Stripping the prefix collides (03-decisions.md and
+    10-decisions.md both strip to `decisions`), and a duplicate id means one
+    of the two chapters is unreachable — which is the failure this whole
+    builder refuses to render."""
+    return path.stem
+
+
+def _tax_group_of(tax: dict, chap_id: str) -> str | None:
+    """A chapter's group: full stem first, then the prefix-stripped stem, so a
+    hand-written map may use either key. None when neither is listed."""
+    go = tax.get("group_of") or {}
+    return go.get(chap_id) or go.get(re.sub(r"^\d+[-_]", "", chap_id))
+
+
+def _tax_part(tax: dict, part: str) -> str:
+    """Canonical name of a raw front-matter part string."""
+    return (tax.get("part_of") or {}).get(part, part)
+
+
+def _tax_is_archived(tax: dict, status: str, date: str) -> bool:
+    """Finished AND old. A chapter is archived when its status is one of the
+    archive statuses and its date (front matter `updated`, else last touch)
+    precedes the cutoff. A recently shipped chapter is still current work and
+    stays in its group; an in-progress chapter never archives on date alone."""
+    arch = tax.get("archive") or {}
+    statuses = set(arch.get("statuses") or [])
+    before = arch.get("before") or ""
+    if not statuses or not before:
+        return False
+    return status in statuses and bool(date) and date < before
+
+
+def _tax_is_changelog(tax: dict, name: str, title: str) -> bool:
+    """Filename or H1 contains one of the collapsed_patterns."""
+    pats = [str(p).lower() for p in (tax.get("collapsed_patterns") or []) if p]
+    hay = f"{name} {title}".lower()
+    return any(p in hay for p in pats)
+
+
+_TREE_CSS = """/* Taxonomy tree: parts and groups are <details> shelves, so 200+ chapters
+   do not have to be visible to be findable. Same type scale as nav.toc li.part;
+   the triangle replaces the marker, Archive and Changelogs reuse .toc-fold. */
+nav.toc details.toc-part{margin:.9rem 0 0}
+nav.toc li.toc-part:first-child{margin-top:0}
+nav.toc details.toc-part > summary,
+nav.toc details.toc-group > summary{
+  cursor:pointer;list-style:none;
+  font-size:.68rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;
+  font-family:system-ui,sans-serif;color:var(--ink-soft);
+  padding:.32rem .6rem;border-radius:6px;
+}
+nav.toc details.toc-part > summary::-webkit-details-marker,
+nav.toc details.toc-group > summary::-webkit-details-marker{display:none}
+nav.toc details.toc-part > summary::before,
+nav.toc details.toc-group > summary::before{
+  content:"\\25B8";display:inline-block;margin-right:.4rem;font-size:.8em;
+  transition:transform .15s ease;
+}
+nav.toc details[open] > summary::before{transform:rotate(90deg)}
+nav.toc details.toc-part > summary:hover,
+nav.toc details.toc-group > summary:hover{color:var(--ink);background:var(--panel-2)}
+nav.toc .toc-count{text-transform:none;letter-spacing:0;opacity:.6;margin-left:.25rem}
+nav.toc details.toc-group{margin:.15rem 0 .2rem .75rem}
+nav.toc details.toc-group > ol.toc-chapters{margin:.1rem 0 .4rem .5rem;padding:0 0 0 .5rem;border-left:1px solid var(--rule)}
+nav.toc li.toc-fold{margin-top:.9rem}
+details.chapter-fold{margin-bottom:1.5rem}
+details.chapter-fold > summary{
+  cursor:pointer;font-family:system-ui,sans-serif;font-weight:600;
+  padding:.55rem 0;color:var(--ink-soft);
+}
+details.chapter-fold > summary:hover{color:var(--accent)}
+details.chapter-fold[open] > summary{margin-bottom:.4rem;color:var(--ink)}
+"""
+
+_TREE_JS = """
+<script>
+/* Deep links must never land inside a closed fold: on load and on every hash
+   change, open every <details> that contains the target — the body fold of
+   the chapter and the nav shelves around its link. */
+(function(){function openAll(el){while(el){if(el.tagName==="DETAILS")el.open=true;el=el.parentElement;}}function go(){var h=decodeURIComponent(location.hash.slice(1));if(!h)return;openAll(document.getElementById(h));var a=document.querySelector('nav.toc a[href="#'+h+'"]');if(a)openAll(a);}addEventListener("hashchange",go);go();})();
+</script>"""
+
+
+def _tree_nav(tax: dict, buckets: dict[str, dict[str, list[str]]],
+              changelog_items: list[str], archive_items: list[str],
+              bench_items: list[str]) -> str:
+    """Assemble the grouped sidebar from the buckets build() filled while it
+    rendered chapters. Order: taxonomy's `parts` then their `groups`; anything
+    the taxonomy never named is appended at the end in encounter order rather
+    than dropped. Part and group headers carry their chapter count. Parts in
+    `collapsed_parts` start closed; groups are open exactly when their part is.
+    The changelog shelf and the Archive shelf close by default, bottom-most."""
+    collapsed = {str(p).casefold() for p in (tax.get("collapsed_parts") or [])}
+
+    def count(groups: dict[str, list[str]]) -> int:
+        return sum(len(v) for v in groups.values())
+
+    order: list[tuple[str, list[str]]] = []
+    seen: set[str] = set()
+    for entry in tax["parts"]:
+        name = str(entry["name"])
+        declared = [str(g) for g in (entry.get("groups") or [])]
+        order.append((name, declared))
+        seen.add(name)
+    for name in buckets:  # canonical parts the taxonomy never named
+        if name not in seen:
+            order.append((name, []))
+            seen.add(name)
+
+    out: list[str] = []
+    for name, declared in order:
+        groups = buckets.get(name) or {}
+        total = count(groups)
+        if not total:
+            continue
+        open_attr = "" if name.casefold() in collapsed else " open"
+        inner: list[str] = []
+        listed = declared + [g for g in groups if g not in declared]
+        for gname in listed:
+            items = groups.get(gname) or []
+            if not items:
+                continue
+            inner.append(
+                f'<details class="toc-group"{open_attr}>'
+                f'<summary>{html.escape(gname)} <span class="toc-count">({len(items)})</span></summary>'
+                f'<ol class="toc-chapters">{"".join(items)}</ol></details>'
+            )
+        out.append(
+            f'<li class="toc-part"><details class="toc-part"{open_attr}>'
+            f'<summary>{html.escape(name)} <span class="toc-count">({total})</span></summary>'
+            f"{"".join(inner)}</details></li>"
+        )
+    for label, items in ((CHANGELOG_GROUP, changelog_items), ("Archive", archive_items)):
+        if not items:
+            continue
+        out.append(
+            f'<li class="toc-fold"><details class="toc-fold">'
+            f'<summary>{html.escape(label)} <span class="toc-count">({len(items)})</span></summary>'
+            f'<ol class="toc-chapters">{"".join(items)}</ol></details></li>'
+        )
+    out.extend(bench_items)
+    return "".join(out)
+
+
 # ------------------------------------------------------------- ticket ledger
 
 def _load_tickets() -> list[dict]:
@@ -1509,7 +1948,7 @@ AREA_NODE = {
 }
 
 TITLE_NODE = (
-    (("debate", "bull", "bear"), "debate"),
+    (("debate", "bull", "bear"), "board"),
     (("fundamental",), "fa"),
     (("quant", "equation", "garch"), "qa"),
     (("valuation",), "va"),
@@ -1790,7 +2229,7 @@ def _view_exec(tickets: list[dict], graph: dict,
 # carry their own `layer`).
 NODE_LAYER = {
     "collectors": 0, "trigger": 1, "preflight": 1, "gatekeeper": 1, "phase0": 1,
-    "regime": 2, "junior": 2, "fa": 2, "qa": 2, "va": 2, "debate": 2,
+    "regime": 2, "junior": 2, "fa": 2, "qa": 2, "va": 2,
     "board": 2, "las_bridge": 2, "contract": 3, "execution": 4, "grading": 5,
 }
 
@@ -3250,15 +3689,17 @@ def build() -> str:
         bench = sorted(BENCH_DIR.glob("*.md"), key=_bench_sort_key, reverse=True) if BENCH_DIR.is_dir() else []
         if not bench:
             return
-        nav_parts.append(f'<li class="part">{BENCH_PART}</li>')
+        if not enhanced_nav:
+            nav_parts.append(f'<li class="part">{BENCH_PART}</li>')
         body_parts.append(f'<div class="part-divider"><h2>{BENCH_PART}</h2></div>')
+        bench_items: list[str] = []
         for path in bench:
             md = path.read_text(encoding="utf-8")
             bench_id = _bench_id(path.stem)
             bench_ts = _last_touched(path)
             touched.append(bench_ts)
             m = re.search(r"^#\s+(.*)$", md, re.M)
-            nav_parts.append(
+            (bench_items if enhanced_nav else (tax_bench if tax else nav_parts)).append(
                 f'<li><a class="chapter" href="#{bench_id}">'
                 f'<span class="title-text">{html.escape(m.group(1).strip() if m else path.stem)}</span>'
                 f'<span class="freshness badge" data-ts="{html.escape(bench_ts)}"></span>'
@@ -3270,16 +3711,56 @@ def build() -> str:
                 f'<p class="eyebrow">{BENCH_PART}</p>'
                 f'{render_markdown(md, id_prefix=bench_id + "-")}</section>'
             )
+        if enhanced_nav:
+            nav_parts.append(
+                f'<li class="part"><span class="part-label">{BENCH_PART}</span>'
+                f'<ol class="toc-chapters">{"".join(bench_items)}</ol></li>'
+            )
 
     nav_parts, body_parts, touched = [], [], []
+    enhanced_nav = ACTIVE_PROJECT == "trading-cycle"
+    groups = _load_parts(chapters)
+    # Optional grouped-tree nav. With no _taxonomy.json in this docs dir every
+    # line below behaves exactly as it did before the taxonomy existed.
+    tax = _load_taxonomy()
+    # canonical part -> group -> rendered <li> items. Chapters moved to the
+    # changelog or archive shelf leave their group, so a header's count always
+    # matches what opening it reveals.
+    buckets: dict[str, dict[str, list[str]]] = {}
+    tax_changelog: list[str] = []
+    tax_archive: list[str] = []
+    tax_bench: list[str] = []
+    seen_ids: dict[str, str] = {}
+    # Flat reading order for the prev/next pager. Bench reports are inserted
+    # after Start Here and are deliberately outside this sequence: they are
+    # evidence, not chapters of the TDD. Only the trading-cycle page gets the
+    # pager and clickable part headings; every other project keeps the old
+    # output byte-for-byte so `stage_project_docs.py --check` still passes.
+    flat: list[dict] = []
+    for group in groups:
+        for record in group["chapters"]:
+            md = record["body"]
+            m = re.search(r"^#\s+(.*)$", md, re.M)
+            flat.append({
+                "id": _tax_chapter_id(record["path"]),
+                "title": m.group(1).strip() if m else record["path"].stem,
+            })
+    flat_index = {c["id"]: i for i, c in enumerate(flat)}
     chap_no = 0
     bench_rendered = False
-    for group in _load_parts(chapters):
+    changelog_items: list[str] = []
+    for group in groups:
+        # Trading-cycle nav nests: li.part > a + ol.toc-chapters > li >
+        # a.chapter + ol.toc-subs. The part <li> is emitted after its chapters
+        # (it wraps them); other projects keep the flat list unchanged.
+        chapter_items: list[str] = []
         if group["part"]:
-            nav_parts.append(
-                f'<li class="part" title="{html.escape(group["blurb"], quote=True)}">'
-                f'{html.escape(group["part"])}</li>'
-            )
+            part_id = _slug(group["part"])
+            if not enhanced_nav:
+                nav_parts.append(
+                    f'<li class="part" title="{html.escape(group["blurb"], quote=True)}">'
+                    f'{html.escape(group["part"])}</li>'
+                )
             # A divider in the BODY too, not just the sidebar. Scrolling is how
             # this page is actually read, and a reader who only ever sees one
             # chapter after another has no sense of structure — which is what
@@ -3287,8 +3768,9 @@ def build() -> str:
             blurb = (
                 f'<p>{html.escape(group["blurb"])}</p>' if group["blurb"] else ""
             )
+            part_id_attr = f' id="part-{part_id}"' if enhanced_nav else ""
             body_parts.append(
-                f'<div class="part-divider">'
+                f'<div class="part-divider"{part_id_attr}>'
                 f'<h2>{html.escape(group["part"])}</h2>{blurb}</div>'
             )
         for record in group["chapters"]:
@@ -3300,13 +3782,31 @@ def build() -> str:
                 # from the ledger and no one can hand-edit a stale backlog.
                 md = _ticket_board(tickets, dates)
             chap_no += 1
+            m_no = re.match(r"^(\d+)", path.stem)
+            chap_label = (m_no.group(1) if m_no else str(chap_no)) if enhanced_nav else str(chap_no)
             chap_ts = _last_touched(path)
             touched.append(chap_ts)
-            sub_toc: list[dict] = []
-            rendered = render_markdown(md, toc=sub_toc)
             m = re.search(r"^#\s+(.*)$", md, re.M)
             chap_title = m.group(1).strip() if m else path.stem
-            chap_id = _slug(re.sub(r"^\d+[-_]", "", path.stem))
+            chap_id = _tax_chapter_id(path)
+            if chap_id in seen_ids:
+                raise SystemExit(
+                    f"Chapter id '{chap_id}' is produced by both "
+                    f"'{seen_ids[chap_id]}' and '{path.name}' — two sections "
+                    "would share one anchor and the sidebar could reach only "
+                    "one of them."
+                )
+            seen_ids[chap_id] = path.name
+            # Heading ids are namespaced by chapter on the trading-cycle page:
+            # headings such as "Data and signals" repeat across chapters and
+            # collided with the chapter <section> ids.
+            sub_toc: list[dict] = []
+            rendered = render_markdown(
+                md, toc=sub_toc, id_prefix=f"{chap_id}-" if enhanced_nav else ""
+            )
+            is_changelog = enhanced_nav and bool(
+                CHANGELOG_RE.search(path.name) or CHANGELOG_RE.search(chap_title)
+            )
             status = (meta.get("status") or "").strip()
             # The status rides in the SIDEBAR as well as the body. A reader
             # scanning for "what is still open" should not have to open eleven
@@ -3321,43 +3821,156 @@ def build() -> str:
                 nav_status += (
                     f'<span class="status s-{tone}">{open_tickets} open</span>'
                 )
-            nav_parts.append(
+            # Taxonomy shelves. A record-style file folds into the changelog
+            # shelf; a finished-and-old one into the archive shelf. The ticket
+            # ledger is live operational content and never shelves away.
+            tax_fold = ""
+            if tax and not is_ledger:
+                chap_date = (meta.get("updated") or "").strip() or chap_ts[:10]
+                if _tax_is_changelog(tax, path.name, chap_title):
+                    tax_fold = CHANGELOG_GROUP.lower()
+                elif _tax_is_archived(tax, status, chap_date):
+                    tax_fold = "archived"
+            chapter_nav = (
                 f'<li><a class="chapter" href="#{chap_id}">'
-                f'<span class="num">{chap_no}</span>'
+                f'<span class="num">{chap_label}</span>'
                 f'<span class="title-text">{html.escape(chap_title)}</span>'
                 f'{nav_status}'
                 f'<span class="freshness badge" data-ts="{html.escape(chap_ts)}"></span>'
-                f"</a></li>"
+                f"</a>"
             )
-            for entry in sub_toc:
-                nav_parts.append(
-                    f'<li><a class="sub" href="#{entry["id"]}">'
-                    f'{html.escape(entry["text"])}</a></li>'
-                )
+            subs = "".join(
+                f'<li><a class="sub" href="#{entry["id"]}">'
+                f'{html.escape(entry["text"])}</a></li>'
+                for entry in sub_toc
+            )
+            item = (
+                chapter_nav
+                + (f'<ol class="toc-subs">{subs}</ol>' if subs else "")
+                + "</li>"
+            )
+            if tax:
+                if tax_fold == CHANGELOG_GROUP.lower():
+                    tax_changelog.append(item)
+                elif tax_fold:
+                    tax_archive.append(item)
+                else:
+                    cpart = _tax_part(tax, (group["part"] or "").strip())
+                    gname = _tax_group_of(tax, chap_id) or cpart
+                    buckets.setdefault(cpart, {}).setdefault(gname, []).append(item)
+            elif enhanced_nav:
+                (changelog_items if is_changelog else chapter_items).append(item)
+            else:
+                nav_parts.append(chapter_nav + "</li>")
+                for entry in sub_toc:
+                    nav_parts.append(
+                        f'<li><a class="sub" href="#{entry["id"]}">'
+                        f'{html.escape(entry["text"])}</a></li>'
+                    )
             # The eyebrow repeats the part name in the body because the sidebar
             # is hidden on narrow screens and in print — without it a reader who
             # lands on a deep link has no idea which section they are in.
             eyebrow = (
                 f'<p class="eyebrow">{html.escape(group["part"])}'
-                f'<span class="sep">·</span>Chapter {chap_no}</p>'
+                f'<span class="sep">·</span>Chapter {chap_label}</p>'
                 if group["part"] else ""
             )
-            body_parts.append(
+            pager = ""
+            i = flat_index.get(chap_id)
+            if enhanced_nav and i is not None:
+                links = []
+                if i > 0:
+                    prev = flat[i - 1]
+                    links.append(
+                        f'<a class="prev" href="#{prev["id"]}">'
+                        f'<span class="dir">Previous chapter</span>'
+                        f'{html.escape(prev["title"])}</a>'
+                    )
+                if i + 1 < len(flat):
+                    nxt = flat[i + 1]
+                    links.append(
+                        f'<a class="next" href="#{nxt["id"]}">'
+                        f'<span class="dir">Next chapter</span>'
+                        f'{html.escape(nxt["title"])}</a>'
+                    )
+                if links:
+                    pager = (
+                        '<nav class="chapter-pager" aria-label="Chapter navigation">'
+                        + "".join(links)
+                        + "</nav>"
+                    )
+            content = f"{_status_bar(meta)}{rendered}"
+            if is_changelog:
+                # Kept in the page, folded out of the reading flow.
+                content = (
+                    f'<details class="chapter-fold"><summary>{html.escape(chap_title)}'
+                    f" ({html.escape(CHANGELOG_GROUP.lower())}, click to expand)</summary>"
+                    f"{content}</details>"
+                )
+            section = (
                 f'<section class="chapter" id="{chap_id}">'
                 f'<span class="freshness" data-ts="{html.escape(chap_ts)}"></span>'
-                f"{eyebrow}{_status_bar(meta)}{rendered}</section>"
+                f"{eyebrow}{content}{pager}</section>"
             )
+            if tax and tax_fold and not is_changelog:
+                # The 160-odd finished chapters must not sit in the reading
+                # flow. The <section> keeps its id, so the anchor still works;
+                # _TREE_JS opens the fold when a deep link points into it.
+                section = (
+                    f'<details class="chapter-fold">'
+                    f'<summary>{html.escape(chap_title)}'
+                    f" ({html.escape(tax_fold)}, click to expand)</summary>"
+                    f"{section}</details>"
+                )
+            body_parts.append(section)
+        if enhanced_nav:
+            if group["part"]:
+                chapters_ol = (
+                    f'<ol class="toc-chapters">{"".join(chapter_items)}</ol>'
+                    if chapter_items else ""
+                )
+                nav_parts.append(
+                    f'<li class="part" title="{html.escape(group["blurb"], quote=True)}">'
+                    f'<a href="#part-{part_id}">{html.escape(group["part"])}</a>'
+                    f"{chapters_ol}</li>"
+                )
+            else:
+                nav_parts.extend(chapter_items)
         if not bench_rendered and (group["part"] or "").strip().lower() == "start here":
             _append_bench()
             bench_rendered = True
 
     if not bench_rendered:
         _append_bench()
+    if changelog_items:
+        nav_parts.append(
+            f'<li class="toc-fold"><details class="toc-fold">'
+            f"<summary>{html.escape(CHANGELOG_GROUP)}</summary>"
+            f'<ol class="toc-chapters">{"".join(changelog_items)}</ol></details></li>'
+        )
+
+    nav_html = "".join(nav_parts)
+    if tax:
+        # Fail closed on a chapter with no sidebar link: the flat nav made
+        # every chapter visible by construction, so in a tree that claim must
+        # be checked, not assumed.
+        placed = (len(tax_changelog) + len(tax_archive)
+                  + sum(len(v) for g in buckets.values() for v in g.values()))
+        if placed != len(chapters):
+            raise SystemExit(
+                f"{TAXONOMY.name}: {placed} of {len(chapters)} chapters landed "
+                "in a nav slot — every chapter needs exactly one sidebar link."
+            )
+        nav_html = _tree_nav(tax, buckets, tax_changelog, tax_archive, tax_bench)
 
     return PAGE.format(
         title=html.escape(title),
         subtitle=html.escape(subtitle),
-        css=CSS + (_TRADING_CHART_CSS if ACTIVE_PROJECT == "trading-cycle" else ""),
+        css=CSS
+        + (_TRADING_CHART_CSS if ACTIVE_PROJECT == "trading-cycle" else "")
+        + (_PAGER_CSS if ACTIVE_PROJECT == "trading-cycle" else "")
+        + (_SIDEBAR_CSS if ACTIVE_PROJECT == "trading-cycle" else "")
+        + (_TREE_CSS if tax else ""),
         stamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         newest=html.escape(max(touched) if touched else ""),
         project_bar=_project_bar(),
@@ -3365,7 +3978,9 @@ def build() -> str:
         view_exec=_view_exec(tickets, exec_graph, stats),
         view_data=_view_data(tickets, data_graph, nodes, _load_stats()),
         view_tickets=_view_tickets(tickets, nodes, stats, dates),
-        nav="".join(nav_parts),
+        nav=nav_html,
+        sidebar_js=(_SIDEBAR_JS if ACTIVE_PROJECT == "trading-cycle" else "")
+        + (_TREE_JS if tax else ""),
         body="\n".join(body_parts),
     )
 
@@ -3473,7 +4088,11 @@ def main() -> int:
         print(f"OK: {OUTPUT.name} is up to date.")
         return 0
 
-    OUTPUT.write_text(page, encoding="utf-8")
+    # Write a sibling temp file, then rename over the page: a request served
+    # mid-build sees the old page or the new one, never a truncated file.
+    tmp = OUTPUT.with_name(OUTPUT.name + ".tmp")
+    tmp.write_text(page, encoding="utf-8")
+    os.replace(tmp, OUTPUT)
     n = len(list(CHAPTERS_DIR.glob("*.md")))
     print(f"Built {OUTPUT} from {n} chapter(s), {len(page):,} bytes.")
     return 0
