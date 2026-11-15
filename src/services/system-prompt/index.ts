@@ -22,7 +22,6 @@ import { DirectoryTreeFormatter } from "./DirectoryTreeFormatter.ts";
 import { ToolDocFormatter } from "./ToolDocFormatter.ts";
 import { SkillMemoryScorer } from "./SkillMemoryScorer.ts";
 import { AssemblerContext } from "./types.ts";
-import SomaticStateService from "../somatic/SomaticStateService.ts";
 import WorkflowMemoryService from "../WorkflowMemoryService.ts";
 import { excludesLearnedState } from "../learning/TradingLearningBoundary.ts";
 import { PROMPT_DELIMITERS } from "../../constants.ts";
@@ -114,14 +113,10 @@ export default class SystemPromptAssembler {
     // ── 1 & 1b. Agent Identity & Platform Rules ─────────────────
     appendIdentityAndPlatformRuleSections(isDirectMode, persona, context, locale, sections);
 
-    // ── 2. Runtime & Somatic Context ────────────────────────────
+    // ── 2. Runtime Context ──────────────────────────────────────
     const platformContextSections: string[] = [];
-    const selfContextSections: string[] = [];
     if (context.agentContext) {
       collectPlatformAndRuntimeContext(context.agentContext, sections, platformContextSections);
-    }
-    if (persona?.hasSomaticState && agentId && !isSubAgent) {
-      await collectSomaticSelfContext(agentId, context, locale, selfContextSections);
     }
 
     // ── 3. Tool Policy ──────────────────────────────────────────
@@ -173,7 +168,7 @@ export default class SystemPromptAssembler {
     return {
       prompt: datedSections.join("\n\n"),
       platformContextMessage: platformContextSections.length > 0 ? platformContextSections.join("\n\n") : null,
-      selfContextMessage: selfContextSections.length > 0 ? selfContextSections.join("\n\n") : null,
+      selfContextMessage: null,
       skillNames,
       skillsText,
       memoriesText,
@@ -446,29 +441,6 @@ function collectPlatformAndRuntimeContext(
     agentContext.lightsContext,
   ]) {
     if (part) sections.push(part);
-  }
-}
-
-async function collectSomaticSelfContext(
-  agentId: string,
-  context: AssemblerContext,
-  locale: string,
-  selfContextSections: string[],
-): Promise<void> {
-  const userMessages = context.messages?.filter((message) => message.role === "user") || [];
-  const latestUserMessage = userMessages[userMessages.length - 1];
-  if (latestUserMessage && typeof latestUserMessage.content === "string") {
-    await SomaticStateService.adaptFromMessage(agentId, latestUserMessage.content, {
-      traceId: context.traceId,
-      agentConversationId: context.agentConversationId,
-      endpoint: context.agentContext?.endpoint || "/agent",
-      project: context.project,
-      username: context.username,
-    });
-  }
-  const somaticMessage = await SomaticStateService.renderSystemMessage(agentId, locale);
-  if (somaticMessage) {
-    selfContextSections.push(somaticMessage);
   }
 }
 

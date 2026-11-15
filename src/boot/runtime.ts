@@ -91,14 +91,6 @@ export const DEFAULT_DAEMONS: DaemonSpec[] = [
   lazyDaemon("Scheduled Tasks", () => import("../services/ScheduledTaskService.ts").then((m) => m.default)),
   lazyDaemon("Conversation Timers", () => import("../services/ConversationTimerService.ts").then((m) => m.default)),
   lazyDaemon("Webhook Dispatcher", () => import("../services/WebhookDispatcher.ts").then((m) => m.default)),
-  {
-    name: "Somatic State",
-    start: async () => {
-      const { default: SomaticStateService } = await import("../services/somatic/SomaticStateService.ts");
-      SomaticStateService.initialize();
-      return { stop: () => SomaticStateService.persistAll() };
-    },
-  },
   lazyDaemon("vLLM Model Sync", () => import("../services/VllmModelSyncService.ts").then((m) => m.VllmModelSyncService)),
   {
     name: "Embedding Corpus",
@@ -384,7 +376,6 @@ export function logStartupBanner(port: number, log: Logger = logger): void {
     .join(", ");
   log.info("Available modalities:", coloredModalities);
   for (const endpoint of ENDPOINTS.rest) log.info(`  REST  →  http://localhost:${port}${endpoint}`);
-  for (const endpoint of ENDPOINTS.websocket) log.info(`  WS    →  ws://localhost:${port}${endpoint}`);
 }
 
 function listProviderNames(): string[] {

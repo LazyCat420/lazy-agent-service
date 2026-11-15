@@ -131,21 +131,5 @@ export type {
   ComparatorFn,
 } from "./benchmark.ts";
 
-export type {
-  GraphNodeBase,
-  InputNode,
-  ModelNode,
-  ViewerNode,
-  GraphNode,
-  GraphEdge,
-  NodeResult,
-  NodeResultMap,
-  AssembledGraph,
-  WorkflowStep,
-  WorkflowMessage,
-  WorkflowDefinition,
-  ResolvedModalities,
-} from "./workflow.ts";
-
 export type { Widget } from "./widget.ts";
 

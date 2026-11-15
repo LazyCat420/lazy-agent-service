@@ -441,7 +441,7 @@ describe("Tool Description Locale Threading", () => {
 
     function buildAssemblerContext(localeOverride?: string) {
       return {
-        agent: "OMNI",
+        agent: "CODING",
         project: "prism-chat",
         username: "test-user",
         messages: [
@@ -605,7 +605,7 @@ describe("Tool Description Locale Threading", () => {
 
     function buildContext(locale?: string) {
       return {
-        agent: "OMNI",
+        agent: "CODING",
         project: "prism-chat",
         username: "test-user",
         messages: [
@@ -668,7 +668,7 @@ describe("Tool Description Locale Threading", () => {
 
     it("should call getToolSchemas with correct locale during orchestrator addendum assembly", async () => {
       // To trigger orchestrator addendum, we need usesCodingGuidelines=true
-      // and orchestrator tools available. The OMNI persona has usesCodingGuidelines=true.
+      // and orchestrator tools available. The CODING persona has usesCodingGuidelines=true.
       // With no enabledTools filter (empty array), orchestratorAvailable defaults to true.
       const assembler = new SystemPromptAssembler();
       await assembler.assemble({
@@ -691,8 +691,8 @@ describe("Tool Description Locale Threading", () => {
 
       // All sections must be caveman — no english leaking through
       const cavemanMarkers = [
-        "Omni Agent — universal all-domain assistant",
-        "use tool proactively, don't ask permission",
+        "Coding agent with file system, git, shell, web access.",
+        "Chain tool for multi-source question",
         CAVEMAN_CODING_GUIDELINES_MARKER,
         CAVEMAN_COMMAND_GUIDELINES_MARKER,
         CAVEMAN_TOOL_HEADER,
@@ -708,8 +708,8 @@ describe("Tool Description Locale Threading", () => {
 
       // No english structural markers should appear
       const englishMarkers = [
-        "You are the Omni Agent — a universal, all-domain AI assistant",
-        "use tools proactively rather than asking if the user wants you to",
+        "You are a coding agent with access to file system, git, shell, and web tools.",
+        "Chain tools when a question requires multiple data sources",
         ENGLISH_CODING_GUIDELINES_MARKER,
         ENGLISH_COMMAND_GUIDELINES_MARKER,
         ENGLISH_TOOL_HEADER,

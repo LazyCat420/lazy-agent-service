@@ -40,7 +40,7 @@ const brief = "## Ticker: AMZN\n## Cycle: cycle-v3-1792183632\n\n## PRECOMPUTED 
 
 function context(project: string): AssemblerContext {
   return {
-    agent: "OMNI",
+    agent: "CODING",
     project,
     username: "lazy-trader",
     messages: [{ role: "system", content: "" }, { role: "user", content: brief }],

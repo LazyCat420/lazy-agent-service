@@ -2,9 +2,9 @@
 part: Governance
 type: reference
 status: verified
-updated: 2026-11-13
-last-verified: 2026-11-13
-review-by: 2026-12-13
+updated: 2026-11-15
+last-verified: 2026-11-15
+review-by: 2026-12-15
 covers: lazy-agent-service:src/services/MCPClientService.ts, lazy-agent-service:src/services/AgenticToolResolver.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/routes/ExecuteRoutes.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/services/harnesses/CodeInterpreter.ts, lazy-agent-service:package.json, lazy-agent-service:Dockerfile, lazy-agent-service:scripts/rotate-execute-key.sh, lazy-agent-service:config.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, scraper-service:scraper_main.py, scraper-service:requirements.txt, spark-console:requirements.txt, tts-service:requirements.txt
 ---
 
@@ -115,9 +115,9 @@ addresses on `GET /health` (`S-13`). Never open or print `.env*` from tooling or
 
 Updates are lockfile-level and smallest-declared-range first; no source churn rides along, and
 no `pnpm.overrides` are used. Audit posture (measured, 2026-10-22 `bb00c0d`): **1 critical / 26
-high / 43 moderate / 5 low → 0 / 0 / 4 / 0**. The 4 remaining moderates are
-`decode-uri-component` and `stream-json`, both pinned by `minio` 8.0.7 (latest), which will not
-accept the fixed lines — revisit when `minio` ships. Recurring bumps:
+high / 43 moderate / 5 low → 0 / 0 / 4 / 0**. The 4 remaining moderates were
+`decode-uri-component` and `stream-json` under the unused `minio` direct dependency (removed in
+Wave 4A along with `express-rate-limit` and `@opentelemetry/sdk-trace-base`). Recurring bumps:
 `@modelcontextprotocol/sdk` pinned (1.32.1), `undici ^8.12.3`, `vitest`, transitive
 `proxy-addr`/`fast-uri`/`qs`/`brace-expansion`; `zod ^4.6.6` and relocked `body-parser 2.4.0`
 (2026-11-04, `5b970c9`). `vite` is declared as a direct devDependency purely to force vitest off

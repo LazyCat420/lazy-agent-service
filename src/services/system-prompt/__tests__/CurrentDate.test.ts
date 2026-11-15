@@ -54,7 +54,7 @@ describe("current date in the system prompt", () => {
   it("starts the assembled prompt with the current date line", async () => {
     const assembler = new SystemPromptAssembler();
     const context: AssemblerContext = {
-      agent: "OMNI",
+      agent: "CODING",
       project: "prism-chat",
       username: "test-user",
       messages: [

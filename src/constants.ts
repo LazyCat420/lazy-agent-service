@@ -45,7 +45,6 @@ export const COLLECTIONS = {
   REQUESTS: "requests",
   MODEL_CONVERSATIONS: "model_conversations",
   AGENT_CONVERSATIONS: "agent_conversations",
-  WORKFLOWS: "workflows",
   BENCHMARKS: "benchmarks",
   BENCHMARK_RUNS: "benchmark_runs",
   SYNTHESIS: "synthesis",
@@ -66,7 +65,6 @@ export const COLLECTIONS = {
   CONVERSATION_TIMERS: "conversation_timers",
   PROMPTS: "prompts",
   WEBHOOK_SUBSCRIPTIONS: "webhook_subscriptions",
-  SOMATIC_STATE: "somatic_state",
   WORKFLOW_MEMORIES: "workflow_memories",
   EXTRACTION_WATERMARKS: "extraction_watermarks",
   PENDING_DECISIONS: "pending_decisions",
@@ -138,14 +136,6 @@ export const MODEL_TYPES = {
   AUDIO: "audio",
   EMBED: "embed",
 };
-
-export const WORKFLOW_ENDPOINTS = {
-  TEXT_TO_TEXT: "textToText",
-  TEXT_TO_IMAGE: "textToImage",
-  AUDIO_TO_TEXT: "audioToText",
-  TEXT_TO_SPEECH: "textToSpeech",
-  MODALITY_TO_EMBEDDING: "modalityToEmbedding",
-} as const;
 
 export const FILE_CATEGORIES = {
   GENERATIONS: "generations",

@@ -53,17 +53,17 @@ vi.mock("../../RequestLogger.ts", () => ({
 }));
 
 // ── Shared fixtures ────────────────────────────────────────
-const CAVEMAN_IDENTITY_MARKER = "Omni Agent — universal all-domain assistant";
-const ENGLISH_IDENTITY_MARKER = "You are the Omni Agent — a universal, all-domain AI assistant";
+const CAVEMAN_IDENTITY_MARKER = "Coding agent with file system, git, shell, web access.";
+const ENGLISH_IDENTITY_MARKER = "You are a coding agent with access to file system, git, shell, and web tools.";
 
-const CAVEMAN_RESPONSE_GUIDELINES_MARKER = "use tool proactively, don't ask permission";
-const ENGLISH_RESPONSE_GUIDELINES_MARKER = "use tools proactively rather than asking if the user wants you to";
+const CAVEMAN_RESPONSE_GUIDELINES_MARKER = "- read file before editing";
+const ENGLISH_RESPONSE_GUIDELINES_MARKER = "- Always read relevant files before making edits";
 
 function buildMinimalAssemblerContext(
   overrides: Partial<AssemblerContext> = {},
 ): AssemblerContext {
   return {
-    agent: "OMNI",
+    agent: "CODING",
     project: "prism-chat",
     username: "test-user",
     messages: [
@@ -92,7 +92,7 @@ describe("Locale Assembly", () => {
     it("should have caveman locale loaded with persona keys", () => {
       const cavemanIdentity = PromptLocaleService.get(
         "caveman",
-        "personas.omni.coreIdentity",
+        "system-prompt.codingFallbackIdentity",
       );
       expect(cavemanIdentity).not.toContain("[MISSING:");
       expect(cavemanIdentity).toContain(CAVEMAN_IDENTITY_MARKER);
@@ -101,7 +101,7 @@ describe("Locale Assembly", () => {
     it("should have english locale loaded with persona keys", () => {
       const englishIdentity = PromptLocaleService.get(
         "en",
-        "personas.omni.coreIdentity",
+        "system-prompt.codingFallbackIdentity",
       );
       expect(englishIdentity).not.toContain("[MISSING:");
       expect(englishIdentity).toContain(ENGLISH_IDENTITY_MARKER);
@@ -110,11 +110,11 @@ describe("Locale Assembly", () => {
     it("should return distinct text for caveman vs english", () => {
       const cavemanIdentity = PromptLocaleService.get(
         "caveman",
-        "personas.omni.coreIdentity",
+        "system-prompt.codingFallbackIdentity",
       );
       const englishIdentity = PromptLocaleService.get(
         "en",
-        "personas.omni.coreIdentity",
+        "system-prompt.codingFallbackIdentity",
       );
       expect(cavemanIdentity).not.toEqual(englishIdentity);
     });

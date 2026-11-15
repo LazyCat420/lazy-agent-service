@@ -2,9 +2,9 @@
 part: Architecture
 type: spec
 status: verified
-updated: 2026-11-13
-last-verified: 2026-11-13
-review-by: 2026-12-13
+updated: 2026-11-15
+last-verified: 2026-11-15
+review-by: 2026-12-15
 covers: lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/routes/AgentRoutes.ts, lazy-agent-service:src/routes/Harness2Routes.ts, lazy-agent-service:src/routes/McpServersRoutes.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:src/services/AgentSessionRegistry.ts, lazy-agent-service:src/services/WebSearchService.ts, lazy-agent-service:src/services/WebExtractService.ts, lazy-agent-service:src/utils/LoopHonestyFields.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
 ---
 
@@ -13,7 +13,7 @@ covers: lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/boot/healt
 One Express process (`src/index.ts` → `src/boot/server.ts`), listening on `PORT` (NAS `:5591`),
 with a single endpoint registry used by the health check and boot log. All mounts live in
 `src/boot/server.ts`; identity middleware (`AuthMiddleware`, which copies `x-project` /
-`x-username` for scoping) applies after `/admin`, `/files`, `/mcp/oauth` and before everything
+`x-username` for scoping) applies after `/files`, `/mcp/oauth` and before everything
 else.
 
 ## Core HTTP & SSE endpoints
@@ -30,7 +30,7 @@ else.
 | `/v1/embeddings` | POST | OpenAI-shaped wrapper over the same model/queue/spaces |
 | `/mcp-servers` | CRUD + POST `/:id/connect` | MCP server registry rows and connect; **stdio rows refused unless the command is on `MCP_STDIO_COMMANDS`** (ch.12). `POST /mcp` is the MCP transport surface (`/mcp/oauth` for OAuth flows). |
 | `/custom-agents` | GET/POST/PUT | The shared agent registry (`prism.custom_agents` collection; all trading V3 agents included) |
-| `/conversations`, `/memory`, `/workflows` | various | Conversation history, agent memories, workflow recall |
+| `/conversations`, `/agent-memories` | various | Conversation history, agent memories |
 | `/obsidian-completions(/:id)` | PUT/GET | Durable model completions for the LLMSortObsidian plugin; SSE push on GET (ch.03) |
 | `/api/wallgarden/*` | POST/GET | youtube-wallgarden LLM jobs behind `JetsonGate` (ch.04) |
 | `/config`, `/config/agents` | GET | `textToText.models` provider map consumed by lazycat-sdk |

@@ -1,11 +1,9 @@
 import express, { Express, Request, Response, NextFunction } from "express";
 import cors from "cors";
 import http from "http";
-import { WebSocketServer } from "ws";
 
 import { errorHandler } from "../utils/errors.ts";
 import { listProviders } from "../providers/index.ts";
-import { setupWebSocket } from "../websocket/index.ts";
 import { authMiddleware } from "../middleware/AuthMiddleware.ts";
 import { requestLoggerMiddleware } from "../middleware/RequestLoggerMiddleware.ts";
 import { CORS_MAX_AGE_SECONDS, PROVIDERS } from "../constants.ts";
@@ -24,9 +22,6 @@ import configRouter, { localConfigRouter } from "../routes/ConfigRoutes.ts";
 import conversationsRouter from "../routes/ConversationsRoutes.ts";
 import conversationBudgetRouter from "../routes/ConversationBudgetRoute.ts";
 import filesRouter from "../routes/FilesRoutes.ts";
-import memoryRouter from "../routes/MemoryRoutes.ts";
-import adminRouter from "../routes/AdminRoutes.ts";
-import workflowsRouter from "../routes/WorkflowsRoutes.ts";
 import mediaRouter from "../routes/MediaRoutes.ts";
 import textRouter from "../routes/TextRoutes.ts";
 import lmStudioRouter from "../routes/LmStudioRoutes.ts";
@@ -73,9 +68,7 @@ export const ENDPOINTS = {
     "/audio-to-text",
     "/embed",
     "/conversations",
-    "/memory",
     "/files",
-    "/workflows",
     "/media",
     "/text",
     "/lm-studio",
@@ -104,14 +97,11 @@ export const ENDPOINTS = {
     "/v1/embeddings",
     "/obsidian-completions",
   ],
-  websocket: ["/ws/chat", "/ws/text-to-audio"],
-  admin: ["/admin", "/admin/lm-studio"],
 };
 
 export interface HttpRuntime {
   app: Express;
   server: http.Server;
-  wss: WebSocketServer;
   mcpAdapter: McpAdapter;
 }
 
@@ -194,7 +184,6 @@ function installHealthRoutes(app: Express): void {
 }
 
 function installPublicRoutes(app: Express): void {
-  app.use("/admin", adminRouter);
   app.use("/files", filesRouter);
   // MCP OAuth callback: a browser redirect carries no identity headers (the flow is found by its `state`)
   app.use("/mcp/oauth", mcpOAuthRouter);
@@ -217,8 +206,6 @@ function installAuthenticatedRoutes(app: Express): void {
   app.use("/embed", embedRouter);
   app.use("/conversations", conversationBudgetRouter);
   app.use("/conversations", conversationsRouter);
-  app.use("/memory", memoryRouter);
-  app.use("/workflows", workflowsRouter);
   app.use("/media", mediaRouter);
   app.use("/text", textRouter);
   app.use("/lm-studio", lmStudioRouter);
@@ -281,7 +268,7 @@ function installCompatRoutes(app: Express, mcpAdapter: McpAdapter): void {
 
 /**
  * Build the whole HTTP surface: middleware, every route group, the MCP
- * adapter's SSE/message pair, the error handler, and the WebSocket server.
+ * adapter's SSE/message pair, and the error handler.
  * Pure wiring — no I/O, no timers — so it is safe to call from a test.
  */
 export function createHttpRuntime(): HttpRuntime {
@@ -302,8 +289,5 @@ export function createHttpRuntime(): HttpRuntime {
   installAuthenticatedRoutes(app);
   installCompatRoutes(app, mcpAdapter);
 
-  const wss = new WebSocketServer({ server });
-  setupWebSocket(wss);
-
-  return { app, server, wss, mcpAdapter };
+  return { app, server, mcpAdapter };
 }

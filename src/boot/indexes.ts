@@ -54,8 +54,6 @@ export const INDEX_DEFINITIONS: IndexDefinition[] = [
   { collection: COLLECTIONS.AGENT_CONVERSATIONS, keys: { isGenerating: 1, updatedAt: -1 } },
   // agent_conversations — sub-agent parent linkage (tree grouping in UI)
   { collection: COLLECTIONS.AGENT_CONVERSATIONS, keys: { parentConversationId: 1 } },
-  // workflows — used by conversationIds lookup
-  { collection: COLLECTIONS.WORKFLOWS, keys: { id: 1 }, options: { unique: true } },
   // benchmarks
   { collection: COLLECTIONS.BENCHMARKS, keys: { id: 1 }, options: { unique: true } },
   { collection: COLLECTIONS.BENCHMARKS, keys: { project: 1, updatedAt: -1 } },
@@ -80,8 +78,6 @@ export const INDEX_DEFINITIONS: IndexDefinition[] = [
   // webhook_subscriptions
   { collection: COLLECTIONS.WEBHOOK_SUBSCRIPTIONS, keys: { id: 1 }, options: { unique: true } },
   { collection: COLLECTIONS.WEBHOOK_SUBSCRIPTIONS, keys: { enabled: 1 } },
-  // somatic_state — unique per agent
-  { collection: COLLECTIONS.SOMATIC_STATE, keys: { agentId: 1 }, options: { unique: true } },
   // workflow_memories — retrieval query index
   { collection: COLLECTIONS.WORKFLOW_MEMORIES, keys: { agent: 1, project: 1, createdAt: -1 } },
   // pending_decisions — durable approvals (settled records expire via expiresAt)

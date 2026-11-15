@@ -1,6 +1,6 @@
 /**
  * Platform helpers — FileService uploads, webhook dispatch (signature, retries,
- * filters), Lupos persona variants, cron matching, memory batching and the
+ * filters), cron matching, memory batching and the
  * global classify capability. Mongo, MinIO and the webhook HTTP endpoint are
  * fakes; every other module is real.
  */
@@ -26,7 +26,6 @@ vi.mock("../../wrappers/MinioWrapper.ts", () => ({
 import FileService from "../FileService.ts";
 import WebhookDispatcher from "../WebhookDispatcher.ts";
 import WebhookEventBus from "../WebhookEventBus.ts";
-import { LuposPersona } from "../personas/LuposPersona.ts";
 import { matchCron } from "../ScheduledTaskService.ts";
 import { buildBatches, BATCH_MAX_CLUSTERS, BATCH_MAX_STALE } from "../memory/BatchBuilder.ts";
 import { GlobalCapabilityExecutor } from "../GlobalCapabilityExecutor.ts";
@@ -226,44 +225,6 @@ describe("WebhookDispatcher", () => {
 
     WebhookDispatcher.destroy();
     expect(WebhookDispatcher.activeSubscriptionCount).toBe(0);
-  });
-});
-
-describe("LuposPersona.identity variants", () => {
-  const identity = (agentContext: Record<string, unknown>, locale?: string) =>
-    String(
-      LuposPersona.identity?.({ agentContext, locale } as never) ?? "",
-    );
-
-  it("uses the default identity and includes political beliefs", () => {
-    const text = identity({});
-    expect(text).toContain("An insane recovering-drug-addicted artist wolf king");
-    expect(text.length).toBeGreaterThan(500);
-  });
-
-  it("uses the Clock Crew identity and omits political beliefs", () => {
-    const text = identity({ guildId: "249010731910037507" });
-    expect(text).toContain("LuposClock");
-    expect(text).not.toContain("political beliefs");
-  });
-
-  it("uses the April Fools identity", () => {
-    const text = identity({ aprilFoolsMode: true });
-    expect(text).toContain("A joyful, drug-addicted artist wolf king");
-  });
-
-  it("combines April Fools and Clock Crew, falling back for missing keys", () => {
-    const text = identity({ aprilFoolsMode: true, guildId: "249010731910037507" });
-    // identity.aprilFoolsClockCrew is absent, so the April Fools variant wins.
-    expect(text).toContain("A joyful, drug-addicted artist wolf king");
-    expect(text).not.toContain("[MISSING:");
-  });
-
-  it("honours the requested locale", () => {
-    const english = identity({});
-    const lol = identity({}, "lol");
-    expect(lol).not.toBe(english);
-    expect(lol.length).toBeGreaterThan(0);
   });
 });
 

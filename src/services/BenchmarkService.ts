@@ -16,9 +16,6 @@ import { getErrorMessage } from "../utils/ErrorHelpers.ts";
 const BENCHMARKS_COLLECTION = COLLECTIONS.BENCHMARKS;
 const RUNS_COLLECTION = COLLECTIONS.BENCHMARK_RUNS;
 
-// In-memory counter: how many benchmark model calls are actively generating
-let activeGenerationCount = 0;
-
 // ── Types ────────────────────────────────────────────────────
 
 interface Assertion {
@@ -644,10 +641,6 @@ const BenchmarkService = {
   MATCH_MODES,
   evaluate,
   getConversationModels,
-  /** Number of benchmark model calls currently in-flight. */
-  get activeGenerationCount() {
-    return activeGenerationCount;
-  },
   async runBenchmark(
     benchmark: BenchmarkDoc,
     modelTargets: ModelTarget[] | null,
@@ -734,7 +727,6 @@ const BenchmarkService = {
               /* noop */
             }
           }
-          activeGenerationCount++;
           // Wrap onEvent to tag each event with the source model (enables
           // correct attribution when multiple provider buckets stream concurrently).
           const modelOnEvent = onEvent
@@ -747,15 +739,10 @@ const BenchmarkService = {
                   },
                 })
             : undefined;
-          let result: ModelResult;
-          try {
-            result = await runSingleModel(benchmark, model, project, username, {
-              signal,
-              onEvent: modelOnEvent,
-            });
-          } finally {
-            activeGenerationCount = Math.max(0, activeGenerationCount - 1);
-          }
+          const result: ModelResult = await runSingleModel(benchmark, model, project, username, {
+            signal,
+            onEvent: modelOnEvent,
+          });
           if (signal?.aborted || aborted) {
             logger.info(
               `[benchmark] Aborting after model ${model.model} completed`,
