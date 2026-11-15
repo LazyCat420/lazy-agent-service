@@ -2,9 +2,9 @@
 part: Operations & Quality
 type: reference
 status: verified
-updated: 2026-11-13
-last-verified: 2026-11-13
-review-by: 2026-12-13
+updated: 2026-11-14
+last-verified: 2026-11-14
+review-by: 2026-12-14
 covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:deploy.sh, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/boot/__tests__/healthProbe.test.ts, lazy-agent-service:src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts, lazy-agent-service:src/services/__tests__/TradingToolResolverIsolation.test.ts, lazy-agent-service:src/utils/__tests__/loopHonestyFields.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
 ---
 
@@ -110,14 +110,11 @@ everything else. Counts below are the runs recorded on 2026-11-07 for the ledger
 
 | Repo | Command | Result (2026-11-07) | What it proves |
 |---|---|---|---|
-| scraper-service | `python3 -m pytest -q tests/test_health_probe_and_feeds.py` | 11 passed | `read_pid_pressure` ok/warn/critical/unknown (the 2026-08-20 figures classify as critical) and the always-200 `/health/pids` route; search-engine probe spacing and caching; `feed_status` tracking and `/health/feeds` (TCK-1021) |
+| scraper-service | `python3 -m pytest -q tests/` | 14 passed (2026-11-14) | `read_pid_pressure` ok/warn/critical/unknown, `/health/pids`, `bing`/`wikipedia` search-engine probe caching, `feed_status` / `/health/feeds`, and retirement of `test_edgar_stooq.py` + `twscrape` (Wave 1) |
 | spark-console | `python3 -m pytest -q tests/test_solo_throughput.py tests/test_live_throughput.py tests/test_spark_console_telemetry.py tests/test_health_monitor.py` | 125 passed | solo/aggregate throughput rules, live TensorFold counters, per-model series alignment and summing, temperature history, remote-LLM reconciliation, monitoring views (TCK-1022) |
 | tts-service | `python3 -m pytest -q tests/test_synth_engine.py` | 6 passed | reciter/prosody, frames, Klatt voice controls, post-conditioning of every preset, and the HTTP endpoints (TCK-1023) |
 
-Known non-gating failures: scraper-service's `tests/test_edgar_stooq.py` needs
-`SEC_USER_AGENT` in the environment and raises `SecIdentityMissing` without it; that is the
-collector refusing to run anonymously, not a regression. spark-console also has DOM checks
-(`node tests/dashboard-ui.cjs`, `node tests/throughput-max-ui.cjs`) for the dashboard.
+Stale contract tests covering deleted Wave 4C modules (`test/contract/AttributionAnalyzer.test.ts` and `test/contract/ExperimentStats.test.ts`) were removed alongside `AttributionAnalyzer.ts` and `ExperimentService.ts`. `spark-console` also has DOM checks (`node tests/dashboard-ui.cjs`, `node tests/throughput-max-ui.cjs`) for the dashboard.
 
 Named sibling proofs:
 
