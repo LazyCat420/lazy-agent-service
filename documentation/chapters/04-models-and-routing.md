@@ -2,9 +2,9 @@
 part: Runtime & Pipeline
 type: spec
 status: verified
-updated: 2026-11-13
-last-verified: 2026-11-13
-review-by: 2026-12-13
+updated: 2026-11-15
+last-verified: 2026-11-15
+review-by: 2026-12-15
 covers: lazy-agent-service:src/services/DynamicModelResolver.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:src/services/wallgarden/JetsonGate.ts, lazy-agent-service:src/services/wallgarden/WallgardenService.ts, lazy-agent-service:src/services/CanonicalProviderBudget.ts, lazy-agent-service:src/services/VllmModelSyncService.ts, spark-console:console.py, spark-console:boxes.json, spark-console:dsv41-start.sh
 ---
 
@@ -68,8 +68,10 @@ model names in caller containers:
   context budget before overflow; a 24k output cap guards harness2 improver replies
   (`a3993ea`).
 - Per-conversation budgets (`ConversationBudgetRegistry`, `CanonicalProviderBudget`,
-  `BudgetPauseRegistry`) let callers pause/resume a run at budget close; trading runs get a
-  tool budget whose close also closes tool offering (ch.03).
+  `BudgetPauseRegistry`) let callers pause/resume a run at budget close;
+  `CanonicalProviderBudget` releases speculative reservations in full on zero-byte
+  pre-telemetry stream failures so retries can proceed (ch.03). Trading runs get a tool
+  budget whose close also closes tool offering (ch.03).
 - Wallgarden and scheduled tasks resolve their model through the same resolver, so a
   background job can never starve an interactive run for boxes.
 

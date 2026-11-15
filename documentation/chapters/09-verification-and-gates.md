@@ -2,9 +2,9 @@
 part: Operations & Quality
 type: reference
 status: verified
-updated: 2026-11-14
-last-verified: 2026-11-14
-review-by: 2026-12-14
+updated: 2026-11-15
+last-verified: 2026-11-15
+review-by: 2026-12-15
 covers: lazy-agent-service:.github/workflows/quality.yml, lazy-agent-service:deploy.sh, lazy-agent-service:scripts/quality/crap.mjs, lazy-agent-service:scripts/quality/dry.mjs, lazy-agent-service:scripts/quality/arch.mjs, lazy-agent-service:scripts/quality/prompt-budget.mjs, lazy-agent-service:scripts/eval/run-basic-eval.mjs, lazy-agent-service:scripts/audit-harness2-loop.ts, lazy-agent-service:scripts/otel-smoke.mjs, lazy-agent-service:src/boot/__tests__/healthProbe.test.ts, lazy-agent-service:src/services/__tests__/CanonicalProviderBudget.finalize.test.ts, lazy-agent-service:src/services/__tests__/ReadLedgerAndShimLiveModel.test.ts, lazy-agent-service:src/services/__tests__/TradingToolResolverIsolation.test.ts, lazy-agent-service:src/utils/__tests__/loopHonestyFields.test.ts, scraper-service:tests/test_health_probe_and_feeds.py, spark-console:tests/test_spark_console_telemetry.py, tts-service:tests/test_synth_engine.py
 ---
 

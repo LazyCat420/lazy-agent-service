@@ -2,9 +2,9 @@
 part: Architecture
 type: spec
 status: verified
-updated: 2026-11-14
-last-verified: 2026-11-14
-review-by: 2026-12-14
+updated: 2026-11-15
+last-verified: 2026-11-15
+review-by: 2026-12-15
 covers: lazy-agent-service:src/services/AgenticLoopService.ts, lazy-agent-service:src/services/AgenticToolResolver.ts, lazy-agent-service:src/services/LocalToolRouter.ts, lazy-agent-service:src/services/CanonicalProviderBudget.ts, lazy-agent-service:src/core/loop/CoreLoop.ts, lazy-agent-service:src/core/loop/MessageCompactor.ts, lazy-agent-service:src/core/loop/RunawayStreamWatch.ts, lazy-agent-service:src/core/loop/ToolRunner.ts, lazy-agent-service:src/services/TradingToolStream.ts, lazy-agent-service:src/utils/LoopHonestyFields.ts, lazy-agent-service:src/services/harness2/Harness2Service.ts, lazy-agent-service:src/services/harness2/Library.ts, spark-console:console.py
 ---
 

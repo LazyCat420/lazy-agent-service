@@ -2,9 +2,9 @@
 part: Overview
 type: reference
 status: verified
-updated: 2026-11-13
-last-verified: 2026-11-13
-review-by: 2026-12-13
+updated: 2026-11-15
+last-verified: 2026-11-15
+review-by: 2026-12-15
 covers: lazy-agent-service:documentation/tickets.jsonl, lazy-agent-service:scripts/export_tool_schemas.py, lazy-agent-service:package.json, lazy-agent-service:src/boot/server.ts, lazy-agent-service:src/boot/healthProbe.ts, lazy-agent-service:src/services/vllm/VllmShimService.ts, lazy-agent-service:src/services/AgenticToolResolver.ts, scraper-service:scraper_main.py, spark-console:console.py, tts-service:main.py
 ---
 
