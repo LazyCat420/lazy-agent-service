@@ -276,7 +276,15 @@ export const requireExecuteKey: RequestHandler = (request, response, next) => {
   const expected = (process.env.EXECUTE_API_KEY || "").trim();
   const body = (request.body || {}) as Record<string, unknown>;
   const args = (body.arguments && typeof body.arguments === "object" ? body.arguments : body) as Record<string, unknown>;
-  if (Object.hasOwn(args, TOOL_CONTEXT_ARG)) return next();
+  if (Object.hasOwn(args, TOOL_CONTEXT_ARG)) {
+    // Verify here as well as at dispatch: a forged context must not skip the key.
+    try {
+      verifyToolContext(args[TOOL_CONTEXT_ARG]);
+      return next();
+    } catch {
+      /* fall through to the key check */
+    }
+  }
   if (!expected) {
     response.status(503).json({
       success: false,
