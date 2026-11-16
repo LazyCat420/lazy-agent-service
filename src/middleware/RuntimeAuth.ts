@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import { z } from "zod";
+import logger from "../utils/logger.ts";
 
 const scopeSchema = z.object({
   app_id: z.string().min(1).max(128), username: z.string().min(1).max(128),
@@ -44,6 +45,35 @@ export function runtimeAuth(req: Request, res: Response, next: NextFunction): vo
       res.locals.runtimeScope = scope;
       next(); return;
     } catch { /* Never include submitted credentials in errors. */ }
+  }
+  res.status(401).json({ error: { code: "RUNTIME_UNAUTHORIZED" } });
+}
+
+/** Loopback and the NAS host itself: peers allowed to fall back to identity headers on reads. */
+const DEFAULT_TRUSTED_INTERNAL_IPS = ["127.0.0.1", "::1", "10.0.0.16"] as const;
+
+/**
+ * Read-only routes that first-party UIs (prism-client) call with identity
+ * headers only. A request that presents a token is authenticated exactly like
+ * `runtimeAuth`; a request with no token at all is accepted only from a trusted
+ * peer address and logged, so the UI keeps working while mutations,
+ * `/harness2/run` and `/execute` stay token-only. Extend with
+ * `TRUSTED_INTERNAL_IPS` (comma-separated).
+ */
+export function runtimeAuthOrTrustedPeer(req: Request, res: Response, next: NextFunction): void {
+  if (req.get("x-runtime-token") || req.get("authorization")) {
+    runtimeAuth(req, res, next);
+    return;
+  }
+  const trustedIps = new Set<string>([
+    ...DEFAULT_TRUSTED_INTERNAL_IPS,
+    ...(process.env.TRUSTED_INTERNAL_IPS || "").split(",").map((ip) => ip.trim()).filter(Boolean),
+  ]);
+  const peer = (req.ip || "").replace(/^::ffff:/, "");
+  if (trustedIps.has(peer)) {
+    logger.info(`[RuntimeAuth] identity-only trusted-peer ${peer} on ${req.method} ${req.originalUrl}`);
+    next();
+    return;
   }
   res.status(401).json({ error: { code: "RUNTIME_UNAUTHORIZED" } });
 }

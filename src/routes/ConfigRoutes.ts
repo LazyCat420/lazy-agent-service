@@ -7,7 +7,7 @@ const CORE_AGENTIC_TOOLS = new Set<string>(CORE_AGENTIC_TOOLS_LIST);
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import { errorMessage } from "@rodrigo-barraza/utilities-library";
 import express, { Request, Response } from "express";
-import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
+import { runtimeAuthOrTrustedPeer } from "../middleware/RuntimeAuth.ts";
 import {
   PROVIDERS,
   PROVIDER_LIST,
@@ -607,7 +607,7 @@ router.get("/rate-limits", (_req: Request, res: Response) => {
  */
 router.post(
   "/system-prompt-preview",
-  runtimeAuth,
+  runtimeAuthOrTrustedPeer,
   asyncHandler(async (req: Request, res: Response) => {
     try {
       const {

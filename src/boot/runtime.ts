@@ -403,7 +403,9 @@ export async function onListening(deps: ListeningDeps): Promise<void> {
   if (!runtimeSecret()) {
     deps.logger.warn(
       `[RuntimeAuth] no runtime credential configured (sources: ${RUNTIME_TOKEN_SOURCES.join(", ")}). ` +
-        "POST/PUT/DELETE /custom-agents, POST /harness2/run and POST /config/system-prompt-preview answer 503 until one is set. " +
+        "Token-only routes (POST/PUT/DELETE /custom-agents, POST /harness2/run) answer 503 until one is set; " +
+        "GET /custom-agents and POST /config/system-prompt-preview accept identity-only requests from trusted peers " +
+        "127.0.0.1, ::1, 10.0.0.16 (extend with TRUSTED_INTERNAL_IPS). " +
         "/agent and /chat stay identity-tagged only: trading-service and trading-client do not send a runtime token.",
     );
   }

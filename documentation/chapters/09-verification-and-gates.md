@@ -57,6 +57,7 @@ waves that closed the CRAP tail (2026-10-31, `ded73cf`).
 | shipped `tool_schemas.json` matches the `tool_schemas/<owner_app>/` shards | `src/services/__tests__/ToolSchemaExport.test.ts` + `python3 scripts/export_tool_schemas.py --check` |
 | `POST /execute` fails closed: 503 when `EXECUTE_API_KEY` is unset, 401 without the key once set, 200 with it (signed `_lazy_trading_context` accepted either way) | `src/routes/__tests__/ExecuteApiKey.test.ts` |
 | `POST /harness2/run` requires `runtimeAuth`: 401 without the token, 503 when no secret is configured | `src/routes/__tests__/Harness2Routes.test.ts` |
+| trusted peer without a token may read (`GET /custom-agents`, preview); untrusted peer 401; mutations never use the fallback | `test/contract/RuntimeAuth.test.ts`, `src/routes/__tests__/RoutesCoverage2.test.ts`, `src/routes/__tests__/ConfigRoutesCoverage.test.ts` |
 | Canvas persona upserted natively at boot | `src/services/__tests__/ClientPersonaSync.test.ts` |
 | Harness² schedule, gates, proposer contract, library, selection | `src/services/harness2/__tests__/` — `Harness2.test.ts`, `Harness2Executor.test.ts`, `Harness2Library.test.ts`, `Harness2Proposer.test.ts`, `Harness2Selection.test.ts` (95 tests after the audit's Phase 1; the pre-audit green suite covered none of the 20 defects) |
 | sandbox walls proven independently (ablation: each attack lands with its wall off, is blocked with it on) | `scripts/benchmarks/sandbox-redteam.mts` (6/6 PASS) |

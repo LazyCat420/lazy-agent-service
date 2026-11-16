@@ -910,6 +910,32 @@ describe("WebhookRoutes GET /requests/stream", () => {
 
 import customAgentsRouter from "../CustomAgentsRoutes.ts";
 
+describe("CustomAgentsRoutes GET / (trusted-peer fallback)", () => {
+  const handlers = () => getRouteHandlers(customAgentsRouter, "get", "/");
+  const readReq = (ip: string) =>
+    makeReq({ method: "GET", originalUrl: "/custom-agents", ip, get: () => undefined }).req as unknown as Request;
+
+  it("serves the list to a trusted peer that presents no token [A9]", async () => {
+    const { res, state } = makeRes();
+    const nextCalls: unknown[] = [];
+    await handlers()[0](readReq("127.0.0.1"), res as unknown as Response, (error?: unknown) => {
+      nextCalls.push(error);
+    });
+    expect(nextCalls).toEqual([undefined]);
+    await handlers().at(-1)!(readReq("127.0.0.1"), res as unknown as Response, nextSpy().next);
+    expect(state.statusCode).toBe(200);
+    // The mocked service returns its default empty list; reaching it proves the fallback passed.
+    expect(state.body).toEqual([]);
+  });
+
+  it("rejects an untrusted peer that presents no token", async () => {
+    const { res, state } = makeRes();
+    await handlers()[0](readReq("10.0.0.99"), res as unknown as Response, nextSpy().next);
+    expect(state.statusCode).toBe(401);
+    expect(state.body).toEqual({ error: { code: "RUNTIME_UNAUTHORIZED" } });
+  });
+});
+
 describe("CustomAgentsRoutes PUT /:id", () => {
   beforeEach(() => {
     fakes.personas.registered.length = 0;

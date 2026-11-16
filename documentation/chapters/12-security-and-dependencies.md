@@ -25,9 +25,9 @@ each capability, not a login:
 |---|---|---|
 | Run arbitrary JS | permission-locked sandbox child, fails closed | `sandbox-redteam.mts` |
 | Spend external API budget | `EXECUTE_API_KEY` on `/execute` (fails closed: 503 when unset); per-run scrape/tool budgets on trading runs | `ExecuteApiKey.test.ts`, budget tests in `src/core/loop/__tests__/` |
-| Register/retarget agents | `runtimeAuth` on `POST/PUT/DELETE /custom-agents` | `Harness2Routes.test.ts`, `RuntimeAuth.test.ts` |
+| Register/retarget agents | `runtimeAuth` on `POST/PUT/DELETE /custom-agents`; reads use the trusted-peer fallback | `RoutesCoverage2.test.ts`, `RuntimeAuth.test.ts` |
 | Start a harness² run | `runtimeAuth` on `POST /harness2/run` | `Harness2Routes.test.ts` |
-| Read the assembled system prompt | `runtimeAuth` on `POST /config/system-prompt-preview` | `RuntimeAuth.test.ts` |
+| Read the assembled system prompt | `runtimeAuthOrTrustedPeer` on `POST /config/system-prompt-preview` | `ConfigRoutesCoverage.test.ts`, `RuntimeAuth.test.ts` |
 | Trade | signed `_lazy_trading_context`; unsigned/forged → `PERMISSION_DENIED` | `NativeTradingBoundary.test.ts` |
 | Trading tool-surface isolation | `AgenticToolResolver` unlocks core tools and strips unrequested `CORE_AGENTIC_TOOLS` (`search_web`), `CORE_ORCHESTRATOR_TOOLS`, and `system` tools in trading contexts (`T3`, `f10b64d`) | `TradingToolResolverIsolation.test.ts` |
 | Read every env var | sandbox gets an empty env | `sandbox-redteam.mts` |
@@ -58,14 +58,20 @@ secret is configured and answers 401 `RUNTIME_UNAUTHORIZED` otherwise, accepting
 shared secret (`x-runtime-token`, compared in constant time) or an HMAC-signed desktop session
 bearer. The secret comes from `RUNTIME_API_TOKEN`, `RUNTIME_AUTH_SECRET` or
 `INTERNAL_EXECUTE_TOKEN`, in that order — the same order `lazycat-sdk`'s `AgentClient` reads
-before adding `x-runtime-token`. Guarded routes: `POST/PUT/DELETE /custom-agents`,
-`POST /harness2/run`, `POST /config/system-prompt-preview` and every `/v1/runs` route
-(`RunRoutes.ts`). `/agent` and `/chat` stay identity-tagged only: their callers (trading-service
-via the SDK, trading-client) do not configure the secret, so guarding them would stop the
-trading pipeline; `onListening` logs a warning naming the accepted sources whenever no secret is
-set. prism-client (`/custom-agents`, `/config/system-prompt-preview`) and trading-service's V3
-registration (`AgentClient` → `POST /custom-agents`) must set the secret in their own env to
-keep working.
+before adding `x-runtime-token`. Token-only routes: `POST/PUT/DELETE /custom-agents`,
+`POST /harness2/run` and every `/v1/runs` route (`RunRoutes.ts`).
+
+Read routes use `runtimeAuthOrTrustedPeer`: a request that presents a token is verified exactly
+like `runtimeAuth` (a wrong token is 401, never excused by the address); a request with **no**
+token is accepted only when its peer address is `127.0.0.1`, `::1` or `10.0.0.16` (extend with
+comma-separated `TRUSTED_INTERNAL_IPS`), logged as `identity-only trusted-peer`, and everything
+else gets 401. This keeps prism-client's identity-header-only UI working on
+`GET /custom-agents` and `POST /config/system-prompt-preview` without opening mutations.
+`/agent` and `/chat` stay identity-tagged only: their callers (trading-service via the SDK,
+trading-client) do not configure the secret, so guarding them would stop the trading pipeline;
+`onListening` logs a warning naming the accepted sources whenever no secret is set.
+trading-service's V3 registration (`AgentClient` → `POST /custom-agents`) must set the secret in
+its own env to keep working.
 
 ## CORS
 

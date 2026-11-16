@@ -385,6 +385,33 @@ describe("POST /config/system-prompt-preview", () => {
     stub.clientSchemas = stub.toolSchemas;
   });
 
+  it("gates the preview on runtimeAuthOrTrustedPeer: trusted peer without a token, others 401 [A9]", async () => {
+    // Express route internals are untyped; the guard is the first handler on the route.
+    const stack = (router as unknown as {
+      stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: (req: unknown, res: unknown, next: unknown) => unknown }> } }>;
+    }).stack;
+    const route = stack.find((entry) => entry.route?.path === "/system-prompt-preview" && entry.route.methods.post)?.route;
+    if (!route) throw new Error("preview route is not registered");
+    const guard = route.stack[0].handle;
+
+    const allowed = fakeRes();
+    const next = vi.fn();
+    await guard(
+      fakeReq({ ip: "127.0.0.1", method: "POST", originalUrl: "/config/system-prompt-preview", get: () => undefined }),
+      allowed,
+      next,
+    );
+    expect(next).toHaveBeenCalledOnce();
+
+    const denied = fakeRes();
+    await guard(
+      fakeReq({ ip: "10.0.0.99", method: "POST", originalUrl: "/config/system-prompt-preview", get: () => undefined }),
+      denied,
+      vi.fn(),
+    );
+    expect(denied.statusCode).toBe(401);
+  });
+
   it("assembles every section into the preview", async () => {
     stub.promptResult = { prompt: "BASE", skillsText: "SKILLS", memoriesText: "MEM", workflowsText: "WF" };
     const { res, errors } = await invoke(router, "post", "/system-prompt-preview", fakeReq({

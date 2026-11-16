@@ -4,7 +4,7 @@ import CustomAgentService from "../services/CustomAgentService.ts";
 import AgentPersonaRegistry from "../services/AgentPersonaRegistry.ts";
 import logger from "../utils/logger.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
-import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
+import { runtimeAuth, runtimeAuthOrTrustedPeer } from "../middleware/RuntimeAuth.ts";
 
 const router = express.Router();
 
@@ -14,6 +14,7 @@ const router = express.Router();
  */
 router.get(
   "/",
+  runtimeAuthOrTrustedPeer,
   asyncHandler(async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const agents = await CustomAgentService.list();
