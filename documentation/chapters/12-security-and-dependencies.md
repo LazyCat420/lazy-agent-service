@@ -27,6 +27,7 @@ each capability, not a login:
 | Spend external API budget | `EXECUTE_API_KEY` on `/execute` (fails closed: 503 when unset); per-run scrape/tool budgets on trading runs | `ExecuteApiKey.test.ts`, budget tests in `src/core/loop/__tests__/` |
 | Register/retarget agents | `runtimeAuth` on `POST/PUT/DELETE /custom-agents`; reads use the trusted-peer fallback | `RoutesCoverage2.test.ts`, `RuntimeAuth.test.ts` |
 | Start a harness² run | `runtimeAuth` on `POST /harness2/run` | `Harness2Routes.test.ts` |
+| Cancel a harness² run / forget a stored lesson | `runtimeAuth` on `POST /harness2/runs/:runId/cancel` and `DELETE /harness2/library/:domain/:taskId` | `Harness2Routes.test.ts` |
 | Read the assembled system prompt | `runtimeAuthOrTrustedPeer` on `POST /config/system-prompt-preview` | `ConfigRoutesCoverage.test.ts`, `RuntimeAuth.test.ts` |
 | Trade | signed `_lazy_trading_context`; unsigned/forged → `PERMISSION_DENIED` | `NativeTradingBoundary.test.ts` |
 | Trading tool-surface isolation | `AgenticToolResolver` unlocks core tools and strips unrequested `CORE_AGENTIC_TOOLS` (`search_web`), `CORE_ORCHESTRATOR_TOOLS`, and `system` tools in trading contexts (`T3`, `f10b64d`) | `TradingToolResolverIsolation.test.ts` |
@@ -59,7 +60,10 @@ shared secret (`x-runtime-token`, compared in constant time) or an HMAC-signed d
 bearer. The secret comes from `RUNTIME_API_TOKEN`, `RUNTIME_AUTH_SECRET` or
 `INTERNAL_EXECUTE_TOKEN`, in that order — the same order `lazycat-sdk`'s `AgentClient` reads
 before adding `x-runtime-token`. Token-only routes: `POST/PUT/DELETE /custom-agents`,
-`POST /harness2/run` and every `/v1/runs` route (`RunRoutes.ts`).
+`POST /harness2/run`, `POST /harness2/runs/:runId/cancel`,
+`DELETE /harness2/library/:domain/:taskId` and every `/v1/runs` route (`RunRoutes.ts`).
+Reads (`GET /custom-agents`, `GET /harness2/runs/:runId`, `GET /harness2/library/:domain`,
+`POST /config/system-prompt-preview`) use the trusted-peer fallback below.
 
 Read routes use `runtimeAuthOrTrustedPeer`: a request that presents a token is verified exactly
 like `runtimeAuth` (a wrong token is 401, never excused by the address); a request with **no**

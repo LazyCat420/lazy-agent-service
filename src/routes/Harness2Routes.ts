@@ -264,6 +264,7 @@ router.get(
 /** POST /harness2/runs/:runId/cancel — abort a running run; it finishes with status cancelled. */
 router.post(
   "/runs/:runId/cancel",
+  runtimeAuth,
   asyncHandler(async (req, res) => {
     const runId = String(req.params.runId);
     if (cancelRun(runId)) return res.status(202).json({ runId, status: "cancelling" });
@@ -287,6 +288,7 @@ router.get(
 /** DELETE /harness2/library/:domain/:taskId — drop one stored lesson (upstream `forget`). */
 router.delete(
   "/library/:domain/:taskId",
+  runtimeAuth,
   asyncHandler(async (req, res) => {
     const domain = String(req.params.domain);
     const taskId = String(req.params.taskId);

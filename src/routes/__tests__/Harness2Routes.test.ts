@@ -64,6 +64,7 @@ const post = (url: string, payload?: unknown) =>
     headers: { "content-type": "application/json", "x-runtime-token": RUNTIME_TOKEN },
     body: payload === undefined ? undefined : JSON.stringify(payload),
   });
+const del = (url: string) => fetch(`${base}${url}`, { method: "DELETE", headers: { "x-runtime-token": RUNTIME_TOKEN } });
 const poll = async (runId: string) => {
   for (let i = 0; i < 100; i++) {
     const rec = await (await fetch(`${base}/runs/${runId}`)).json();
@@ -134,6 +135,11 @@ describe("POST /harness2/run is an async job with a run record [C2]", () => {
 });
 
 describe("one run at a time per domain [C4], and cancel", () => {
+  it("refuses cancel without the runtime token [A9]", async () => {
+    const res = await fetch(`${base}/runs/whatever/cancel`, { method: "POST" });
+    expect(res.status).toBe(401);
+  });
+
   it("a second run in a busy domain gets 409; another domain still starts", async () => {
     const release = heldRunner();
     const first = await (await post("/run", body({ domain: "busy" }))).json();
@@ -183,22 +189,27 @@ describe("request validation [C1, C3, A12]", () => {
 });
 
 describe("library routes", () => {
+  it("refuses library DELETE without the runtime token [A9]", async () => {
+    const res = await fetch(`${base}/library/lessons/x`, { method: "DELETE" });
+    expect(res.status).toBe(401);
+  });
+
   it("DELETE drops one stored lesson; unknown and invalid ids are refused", async () => {
     const lib = new Library("lessons");
     lib.add("bad-lesson", BASE, { experience: { cue: "c", lesson: "l", evidence: "e" } });
     lib.add("good-lesson", BASE, { experience: { cue: "c", lesson: "l", evidence: "e" } });
-    const res = await fetch(`${base}/library/lessons/bad-lesson`, { method: "DELETE" });
+    const res = await del("/library/lessons/bad-lesson");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ domain: "lessons", removed: ["bad-lesson"] });
     expect(new Library("lessons").entries()).toEqual(["good-lesson"]);
-    expect((await fetch(`${base}/library/lessons/bad-lesson`, { method: "DELETE" })).status).toBe(404);
-    expect((await fetch(`${base}/library/lessons/.hidden`, { method: "DELETE" })).status).toBe(400);
+    expect((await del("/library/lessons/bad-lesson")).status).toBe(404);
+    expect((await del("/library/lessons/.hidden")).status).toBe(400);
   });
 
   it("DELETE waits while a run is active in the domain", async () => {
     const release = heldRunner();
     const { runId } = await (await post("/run", body({ domain: "lessons-busy" }))).json();
-    expect((await fetch(`${base}/library/lessons-busy/x`, { method: "DELETE" })).status).toBe(409);
+    expect((await del("/library/lessons-busy/x")).status).toBe(409);
     release();
     await poll(runId);
   });

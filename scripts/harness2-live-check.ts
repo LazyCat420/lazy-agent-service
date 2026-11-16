@@ -210,7 +210,7 @@ try {
     const lib = await (await fetch(`${base}/library/${DOMAIN}`)).json();
     log(`library entries before cleanup (oldest first): ${JSON.stringify(lib.entries)}`);
     for (const id of lib.entries) {
-      const del = await fetch(`${base}/library/${DOMAIN}/${id}`, { method: "DELETE" });
+      const del = await fetch(`${base}/library/${DOMAIN}/${id}`, { method: "DELETE", headers: { "x-runtime-token": runtimeToken } });
       verdict(`DELETE ${id}`, del.status === 200, String(del.status));
     }
     const after = await (await fetch(`${base}/library/${DOMAIN}`)).json();
