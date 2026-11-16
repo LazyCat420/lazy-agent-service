@@ -23,6 +23,7 @@ import { listProviders } from "../providers/index.ts";
 import { evalChaosEnabled } from "../services/EvalChaosCapabilities.ts";
 import { INDEX_DEFINITIONS, type IndexDefinition } from "./indexes.ts";
 import { ENDPOINTS, type HttpRuntime } from "./server.ts";
+import { RUNTIME_TOKEN_SOURCES, runtimeSecret } from "../middleware/RuntimeAuth.ts";
 
 // Container-internal bind port; the NAS maps host 5591 → container 7778.
 // NOTE: LAZY_AGENT_SERVICE_PORT is the EXTERNAL port elsewhere in the ecosystem
@@ -397,6 +398,20 @@ export interface ListeningDeps {
  */
 export async function onListening(deps: ListeningDeps): Promise<void> {
   logStartupBanner(PORT, deps.logger);
+
+  // Auth posture, stated once so an unconfigured deployment is never silent.
+  if (!runtimeSecret()) {
+    deps.logger.warn(
+      `[RuntimeAuth] no runtime credential configured (sources: ${RUNTIME_TOKEN_SOURCES.join(", ")}). ` +
+        "POST/PUT/DELETE /custom-agents, POST /harness2/run and POST /config/system-prompt-preview answer 503 until one is set. " +
+        "/agent and /chat stay identity-tagged only: trading-service and trading-client do not send a runtime token.",
+    );
+  }
+  if (!(process.env.EXECUTE_API_KEY || "").trim()) {
+    deps.logger.warn(
+      "[ExecuteRoutes] EXECUTE_API_KEY is unset: POST /execute/* is closed (503) except for requests carrying a signed trading tool context.",
+    );
+  }
 
   try {
     await deps.loadProfiles();

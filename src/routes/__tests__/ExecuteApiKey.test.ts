@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireExecuteKey } from "../ExecuteRoutes.ts";
+import { TOOL_CONTEXT_ARG } from "../../services/TradingToolContext.ts";
 
 function run(headers: Record<string, string>, body: Record<string, unknown> = {}) {
   const status = vi.fn().mockReturnThis();
@@ -12,9 +13,16 @@ function run(headers: Record<string, string>, body: Record<string, unknown> = {}
 
 afterEach(() => vi.unstubAllEnvs());
 
-describe("optional /execute key (audit D11)", () => {
-  it("stays open when EXECUTE_API_KEY is unset", () => {
-    expect(run({}).next).toHaveBeenCalled();
+describe("fail-closed /execute key (audit D11, A10)", () => {
+  it("closes the route with 503 when EXECUTE_API_KEY is unset", () => {
+    const { next, status } = run({});
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(503);
+  });
+
+  it("still accepts a signed trading tool context while the key is unset", () => {
+    expect(run({}, { [TOOL_CONTEXT_ARG]: "signed" }).next).toHaveBeenCalled();
+    expect(run({}, { arguments: { [TOOL_CONTEXT_ARG]: "signed" } }).next).toHaveBeenCalled();
   });
 
   it("requires the key once configured", () => {

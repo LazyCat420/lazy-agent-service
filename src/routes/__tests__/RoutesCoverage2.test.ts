@@ -916,7 +916,33 @@ describe("CustomAgentsRoutes PUT /:id", () => {
     fakes.personas.unregistered.length = 0;
   });
 
-  const handler = () => getHandler(customAgentsRouter, "put", "/:id");
+  /** Middleware first, route handler last: auth is the gate, these tests drive the body. */
+  const handlers = () => getRouteHandlers(customAgentsRouter, "put", "/:id");
+  const handler = () => handlers().at(-1)!;
+
+  it("fails closed without a runtime secret and rejects a missing token [A9]", async () => {
+    for (const name of ["RUNTIME_API_TOKEN", "RUNTIME_AUTH_SECRET", "INTERNAL_EXECUTE_TOKEN"]) vi.stubEnv(name, "");
+    const unconfigured = makeRes();
+    await handlers()[0](
+      makeReq({ params: { id: "a1" }, body: { name: "x" }, get: () => undefined }).req as unknown as Request,
+      unconfigured.res as unknown as Response,
+      nextSpy().next,
+    );
+    expect(unconfigured.state.statusCode).toBe(503);
+
+    vi.stubEnv("RUNTIME_API_TOKEN", "routes-coverage-runtime-token");
+    try {
+      const unauthenticated = makeRes();
+      await handlers()[0](
+        makeReq({ params: { id: "a1" }, body: { name: "x" }, get: () => undefined }).req as unknown as Request,
+        unauthenticated.res as unknown as Response,
+        nextSpy().next,
+      );
+      expect(unauthenticated.state.statusCode).toBe(401);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("rejects a non-object body", async () => {
     const { res, state } = makeRes();

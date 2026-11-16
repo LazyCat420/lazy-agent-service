@@ -4,6 +4,7 @@ import CustomAgentService from "../services/CustomAgentService.ts";
 import AgentPersonaRegistry from "../services/AgentPersonaRegistry.ts";
 import logger from "../utils/logger.ts";
 import { getErrorMessage } from "../utils/ErrorHelpers.ts";
+import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
 
 const router = express.Router();
 
@@ -30,6 +31,7 @@ router.get(
  */
 router.post(
   "/",
+  runtimeAuth,
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = req.body;
@@ -59,6 +61,7 @@ router.post(
  */
 router.put(
   "/:id",
+  runtimeAuth,
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
@@ -100,6 +103,7 @@ router.put(
  */
 router.delete(
   "/:id",
+  runtimeAuth,
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;

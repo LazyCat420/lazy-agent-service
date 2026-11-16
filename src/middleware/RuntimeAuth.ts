@@ -9,6 +9,8 @@ const scopeSchema = z.object({
 }).strict();
 export type RuntimeScope = z.infer<typeof scopeSchema>;
 export const runtimeSecret = () => process.env.RUNTIME_API_TOKEN || process.env.RUNTIME_AUTH_SECRET || process.env.INTERNAL_EXECUTE_TOKEN;
+/** Env vars that may supply the runtime credential, in priority order. */
+export const RUNTIME_TOKEN_SOURCES = ["RUNTIME_API_TOKEN", "RUNTIME_AUTH_SECRET", "INTERNAL_EXECUTE_TOKEN"] as const;
 const sign = (value: string) => crypto.createHmac("sha256", runtimeSecret()!).update(`runtime-session.v1:${value}`).digest("base64url");
 const equal = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 

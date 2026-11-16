@@ -24,7 +24,10 @@ each capability, not a login:
 | Capability | Boundary | Proof |
 |---|---|---|
 | Run arbitrary JS | permission-locked sandbox child, fails closed | `sandbox-redteam.mts` |
-| Spend external API budget | `EXECUTE_API_KEY` on `/execute`; per-run scrape/tool budgets on trading runs | `ExecuteApiKey.test.ts`, budget tests in `src/core/loop/__tests__/` |
+| Spend external API budget | `EXECUTE_API_KEY` on `/execute` (fails closed: 503 when unset); per-run scrape/tool budgets on trading runs | `ExecuteApiKey.test.ts`, budget tests in `src/core/loop/__tests__/` |
+| Register/retarget agents | `runtimeAuth` on `POST/PUT/DELETE /custom-agents` | `Harness2Routes.test.ts`, `RuntimeAuth.test.ts` |
+| Start a harness² run | `runtimeAuth` on `POST /harness2/run` | `Harness2Routes.test.ts` |
+| Read the assembled system prompt | `runtimeAuth` on `POST /config/system-prompt-preview` | `RuntimeAuth.test.ts` |
 | Trade | signed `_lazy_trading_context`; unsigned/forged → `PERMISSION_DENIED` | `NativeTradingBoundary.test.ts` |
 | Trading tool-surface isolation | `AgenticToolResolver` unlocks core tools and strips unrequested `CORE_AGENTIC_TOOLS` (`search_web`), `CORE_ORCHESTRATOR_TOOLS`, and `system` tools in trading contexts (`T3`, `f10b64d`) | `TradingToolResolverIsolation.test.ts` |
 | Read every env var | sandbox gets an empty env | `sandbox-redteam.mts` |
@@ -38,12 +41,40 @@ each capability, not a login:
 
 `POST /execute` (Exa web search + scrape proxy used by html-notes, LLMSortObsidian, treesearch,
 trading-client, lazycat-sdk, bittle-agent) is gated by `requireExecuteKey`
-(`src/routes/ExecuteRoutes.ts`): when `EXECUTE_API_KEY` is set, no key → 401, wrong key → 401,
-`x-api-key` or `Authorization: Bearer` → 200. The key's canonical home is
-`vault-service/projects.json` → top-level `config` (plus the deploy-kit and vault master `.env`
-copies that deploys copy); **never in git**. Rotation is
+(`src/routes/ExecuteRoutes.ts`) and **fails closed**: `EXECUTE_API_KEY` unset → 503
+(`EXECUTE_KEY_UNCONFIGURED`); set → no key or wrong key → 401, `x-api-key` or
+`Authorization: Bearer` → 200. A request carrying the signed `_lazy_trading_context` argument is
+accepted in place of the key, configured or not (it is already authenticated). The key's
+canonical home is `vault-service/projects.json` → top-level `config` (plus the deploy-kit and
+vault master `.env` copies that deploys copy); **never in git**. Rotation is
 `scripts/rotate-execute-key.sh` — writes all four places, restarts the vault, redeploys,
 verifies 401/200, copies to clipboard, never prints the secret (`--no-deploy` writes only).
+
+## Runtime auth (`x-runtime-token`)
+
+`AuthMiddleware` only copies identity headers; the credential boundary is `runtimeAuth`
+(`src/middleware/RuntimeAuth.ts`): it fails closed (503 `RUNTIME_AUTH_UNAVAILABLE`) when no
+secret is configured and answers 401 `RUNTIME_UNAUTHORIZED` otherwise, accepting either the
+shared secret (`x-runtime-token`, compared in constant time) or an HMAC-signed desktop session
+bearer. The secret comes from `RUNTIME_API_TOKEN`, `RUNTIME_AUTH_SECRET` or
+`INTERNAL_EXECUTE_TOKEN`, in that order — the same order `lazycat-sdk`'s `AgentClient` reads
+before adding `x-runtime-token`. Guarded routes: `POST/PUT/DELETE /custom-agents`,
+`POST /harness2/run`, `POST /config/system-prompt-preview` and every `/v1/runs` route
+(`RunRoutes.ts`). `/agent` and `/chat` stay identity-tagged only: their callers (trading-service
+via the SDK, trading-client) do not configure the secret, so guarding them would stop the
+trading pipeline; `onListening` logs a warning naming the accepted sources whenever no secret is
+set. prism-client (`/custom-agents`, `/config/system-prompt-preview`) and trading-service's V3
+registration (`AgentClient` → `POST /custom-agents`) must set the secret in their own env to
+keep working.
+
+## CORS
+
+`installMiddleware` (`src/boot/server.ts`) allows an explicit origin list, not `origin: true`:
+trading-client (`:3030`), prism-client (`:3333`), the LAS chat UI (`:5591`) and the legacy tools
+UI (`:8888`) on `localhost`, `127.0.0.1` and `10.0.0.16`; extend with comma-separated
+`CORS_ORIGINS`. Requests without an `Origin` header (same-origin, curl, service-to-service) are
+not CORS requests and always pass; unknown origins get no `Access-Control-Allow-Origin`, so the
+browser blocks them. `Authorization`, `x-api-key` and `x-runtime-token` are allowed headers.
 
 ## SSRF: fetch and scrape
 

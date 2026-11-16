@@ -6,6 +6,7 @@ import { DEFAULT_IMPROVER, type Harness2Request, type ModelRef } from "../servic
 import { activeRun, cancelRun, getRun, startRun, waitRun } from "../services/harness2/Harness2Jobs.ts";
 import { Library } from "../services/harness2/Library.ts";
 import { validateTree } from "../services/harness2/HarnessTree.ts";
+import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
 
 const router = Router();
 
@@ -223,6 +224,7 @@ async function preflight(req: Harness2Request): Promise<{ status: number; error:
  */
 router.post(
   "/run",
+  runtimeAuth,
   asyncHandler(async (req, res) => {
     const body = (req.body || {}) as Record<string, unknown>;
     const checked = check(body);

@@ -267,17 +267,24 @@ const handleExecuteRoute: RequestHandler = async (request, response) => {
 };
 
 /**
- * Optional shared key for POST /execute/*. Unset (default) keeps the route
- * LAN-open as before; set EXECUTE_API_KEY and every caller must send it as
- * `x-api-key` or `Authorization: Bearer`. A signed trading tool context is
- * accepted in place of the key (it is already authenticated).
+ * Shared key for POST /execute/*. Unset fails closed (503): the route is never
+ * LAN-open. Set EXECUTE_API_KEY and every caller must send it as `x-api-key` or
+ * `Authorization: Bearer`. A signed trading tool context is accepted in place of
+ * the key (it is already authenticated) whether or not the key is configured.
  */
 export const requireExecuteKey: RequestHandler = (request, response, next) => {
   const expected = (process.env.EXECUTE_API_KEY || "").trim();
-  if (!expected) return next();
   const body = (request.body || {}) as Record<string, unknown>;
   const args = (body.arguments && typeof body.arguments === "object" ? body.arguments : body) as Record<string, unknown>;
   if (Object.hasOwn(args, TOOL_CONTEXT_ARG)) return next();
+  if (!expected) {
+    response.status(503).json({
+      success: false,
+      error: "EXECUTE_KEY_UNCONFIGURED",
+      message: "POST /execute is closed until EXECUTE_API_KEY is configured",
+    });
+    return;
+  }
   const header = String(request.headers["x-api-key"] || "").trim() ||
     String(request.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
   const a = Buffer.from(header);

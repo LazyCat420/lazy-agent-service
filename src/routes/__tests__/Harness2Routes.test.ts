@@ -32,10 +32,13 @@ let root = "";
 let server: http.Server | undefined;
 let base = "";
 const savedRoot = process.env.HARNESS2_LIBRARY_PATH;
+const savedRuntimeToken = process.env.RUNTIME_API_TOKEN;
+const RUNTIME_TOKEN = "harness2-test-runtime-token";
 
 beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "harness2-routes-"));
   process.env.HARNESS2_LIBRARY_PATH = root;
+  process.env.RUNTIME_API_TOKEN = RUNTIME_TOKEN;
   const app = express();
   app.use(express.json());
   app.use("/harness2", harness2Router);
@@ -50,11 +53,17 @@ afterAll(async () => {
   if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
   if (savedRoot === undefined) delete process.env.HARNESS2_LIBRARY_PATH;
   else process.env.HARNESS2_LIBRARY_PATH = savedRoot;
+  if (savedRuntimeToken === undefined) delete process.env.RUNTIME_API_TOKEN;
+  else process.env.RUNTIME_API_TOKEN = savedRuntimeToken;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 const post = (url: string, payload?: unknown) =>
-  fetch(`${base}${url}`, { method: "POST", headers: { "content-type": "application/json" }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  fetch(`${base}${url}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-runtime-token": RUNTIME_TOKEN },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  });
 const poll = async (runId: string) => {
   for (let i = 0; i < 100; i++) {
     const rec = await (await fetch(`${base}/runs/${runId}`)).json();
@@ -75,6 +84,17 @@ const heldRunner = () => {
 };
 
 describe("POST /harness2/run is an async job with a run record [C2]", () => {
+  it("refuses a run without the runtime token, and fails closed when none is configured [A9]", async () => {
+    const noToken = await fetch(`${base}/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body()) });
+    expect(noToken.status).toBe(401);
+    delete process.env.RUNTIME_API_TOKEN;
+    try {
+      expect((await post("/run", body())).status).toBe(503);
+    } finally {
+      process.env.RUNTIME_API_TOKEN = RUNTIME_TOKEN;
+    }
+  });
+
   it("answers 202 with a run id; the record ends done and is written to disk", async () => {
     setRunnerForTests(async () => fakeResult("ok"));
     const res = await post("/run", body());

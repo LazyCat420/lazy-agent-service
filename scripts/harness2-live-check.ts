@@ -124,8 +124,16 @@ try {
       const s = app.listen(0, "127.0.0.1", () => resolve(s));
     });
     const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/harness2`;
+    // POST /harness2/run is behind runtimeAuth; the secret is the same one the
+    // service reads, so the in-process check presents it like a trusted backend.
+    const runtimeToken = process.env.RUNTIME_API_TOKEN || process.env.RUNTIME_AUTH_SECRET || process.env.INTERNAL_EXECUTE_TOKEN;
+    if (!runtimeToken) throw new Error("harness2 live check: set RUNTIME_API_TOKEN (or RUNTIME_AUTH_SECRET / INTERNAL_EXECUTE_TOKEN) — POST /harness2/run requires the runtime token");
     const post = async (url: string, payload: unknown) => {
-      const res = await fetch(`${base}${url}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      const res = await fetch(`${base}${url}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-runtime-token": runtimeToken },
+        body: JSON.stringify(payload),
+      });
       return { status: res.status, json: await res.json() };
     };
     const poll = async (runId: string, limitMin = 45) => {

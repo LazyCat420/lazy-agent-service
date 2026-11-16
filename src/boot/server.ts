@@ -56,19 +56,54 @@ export interface HttpRuntime {
   mcpAdapter: McpAdapter;
 }
 
+/**
+ * Origins the browser UIs are served from: trading-client (:3030), prism-client
+ * (:3333), the LAS chat UI itself (:5591) and the legacy tools UI (:8888), on
+ * loopback and the NAS LAN address. Extend with CORS_ORIGINS (comma-separated).
+ * Requests without an Origin header (same-origin navigation, curl, server-to-
+ * server) are not CORS requests and always pass.
+ */
+const DEFAULT_CORS_ORIGINS = [
+  "http://localhost:3030",
+  "http://localhost:3333",
+  "http://localhost:5591",
+  "http://localhost:8888",
+  "http://127.0.0.1:3030",
+  "http://127.0.0.1:3333",
+  "http://127.0.0.1:5591",
+  "http://127.0.0.1:8888",
+  "http://10.0.0.16:3030",
+  "http://10.0.0.16:3333",
+  "http://10.0.0.16:5591",
+  "http://10.0.0.16:8888",
+];
+
+const corsOrigins = (): Set<string> =>
+  new Set([
+    ...DEFAULT_CORS_ORIGINS,
+    ...(process.env.CORS_ORIGINS || "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  ]);
+
 function installMiddleware(app: Express): void {
+  const allowedOrigins = corsOrigins();
   app.use(
     cors({
-      origin: true, // reflect request origin (equivalent to *)
+      origin: (origin, callback) => callback(null, !origin || allowedOrigins.has(origin)),
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: [
         "Content-Type",
+        "Authorization",
         "x-project",
         "x-username",
         "x-workspace-id",
         "x-workspace-root",
         "x-api-secret",
+        "x-api-key",
         "x-admin-secret",
+        "x-runtime-token",
       ],
       maxAge: CORS_MAX_AGE_SECONDS, // cache preflight for 24h — eliminates burst OPTIONS storms
     }),
