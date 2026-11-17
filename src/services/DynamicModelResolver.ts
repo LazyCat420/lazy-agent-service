@@ -22,12 +22,18 @@ export interface HostModelStatus {
  * actually serve. `servedIds` is the `GET /v1/models` id set and the only
  * source of truth; no model name or suffix is hardcoded.
  *
- * - A served id is returned unchanged (exact match always wins).
- * - Otherwise, when exactly ONE served id is the same id with an extra
- *   `-suffix` on either side (settings pinned to `GLM-5.3-Flash-EXL3` while
- *   the box serves `GLM-5.3-Flash-EXL3-TF`, or the reverse), that served id
- *   is returned.
- * - No such id, or more than one: the request is returned unchanged.
+ * - A served id is returned unchanged (exact match always wins, no log).
+ * - Otherwise, when exactly ONE served id differs from the request by a
+ *   single extra `-segment` on either side (`base` ↔ `base-<one segment>`,
+ *   e.g. settings pinned to `GLM-5.3-Flash-EXL3` while the box serves
+ *   `GLM-5.3-Flash-EXL3-TF`, or the reverse), that served id is returned and
+ *   the rewrite is logged as a warning.
+ * - Two or more extra segments (`base-<seg>-<seg>`), any other base name, no
+ *   such id, or more than one candidate: the request is returned unchanged.
+ *   A looser prefix match silently routed requests to a different model
+ *   (e.g. `Qwen3.8-Flash` → `Qwen3.8-Flash-Next-Pro`), so the extra segment
+ *   must be exactly one `-`-delimited token that also stays inside the same
+ *   `/` namespace.
  *
  * The old unconditional `GLM-5.3-Flash-EXL3` → `-TF` rewrite was applied to
  * the served ids too, so a box serving the plain id was asked for `-TF`.
@@ -37,11 +43,23 @@ export function normalizeLocalModelId(
   servedIds: readonly string[],
 ): string {
   if (!modelId || servedIds.includes(modelId)) return modelId;
+  const differsBySingleSegment = (base: string, longer: string): boolean => {
+    if (!longer.startsWith(`${base}-`)) return false;
+    const extra = longer.slice(base.length + 1);
+    return extra.length > 0 && !extra.includes("-") && !extra.includes("/");
+  };
   const variants = servedIds.filter(
     (served) =>
-      served.startsWith(`${modelId}-`) || modelId.startsWith(`${served}-`),
+      differsBySingleSegment(modelId, served) ||
+      differsBySingleSegment(served, modelId),
   );
-  return variants.length === 1 ? variants[0] : modelId;
+  if (variants.length !== 1) return modelId;
+  const served = variants[0];
+  logger.warn(
+    `[DynamicModelResolver] normalizeLocalModelId: rewriting requested model id "${modelId}" to served id "${served}"`,
+    { requested: modelId, served, servedIds: [...servedIds] },
+  );
+  return served;
 }
 
 export class DynamicModelResolver {

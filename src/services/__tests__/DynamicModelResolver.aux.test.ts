@@ -9,9 +9,13 @@
  * The online-check is injected via DynamicModelResolver.setMockStatuses, the
  * same stub the existing resolver tests use — no network probes run.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { DynamicModelResolver } from "../DynamicModelResolver.js";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  DynamicModelResolver,
+  normalizeLocalModelId,
+} from "../DynamicModelResolver.js";
 import type { HostModelStatus } from "../DynamicModelResolver.js";
+import logger from "../../utils/logger.ts";
 
 const jetson: HostModelStatus = {
   instanceId: "vllm",
@@ -150,5 +154,82 @@ describe("resolveAuxModel", () => {
     const bad: "web" | "vision" | "compression" = "unknown";
     // Runtime is a fallback default; the real guard is the type error above.
     expect(typeof DynamicModelResolver.resolveAuxModel(bad)).toBe("object");
+  });
+});
+
+/**
+ * SliceReviewer MEDIUM follow-up: the served-id matcher may only bridge a
+ * single extra `-segment` (`base` ↔ `base-<one segment>`) and must log every
+ * rewrite, so a request is never silently routed to a different model
+ * (`base-<seg>-<seg>`, a different base name, or another `/` namespace).
+ */
+describe("normalizeLocalModelId single-segment guard", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps the exact-match path silent and unchanged", () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    expect(
+      normalizeLocalModelId("Qwen3.8-Flash-Next", ["Qwen3.8-Flash-Next", "qwen3-4b"]),
+    ).toBe("Qwen3.8-Flash-Next");
+    // Exact match wins even when a suffixed sibling is also served.
+    expect(
+      normalizeLocalModelId("GLM-5.3-Flash-EXL3", [
+        "GLM-5.3-Flash-EXL3-TF",
+        "GLM-5.3-Flash-EXL3",
+      ]),
+    ).toBe("GLM-5.3-Flash-EXL3");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("allows a one-segment suffix rewrite in both directions and warns", () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    expect(
+      normalizeLocalModelId("GLM-5.3-Flash-EXL3", ["GLM-5.3-Flash-EXL3-TF"]),
+    ).toBe("GLM-5.3-Flash-EXL3-TF");
+    // Reverse: settings pinned to `-TF`, box serves the plain id.
+    expect(
+      normalizeLocalModelId("GLM-5.3-Flash-EXL3-TF", ["GLM-5.3-Flash-EXL3"]),
+    ).toBe("GLM-5.3-Flash-EXL3");
+    // The finding's case is one segment: allowed, but never silent.
+    expect(normalizeLocalModelId("Qwen3.8-Flash", ["Qwen3.8-Flash-Next"])).toBe(
+      "Qwen3.8-Flash-Next",
+    );
+    expect(warn).toHaveBeenCalledTimes(3);
+    const [message, meta] = warn.mock.calls[0] as unknown as [
+      string,
+      { requested: string; served: string; servedIds: string[] },
+    ];
+    expect(message).toContain("GLM-5.3-Flash-EXL3");
+    expect(message).toContain("GLM-5.3-Flash-EXL3-TF");
+    expect(meta.requested).toBe("GLM-5.3-Flash-EXL3");
+    expect(meta.served).toBe("GLM-5.3-Flash-EXL3-TF");
+    expect(meta.servedIds).toEqual(["GLM-5.3-Flash-EXL3-TF"]);
+  });
+
+  it("rejects two-segment and different-base candidates without warning", () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    // base → base-<seg>-<seg> is never a one-segment suffix.
+    expect(normalizeLocalModelId("Qwen3.8-Flash", ["Qwen3.8-Flash-Next-Pro"])).toBe(
+      "Qwen3.8-Flash",
+    );
+    // …and never across a different base name or `/` namespace.
+    expect(normalizeLocalModelId("Qwen3.8-Flash", ["Qwen2.5-VL-7B"])).toBe(
+      "Qwen3.8-Flash",
+    );
+    expect(normalizeLocalModelId("Qwen3.8-Flash", ["Qwen3.8-Flash/team"])).toBe(
+      "Qwen3.8-Flash",
+    );
+    // Shared prefix that is not a whole `-` segment: different model.
+    expect(normalizeLocalModelId("Qwen3", ["Qwen3.8-Flash-Next"])).toBe("Qwen3");
+    // Two single-suffix candidates stay ambiguous → unchanged.
+    expect(
+      normalizeLocalModelId("GLM-5.3-Flash-EXL3", [
+        "GLM-5.3-Flash-EXL3-TF",
+        "GLM-5.3-Flash-EXL3-AWQ",
+      ]),
+    ).toBe("GLM-5.3-Flash-EXL3");
+    expect(warn).not.toHaveBeenCalled();
   });
 });
