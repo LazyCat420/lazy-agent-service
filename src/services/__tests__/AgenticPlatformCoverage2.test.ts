@@ -255,7 +255,7 @@ describe("DynamicModelResolver.queryLiveHosts", () => {
     expect(fakes.getInstancesByType).not.toHaveBeenCalled();
   });
 
-  it("normalizes model ids and marks hosts online", async () => {
+  it("keeps served model ids exactly as the box reports them and marks hosts online", async () => {
     fakes.getInstancesByType.mockReturnValue(instances);
     fakes.getProvider.mockImplementation((id: string) =>
       id === "vllm"
@@ -270,7 +270,7 @@ describe("DynamicModelResolver.queryLiveHosts", () => {
         instanceId: "vllm",
         baseUrl: "http://vllm.test",
         nickname: "Jetson",
-        models: ["GLM-5.3-Flash-EXL3-TF"],
+        models: ["GLM-5.3-Flash-EXL3"],
         online: true,
       },
       {
@@ -311,13 +311,76 @@ describe("DynamicModelResolver.queryLiveHosts", () => {
     expect(fakes.getProvider).toHaveBeenCalledTimes(2);
   });
 
-  it("normalizes the stale GLM model id", () => {
-    expect(DynamicModelResolver.normalizeModelId("GLM-5.3-Flash-EXL3")).toBe(
-      "GLM-5.3-Flash-EXL3-TF",
-    );
-    expect(DynamicModelResolver.normalizeModelId("org/GLM-5.3-Flash-EXL3")).toBe(
-      "org/GLM-5.3-Flash-EXL3-TF",
-    );
-    expect(DynamicModelResolver.normalizeModelId("other")).toBe("other");
+  const host = (instanceId: string, models: string[]) => ({
+    instanceId,
+    baseUrl: `http://${instanceId}.test`,
+    nickname: instanceId,
+    models,
+    online: true,
+  });
+
+  it("resolves a stale GLM model id to the id the box serves", () => {
+    DynamicModelResolver.setMockStatuses([host("vllm-2", ["GLM-5.3-Flash-EXL3-TF"])]);
+
+    expect(
+      DynamicModelResolver.resolveProviderAndModel("analyst", ["vllm-2"], "GLM-5.3-Flash-EXL3"),
+    ).toEqual({ provider: "vllm-2", model: "GLM-5.3-Flash-EXL3-TF" });
+    expect(
+      DynamicModelResolver.resolveProviderAndModel(
+        "analyst",
+        ["vllm-2"],
+        "GLM-5.3-Flash-EXL3",
+        "vllm-2",
+      ),
+    ).toEqual({ provider: "vllm-2", model: "GLM-5.3-Flash-EXL3-TF" });
+    expect(
+      DynamicModelResolver.isModelAllowedForProfile("GLM-5.3-Flash-EXL3", ["vllm-2"], "analyst"),
+    ).toEqual({ allowed: true, hostInstance: "vllm-2" });
+    expect(DynamicModelResolver.resolveProviderAndModel("analyst", ["vllm-2"], "other")).toEqual({
+      provider: "vllm-2",
+      model: "other",
+    });
+  });
+
+  it("never asks a box for a -TF id it does not serve", () => {
+    DynamicModelResolver.setMockStatuses([host("vllm-2", ["GLM-5.3-Flash-EXL3"])]);
+
+    expect(DynamicModelResolver.getCachedLiveHosts()[0].models).toEqual(["GLM-5.3-Flash-EXL3"]);
+    expect(
+      DynamicModelResolver.resolveProviderAndModel("analyst", ["vllm-2"], "GLM-5.3-Flash-EXL3"),
+    ).toEqual({ provider: "vllm-2", model: "GLM-5.3-Flash-EXL3" });
+    expect(
+      DynamicModelResolver.resolveProviderAndModel("analyst", ["vllm-2"], "GLM-5.3-Flash-EXL3-TF"),
+    ).toEqual({ provider: "vllm-2", model: "GLM-5.3-Flash-EXL3" });
+    expect(DynamicModelResolver.resolveProviderAndModel("analyst", ["vllm-2"])).toEqual({
+      provider: "vllm-2",
+      model: "GLM-5.3-Flash-EXL3",
+    });
+  });
+
+  it("resolves the id per host when the boxes serve different builds", () => {
+    DynamicModelResolver.setMockStatuses([
+      host("vllm", ["GLM-5.3-Flash-EXL3"]),
+      host("vllm-2", ["GLM-5.3-Flash-EXL3-TF"]),
+    ]);
+
+    expect(
+      DynamicModelResolver.isModelAllowedForProfile("GLM-5.3-Flash-EXL3", ["vllm-2"], "analyst"),
+    ).toEqual({ allowed: true, hostInstance: "vllm-2" });
+    expect(
+      DynamicModelResolver.resolveProviderAndModel(
+        "analyst",
+        ["vllm", "vllm-2"],
+        "GLM-5.3-Flash-EXL3",
+        "vllm-2",
+      ),
+    ).toEqual({ provider: "vllm-2", model: "GLM-5.3-Flash-EXL3-TF" });
+    expect(
+      DynamicModelResolver.resolveProviderAndModel(
+        "analyst",
+        ["vllm", "vllm-2"],
+        "GLM-5.3-Flash-EXL3",
+      ),
+    ).toEqual({ provider: "vllm", model: "GLM-5.3-Flash-EXL3" });
   });
 });

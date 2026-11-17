@@ -601,14 +601,52 @@ describe("CoreLoop v2 Upgrades (H1-H10) & Reliability Fixes", () => {
       }
     });
 
-    it("Backlog 13: normalizes GLM-5.3-Flash-EXL3 to GLM-5.3-Flash-EXL3-TF", () => {
-      expect(normalizeLocalModelId("GLM-5.3-Flash-EXL3")).toBe("GLM-5.3-Flash-EXL3-TF");
-      expect(normalizeLocalModelId("local-dspark/GLM-5.3-Flash-EXL3")).toBe(
-        "local-dspark/GLM-5.3-Flash-EXL3-TF",
+    it("Backlog 13: normalizes GLM-5.3-Flash-EXL3 to GLM-5.3-Flash-EXL3-TF when that is the served id", () => {
+      expect(normalizeLocalModelId("GLM-5.3-Flash-EXL3", ["GLM-5.3-Flash-EXL3-TF"])).toBe(
+        "GLM-5.3-Flash-EXL3-TF",
       );
-      expect(normalizeLocalModelId("local-dspark/GLM-5.3-Flash-EXL3-TF")).toBe(
-        "local-dspark/GLM-5.3-Flash-EXL3-TF",
+      expect(
+        normalizeLocalModelId("local-dspark/GLM-5.3-Flash-EXL3", [
+          "local-dspark/GLM-5.3-Flash-EXL3-TF",
+        ]),
+      ).toBe("local-dspark/GLM-5.3-Flash-EXL3-TF");
+      expect(
+        normalizeLocalModelId("local-dspark/GLM-5.3-Flash-EXL3-TF", [
+          "local-dspark/GLM-5.3-Flash-EXL3-TF",
+        ]),
+      ).toBe("local-dspark/GLM-5.3-Flash-EXL3-TF");
+    });
+
+    it("C24c: the rewrite comes from the served id set, never from a hardcoded name", () => {
+      // The box serves the plain id: the old code asked it for `-TF` anyway.
+      expect(normalizeLocalModelId("GLM-5.3-Flash-EXL3", ["GLM-5.3-Flash-EXL3"])).toBe(
+        "GLM-5.3-Flash-EXL3",
       );
+      // Settings still pinned to `-TF` after the box went back to the plain id.
+      expect(normalizeLocalModelId("GLM-5.3-Flash-EXL3-TF", ["GLM-5.3-Flash-EXL3"])).toBe(
+        "GLM-5.3-Flash-EXL3",
+      );
+      // An exact match wins over a suffixed sibling.
+      expect(
+        normalizeLocalModelId("GLM-5.3-Flash-EXL3", [
+          "GLM-5.3-Flash-EXL3-TF",
+          "GLM-5.3-Flash-EXL3",
+        ]),
+      ).toBe("GLM-5.3-Flash-EXL3");
+      // Nothing served, nothing related, or two candidates: left as requested.
+      expect(normalizeLocalModelId("GLM-5.3-Flash-EXL3", [])).toBe("GLM-5.3-Flash-EXL3");
+      expect(normalizeLocalModelId("GLM-5.3-Flash-EXL3", ["Qwen3.8-Flash-Next"])).toBe(
+        "GLM-5.3-Flash-EXL3",
+      );
+      expect(
+        normalizeLocalModelId("GLM-5.3-Flash-EXL3", [
+          "GLM-5.3-Flash-EXL3-TF",
+          "GLM-5.3-Flash-EXL3-AWQ",
+        ]),
+      ).toBe("GLM-5.3-Flash-EXL3");
+      // A shared prefix that is not a whole `-` segment is a different model.
+      expect(normalizeLocalModelId("Qwen3", ["Qwen3.8-Flash-Next"])).toBe("Qwen3");
+      expect(normalizeLocalModelId("", ["GLM-5.3-Flash-EXL3-TF"])).toBe("");
     });
 
     it("Phase 6 Step 6.3: global.web.read_page falls back to webExtractFallback on HTTP 403 or EMPTY_CONTENT", async () => {

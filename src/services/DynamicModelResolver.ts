@@ -18,18 +18,30 @@ export interface HostModelStatus {
 }
 
 /**
- * Backlog 13: Normalize stale local model IDs (`GLM-5.3-Flash-EXL3` without `-TF`)
- * to the canonical served model ID (`GLM-5.3-Flash-EXL3-TF`).
+ * Backlog 13 / C24c: map a requested local model id onto the id the boxes
+ * actually serve. `servedIds` is the `GET /v1/models` id set and the only
+ * source of truth; no model name or suffix is hardcoded.
+ *
+ * - A served id is returned unchanged (exact match always wins).
+ * - Otherwise, when exactly ONE served id is the same id with an extra
+ *   `-suffix` on either side (settings pinned to `GLM-5.3-Flash-EXL3` while
+ *   the box serves `GLM-5.3-Flash-EXL3-TF`, or the reverse), that served id
+ *   is returned.
+ * - No such id, or more than one: the request is returned unchanged.
+ *
+ * The old unconditional `GLM-5.3-Flash-EXL3` → `-TF` rewrite was applied to
+ * the served ids too, so a box serving the plain id was asked for `-TF`.
  */
-export function normalizeLocalModelId(modelId: string): string {
-  if (!modelId) return modelId;
-  if (modelId === "GLM-5.3-Flash-EXL3") {
-    return "GLM-5.3-Flash-EXL3-TF";
-  }
-  if (modelId.endsWith("/GLM-5.3-Flash-EXL3")) {
-    return `${modelId}-TF`;
-  }
-  return modelId;
+export function normalizeLocalModelId(
+  modelId: string,
+  servedIds: readonly string[],
+): string {
+  if (!modelId || servedIds.includes(modelId)) return modelId;
+  const variants = servedIds.filter(
+    (served) =>
+      served.startsWith(`${modelId}-`) || modelId.startsWith(`${served}-`),
+  );
+  return variants.length === 1 ? variants[0] : modelId;
 }
 
 export class DynamicModelResolver {
@@ -38,23 +50,13 @@ export class DynamicModelResolver {
   private static readonly PROBE_CACHE_TTL_MS = 5000; // 5 seconds cache
   private static mockStatuses: HostModelStatus[] | null = null;
 
-  public static normalizeModelId(modelId: string): string {
-    return normalizeLocalModelId(modelId);
-  }
-
   /**
    * For testing: stub host model statuses
    */
   public static setMockStatuses(statuses: HostModelStatus[] | null) {
-    const normalized = statuses
-      ? statuses.map((s) => ({
-          ...s,
-          models: s.models.map(normalizeLocalModelId),
-        }))
-      : null;
-    this.mockStatuses = normalized;
-    if (normalized) {
-      this.cachedStatuses = normalized;
+    this.mockStatuses = statuses;
+    if (statuses) {
+      this.cachedStatuses = statuses;
       this.lastProbeTime = Date.now();
     }
   }
@@ -92,9 +94,11 @@ export class DynamicModelResolver {
             ),
           ]);
 
-          const rawModels = res?.models || res?.data || [];
-          const models: string[] = rawModels
-            .map((m: any) => normalizeLocalModelId(m.key || m.id || ""))
+          // Served ids are kept exactly as the box reports them.
+          const rawModels: Array<{ key?: string; id?: string }> =
+            res?.models || res?.data || [];
+          const models = rawModels
+            .map((m) => m.key || m.id || "")
             .filter(Boolean);
           return {
             instanceId: inst.id,
@@ -143,9 +147,12 @@ export class DynamicModelResolver {
     allowedProviders: string[],
     _role: string,
   ): { allowed: boolean; hostInstance?: string; reason?: string } {
-    const normalizedModelName = normalizeLocalModelId(modelName);
     const statuses = this.getCachedLiveHosts();
     const onlineHosts = statuses.filter((h) => h.online);
+    const normalizedModelName = normalizeLocalModelId(
+      modelName,
+      onlineHosts.flatMap((h) => h.models),
+    );
 
     if (onlineHosts.length === 0) {
       return { allowed: false, reason: "No local model instances are online" };
@@ -154,7 +161,7 @@ export class DynamicModelResolver {
     // Single-box fallback: If only one box is online, it does all jobs
     if (onlineHosts.length === 1) {
       const singleHost = onlineHosts[0];
-      if (singleHost.models.map(normalizeLocalModelId).includes(normalizedModelName)) {
+      if (singleHost.models.includes(normalizedModelName)) {
         return { allowed: true, hostInstance: singleHost.instanceId };
       }
       return {
@@ -164,11 +171,13 @@ export class DynamicModelResolver {
     }
 
     // Both (or multiple) boxes online:
-    // Check if the model is on any host matching allowedProviders
+    // Check if the model is on any host matching allowedProviders. Resolved
+    // against each host's own served ids, so a host serving a suffixed build
+    // still matches when another box serves the id as requested.
     for (const host of onlineHosts) {
       if (
         allowedProviders.includes(host.instanceId) &&
-        host.models.map(normalizeLocalModelId).includes(normalizedModelName)
+        host.models.includes(normalizeLocalModelId(modelName, host.models))
       ) {
         return { allowed: true, hostInstance: host.instanceId };
       }
@@ -192,9 +201,6 @@ export class DynamicModelResolver {
     requestedModel?: string,
     requestedProvider?: string,
   ): { provider: string; model: string } {
-    const normalizedRequestedModel = requestedModel
-      ? normalizeLocalModelId(requestedModel)
-      : undefined;
     const statuses = this.getCachedLiveHosts();
     const onlineHosts = statuses.filter((h) => h.online);
 
@@ -203,10 +209,17 @@ export class DynamicModelResolver {
       const resolved = this.resolveRequestedProvider(
         requestedProvider,
         onlineHosts,
-        normalizedRequestedModel,
+        requestedModel,
       );
       if (resolved) return resolved;
     }
+
+    const normalizedRequestedModel = requestedModel
+      ? normalizeLocalModelId(
+          requestedModel,
+          onlineHosts.flatMap((h) => h.models),
+        )
+      : undefined;
 
     // If requestedModel is supplied, find which online host serves it
     if (normalizedRequestedModel) {
@@ -250,11 +263,15 @@ export class DynamicModelResolver {
   private static resolveRequestedProvider(
     requestedProvider: string,
     onlineHosts: HostModelStatus[],
-    normalizedRequestedModel: string | undefined,
+    requestedModel: string | undefined,
   ): { provider: string; model: string } | null {
     const match = onlineHosts.find((h) => h.instanceId === requestedProvider);
     if (!match) return null;
-    const hostModels = match.models.map(normalizeLocalModelId);
+    const hostModels = match.models;
+    // Resolved against THIS box's served ids: the request is going to it.
+    const normalizedRequestedModel = requestedModel
+      ? normalizeLocalModelId(requestedModel, hostModels)
+      : undefined;
     if (normalizedRequestedModel && hostModels.includes(normalizedRequestedModel)) {
       return { provider: requestedProvider, model: normalizedRequestedModel };
     }
@@ -273,7 +290,7 @@ export class DynamicModelResolver {
     onlineHosts: HostModelStatus[],
   ): { provider: string; model: string } | null {
     const match = onlineHosts.find((h) =>
-      h.models.map(normalizeLocalModelId).includes(normalizedRequestedModel),
+      h.models.includes(normalizedRequestedModel),
     );
     return match
       ? { provider: match.instanceId, model: normalizedRequestedModel }
@@ -288,9 +305,7 @@ export class DynamicModelResolver {
     const single = onlineHosts[0];
     return {
       provider: single.instanceId,
-      model:
-        normalizedRequestedModel ||
-        (single.models[0] ? normalizeLocalModelId(single.models[0]) : "default-model"),
+      model: normalizedRequestedModel || single.models[0] || "default-model",
     };
   }
 
@@ -308,9 +323,7 @@ export class DynamicModelResolver {
     if (preferredHost && preferredHost.models.length > 0) {
       return {
         provider: preferredInstanceId,
-        model:
-          normalizedRequestedModel ||
-          normalizeLocalModelId(preferredHost.models[0]),
+        model: normalizedRequestedModel || preferredHost.models[0],
       };
     }
     return null;
@@ -327,9 +340,7 @@ export class DynamicModelResolver {
       if (host && host.models.length > 0) {
         return {
           provider: provId,
-          model:
-            normalizedRequestedModel ||
-            normalizeLocalModelId(host.models[0]),
+          model: normalizedRequestedModel || host.models[0],
         };
       }
     }
