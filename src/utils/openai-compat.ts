@@ -796,7 +796,9 @@ const QWEN_FUNCTION_BODY = /^<function=([\w.-]+)>([\s\S]*?)(?:<\/function>)?$/;
 const QWEN_PARAM_PAIR = /<parameter=([\w.-]+)>([\s\S]*?)(?:<\/parameter>|(?=<parameter=)|(?=<\/function>)|$)/g;
 /**
  * The function opener written as a value-less `<parameter=NAME>`. 2026-11-05: Qwen3.8 on
- * vllm-4 ended both PRI valuation attempts with `<tool_call><parameter=screener_query>
+ * vllm-4 (LAS instance id; physical dellbox2 @ 10.0.0.131 — the legacy `dell1`
+ * shim name is swapped vs the box) ended both PRI valuation attempts with
+ * `<tool_call><parameter=screener_query>
  * <parameter=filters>…</function></tool_call>`; the call was dropped and the run ended
  * on that text. Only an opener followed directly by another tag counts.
  */
@@ -848,7 +850,9 @@ function _markupCallFromGlmBody(body: string): MarkupToolCall | null {
  * Parse the Qwen3 coder body form (`<function=NAME><parameter=K>V</parameter>…</function>`);
  * null when not a call. 2026-11-03: Qwen3.8 on dell1 streamed a JPM research call
  * this way as plain content; the GLM parser rejected the `<` in the name and the
- * call was dropped, so the run ended with no tool executed.
+ * call was dropped, so the run ended with no tool executed. ("dell1" is the
+ * legacy shim route — that traffic ran on physical dellbox2 @ 10.0.0.131,
+ * LAS instance vllm-4; the route names are swapped vs the boxes.)
  */
 function _markupCallFromQwenBody(body: string): MarkupToolCall | null {
   const match = QWEN_FUNCTION_BODY.exec(body);

@@ -56,8 +56,15 @@ const UPSTREAMS: Record<string, string> = {
   // boxes also serve the agent-pool's qwen/qwen37 subagents directly (not
   // through this shim), so no shim cap: the trading admission controller
   // reads the engine's own running/waiting counts instead.
-  "dell1": process.env.VLLM_SHIM_DELL1_URL || "http://10.0.0.131:8888",
-  "dell2": process.env.VLLM_SHIM_DELL2_URL || "http://10.0.0.37:8888",
+  // NOTE (2026-11-16): the route names dell1/dell2 are legacy and SWAPPED vs
+  // the physical machines — ssh logins dellbox1@10.0.0.37 / dellbox2@10.0.0.131
+  // are ground truth (authoritative table: spark-console boxes.json identity
+  // blocks). Route `dell1` reaches physical dellbox2 (.131), `dell2` reaches
+  // physical dellbox1 (.37). Do not "fix" the IPs to match the route names:
+  // trading addresses these paths, and instance ids vllm-4/vllm-5 are
+  // permanent (instance-registry.ts).
+  "dell1": process.env.VLLM_SHIM_DELL1_URL || "http://10.0.0.131:8888", // physical dellbox2 = LAS vllm-4
+  "dell2": process.env.VLLM_SHIM_DELL2_URL || "http://10.0.0.37:8888", // physical dellbox1 = LAS vllm-5
 };
 
 /**
