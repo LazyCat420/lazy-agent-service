@@ -1,2 +1,0 @@
-lazy-agent-service — Architecture & Operations
-Unified Agent Hub: lazy-agent-service (:5591), scraper-service (:8001), spark-console (:8800) & tts-service (:8080)
