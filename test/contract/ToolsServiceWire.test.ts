@@ -94,6 +94,7 @@ vi.mock("../../src/utils/logger.ts", () => ({
 import PromptLocaleService from "../../src/services/PromptLocaleService.ts";
 import ToolOrchestratorService from "../../src/services/ToolOrchestratorService.ts";
 import { GitWorktreeHelper } from "../../src/services/orchestrator/GitWorktreeHelper.ts";
+import { toWorktreeDiff } from "../../src/services/orchestrator/WorktreeDiffContract.ts";
 import { DirectoryTreeFormatter } from "../../src/services/system-prompt/DirectoryTreeFormatter.ts";
 
 // ── Fixture: responses in the shape tools-service produces ──────────────────────────────────────
@@ -487,20 +488,31 @@ describe("responses tools-service defines are parsed by LAS", () => {
     expect(await GitWorktreeHelper.getWorktreeDiff("/srv/workspace", "orchestrator/agent-contract")).toEqual(fixture.worktreeDiff.body);
   });
 
-  // What LAS requires of a diff before it keeps it: the gate in commitAndCollectSubAgentDiff
-  // (src/services/OrchestratorService.ts) and the type WorktreeDiff (src/types/orchestrator.ts).
-  // Any other shape is stored as `diff = null`. Keep this in step with that gate.
-  const LasWorktreeDiffSchema = z.object({ hasChanges: z.boolean(), additions: z.number(), deletions: z.number(), files: z.array(z.unknown()) });
-
-  // DEFECT?: the two sides disagree on the diff shape. tools-service sends { branch, base,
-  // files: [{ path, status }], patch, stats: { filesChanged, additions, deletions } } (its pinned
-  // tests/fixtures/worktree-diff-contract.json); LAS expects { hasChanges, additions, deletions,
-  // files: string[] } at the top level. The gate never passes, so every sub-agent's diff is null
-  // and its result reports no changes. Remove .fails when LAS reads the tools-service shape.
-  it.fails("C18b the tools-service worktree diff is one LAS keeps", async () => {
+  // tools-service sends { branch, base, files: [{ path, status }], patch, stats: { filesChanged,
+  // additions, deletions } } (its pinned tests/fixtures/worktree-diff-contract.json).
+  // commitAndCollectSubAgentDiff keeps a diff only through toWorktreeDiff, which must turn that
+  // into the sub-agent's WorktreeDiff. Before it read this shape, every sub-agent's diff was
+  // stored as null and its result reported no changes.
+  it("C18b the tools-service worktree diff is one LAS keeps, with its counts and file paths", async () => {
     serve("POST /agentic/git/worktree/diff", fixture.worktreeDiff);
     const diff = await GitWorktreeHelper.getWorktreeDiff("/srv/workspace", "orchestrator/agent-contract");
-    expect(LasWorktreeDiffSchema.safeParse(diff).success).toBe(true);
+    expect(toWorktreeDiff(diff)).toEqual({
+      hasChanges: true,
+      additions: 2,
+      deletions: 2,
+      files: ["change.txt", "notes/hello.txt", "remove.txt"],
+    });
+  });
+
+  it("C18c a refused diff, a diff without stats and an empty diff are told apart", () => {
+    expect(toWorktreeDiff({ error: "fatal: bad revision" })).toBeNull();
+    expect(toWorktreeDiff({ hasChanges: true, additions: 1, deletions: 0, files: ["a.txt"] })).toBeNull();
+    expect(toWorktreeDiff({ branch: "b", base: "main", files: [], patch: "", stats: { filesChanged: 0, additions: 0, deletions: 0 } })).toEqual({
+      hasChanges: false,
+      additions: 0,
+      deletions: 0,
+      files: [],
+    });
   });
 
   it("C19a a shell stream becomes one result holding the joined output and the exit event's fields", async () => {
@@ -527,21 +539,20 @@ describe("responses tools-service defines are parsed by LAS", () => {
     expect(result).toEqual({ success: false, stdout: "4\n", stderr: "", exitCode: 1, executionTimeMs: 60000, timedOut: true, error: "Execution timed out after 60000ms" });
   });
 
-  // DEFECT?: /agentic/command/stream marks a run the caller cancelled with `aborted: true` in
-  // its exit event. LAS's stream parser (applyStreamEvent) copies success, exitCode,
-  // executionTimeMs, timedOut and error only, so the result is an ordinary failure with
-  // nothing saying it was cancelled. Remove .fails when the result carries `aborted`.
-  it.fails("C19d a command stream the caller aborted is reported as aborted", async () => {
+  // /agentic/command/stream marks a run the caller cancelled with `aborted: true` in its exit
+  // event. Regression (fixed 2026-11-18): applyStreamEvent used to drop it, so the result was an
+  // ordinary failure with nothing saying it was cancelled.
+  it("C19d a command stream the caller aborted is reported as aborted", async () => {
     serve("POST /agentic/command/stream", fixture.commandStreamAborted);
     const result = await ToolOrchestratorService.executeToolStreaming(TOOL_NAMES.RUN_COMMAND, { command: "npm test" }, null, context);
     expect(result).toMatchObject({ success: false, stdout: "running\n", aborted: true });
   });
 
-  // DEFECT?: every stream route answers a bad request with 400 { error: "<what is wrong>" }
-  // before it opens the stream. executeToolStreaming returns "API returned 400: Bad Request"
-  // and drops that text, where the non-streaming path (fetchJsonWithBody) forwards it. The
-  // model is not told which argument to fix. Remove .fails when the text is forwarded.
-  it.fails("C20 a stream route's refusal reaches the caller with the service's error text", async () => {
+  // Every stream route answers a bad request with 400 { error: "<what is wrong>" } before it
+  // opens the stream. Regression (fixed 2026-11-18): executeToolStreaming used to return
+  // "API returned 400: Bad Request" and drop that text, so the model was not told which
+  // argument to fix.
+  it("C20 a stream route's refusal reaches the caller with the service's error text", async () => {
     serve("POST /compute/shell/stream", fixture.streamRejected);
     const result = await ToolOrchestratorService.executeToolStreaming(TOOL_NAMES.EXECUTE_SHELL, {}, null, context);
     expect(result).toEqual({ error: "Request body must include 'command' (string)" });
@@ -556,7 +567,7 @@ describe("responses tools-service defines are parsed by LAS", () => {
 
   it.each([
     ["a 400 with code and retryable", "fileWriteRejected", "Request body must include 'content' (string)"],
-    ["a 504 handler timeout", "handlerTimedOut", "Tool handler timed out after 120000ms (POST /agentic/file/write)"],
+    ["a 504 handler timeout", "handlerTimedOut", "Tool handler timed out after 150000ms (POST /agentic/file/write)"],
   ] as const)("C21b %s from a catalog tool is reduced to { error } with the service's text", async (_name, key, message) => {
     await loadCatalog();
     serve("POST /agentic/file/write", fixture[key]);

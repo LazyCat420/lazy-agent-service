@@ -5,7 +5,6 @@ import ToolOrchestratorService from "../ToolOrchestratorService.ts";
 import type {
   ToolsApiResponse,
   WorktreeCreateResponse,
-  WorktreeDiff,
 } from "../../types/orchestrator.ts";
 import { getErrorMessage } from "../../utils/ErrorHelpers.ts";
 
@@ -103,13 +102,12 @@ export class GitWorktreeHelper {
     );
   }
 
+  /** The tools-service diff body as sent; `toWorktreeDiff` (WorktreeDiffContract.ts) reads it. */
   static async getWorktreeDiff(
     repositoryPath: string,
     branchName: string,
-  ): Promise<ToolsApiResponse & Partial<WorktreeDiff>> {
-    return GitWorktreeHelper.toolsApiPost<
-      ToolsApiResponse & Partial<WorktreeDiff>
-    >("/agentic/git/worktree/diff", {
+  ): Promise<ToolsApiResponse> {
+    return GitWorktreeHelper.toolsApiPost<ToolsApiResponse>("/agentic/git/worktree/diff", {
       path: repositoryPath,
       branch: branchName,
     });

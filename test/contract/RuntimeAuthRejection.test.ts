@@ -209,9 +209,9 @@ describe("runtimeAuth rejections", () => {
     expect(await status(headers)).toBe(401);
   });
 
-  // DEFECT: auth scheme compared case-sensitively (RFC 9110 §11.1 says case-insensitive).
-  // "bearer <token>" is refused with 401. Remove .fails when the scheme match ignores case.
-  it.fails("R14 a valid session is accepted with the scheme written in lower case", async () => {
+  // Regression (fixed 2026-11-18): the auth scheme was compared case-sensitively, so
+  // "bearer <token>" was refused with 401 (RFC 9110 §11.1: the scheme is case-insensitive).
+  it("R14 a valid session is accepted with the scheme written in lower case", async () => {
     expect(await status({ authorization: `bearer ${forge(validScope())}` })).toBe(200);
   });
 });

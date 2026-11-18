@@ -32,6 +32,7 @@ import { resolveModelForInstances } from "../utils/ModelResolution.ts";
 // Extracted Domain Helpers
 import { InstanceLoadBalancer } from "./orchestrator/InstanceLoadBalancer.ts";
 import { GitWorktreeHelper } from "./orchestrator/GitWorktreeHelper.ts";
+import { toWorktreeDiff } from "./orchestrator/WorktreeDiffContract.ts";
 import {
   getLastAssistantText,
   buildSubAgentResult,
@@ -1750,27 +1751,9 @@ async function commitAndCollectSubAgentDiff(subAgent: SubAgentState): Promise<vo
     cwd: subAgent.worktreePath,
   });
 
-  if (subAgent.branchName) {
-    const diffResult = await GitWorktreeHelper.getWorktreeDiff(subAgent.repositoryPath, subAgent.branchName);
-    if (
-      !("error" in diffResult) &&
-      typeof diffResult.hasChanges === "boolean" &&
-      typeof diffResult.additions === "number" &&
-      typeof diffResult.deletions === "number" &&
-      Array.isArray(diffResult.files)
-    ) {
-      subAgent.diff = {
-        hasChanges: diffResult.hasChanges,
-        additions: diffResult.additions,
-        deletions: diffResult.deletions,
-        files: diffResult.files,
-      };
-    } else {
-      subAgent.diff = null;
-    }
-  } else {
-    subAgent.diff = null;
-  }
+  subAgent.diff = subAgent.branchName
+    ? toWorktreeDiff(await GitWorktreeHelper.getWorktreeDiff(subAgent.repositoryPath, subAgent.branchName))
+    : null;
   subAgent.status = "complete";
 }
 

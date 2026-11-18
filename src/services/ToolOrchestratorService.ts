@@ -763,26 +763,29 @@ async function fetchJson(
       headers: { ...extraHeaders },
       ...(signal && { signal }),
     });
-    if (!response.ok) {
-      try {
-        const errorBody = (await response.json()) as Record<string, unknown>;
-        return {
-          error:
-            errorBody.error ||
-            `API returned ${response.status}: ${response.statusText}`,
-        };
-      } catch {
-        return {
-          error: `API returned ${response.status}: ${response.statusText}`,
-        };
-      }
-    }
+    if (!response.ok) return await errorFromResponse(response);
     return await response.json();
   } catch (error: unknown) {
     if (error instanceof Error && error.name === "AbortError") {
       return { error: "Tool execution aborted" };
     }
     return { error: `Failed to reach API: ${getErrorMessage(error)}` };
+  }
+}
+
+/** A refused tools-service call as `{ error }`: the service's own error text, else the status line. */
+async function errorFromResponse(response: Response): Promise<{ error: unknown }> {
+  try {
+    const errorBody = (await response.json()) as Record<string, unknown>;
+    return {
+      error:
+        errorBody.error ||
+        `API returned ${response.status}: ${response.statusText}`,
+    };
+  } catch {
+    return {
+      error: `API returned ${response.status}: ${response.statusText}`,
+    };
   }
 }
 
@@ -800,21 +803,7 @@ async function fetchJsonWithBody(
       body: JSON.stringify(body),
       ...(signal && { signal }),
     });
-    if (!response.ok) {
-      // Forward the actual error body from tools-api for debugging
-      try {
-        const errorBody = (await response.json()) as Record<string, unknown>;
-        return {
-          error:
-            errorBody.error ||
-            `API returned ${response.status}: ${response.statusText}`,
-        };
-      } catch {
-        return {
-          error: `API returned ${response.status}: ${response.statusText}`,
-        };
-      }
-    }
+    if (!response.ok) return await errorFromResponse(response);
     return await response.json();
   } catch (error: unknown) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -1140,6 +1129,8 @@ interface StreamingSseEvent {
   exitCode?: number | null;
   executionTimeMs?: number;
   timedOut?: boolean;
+  /** /agentic/command/stream: the caller disconnected and the command was killed. */
+  aborted?: boolean;
   error?: string;
   [key: string]: unknown;
 }
@@ -1193,6 +1184,7 @@ function applyStreamEvent(
       exitCode: event.exitCode,
       executionTimeMs: event.executionTimeMs,
       timedOut: event.timedOut || false,
+      ...(event.aborted === true && { aborted: true }),
       ...(event.error && { error: event.error }),
     };
     state.finalResult = finalResult;
@@ -2357,11 +2349,8 @@ export default class ToolOrchestratorService {
       });
       clearTimeout(timeout);
 
-      if (!response.ok) {
-        return {
-          error: `API returned ${response.status}: ${response.statusText}`,
-        };
-      }
+      // Stream routes refuse a bad request with 400 { error } before the stream opens.
+      if (!response.ok) return await errorFromResponse(response);
 
       // Parse the SSE stream — accumulate stdout/stderr so the final result
       // includes the full output for persistence (TerminalRenderer reads

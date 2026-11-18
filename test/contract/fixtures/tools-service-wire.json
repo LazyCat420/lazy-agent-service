@@ -237,8 +237,8 @@
     "body": { "code": "VALIDATION", "retryable": false, "error": "Request body must include 'content' (string)" }
   },
   "handlerTimedOut": {
-    "from": "src/utilities.ts agenticHandler catch branch: 504 { error, code: 'TIMEOUT', retryable: true } when the handler exceeds its time limit",
+    "from": "src/utilities.ts agenticHandler catch branch: 504 { error, code: 'TIMEOUT', retryable: true } when the handler exceeds AGENTIC_HANDLER_TIMEOUT_MS (src/constants.ts, 150_000)",
     "status": 504,
-    "body": { "error": "Tool handler timed out after 120000ms (POST /agentic/file/write)", "code": "TIMEOUT", "retryable": true }
+    "body": { "error": "Tool handler timed out after 150000ms (POST /agentic/file/write)", "code": "TIMEOUT", "retryable": true }
   }
 }

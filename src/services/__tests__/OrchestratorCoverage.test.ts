@@ -196,11 +196,13 @@ beforeEach(() => {
   fakes.createWorktree.mockResolvedValue({ worktreePath: "/workspace/.worktrees/agent-1" });
   fakes.removeWorktree.mockResolvedValue(undefined);
   fakes.toolsApiPost.mockResolvedValue({ ok: true });
+  // The body tools-service sends (test/contract/fixtures/tools-service-wire.json worktreeDiff).
   fakes.getWorktreeDiff.mockResolvedValue({
-    hasChanges: true,
-    additions: 3,
-    deletions: 1,
-    files: ["notes.md"],
+    branch: "orchestrator/agent-1",
+    base: "main",
+    files: [{ path: "notes.md", status: "modified" }],
+    patch: "",
+    stats: { filesChanged: 1, additions: 3, deletions: 1 },
   });
   fakes.getDefaultWorkspaceRoot.mockReturnValue("/workspace");
   fakes.resolveRepositoryPath.mockReturnValue("/repo");
@@ -784,10 +786,11 @@ describe("_runSubAgentLoop — abort and diff edge cases", () => {
 
   it("tolerates a non-numeric diff payload", async () => {
     fakes.getWorktreeDiff.mockResolvedValue({
-      hasChanges: "yes",
-      additions: 1,
-      deletions: 1,
-      files: [],
+      branch: "orchestrator/agent-1",
+      base: "main",
+      files: [{ path: "notes.md", status: "modified" }],
+      patch: "",
+      stats: { filesChanged: 1, additions: "1", deletions: 1 },
     });
     const result = (await OrchestratorService.spawnFromTool(spawnParams() as never)) as Event;
     expect(result.status).toBe("completed");
