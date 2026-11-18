@@ -41,6 +41,9 @@ const baseOptions = (over: Partial<ToolBatchOptions> = {}): ToolBatchOptions => 
   maxConsecutiveToolErrors: 3,
   failureStreak: new Map<string, number>(),
   now: () => 0,
+  // A time limit that never passes, unless a case hands in its own: without this the runner
+  // would start a real one-second timer for every execution.
+  timeoutSignalFor: () => new AbortController().signal,
   ...over,
 });
 
