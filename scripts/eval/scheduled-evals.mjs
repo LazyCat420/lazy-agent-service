@@ -141,7 +141,13 @@ fs.mkdirSync(OUT, { recursive: true });
 const bySuite = {};
 const errors = [];
 for (const suite of SUITES) {
-  const result = SUITE_RUNNERS[suite]();
+  let result;
+  try {
+    result = SUITE_RUNNERS[suite]();
+  } catch (err) {
+    // Malformed result files or a failed spawn: record the suite as errored and keep going.
+    result = { error: `threw: ${String(err?.message ?? err).slice(0, 200)}` };
+  }
   if (result.error) {
     errors.push(suite);
     bySuite[suite] = { pass: 0, weak: 0, fail: 0, error: result.error };
