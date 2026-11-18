@@ -1,0 +1,1 @@
+{"date":"2026-11-18T04:27:22.882Z","commit":"ed7f487","suites":"redteam,security","pass":80,"weak":0,"fail":1,"by_suite":{"redteam":{"pass":6,"weak":0,"fail":0},"security":{"pass":74,"weak":0,"fail":1}}}

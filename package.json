@@ -32,7 +32,8 @@
     "quality": "npm run quality:crap && npm run quality:dry && npm run quality:arch && npm run quality:deadcode && npm run quality:prompt",
     "verify": "npm run typecheck && npm run quality:strict && npm run lint && npm run test && npm run quality:dry && npm run quality:arch && npm run quality:prompt",
     "quality:prompt": "node scripts/quality/prompt-budget.mjs",
-    "quality:strict": "node scripts/quality/tsc-strict.mjs"
+    "quality:strict": "node scripts/quality/tsc-strict.mjs",
+    "eval:scheduled": "node scripts/eval/scheduled-evals.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.103.0",

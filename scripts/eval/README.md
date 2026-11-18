@@ -73,3 +73,27 @@ non-empty answer, else `FAIL`.
 ## Baseline
 
 Baseline on **2026-10-17**: trading **3/8**, html-notes **4/8** PASS.
+
+## Scheduled runs and score history
+
+`npm run eval:scheduled` (`scripts/eval/scheduled-evals.mjs`) runs a suite set, grades every
+result pass / weak / fail, appends one dated JSON line to the tracked
+`scripts/eval/history.jsonl`, and exits 1 when the pass count is below the last recorded
+non-regressed run of the same suite set (exit 2 when a suite produced no result).
+
+| suite | source | needs |
+|---|---|---|
+| `security` | `scripts/benchmarks/security-bench.mts` (check pass/fail) | nothing (default) |
+| `redteam` | `scripts/benchmarks/sandbox-redteam.mts` (wall PASS / UNPROVEN = weak / FAIL) | nothing (default) |
+| `basic` | this eval, 2 profiles × 8 questions, GLM judge | live LAS + judge (`--live`) |
+| `chaos` | chaos questions 1-5, `--no-judge` | live LAS with `LAS_EVAL_CHAOS=1` (`--live`) |
+| `harness2` | `scripts/harness2-eval/run.ts`; attempt correct = pass, total or ids right = weak | Jetson + Spark, hours (`--suites harness2`) |
+
+```sh
+testrun -- npm run eval:scheduled                       # offline: redteam,security
+testrun -- npm run eval:scheduled -- --live             # + basic,chaos (LAN only)
+testrun -- npm run eval:scheduled -- --suites harness2  # explicit only
+```
+
+The nightly GitHub workflow `.github/workflows/evals.yml` runs the offline suites and uploads the
+updated history as an artifact; commit history lines from local runs to move the bar.
