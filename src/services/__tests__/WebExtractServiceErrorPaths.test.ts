@@ -171,6 +171,8 @@ describe("webExtract: overlapping callers, the cache and the character limit", (
   });
 
   it("W12 a cached page is served until exactly 20 minutes after the scrape, then fetched again", async () => {
+    // The service reads this override once at import, so it cannot be stubbed per test. If the
+    // machine exports it, fail here with the reason instead of on the 20-minute numbers below.
     expect(process.env.WEB_EXTRACT_CACHE_TTL_MS).toBeUndefined();
     const ttl = 20 * 60 * 1_000;
     const clock = { t: 1_000_000 };
@@ -228,6 +230,7 @@ describe("webExtract: overlapping callers, the cache and the character limit", (
     ["0", 0],
     ["undefined", undefined],
   ])("W14 a limit of %s means the default of 15,000", async (_name, charLimit) => {
+    // Read once at import, like the cache lifetime in W12: a precondition, not a stub.
     expect(process.env.WEB_EXTRACT_CHAR_LIMIT).toBeUndefined();
     expect(await isCut(15_000, charLimit)).toBe(false);
     expect(await isCut(15_001, charLimit)).toBe(true);

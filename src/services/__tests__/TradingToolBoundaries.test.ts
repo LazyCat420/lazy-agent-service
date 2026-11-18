@@ -2,6 +2,7 @@
 // wrong scope), the SSE transform that attaches it to tool calls, and the request protocol.
 // TradingToolContext.test.ts and TradingToolProtocol.test.ts cover the main paths; nothing here
 // repeats them.
+import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -16,13 +17,15 @@ import {
   verifyToolContext,
 } from "../TradingToolContext.ts";
 import { TradingToolStream, bindRecoveredToolArgs, bindToolResponse } from "../TradingToolStream.ts";
-import { PARALLEL_TOOL_HINT, applyTradingToolProtocol, openingStackLine } from "../TradingToolProtocol.ts";
+import { PARALLEL_TOOL_HINT, applyTradingToolProtocol } from "../TradingToolProtocol.ts";
 
 const NOW = 1_800_000_000_000;
 const TAG = "TRADING_TOOL_CONTEXT_V1";
 const MCP = "mcp__lazy-agent-service__";
 
-beforeEach(() => vi.stubEnv("TRADING_TOOL_CONTEXT_KEY", "offline-context-test-key"));
+const freshKey = () => randomBytes(24).toString("hex");
+
+beforeEach(() => vi.stubEnv("TRADING_TOOL_CONTEXT_KEY", freshKey()));
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
@@ -78,7 +81,7 @@ describe("signed trading tool context", () => {
 
   it("T5 a token stops verifying when the signing key changes, and the placeholder key cannot sign", () => {
     const token = signToolContext(context());
-    vi.stubEnv("TRADING_TOOL_CONTEXT_KEY", "another-key");
+    vi.stubEnv("TRADING_TOOL_CONTEXT_KEY", freshKey());
     expect(() => verifyToolContext(token)).toThrow("Invalid");
 
     vi.stubEnv("TRADING_TOOL_CONTEXT_KEY", "change-me-local-dev");
@@ -467,7 +470,10 @@ describe("applyTradingToolProtocol", () => {
   it("P11 an opening-stack entry with the MCP prefix matches a tool offered without it", () => {
     const stack = [`${MCP}get_upcoming_events`, "get_finnhub_news"];
     const content: string = applyTradingToolProtocol({ tools: twoTools(), messages: [{ role: "system", content: "role" }] }, undefined, stack).body.messages[0].content;
-    expect(content.endsWith(`${PARALLEL_TOOL_HINT}\n${openingStackLine(stack)}`)).toBe(true);
+    expect(content.endsWith(
+      `${PARALLEL_TOOL_HINT}\nUsual opening bundle for this role (learned from past runs): ${MCP}get_upcoming_events, get_finnhub_news. ` +
+        "They are keyed by the ticker; when you need them, call them together in your first response.",
+    )).toBe(true);
   });
 
   it.each([
