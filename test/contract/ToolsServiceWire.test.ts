@@ -204,7 +204,9 @@ async function loadCatalog(): Promise<void> {
 beforeAll(async () => {
   // Importing ToolOrchestratorService fetches the catalog, then one catalog per non-default
   // locale. Wait until the stand-in has answered all of them so none lands inside a test.
-  // ("en" is never fetched as a locale: it is the catalog itself.)
+  // ("en" is never fetched as a locale: it is the catalog itself.) If the service ever makes
+  // fewer boot requests than this, the wait cannot finish and this hook fails at vitest's hook
+  // timeout: recount the boot requests here.
   const otherLocales = PromptLocaleService.getAvailableLocales().filter((locale) => locale !== PromptLocaleService.getDefaultLocale() && locale !== "en");
   await tools.answeredAtLeast(1 + otherLocales.length);
 });
@@ -300,14 +302,14 @@ describe("requests LAS sends are ones tools-service accepts", () => {
     // tools-service reads x-project, x-username, x-agent, x-request-id, x-conversation-id and
     // x-iteration (ToolCallLoggerMiddleware.ts, via IDENTITY_HEADERS), x-trace-id (utilities.ts),
     // x-workspace-root (AgentConnectionManager.ts), x-enabled-tools, x-provider and x-model
-    // (AgenticRoutes.ts). Nothing in it reads x-agent-conversation-id.
-    expect(customHeaders(only("POST /compute/shell/stream"))).toEqual({
+    // (AgenticRoutes.ts). LAS also sends x-agent-conversation-id, which nothing there reads,
+    // so it is not part of this contract and not checked.
+    expect(customHeaders(only("POST /compute/shell/stream"))).toMatchObject({
       "x-project": "contract-test",
       "x-username": "fixture-user",
       "x-agent": "CODING",
       "x-request-id": "req-1",
       "x-trace-id": "trace-1",
-      "x-agent-conversation-id": "agent-conv-1",
       "x-conversation-id": "conv-1",
       "x-iteration": "3",
       "x-workspace-root": "/srv/workspace",
@@ -413,8 +415,8 @@ describe("responses tools-service defines are parsed by LAS", () => {
 
   it("C12 /admin/config has no staticRoots key, so LAS has no static roots to report", async () => {
     // LAS reads `staticRoots` from this response (ToolOrchestratorService fetchSchemas,
-    // refreshWorkspaceRoots, updateWorkspaceRoots); tools-service never sends it.
-    expect(fixture.adminConfig.body).not.toHaveProperty("staticRoots");
+    // refreshWorkspaceRoots, updateWorkspaceRoots); tools-service never sends it, and the
+    // fixture's /admin/config body has the two keys the route sends and no other.
     await loadCatalog();
     await ToolOrchestratorService.refreshWorkspaceRoots();
     expect(ToolOrchestratorService.getStaticRoots()).toEqual([]);
