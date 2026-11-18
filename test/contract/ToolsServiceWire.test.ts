@@ -288,13 +288,13 @@ describe("requests LAS sends are ones tools-service accepts", () => {
     [TOOL_NAMES.EXECUTE_JAVASCRIPT, "POST /compute/js/stream", { code: "console.log(total)" }],
     [TOOL_NAMES.EXECUTE_PYTHON, "POST /utility/python/stream", { code: "print(2 + 2)", timeout: 60000 }],
     [TOOL_NAMES.RUN_COMMAND, "POST /agentic/command/stream", { command: "npm test", cwd: "/srv/workspace" }],
-  ])("C8 the streaming tool %s posts the model's arguments unchanged to %s", async (name, route, args) => {
+  ])("C8a the streaming tool %s posts the model's arguments unchanged to %s", async (name, route, args) => {
     serve(route, fixture.shellStream);
     await ToolOrchestratorService.executeToolStreaming(name, args, null, context);
     expect(acceptedBody(route)).toEqual(args);
   });
 
-  it("C8 a streaming call carries the caller identity in the headers tools-service reads", async () => {
+  it("C8b a streaming call carries the caller identity in the headers tools-service reads", async () => {
     serve("POST /compute/shell/stream", fixture.shellStream);
     await ToolOrchestratorService.executeToolStreaming(TOOL_NAMES.EXECUTE_SHELL, { command: "echo hi" }, null, context);
     // tools-service reads x-project, x-username, x-agent, x-request-id, x-conversation-id and
@@ -317,7 +317,7 @@ describe("requests LAS sends are ones tools-service accepts", () => {
     });
   });
 
-  it("C9 a catalog tool with path and query parameters becomes a GET the route can read", async () => {
+  it("C9a a catalog tool with path and query parameters becomes a GET the route can read", async () => {
     await loadCatalog();
     serve("GET /finance/prices/BRK%20B", { status: 200, body: { symbol: "BRK B", prices: [] } });
     await ToolOrchestratorService.executeTool("get_historical_prices", { symbol: "BRK B", interval: "1wk", period: "", fields: ["date", "close"] }, context);
@@ -332,14 +332,14 @@ describe("requests LAS sends are ones tools-service accepts", () => {
     expect(request.bodyText).toBe("");
   });
 
-  it("C9 a catalog tool whose endpoint says GET explicitly puts a numeric path parameter in the path", async () => {
+  it("C9b a catalog tool whose endpoint says GET explicitly puts a numeric path parameter in the path", async () => {
     await loadCatalog();
     serve("GET /agentic/command/background/4242", { status: 200, body: { pid: 4242, running: false } });
     await ToolOrchestratorService.executeTool("get_background_output", { pid: 4242 }, context);
     expect(sent()).toEqual(["GET /agentic/command/background/4242"]);
   });
 
-  it("C9 a catalog tool with method POST sends its declared bodyParams as a JSON body", async () => {
+  it("C9c a catalog tool with method POST sends its declared bodyParams as a JSON body", async () => {
     await loadCatalog();
     serve("POST /agentic/file/write", fixture.fileWritten);
     await ToolOrchestratorService.executeTool("write_file", { path: "/srv/workspace/notes.md", content: "hello world", createDirs: true }, context);
@@ -355,7 +355,7 @@ describe("requests LAS sends are ones tools-service accepts", () => {
     expect(only("POST /agentic/file/write").search).toBe("");
   });
 
-  it("C9 inside a worktree the file path is redirected and x-workspace-override names the worktree", async () => {
+  it("C9d inside a worktree the file path is redirected and x-workspace-override names the worktree", async () => {
     await loadCatalog();
     serve("POST /agentic/file/write", fixture.fileWritten);
     ToolOrchestratorService._setWorktree("agent-conv-1", { originalRoot: "/srv/workspace", worktreePath: "/srv/workspace-worktrees/agent-1" });
@@ -379,7 +379,7 @@ describe("responses tools-service defines are parsed by LAS", () => {
     return entry;
   };
 
-  it("C10 a catalog entry reaches the UI with its grouping metadata and without its endpoint", async () => {
+  it("C10a a catalog entry reaches the UI with its grouping metadata and without its endpoint", async () => {
     await loadCatalog();
     const shown = ToolOrchestratorService.getClientToolSchemas(undefined, "en").find((tool) => tool.name === "write_file");
     const { endpoint: _endpoint, parameters, ...metadata } = catalogEntry("write_file");
@@ -388,7 +388,7 @@ describe("responses tools-service defines are parsed by LAS", () => {
     expect(shown).not.toHaveProperty("endpoint");
   });
 
-  it("C10 a catalog entry reaches the model without endpoint, dataSource or domain, and closed to extra arguments", async () => {
+  it("C10b a catalog entry reaches the model without endpoint, dataSource or domain, and closed to extra arguments", async () => {
     await loadCatalog();
     const offered = ToolOrchestratorService.getToolSchemas(undefined, "en").find((tool) => tool.name === "get_historical_prices");
     const { parameters, name, description } = catalogEntry("get_historical_prices");
@@ -398,13 +398,13 @@ describe("responses tools-service defines are parsed by LAS", () => {
     for (const key of ["endpoint", "dataSource", "domain"]) expect(offered).not.toHaveProperty(key);
   });
 
-  it("C11 the workspace roots come from /admin/config", async () => {
+  it("C11a the workspace roots come from /admin/config", async () => {
     await loadCatalog();
     expect(ToolOrchestratorService.getWorkspaceRoots()).toEqual(["/srv/workspace", "/srv/second"]);
     expect(ToolOrchestratorService.getWorkspaceRoot()).toBe("/srv/workspace");
   });
 
-  it("C11 a workspace agent counts as connected when /admin/config lists one with roots", async () => {
+  it("C11b a workspace agent counts as connected when /admin/config lists one with roots", async () => {
     serve("GET /admin/config", fixture.adminConfig);
     expect(await ToolOrchestratorService.isWorkspaceAgentConnected()).toBe(true);
     serve("GET /admin/config", fixture.adminConfigNoAgents);
@@ -420,13 +420,13 @@ describe("responses tools-service defines are parsed by LAS", () => {
     expect(ToolOrchestratorService.getStaticRoots()).toEqual([]);
   });
 
-  it("C13 a workspace update returns the service's answer, per-path errors included, and adopts its roots", async () => {
+  it("C13a a workspace update returns the service's answer, per-path errors included, and adopts its roots", async () => {
     serve("PUT /admin/config/workspaces", fixture.workspacesUpdated);
     expect(await ToolOrchestratorService.updateWorkspaceRoots(["/srv/extra", "relative/dir"])).toEqual(fixture.workspacesUpdated.body);
     expect(ToolOrchestratorService.getWorkspaceRoots()).toEqual(["/srv/workspace", "/srv/extra"]);
   });
 
-  it("C13 a refused workspace update throws the service's error text", async () => {
+  it("C13b a refused workspace update throws the service's error text", async () => {
     serve("PUT /admin/config/workspaces", fixture.workspacesRejected);
     await expect(ToolOrchestratorService.updateWorkspaceRoots([])).rejects.toThrow("'roots' must be an array of path strings");
   });
@@ -452,22 +452,22 @@ describe("responses tools-service defines are parsed by LAS", () => {
     expect([...failing.offline].sort()).toEqual(["get_background_output", "get_historical_prices", "write_file"]);
   });
 
-  it("C16 the directory listing becomes a two-level tree", async () => {
+  it("C16a the directory listing becomes a two-level tree", async () => {
     serve("GET /filesystem/list", fixture.filesystemList);
     expect(await new DirectoryTreeFormatter("/srv/workspace").fetchDirectoryTree()).toBe("📁 src\n  📄 index.ts\n📄 README.md");
   });
 
-  it("C16 a refused directory listing yields an empty tree", async () => {
+  it("C16b a refused directory listing yields an empty tree", async () => {
     serve("GET /filesystem/list", fixture.filesystemListRejected);
     expect(await new DirectoryTreeFormatter("/srv/workspace").fetchDirectoryTree()).toBe("");
   });
 
-  it("C17 a created worktree is returned as the service describes it", async () => {
+  it("C17a a created worktree is returned as the service describes it", async () => {
     serve("POST /agentic/git/worktree/create", fixture.worktreeCreated);
     expect(await GitWorktreeHelper.createWorktree("/srv/workspace", "orchestrator/agent-1")).toEqual(fixture.worktreeCreated.body);
   });
 
-  it("C17 a refused worktree call is reduced to the service's error text, for 400 and for 403", async () => {
+  it("C17b a refused worktree call is reduced to the service's error text, for 400 and for 403", async () => {
     serve("POST /agentic/git/worktree/create", fixture.worktreeCreateFailed);
     expect(await GitWorktreeHelper.createWorktree("/srv/workspace", "orchestrator/agent-1")).toEqual({
       error: "fatal: a branch named 'orchestrator/agent-1' already exists",
@@ -478,7 +478,7 @@ describe("responses tools-service defines are parsed by LAS", () => {
     });
   });
 
-  it("C18 the worktree diff is handed on exactly as tools-service sent it", async () => {
+  it("C18a the worktree diff is handed on exactly as tools-service sent it", async () => {
     serve("POST /agentic/git/worktree/diff", fixture.worktreeDiff);
     expect(await GitWorktreeHelper.getWorktreeDiff("/srv/workspace", "orchestrator/agent-contract")).toEqual(fixture.worktreeDiff.body);
   });
@@ -493,13 +493,13 @@ describe("responses tools-service defines are parsed by LAS", () => {
   // tests/fixtures/worktree-diff-contract.json); LAS expects { hasChanges, additions, deletions,
   // files: string[] } at the top level. The gate never passes, so every sub-agent's diff is null
   // and its result reports no changes. Remove .fails when LAS reads the tools-service shape.
-  it.fails("C18 the tools-service worktree diff is one LAS keeps", async () => {
+  it.fails("C18b the tools-service worktree diff is one LAS keeps", async () => {
     serve("POST /agentic/git/worktree/diff", fixture.worktreeDiff);
     const diff = await GitWorktreeHelper.getWorktreeDiff("/srv/workspace", "orchestrator/agent-contract");
     expect(LasWorktreeDiffSchema.safeParse(diff).success).toBe(true);
   });
 
-  it("C19 a shell stream becomes one result holding the joined output and the exit event's fields", async () => {
+  it("C19a a shell stream becomes one result holding the joined output and the exit event's fields", async () => {
     serve("POST /compute/shell/stream", fixture.shellStream);
     const chunks: Array<[string, string | null]> = [];
     const result = await ToolOrchestratorService.executeToolStreaming(TOOL_NAMES.EXECUTE_SHELL, { command: "echo hi" }, (event, data) => chunks.push([event, data]), context);
@@ -511,13 +511,13 @@ describe("responses tools-service defines are parsed by LAS", () => {
     ]);
   });
 
-  it("C19 a JavaScript stream, whose exit event has no timedOut or error, reports a failure through stderr and the exit code", async () => {
+  it("C19b a JavaScript stream, whose exit event has no timedOut or error, reports a failure through stderr and the exit code", async () => {
     serve("POST /compute/js/stream", fixture.jsStream);
     const result = await ToolOrchestratorService.executeToolStreaming(TOOL_NAMES.EXECUTE_JAVASCRIPT, { code: "console.log(total)" }, null, context);
     expect(result).toEqual({ success: false, stdout: "", stderr: "ReferenceError: total is not defined\n", exitCode: 1, executionTimeMs: 3, timedOut: false });
   });
 
-  it("C19 a Python stream that timed out keeps timedOut and the service's error text", async () => {
+  it("C19c a Python stream that timed out keeps timedOut and the service's error text", async () => {
     serve("POST /utility/python/stream", fixture.pythonStream);
     const result = await ToolOrchestratorService.executeToolStreaming(TOOL_NAMES.EXECUTE_PYTHON, { code: "print(2 + 2)" }, null, context);
     expect(result).toEqual({ success: false, stdout: "4\n", stderr: "", exitCode: 1, executionTimeMs: 60000, timedOut: true, error: "Execution timed out after 60000ms" });
@@ -527,7 +527,7 @@ describe("responses tools-service defines are parsed by LAS", () => {
   // its exit event. LAS's stream parser (applyStreamEvent) copies success, exitCode,
   // executionTimeMs, timedOut and error only, so the result is an ordinary failure with
   // nothing saying it was cancelled. Remove .fails when the result carries `aborted`.
-  it.fails("C19 a command stream the caller aborted is reported as aborted", async () => {
+  it.fails("C19d a command stream the caller aborted is reported as aborted", async () => {
     serve("POST /agentic/command/stream", fixture.commandStreamAborted);
     const result = await ToolOrchestratorService.executeToolStreaming(TOOL_NAMES.RUN_COMMAND, { command: "npm test" }, null, context);
     expect(result).toMatchObject({ success: false, stdout: "running\n", aborted: true });

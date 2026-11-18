@@ -137,7 +137,7 @@ describe("webExtract: overlapping callers, the cache and the character limit", (
     expect(second).toMatchObject({ status: "ok", content: "shared", cached: true });
   });
 
-  it("W11 a caller that joins a failing scrape gets the same error without a second fetch, and the failure is not kept", async () => {
+  it("W11a a caller that joins a failing scrape gets the same error without a second fetch, and the failure is not kept", async () => {
     const scraper = heldScraper([ok("recovered")]);
     const both = Promise.all([
       webExtract("https://example.com/w11", 15_000, scraper.deps),
@@ -157,7 +157,7 @@ describe("webExtract: overlapping callers, the cache and the character limit", (
 
   // DEFECT: webExtract answers the joining caller with `{ ...scraped, cached: true }` for a failed
   // scrape (the `pending` branch), although a failure is never cached. Remove `.fails` when fixed.
-  it.fails("W11 a failure handed to a joining caller is not labelled as served from the cache", async () => {
+  it.fails("W11b a failure handed to a joining caller is not labelled as served from the cache", async () => {
     const scraper = heldScraper();
     const both = Promise.all([
       webExtract("https://example.com/w11-label", 15_000, scraper.deps),
@@ -220,7 +220,7 @@ describe("webExtract: overlapping callers, the cache and the character limit", (
     return result.truncated;
   };
 
-  it("W14 a limit below 2,000 is raised to 2,000", async () => {
+  it("W14a a limit below 2,000 is raised to 2,000", async () => {
     expect(await isCut(2_000, 10)).toBe(false);
     expect(await isCut(2_001, 10)).toBe(true);
   });
@@ -229,14 +229,14 @@ describe("webExtract: overlapping callers, the cache and the character limit", (
     ["NaN", Number.NaN],
     ["0", 0],
     ["undefined", undefined],
-  ])("W14 a limit of %s means the default of 15,000", async (_name, charLimit) => {
+  ])("W14b a limit of %s means the default of 15,000", async (_name, charLimit) => {
     // Read once at import, like the cache lifetime in W12: a precondition, not a stub.
     expect(process.env.WEB_EXTRACT_CHAR_LIMIT).toBeUndefined();
     expect(await isCut(15_000, charLimit)).toBe(false);
     expect(await isCut(15_001, charLimit)).toBe(true);
   });
 
-  it("W14 a limit above 500,000 is lowered to 500,000", async () => {
+  it("W14c a limit above 500,000 is lowered to 500,000", async () => {
     expect(await isCut(500_000, 9_999_999)).toBe(false);
     expect(await isCut(500_001, 9_999_999)).toBe(true);
   });

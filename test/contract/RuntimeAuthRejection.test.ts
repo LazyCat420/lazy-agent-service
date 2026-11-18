@@ -154,11 +154,11 @@ describe("runtimeAuth rejections", () => {
     expect(GuardedSchema.parse(reply.body)).toEqual({ project: "obsidian", username: "fixture", backend: false, scope });
   });
 
-  it("R7 a session whose expiry has passed is refused", async () => {
+  it("R7a a session whose expiry has passed is refused", async () => {
     expect(await guarded(bearer({ ...validScope(), expires_at: Date.now() - 1 }))).toEqual({ status: 401, body: UNAUTHORIZED });
   });
 
-  it("R7 a session is accepted one millisecond before its expiry and refused at it", () => {
+  it("R7b a session is accepted one millisecond before its expiry and refused at it", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const headers = bearer({ ...validScope(), expires_at: T });
     vi.setSystemTime(T - 1);
@@ -179,11 +179,11 @@ describe("runtimeAuth rejections", () => {
     ["an array payload", () => []],
     ["a JSON string payload", () => JSON.stringify("str")],
     ["a payload that is not JSON", () => "not json"],
-  ])("R8 a correctly signed session with %s is refused", async (_name, payload) => {
+  ])("R8a a correctly signed session with %s is refused", async (_name, payload) => {
     expect(await guarded(bearer(payload()))).toEqual({ status: 401, body: UNAUTHORIZED });
   });
 
-  it("R8 a session at the length limits (128-character username, 256-character session_id) is accepted", async () => {
+  it("R8b a session at the length limits (128-character username, 256-character session_id) is accepted", async () => {
     expect(await status(bearer({ ...validScope(), username: "u".repeat(128), session_id: "s".repeat(256) }))).toBe(200);
   });
 
@@ -194,11 +194,11 @@ describe("runtimeAuth rejections", () => {
     ["an empty signature", () => `${forge(validScope()).split(".")[0]}.`],
     ["no signature", () => forge(validScope()).split(".")[0]],
     ["4,096 characters", () => "x".repeat(4096)],
-  ])("R9 a bearer token with %s is refused", async (_name, token) => {
+  ])("R9a a bearer token with %s is refused", async (_name, token) => {
     expect(await guarded({ authorization: `Bearer ${token()}` })).toEqual({ status: 401, body: UNAUTHORIZED });
   });
 
-  it("R9 a valid session sent under the Basic scheme is refused", async () => {
+  it("R9b a valid session sent under the Basic scheme is refused", async () => {
     expect(await guarded({ authorization: `Basic ${forge(validScope())}` })).toEqual({ status: 401, body: UNAUTHORIZED });
   });
 
@@ -225,20 +225,20 @@ describe("issueRuntimeSession", () => {
     vi.setSystemTime(T);
   });
 
-  it("R11 an expiry of now, or more than 24 hours ahead, is refused", () => {
+  it("R11a an expiry of now, or more than 24 hours ahead, is refused", () => {
     expect(() => issueRuntimeSession({ ...request(), expires_at: T })).toThrow("Session expiry must be within 24 hours");
     expect(() => issueRuntimeSession({ ...request(), expires_at: T + DAY_MS + 1 })).toThrow("Session expiry must be within 24 hours");
   });
 
-  it("R11 an expiry exactly 24 hours ahead yields a session that runtimeAuth accepts", () => {
+  it("R11b an expiry exactly 24 hours ahead yields a session that runtimeAuth accepts", () => {
     expect(accepted(issueRuntimeSession({ ...request(), expires_at: T + DAY_MS }))).toBe(true);
   });
 
-  it("R11 a scope with an empty app_id is refused", () => {
+  it("R11c a scope with an empty app_id is refused", () => {
     expect(() => issueRuntimeSession({ ...request(), app_id: "", expires_at: T + 60_000 })).toThrow();
   });
 
-  it("R11 two sessions for the same scope are different tokens and both are accepted", () => {
+  it("R11d two sessions for the same scope are different tokens and both are accepted", () => {
     const scope = { ...request(), expires_at: T + 60_000 };
     const [first, second] = [issueRuntimeSession(scope), issueRuntimeSession(scope)];
     expect(first).not.toBe(second);
@@ -247,11 +247,11 @@ describe("issueRuntimeSession", () => {
 });
 
 describe("scopeOwnsRun", () => {
-  it("R12 a backend caller, which has no session scope, owns every run", () => {
+  it("R12a a backend caller, which has no session scope, owns every run", () => {
     expect(scopeOwnsRun(responseWith({}), { session_id: "anything", profile_id: "anything" })).toBe(true);
   });
 
-  it("R12 a session owns a run only when both its session and its profile match", () => {
+  it("R12b a session owns a run only when both its session and its profile match", () => {
     const scope = validScope();
     const response = responseWith({ runtimeScope: scope });
     expect(scopeOwnsRun(response, { session_id: scope.session_id, profile_id: scope.profile_id })).toBe(true);
@@ -262,34 +262,34 @@ describe("scopeOwnsRun", () => {
 });
 
 describe("runtimeAuthOrTrustedPeer", () => {
-  it("R13 an untrusted peer is refused even when x-forwarded-for names a trusted address", () => {
+  it("R13a an untrusted peer is refused even when x-forwarded-for names a trusted address", () => {
     const outcome = direct(runtimeAuthOrTrustedPeer, { ip: "10.0.0.99", headers: { "x-forwarded-for": "127.0.0.1" } });
     expect(outcome).toMatchObject({ passed: false, status: 401, body: UNAUTHORIZED });
   });
 
-  it("R13 TRUSTED_INTERNAL_IPS adds exact addresses, ignoring the spaces around them", () => {
+  it("R13b TRUSTED_INTERNAL_IPS adds exact addresses, ignoring the spaces around them", () => {
     vi.stubEnv("TRUSTED_INTERNAL_IPS", " 10.0.0.99 , 10.0.0.98");
     expect(direct(runtimeAuthOrTrustedPeer, { ip: "10.0.0.99" }).passed).toBe(true);
     expect(direct(runtimeAuthOrTrustedPeer, { ip: "10.0.0.9" })).toMatchObject({ passed: false, status: 401 });
   });
 
-  it("R13 a request with no peer address is refused", () => {
+  it("R13c a request with no peer address is refused", () => {
     expect(direct(runtimeAuthOrTrustedPeer, { ip: "" })).toMatchObject({ passed: false, status: 401, body: UNAUTHORIZED });
   });
 
-  it("R13 a trusted peer that presents a bad credential is refused", () => {
+  it("R13d a trusted peer that presents a bad credential is refused", () => {
     const outcome = direct(runtimeAuthOrTrustedPeer, { ip: "127.0.0.1", headers: { authorization: "garbage" } });
     expect(outcome).toMatchObject({ passed: false, status: 401, body: UNAUTHORIZED });
   });
 
-  it("R13 with no secret configured a trusted peer may still read, but any presented credential gets 503", () => {
+  it("R13e with no secret configured a trusted peer may still read, but any presented credential gets 503", () => {
     vi.stubEnv("RUNTIME_API_TOKEN", "");
     expect(direct(runtimeAuthOrTrustedPeer, { ip: "127.0.0.1" }).passed).toBe(true);
     const outcome = direct(runtimeAuthOrTrustedPeer, { ip: "127.0.0.1", headers: { "x-runtime-token": "anything" } });
     expect(outcome).toMatchObject({ passed: false, status: 503, body: UNAVAILABLE });
   });
 
-  it("R13 over HTTP, a loopback caller reads without credentials and is refused with a wrong one", async () => {
+  it("R13f over HTTP, a loopback caller reads without credentials and is refused with a wrong one", async () => {
     expect((await served.request("/read")).status).toBe(200);
     expect(await served.request("/read", { headers: { "x-runtime-token": "wrong" } })).toEqual({ status: 401, body: UNAUTHORIZED });
   });

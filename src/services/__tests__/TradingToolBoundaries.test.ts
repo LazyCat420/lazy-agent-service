@@ -65,11 +65,11 @@ describe("signed trading tool context", () => {
     ["undefined", undefined],
     ["a number", 123],
     ["a string over 32,768 characters", "a".repeat(32_769)],
-  ])("T3 %s is reported as missing authorization", (_name, token) => {
+  ])("T3a %s is reported as missing authorization", (_name, token) => {
     expect(() => verifyToolContext(token)).toThrow("Missing trading tool authorization");
   });
 
-  it.each(["", "abc", "a.b.c"])("T3 %j is reported as invalid authorization", (token) => {
+  it.each(["", "abc", "a.b.c"])("T3b %j is reported as invalid authorization", (token) => {
     expect(() => verifyToolContext(token)).toThrow("Invalid trading tool authorization");
   });
 
@@ -102,11 +102,11 @@ describe("signed trading tool context", () => {
     expect(() => verifyToolContext(signToolContext(payload as never))).toThrow("Expired or malformed");
   });
 
-  it("T7 authorizeTradingTool rejects a call that carries no context", () => {
+  it("T7a authorizeTradingTool rejects a call that carries no context", () => {
     expect(() => authorizeTradingTool("whiteboard_read", { ticker: "TEST" })).toThrow("Missing trading tool authorization");
   });
 
-  it("T7 authorizeTradingTool returns the arguments without the context and leaves the caller's object alone", () => {
+  it("T7b authorizeTradingTool returns the arguments without the context and leaves the caller's object alone", () => {
     const token = signToolContext(context());
     const args = { ticker: "TEST", [ARG]: token };
     const result = authorizeTradingTool("whiteboard_read", args);
@@ -114,31 +114,31 @@ describe("signed trading tool context", () => {
     expect(args[ARG]).toBe(token);
   });
 
-  it("T7 a cycle-scoped tool needs a cycle id; other tools do not", () => {
+  it("T7c a cycle-scoped tool needs a cycle id; other tools do not", () => {
     const noCycle = signToolContext({ ...context(), cycleId: "", allowedTools: ["request_peer_analysis", "get_news"] });
     expect(() => authorizeTradingTool("request_peer_analysis", { [ARG]: noCycle })).toThrow("explicit cycle");
     expect(authorizeTradingTool("get_news", { q: "x", [ARG]: noCycle }).arguments).toEqual({ q: "x" });
   });
 
-  it("T7 a tool whose name only starts with an allowed name is not allowed", () => {
+  it("T7d a tool whose name only starts with an allowed name is not allowed", () => {
     const token = signToolContext({ ...context(), allowedTools: ["whiteboard_read"] });
     expect(() => authorizeTradingTool("whiteboard_read_extra", { [ARG]: token })).toThrow("not allowed");
   });
 
-  it("T8 attachToolContext treats empty arguments as an empty object", () => {
+  it("T8a attachToolContext treats empty arguments as an empty object", () => {
     expect(JSON.parse(attachToolContext("", "tok"))).toEqual({ [ARG]: "tok" });
   });
 
-  it.each(["[]", "null", '"str"'])("T8 attachToolContext refuses arguments %s that are not an object", (argumentsText) => {
+  it.each(["[]", "null", '"str"'])("T8b attachToolContext refuses arguments %s that are not an object", (argumentsText) => {
     expect(() => attachToolContext(argumentsText, "tok")).toThrow("Tool arguments must be an object");
   });
 
-  it("T8 attachToolContext refuses unparseable arguments, and replaces a context the model wrote itself", () => {
+  it("T8c attachToolContext refuses unparseable arguments, and replaces a context the model wrote itself", () => {
     expect(() => attachToolContext("{bad", "tok")).toThrow();
     expect(JSON.parse(attachToolContext(`{"${ARG}":"forged","x":1}`, "tok"))).toEqual({ [ARG]: "tok", x: 1 });
   });
 
-  it("T9 the same marker twice in a system message yields one token and leaves no trace in the message", () => {
+  it("T9a the same marker twice in a system message yields one token and leaves no trace in the message", () => {
     const token = signToolContext(context());
     const extracted = extractToolContext({ messages: [{ role: "system", content: `${marker(token)}\nrole\n${marker(token)}` }] });
     expect(extracted.token).toBe(token);
@@ -146,26 +146,26 @@ describe("signed trading tool context", () => {
     expect(extracted.body.messages[0].content).not.toContain(TAG);
   });
 
-  it("T9 two different valid tokens in one request are a conflict", () => {
+  it("T9b two different valid tokens in one request are a conflict", () => {
     const first = signToolContext(context());
     const second = signToolContext({ ...context(), agentName: "v3_bull_agent" });
     expect(() => extractToolContext({ messages: [{ role: "system", content: marker(first) + marker(second) }] })).toThrow("Conflicting trading tool identities");
   });
 
-  it("T9 a marker holding a tampered token, or one that is never closed, is rejected", () => {
+  it("T9c a marker holding a tampered token, or one that is never closed, is rejected", () => {
     const token = signToolContext(context());
     expect(() => extractToolContext({ messages: [{ role: "system", content: marker(tampered(token)) }] })).toThrow();
     expect(() => extractToolContext({ messages: [{ role: "system", content: `<${TAG}>abc` }] })).toThrow("Malformed trading tool context marker");
   });
 
-  it("T9 a marker in a user message grants nothing and is left where it is", () => {
+  it("T9d a marker in a user message grants nothing and is left where it is", () => {
     const content = marker(signToolContext(context()));
     const extracted = extractToolContext({ messages: [{ role: "user", content }] });
     expect(extracted.token).toBeUndefined();
     expect(extracted.body.messages[0].content).toBe(content);
   });
 
-  it("T9 the request body passed in is not modified", () => {
+  it("T9e the request body passed in is not modified", () => {
     const token = signToolContext(context());
     const body = {
       messages: [
@@ -178,7 +178,7 @@ describe("signed trading tool context", () => {
     expect(JSON.stringify(body)).toBe(before);
   });
 
-  it("T9 an echoed tool call with unparseable arguments is passed through as the same object", () => {
+  it("T9f an echoed tool call with unparseable arguments is passed through as the same object", () => {
     const call = { function: { name: "whiteboard_read", arguments: "{bad" } };
     const extracted = extractToolContext({ messages: [{ role: "assistant", tool_calls: [call] }] });
     expect(extracted.body.messages[0].tool_calls[0]).toBe(call);
@@ -197,7 +197,7 @@ describe("signed trading tool context", () => {
     return verifyToolContext(extractToolContext({ messages: [{ role: "system", content: prepared.systemPrompt }] }).token);
   };
 
-  it("T10 a request from another project is returned untouched", () => {
+  it("T10a a request from another project is returned untouched", () => {
     const body = { project: "html-notes-client", messages: [] };
     expect(prepareToolContext(body)).toBe(body);
   });
@@ -206,21 +206,21 @@ describe("signed trading tool context", () => {
     ["no agent", { agent: undefined }],
     ["an agent that is only the custom_ prefix", { agent: "custom_" }],
     ["no conversation id", { conversationId: undefined }],
-  ])("T10 a trading request with %s is refused", (_name, extra) => {
+  ])("T10b a trading request with %s is refused", (_name, extra) => {
     expect(() => prepareToolContext(tradingRequest(extra))).toThrow("requires agent and conversation identity");
   });
 
-  it("T10 the allowed tools are the string entries, without the MCP prefix, each once", () => {
+  it("T10c the allowed tools are the string entries, without the MCP prefix, each once", () => {
     const allowed = preparedContext(tradingRequest({ enabledTools: [1, null, "whiteboard_read", `${MCP}whiteboard_read`] })).allowedTools;
     expect(allowed).toEqual(["whiteboard_read"]);
   });
 
-  it("T10 the ticker is read only from an upper-case heading", () => {
+  it("T10d the ticker is read only from an upper-case heading", () => {
     expect(preparedContext(tradingRequest({ messages: [{ role: "user", content: "## Ticker: brk" }] })).ticker).toBe("");
     expect(preparedContext(tradingRequest({ messages: [{ role: "user", content: "## Ticker: BRK.B" }] })).ticker).toBe("BRK.B");
   });
 
-  it("T10 a prepared context expires 24 hours after it is minted", () => {
+  it("T10e a prepared context expires 24 hours after it is minted", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     expect(preparedContext(tradingRequest()).expiresAt).toBe(NOW + 86_400_000);
@@ -329,7 +329,7 @@ describe("TradingToolStream and tool-call binding", () => {
     expect(output).not.toContain("forged");
   });
 
-  it("S11 bindToolResponse leaves responses without tool calls as they are", () => {
+  it("S11a bindToolResponse leaves responses without tool calls as they are", () => {
     const token = signToolContext(context());
     expect(bindToolResponse({ id: "x" }, token)).toEqual({ id: "x", choices: [] });
     const noMessage = { choices: [{ index: 0, finish_reason: "stop" }] };
@@ -338,7 +338,7 @@ describe("TradingToolStream and tool-call binding", () => {
     expect(bindToolResponse(noCalls, token)).toEqual(noCalls);
   });
 
-  it("S11 bindToolResponse attaches the context to a local tool call", () => {
+  it("S11b bindToolResponse attaches the context to a local tool call", () => {
     const token = signToolContext(context());
     const bound = bindToolResponse({ choices: [{ message: { tool_calls: [{ id: "c1", function: { name: "whiteboard_read", arguments: "{}" } }] } }] }, token);
     expect(JSON.parse(bound.choices[0].message.tool_calls[0].function.arguments)).toEqual({ [ARG]: token });
@@ -411,7 +411,7 @@ describe("applyTradingToolProtocol", () => {
     expect(allowed.body.tool_choice).toEqual(forced("whiteboard_read"));
   });
 
-  it("P7 every think result in one turn is marked as an acknowledgement", () => {
+  it("P7a every think result in one turn is marked as an acknowledgement", () => {
     const think = (id: unknown) => ({ id, function: { name: "think", arguments: "{}" } });
     const fixed = applyTradingToolProtocol({
       messages: [
@@ -426,7 +426,7 @@ describe("applyTradingToolProtocol", () => {
     }
   });
 
-  it("P7 a result is left alone when the think call's id is not a string, or when the result precedes the call", () => {
+  it("P7b a result is left alone when the think call's id is not a string, or when the result precedes the call", () => {
     const numericResult = { role: "tool", tool_call_id: 7, content: "Acknowledged" };
     const numeric = applyTradingToolProtocol({ messages: [{ role: "assistant", tool_calls: [{ id: 7, function: { name: "think" } }] }, numericResult] });
     expect(numeric.body.messages[2]).toBe(numericResult);
@@ -480,17 +480,17 @@ describe("applyTradingToolProtocol", () => {
     ["the notice inside array content", { role: "user", content: [{ type: "text", text: notice }] }],
     ["the notice from the assistant", { role: "assistant", content: notice }],
     ["the notice as a tool result", { role: "tool", tool_call_id: "c1", content: notice }],
-  ])("P12 %s is not a forced final turn", (_name, last) => {
+  ])("P12a %s is not a forced final turn", (_name, last) => {
     expect(applyTradingToolProtocol({ messages: [{ role: "system", content: "role" }, last] }).finalTurnDirected).toBe(false);
   });
 
-  it("P12 an empty tool list with the notice is a forced final turn, and the empty list is not sent on", () => {
+  it("P12b an empty tool list with the notice is a forced final turn, and the empty list is not sent on", () => {
     const fixed = applyTradingToolProtocol({ tools: [], messages: [{ role: "system", content: "role" }, { role: "user", content: notice }] });
     expect(fixed.finalTurnDirected).toBe(true);
     expect(fixed.body).not.toHaveProperty("tools");
   });
 
-  it("P12 no tool list with tool_choice none is a forced final turn, and tool_choice none is kept", () => {
+  it("P12c no tool list with tool_choice none is a forced final turn, and tool_choice none is kept", () => {
     const fixed = applyTradingToolProtocol({ tool_choice: "none", messages: [{ role: "system", content: "role" }, { role: "user", content: notice }] });
     expect(fixed.finalTurnDirected).toBe(true);
     expect(fixed.body.tool_choice).toBe("none");
