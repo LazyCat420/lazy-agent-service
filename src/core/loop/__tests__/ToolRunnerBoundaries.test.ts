@@ -6,11 +6,7 @@
  * No real timers: timeouts use the `timeoutSignalFor` seam, clocks are injected.
  */
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_PARALLEL_TOOL_CONCURRENCY,
-  createToolCallHistory,
-  runToolBatch,
-} from "../ToolRunner.ts";
+import { createToolCallHistory, runToolBatch } from "../ToolRunner.ts";
 import { SpillBuffer } from "../SpillBuffer.ts";
 import type { CoreTool, CoreToolCall, CoreToolContext, ToolBatchOptions } from "../types.ts";
 
@@ -129,7 +125,7 @@ describe("runToolBatch invariant: never throws, one result per call", () => {
     expect(results[1]).toMatchObject({ isError: false, content: "fine" });
   });
 
-  it("B3 a rejection with a non-Error value is reported with that value as the error text", async () => {
+  it("B3a a rejection with a non-Error value is reported with that value as the error text", async () => {
     const tools = toolMap(
       makeTool("rejects_string", () => Promise.reject("upstream said no")),
       makeTool("rejects_undefined", () => Promise.reject(undefined)),
@@ -147,9 +143,9 @@ describe("runToolBatch invariant: never throws, one result per call", () => {
 
   // DEFECT (ToolRunner.ts coerceArgs): `Object.entries(args)` throws "Cannot convert undefined
   // or null to object" when a known tool is called with `args: null`. The provider produces
-  // that for a model that emits `"arguments": "null"` (openai-compat.ts JSON.parse, no object
+  // that for a model that emits `"arguments": "null"` (src/utils/openai-compat.ts JSON.parse, no object
   // check) and CoreLoop passes it through. Remove `.fails` when fixed.
-  it.fails("B3 args of the wrong top-level shape (null from a model that sent `null`) are a TOOL_BAD_ARGS result, not a rejected batch", async () => {
+  it.fails("B3b args of the wrong top-level shape (null from a model that sent `null`) are a TOOL_BAD_ARGS result, not a rejected batch", async () => {
     const search = recordingTool("search", "ran", {
       parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
     });
@@ -197,7 +193,7 @@ describe("runToolBatch output capping and the spill buffer", () => {
     expect(over.content).not.toContain("M");
   });
 
-  it("B6 with a spill buffer the cut text is readable through read_tool_spill at any offset", async () => {
+  it("B6a with a spill buffer the cut text is readable through read_tool_spill at any offset", async () => {
     const full = Array.from({ length: 4000 }, (_, i) => `row-${String(i).padStart(5, "0")};`).join("");
     const spillBuffer = new SpillBuffer();
     const options = baseOptions({ tools: toolMap(makeTool("dump", async () => full)), spillBuffer });
@@ -230,7 +226,7 @@ describe("runToolBatch output capping and the spill buffer", () => {
   // DEFECT (ToolRunner.ts tryHandleBuiltInSpillRead): the built-in bypasses coerceArgs, so
   // `offset: "11205"` is silently read as offset 0 and `length: "10"` as 8000: the model asks
   // for the middle and is handed the head again, with no error. Remove `.fails` when fixed.
-  it.fails("B6 read_tool_spill takes a numeric-string offset the way every schema-typed integer arg is taken", async () => {
+  it.fails("B6b read_tool_spill takes a numeric-string offset the way every schema-typed integer arg is taken", async () => {
     const full = "0123456789".repeat(3000);
     const spillBuffer = new SpillBuffer();
     const options = baseOptions({ tools: toolMap(makeTool("dump", async () => full)), spillBuffer });
@@ -242,7 +238,7 @@ describe("runToolBatch output capping and the spill buffer", () => {
     expect(JSON.parse(read.content)).toMatchObject({ offset: 11_205, content: full.slice(11_205, 11_215) });
   });
 
-  it("B7 read_tool_spill failures name the problem; without a buffer the tool does not exist", async () => {
+  it("B7a read_tool_spill failures name the problem; without a buffer the tool does not exist", async () => {
     const spillBuffer = new SpillBuffer();
     const options = baseOptions({ tools: toolMap(makeTool("dump", async () => "z".repeat(20_000))), spillBuffer });
     await runToolBatch([makeCall("dump")], options);
@@ -272,7 +268,7 @@ describe("runToolBatch output capping and the spill buffer", () => {
     expect(typo.content).toContain("Available tools: dump, read_tool_spill.");
   });
 
-  it("B7 an output larger than the whole spill buffer is cut without promising a spill id", async () => {
+  it("B7b an output larger than the whole spill buffer is cut without promising a spill id", async () => {
     const spillBuffer = new SpillBuffer(1024);
     const [result] = await runToolBatch(
       [makeCall("dump")],
@@ -361,7 +357,7 @@ describe("runToolBatch timeouts and cancellation", () => {
     expect(retried).toMatchObject({ isError: false, content: "second run answered" });
   });
 
-  it("B11 when the run is cancelled and the tool's timeout fires together, the result is TOOL_CANCELLED", async () => {
+  it("B11a when the run is cancelled and the tool's timeout fires together, the result is TOOL_CANCELLED", async () => {
     const controller = new AbortController();
     const timeouts = manualTimeouts();
     const slow = hang("slow");
@@ -378,7 +374,7 @@ describe("runToolBatch timeouts and cancellation", () => {
     expect(failureStreak.size).toBe(0);
   });
 
-  it("B11 a tool that finishes in the same tick the run is cancelled is still reported cancelled, never as a success", async () => {
+  it("B11b a tool that finishes in the same tick the run is cancelled is still reported cancelled, never as a success", async () => {
     const controller = new AbortController();
     const quick = makeTool("quick", async () => {
       controller.abort();
@@ -416,7 +412,7 @@ describe("runToolBatch ordering and concurrency", () => {
     [1, 1],
     [0, 1],
     [-5, 1],
-    [undefined, DEFAULT_PARALLEL_TOOL_CONCURRENCY],
+    [undefined, 8],
     [50, 12],
   ])("B12 with parallelToolMaxConcurrency=%s at most %s of 12 calls run at once and all 12 finish", async (cap, expectedPeak) => {
     expect(await peakOverlap(12, cap)).toBe(expectedPeak);
@@ -483,7 +479,7 @@ describe("runToolBatch duplicate and oscillation guard", () => {
     return { alpha, beta, failureStreak, history, call };
   };
 
-  it("B15 the sixth call of an A,B,A,B,A,B run is refused as TOOL_OSCILLATION without executing or counting as a failure", async () => {
+  it("B15a the sixth call of an A,B,A,B,A,B run is refused as TOOL_OSCILLATION without executing or counting as a failure", async () => {
     const run = session();
     for (const name of ["alpha_op", "beta_op", "alpha_op", "beta_op", "alpha_op"]) {
       expect((await run.call(name, { id: 1 })).isError).toBe(false);
@@ -506,7 +502,7 @@ describe("runToolBatch duplicate and oscillation guard", () => {
     expect(run.history.finalizeReason).toBe("repeated_tool_call:beta_op");
   });
 
-  it("B15 calls without arguments oscillate too", async () => {
+  it("B15b calls without arguments oscillate too", async () => {
     const run = session();
     for (const name of ["alpha_op", "beta_op", "alpha_op", "beta_op", "alpha_op"]) await run.call(name);
     expect((await run.call("beta_op")).errorCode).toBe("TOOL_OSCILLATION");
@@ -575,7 +571,7 @@ describe("runToolBatch duplicate and oscillation guard", () => {
     expect(other.executed).toHaveLength(2);
   });
 
-  it("B19 the third identical call ends the tool phase; a blocked repeat never counts as a tool failure", async () => {
+  it("B19a the third identical call ends the tool phase; a blocked repeat never counts as a tool failure", async () => {
     const run = session();
     expect((await run.call("alpha_op", { id: 9 })).isError).toBe(false);
     const second = await run.call("alpha_op", { id: 9 });
@@ -589,7 +585,7 @@ describe("runToolBatch duplicate and oscillation guard", () => {
     expect(run.failureStreak.size).toBe(0);
   });
 
-  it("B19 without an explicit history, repeats are tracked per run (per failureStreak map), never across runs", async () => {
+  it("B19b without an explicit history, repeats are tracked per run (per failureStreak map), never across runs", async () => {
     const save = recordingTool("save_note", "saved");
     const runA = baseOptions({ tools: toolMap(save.tool) });
     const runB = baseOptions({ tools: toolMap(save.tool) });
@@ -696,7 +692,7 @@ describe("runToolBatch argument boundaries", () => {
     expect(await send({ __raw: 5 })).toEqual({ received: { __raw: 5 } });
   });
 
-  it("B25 the failure streak counts rejected arguments: under the cap a valid call runs and clears it, at the cap it is refused", async () => {
+  it("B25a the failure streak counts rejected arguments: under the cap a valid call runs and clears it, at the cap it is refused", async () => {
     const tool = recordingTool("strict", "ran", {
       parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
     });
@@ -717,7 +713,7 @@ describe("runToolBatch argument boundaries", () => {
     expect(tool.executed).toEqual([{ q: "now valid" }]);
   });
 
-  it("B25 a tool registered under both a bare and a namespaced name is called by the exact name asked for", async () => {
+  it("B25b a tool registered under both a bare and a namespaced name is called by the exact name asked for", async () => {
     const bare = recordingTool("whiteboard_read", "bare");
     const namespaced = recordingTool("mcp__lazy-agent-service__whiteboard_read", "namespaced");
     const results = await runToolBatch(
