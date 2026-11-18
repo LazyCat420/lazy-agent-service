@@ -1,0 +1,68 @@
+{
+  "id": "08-tool-error",
+  "description": "The tool throws: the error text reaches the model, which answers without the data.",
+  "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
+  "model": "replay-model",
+  "input": "Summarise the latest AAPL 10-K.",
+  "tools": [
+    {
+      "name": "get_filing",
+      "description": "Fetch one SEC filing for a ticker.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "form": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      },
+      "replies": [
+        {
+          "throw": "SEC EDGAR returned HTTP 503"
+        }
+      ]
+    }
+  ],
+  "turns": [
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_filing", "type": "function", "function": {"name": "get_filing", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"symbol\": \"AAPL\", \"form\": \"10-K\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 61, "completion_tokens": 12, "total_tokens": 73}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "I could not retrieve the filing: "}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "the SEC service is unavailable."}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 42, "completion_tokens": 2, "total_tokens": 44}}
+      ]
+    }
+  ],
+  "expect": {
+    "outcome": "completed",
+    "toolCalls": [
+      {
+        "name": "get_filing",
+        "args": {
+          "symbol": "AAPL",
+          "form": "10-K"
+        }
+      }
+    ],
+    "modelRequests": 2,
+    "text": "I could not retrieve the filing: the SEC service is unavailable.",
+    "finalizeReason": null,
+    "answerSource": "model"
+  }
+}

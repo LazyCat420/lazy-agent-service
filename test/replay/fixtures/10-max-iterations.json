@@ -1,0 +1,91 @@
+{
+  "id": "10-max-iterations",
+  "description": "The model wants a tool on every turn; at the step limit the loop asks for a final answer without tools.",
+  "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
+  "model": "replay-model",
+  "input": "Research rates and housing.",
+  "maxIterations": 2,
+  "tools": [
+    {
+      "name": "search_notes",
+      "description": "Search the research notes.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "replies": [
+        {
+          "result": {
+            "hits": [
+              "note about rates"
+            ]
+          }
+        },
+        {
+          "result": {
+            "hits": [
+              "note about housing"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "turns": [
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_s1", "type": "function", "function": {"name": "search_notes", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"query\": \"rates\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 61, "completion_tokens": 12, "total_tokens": 73}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_s2", "type": "function", "function": {"name": "search_notes", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"query\": \"housing\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 62, "completion_tokens": 12, "total_tokens": 74}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "Rates and housing: "}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "two notes found."}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 43, "completion_tokens": 2, "total_tokens": 45}}
+      ]
+    }
+  ],
+  "expect": {
+    "outcome": "completed",
+    "toolCalls": [
+      {
+        "name": "search_notes",
+        "args": {
+          "query": "rates"
+        }
+      },
+      {
+        "name": "search_notes",
+        "args": {
+          "query": "housing"
+        }
+      }
+    ],
+    "modelRequests": 3,
+    "text": "Rates and housing: two notes found.",
+    "finalizeReason": "STEP_LIMIT",
+    "answerSource": "model"
+  }
+}

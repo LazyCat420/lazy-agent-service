@@ -1,0 +1,27 @@
+{
+  "id": "18-cut-off-at-length",
+  "description": "The model server stops the answer at the token limit: the partial text is delivered and reported as partial.",
+  "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
+  "model": "replay-model",
+  "input": "Explain bond duration.",
+  "tools": [],
+  "turns": [
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "Duration measures how sensitive a bond's price is"}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": " to changes in"}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 41, "completion_tokens": 2, "total_tokens": 43}}
+      ]
+    }
+  ],
+  "expect": {
+    "outcome": "completed",
+    "toolCalls": [],
+    "modelRequests": 1,
+    "text": "Duration measures how sensitive a bond's price is to changes in",
+    "finalizeReason": "CUT_OFF",
+    "answerSource": "partial"
+  }
+}

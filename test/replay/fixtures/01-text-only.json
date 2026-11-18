@@ -1,0 +1,30 @@
+{
+  "id": "01-text-only",
+  "description": "No tools offered or used: the streamed text is the answer.",
+  "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
+  "model": "replay-model",
+  "input": "Say hello in five words.",
+  "tools": [],
+  "turns": [
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": " there,"}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": " nice to"}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": " meet you."}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 41, "completion_tokens": 4, "total_tokens": 45}}
+      ]
+    }
+  ],
+  "expect": {
+    "outcome": "completed",
+    "toolCalls": [],
+    "modelRequests": 1,
+    "text": "Hello there, nice to meet you.",
+    "finalizeReason": null,
+    "answerSource": "model",
+    "providerRetries": 0
+  }
+}

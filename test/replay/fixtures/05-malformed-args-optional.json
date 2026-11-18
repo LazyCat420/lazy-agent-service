@@ -1,0 +1,89 @@
+{
+  "id": "05-malformed-args-optional",
+  "description": "The model's argument JSON is cut short for a tool whose arguments are all optional: the tool must not run with empty arguments (that would list every account instead of the one asked for).",
+  "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
+  "model": "replay-model",
+  "input": "List the positions in my IRA account.",
+  "knownDefect": "The provider flags unparseable argument JSON (openai-compat.ts argsParseError/rawArgs) but CoreLoop.ts consumeModelStream drops the flag, so the core loop runs the tool with {}. The legacy harness refuses such calls (harnesses/lifecycle/ToolExecutor.ts MALFORMED_TOOL_CALL_JSON).",
+  "tools": [
+    {
+      "name": "list_positions",
+      "description": "List open positions; `account` narrows the list to one account.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "replies": [
+        {
+          "result": {
+            "positions": [
+              {
+                "symbol": "VTI",
+                "account": "IRA"
+              }
+            ]
+          }
+        },
+        {
+          "result": {
+            "positions": [
+              {
+                "symbol": "VTI",
+                "account": "IRA"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "turns": [
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_bad", "type": "function", "function": {"name": "list_positions", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"account\": "}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "\"IRA"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 61, "completion_tokens": 12, "total_tokens": 73}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_good", "type": "function", "function": {"name": "list_positions", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"account\": \"IRA\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 62, "completion_tokens": 12, "total_tokens": 74}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "Your IRA holds VTI."}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 43, "completion_tokens": 1, "total_tokens": 44}}
+      ]
+    }
+  ],
+  "expect": {
+    "outcome": "completed",
+    "toolCalls": [
+      {
+        "name": "list_positions",
+        "args": {
+          "account": "IRA"
+        }
+      }
+    ],
+    "modelRequests": 3,
+    "text": "Your IRA holds VTI.",
+    "finalizeReason": null,
+    "answerSource": "model"
+  }
+}

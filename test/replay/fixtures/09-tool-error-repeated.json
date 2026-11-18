@@ -1,0 +1,114 @@
+{
+  "id": "09-tool-error-repeated",
+  "description": "The same tool fails three times in a row; the fourth call is refused without running.",
+  "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
+  "model": "replay-model",
+  "input": "Fetch AAPL filings.",
+  "tools": [
+    {
+      "name": "get_filing",
+      "description": "Fetch one SEC filing for a ticker.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "form": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      },
+      "replies": [
+        {
+          "throw": "SEC EDGAR returned HTTP 503"
+        },
+        {
+          "throw": "SEC EDGAR returned HTTP 503"
+        },
+        {
+          "throw": "SEC EDGAR returned HTTP 503"
+        }
+      ]
+    }
+  ],
+  "turns": [
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "get_filing", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"symbol\": \"AAPL\", \"form\": \"10-K\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 61, "completion_tokens": 12, "total_tokens": 73}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_2", "type": "function", "function": {"name": "get_filing", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"symbol\": \"AAPL\", \"form\": \"10-Q\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 62, "completion_tokens": 12, "total_tokens": 74}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_3", "type": "function", "function": {"name": "get_filing", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"symbol\": \"AAPL\", \"form\": \"8-K\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-3", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 63, "completion_tokens": 12, "total_tokens": 75}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-4", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-4", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_4", "type": "function", "function": {"name": "get_filing", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-4", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"symbol\": \"AAPL\", \"form\": \"DEF 14A\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-4", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-4", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 64, "completion_tokens": 12, "total_tokens": 76}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-5", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-5", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "The filing service is down; I have no filings to show."}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-5", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"id": "chatcmpl-replay-5", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 45, "completion_tokens": 1, "total_tokens": 46}}
+      ]
+    }
+  ],
+  "expect": {
+    "outcome": "completed",
+    "toolCalls": [
+      {
+        "name": "get_filing",
+        "args": {
+          "symbol": "AAPL",
+          "form": "10-K"
+        }
+      },
+      {
+        "name": "get_filing",
+        "args": {
+          "symbol": "AAPL",
+          "form": "10-Q"
+        }
+      },
+      {
+        "name": "get_filing",
+        "args": {
+          "symbol": "AAPL",
+          "form": "8-K"
+        }
+      }
+    ],
+    "modelRequests": 5,
+    "text": "The filing service is down; I have no filings to show.",
+    "finalizeReason": null,
+    "answerSource": "model"
+  }
+}

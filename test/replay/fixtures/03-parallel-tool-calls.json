@@ -1,0 +1,109 @@
+{
+  "id": "03-parallel-tool-calls",
+  "description": "Two tool calls in one turn with interleaved argument fragments; the model sends an integer as a string.",
+  "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
+  "model": "replay-model",
+  "input": "Give me the NVDA price and three headlines.",
+  "tools": [
+    {
+      "name": "get_quote",
+      "description": "Latest trade price for one ticker symbol.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "Ticker symbol, e.g. AAPL"
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      },
+      "replies": [
+        {
+          "result": {
+            "symbol": "NVDA",
+            "price": 912.5,
+            "currency": "USD"
+          }
+        }
+      ]
+    },
+    {
+      "name": "get_news",
+      "description": "Recent headlines for one ticker symbol.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      },
+      "replies": [
+        {
+          "result": {
+            "headlines": [
+              "NVDA beats",
+              "New GPU",
+              "Export rules"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "turns": [
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_a", "type": "function", "function": {"name": "get_quote", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 1, "id": "call_b", "type": "function", "function": {"name": "get_news", "arguments": ""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"symbol\""}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 1, "function": {"arguments": "{\"symbol\": \"NVDA\","}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": ": \"NVDA\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 1, "function": {"arguments": " \"limit\": \"3\"}"}}]}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"id": "chatcmpl-replay-1", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 61, "completion_tokens": 12, "total_tokens": 73}}
+      ]
+    },
+    {
+      "chunks": [
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "NVDA trades at $912.50. "}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {"content": "Headlines: NVDA beats; New GPU; Export rules."}, "finish_reason": null}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"id": "chatcmpl-replay-2", "object": "chat.completion.chunk", "created": 1794873600, "model": "replay-model", "choices": [], "usage": {"prompt_tokens": 42, "completion_tokens": 2, "total_tokens": 44}}
+      ]
+    }
+  ],
+  "expect": {
+    "outcome": "completed",
+    "toolCalls": [
+      {
+        "name": "get_quote",
+        "args": {
+          "symbol": "NVDA"
+        }
+      },
+      {
+        "name": "get_news",
+        "args": {
+          "symbol": "NVDA",
+          "limit": 3
+        }
+      }
+    ],
+    "modelRequests": 2,
+    "text": "NVDA trades at $912.50. Headlines: NVDA beats; New GPU; Export rules.",
+    "finalizeReason": null,
+    "answerSource": "model"
+  }
+}
