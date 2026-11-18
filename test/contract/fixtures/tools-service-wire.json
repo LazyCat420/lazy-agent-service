@@ -1,0 +1,244 @@
+{
+  "provenance": "Hand-derived by reading tools-service source on disk at commit 324fc271d83f4db8a8ca9f7fdc01f94a1a4cc271 (2026-09-26). Not captured from a running service. Field names, types and status codes are the ones the named handler produces; data values (paths, timings, descriptions, emoji) are illustrative. Re-derive when the named files change.",
+  "toolsServiceCommit": "324fc271d83f4db8a8ca9f7fdc01f94a1a4cc271",
+
+  "toolSchemas": {
+    "from": "src/routes/AdminRoutes.ts GET /tool-schemas -> src/services/ToolSchemaService.ts getToolSchemas(); entry type ToolSchema in src/types/tools.ts; definitions copied from src/services/tool-definitions/FinanceTools.ts (get_historical_prices) and CoreWorkspaceTools.ts (write_file, get_background_output). tools-service definitions carry no additionalProperties key.",
+    "status": 200,
+    "body": [
+      {
+        "name": "get_historical_prices",
+        "dataSource": { "type": "onDemand", "provider": "Yahoo Finance" },
+        "description": "Historical OHLCV prices for a ticker.",
+        "endpoint": { "path": "/finance/prices/:symbol", "pathParams": ["symbol"], "queryParams": ["interval", "period"] },
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "symbol": { "type": "string", "description": "Ticker symbol." },
+            "interval": { "type": "string", "description": "Bar size.", "enum": ["1m", "5m", "15m", "1h", "1d", "1wk", "1mo"] },
+            "period": { "type": "string", "description": "Look-back window.", "enum": ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "ytd", "max"] },
+            "fields": { "type": "string", "description": "Comma-separated fields to return." }
+          },
+          "required": ["symbol"]
+        },
+        "display": { "activeVerb": "Fetching historical prices for", "completedVerb": "Fetched historical prices for", "subjectParam": "symbol", "subjectFormat": "full" },
+        "domain": "Finance",
+        "domainKey": "finance",
+        "emoji": "🕯️",
+        "intelligenceTier": "low",
+        "complexityScore": 2,
+        "capabilities": ["network"]
+      },
+      {
+        "name": "write_file",
+        "dataSource": { "type": "compute", "provider": "internal", "runtime": "sandboxed fs" },
+        "description": "Write a file inside the workspace.",
+        "endpoint": { "method": "POST", "path": "/agentic/file/write", "bodyParams": ["path", "content", "createDirs"] },
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string", "description": "Absolute file path." },
+            "content": { "type": "string", "description": "Full file content." },
+            "createDirs": { "type": "boolean", "description": "Create missing parent directories." }
+          },
+          "required": ["path", "content"]
+        },
+        "display": { "activeVerb": "Writing", "completedVerb": "Wrote", "subjectParam": "path", "subjectFormat": "basename", "filePathParam": "path" },
+        "domain": "Core Workspace Tools",
+        "domainKey": "core_workspace",
+        "emoji": null,
+        "intelligenceTier": "medium",
+        "complexityScore": 3,
+        "capabilities": ["fs_write"]
+      },
+      {
+        "name": "get_background_output",
+        "dataSource": { "type": "compute", "provider": "internal", "runtime": "background process registry" },
+        "description": "Read the output of a background process.",
+        "endpoint": { "method": "GET", "path": "/agentic/command/background/:pid", "pathParams": ["pid"] },
+        "parameters": {
+          "type": "object",
+          "properties": { "pid": { "type": "integer", "description": "Process id returned by run_command." } },
+          "required": ["pid"]
+        },
+        "display": { "activeVerb": "Checking", "completedVerb": "Checked", "subjectParam": "pid" },
+        "domain": "Core Workspace Tools",
+        "domainKey": "core_workspace",
+        "emoji": null,
+        "intelligenceTier": "low",
+        "complexityScore": 1,
+        "capabilities": ["shell"]
+      }
+    ]
+  },
+
+  "adminConfig": {
+    "from": "src/routes/AdminRoutes.ts GET /config: res.json({ workspaceRoots: ALLOWED_ROOTS, agents }); agent entry from src/services/AgentConnectionManager.ts getConnectedAgents(). The handler sends no other key.",
+    "status": 200,
+    "body": {
+      "workspaceRoots": ["/srv/workspace", "/srv/second"],
+      "agents": [
+        {
+          "id": "agent-1",
+          "name": "dev-laptop",
+          "roots": ["/home/dev/project"],
+          "displayRoots": ["~/project"],
+          "capabilities": ["fs", "shell"],
+          "version": "1.4.0",
+          "machineInfo": null,
+          "clientIp": "10.0.0.50",
+          "connectedAt": "2026-09-26T10:00:00.000Z",
+          "lastPong": "2026-09-26T10:05:00.000Z",
+          "pendingRpcs": 0
+        }
+      ]
+    }
+  },
+  "adminConfigNoAgents": {
+    "from": "same handler, with no workspace agent connected",
+    "status": 200,
+    "body": { "workspaceRoots": ["/srv/workspace"], "agents": [] }
+  },
+
+  "workspacesUpdated": {
+    "from": "src/routes/AdminRoutes.ts PUT /config/workspaces success: res.json({ workspaceRoots, userRoots, errors }). A rejected path is reported inside a 200.",
+    "status": 200,
+    "body": {
+      "workspaceRoots": ["/srv/workspace", "/srv/extra"],
+      "userRoots": ["/srv/extra"],
+      "errors": [{ "path": "relative/dir", "resolved": "relative/dir", "error": "Path must be absolute" }]
+    }
+  },
+  "workspacesRejected": {
+    "from": "src/routes/AdminRoutes.ts PUT /config/workspaces when roots is not an array",
+    "status": 400,
+    "body": { "error": "'roots' must be an array of path strings" }
+  },
+
+  "validateVerdict": {
+    "from": "src/routes/AdminRoutes.ts POST /config/workspaces/validate: an invalid path is a 200 verdict with the reason in error",
+    "status": 200,
+    "body": {
+      "valid": false,
+      "resolvedPath": "/srv/missing",
+      "originalPath": "/srv/missing",
+      "isWsl": false,
+      "exists": false,
+      "isDirectory": false,
+      "alreadyRegistered": false,
+      "error": "Directory does not exist"
+    }
+  },
+  "validateRejected": {
+    "from": "src/routes/AdminRoutes.ts POST /config/workspaces/validate when path is missing or not a string",
+    "status": 400,
+    "body": { "error": "'path' is required (string)" }
+  },
+
+  "health": {
+    "from": "src/server.ts app.get('/health'): { status, uptime, domains }. The per-domain health objects are omitted here.",
+    "status": 200,
+    "body": { "status": "ok", "uptime": 12.5, "domains": {} }
+  },
+
+  "filesystemList": {
+    "from": "src/routes/FilesystemRoutes.ts GET /list -> src/services/AgenticFileService.ts agenticGetDirectoryTree(): { entries }, entry { name, path, type: 'directory' | 'file', children? }",
+    "status": 200,
+    "body": {
+      "entries": [
+        { "name": "src", "path": "src", "type": "directory", "children": [{ "name": "index.ts", "path": "src/index.ts", "type": "file" }] },
+        { "name": "README.md", "path": "README.md", "type": "file" }
+      ]
+    }
+  },
+  "filesystemListRejected": {
+    "from": "src/routes/FilesystemRoutes.ts returns { error } and src/utilities.ts agenticHandler turns it into 400 { code, retryable, error }",
+    "status": 400,
+    "body": { "code": "VALIDATION", "retryable": false, "error": "Query parameter 'path' is required" }
+  },
+
+  "worktreeCreated": {
+    "from": "src/services/AgenticGitService.ts agenticGitWorktreeCreate(): { worktreePath, branch, repoPath }",
+    "status": 200,
+    "body": { "worktreePath": "/srv/workspace-worktrees/orchestrator-agent-1", "branch": "orchestrator/agent-1", "repoPath": "/srv/workspace" }
+  },
+  "worktreeCreateFailed": {
+    "from": "agenticGitWorktreeCreate() returns { error, repoPath }; agenticHandler answers 400 with { code, retryable, ...result }",
+    "status": 400,
+    "body": { "code": "INTERNAL", "retryable": false, "error": "fatal: a branch named 'orchestrator/agent-1' already exists", "repoPath": "/srv/workspace" }
+  },
+  "worktreeForbidden": {
+    "from": "agenticHandler answers 403 when classifyAgenticError() returns FORBIDDEN (message matches /outside allowed|blocked/)",
+    "status": 403,
+    "body": { "code": "FORBIDDEN", "retryable": false, "error": "Path '/etc' is outside allowed roots: /srv/workspace" }
+  },
+  "worktreeDiff": {
+    "from": "tools-service tests/fixtures/worktree-diff-contract.json, copied whole. src/services/AgenticGitService.ts says both repositories pin this file as the worktree diff contract (type WorktreeDiff: branch, base, files[{ path, status, previousPath? }], patch, stats{ filesChanged, additions, deletions }, patchTruncated?).",
+    "status": 200,
+    "body": {
+      "branch": "orchestrator/agent-contract",
+      "base": "main",
+      "files": [
+        { "path": "change.txt", "status": "modified" },
+        { "path": "notes/hello.txt", "status": "added" },
+        { "path": "remove.txt", "status": "deleted" }
+      ],
+      "patch": "diff --git a/change.txt b/change.txt\nindex 4cb29ea..f04eb26 100644\n--- a/change.txt\n+++ b/change.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\ndiff --git a/notes/hello.txt b/notes/hello.txt\nnew file mode 100644\nindex 0000000..9659674\n--- /dev/null\n+++ b/notes/hello.txt\n@@ -0,0 +1 @@\n+hello from a sub-agent\ndiff --git a/remove.txt b/remove.txt\ndeleted file mode 100644\nindex 10b961a..0000000\n--- a/remove.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-remove me\n",
+      "stats": { "filesChanged": 3, "additions": 2, "deletions": 2 }
+    }
+  },
+
+  "shellStream": {
+    "from": "src/routes/ComputeRoutes.ts POST /shell/stream: start, chunks, exit { exitCode, executionTimeMs, success, timedOut, error? }. Frames are written by setupStreamingServerSentEvents as 'data: <json>\\n\\n'.",
+    "sse": [
+      { "event": "start", "command": "echo hi" },
+      { "event": "stdout", "data": "hi\n" },
+      { "event": "exit", "exitCode": 0, "executionTimeMs": 12, "success": true, "timedOut": false }
+    ]
+  },
+  "jsStream": {
+    "from": "src/routes/ComputeRoutes.ts POST /js/stream: the exit event has exitCode, executionTimeMs, success only (no timedOut, no error); a failure is a stderr chunk plus exitCode 1",
+    "sse": [
+      { "event": "start", "language": "javascript" },
+      { "event": "stderr", "data": "ReferenceError: total is not defined\n" },
+      { "event": "exit", "exitCode": 1, "executionTimeMs": 3, "success": false }
+    ]
+  },
+  "pythonStream": {
+    "from": "src/routes/UtilityRoutes.ts POST /python/stream: exit { exitCode, executionTimeMs, success, timedOut, error?, inputFiles?, figure payload? }",
+    "sse": [
+      { "event": "start", "language": "python" },
+      { "event": "stdout", "data": "4\n" },
+      { "event": "exit", "exitCode": 1, "executionTimeMs": 60000, "success": false, "timedOut": true, "error": "Execution timed out after 60000ms" }
+    ]
+  },
+  "commandStreamAborted": {
+    "from": "src/routes/AgenticRoutes.ts POST /command/stream: exit { exitCode, executionTimeMs, success, timedOut, aborted?, error? }; aborted is true when the caller disconnected",
+    "sse": [
+      { "event": "start", "command": "npm test" },
+      { "event": "stdout", "data": "running\n" },
+      { "event": "exit", "exitCode": null, "executionTimeMs": 840, "success": false, "timedOut": false, "aborted": true, "error": "Command aborted" }
+    ]
+  },
+  "streamRejected": {
+    "from": "every stream route validates the body before it opens the stream and answers 400 { error } as JSON (ComputeRoutes.ts /shell/stream shown)",
+    "status": 400,
+    "body": { "error": "Request body must include 'command' (string)" }
+  },
+
+  "fileWritten": {
+    "from": "src/services/AgenticFileService.ts agenticWriteFile() success: { filePath, created, overwritten, bytesWritten, linesWritten }",
+    "status": 200,
+    "body": { "filePath": "/srv/workspace/notes.md", "created": true, "overwritten": false, "bytesWritten": 11, "linesWritten": 1 }
+  },
+  "fileWriteRejected": {
+    "from": "src/routes/AgenticRoutes.ts POST /file/write returns { error }; agenticHandler answers 400 { code, retryable, error }",
+    "status": 400,
+    "body": { "code": "VALIDATION", "retryable": false, "error": "Request body must include 'content' (string)" }
+  },
+  "handlerTimedOut": {
+    "from": "src/utilities.ts agenticHandler catch branch: 504 { error, code: 'TIMEOUT', retryable: true } when the handler exceeds its time limit",
+    "status": 504,
+    "body": { "error": "Tool handler timed out after 120000ms (POST /agentic/file/write)", "code": "TIMEOUT", "retryable": true }
+  }
+}
