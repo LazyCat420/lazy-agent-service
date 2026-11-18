@@ -203,10 +203,12 @@ async function loadCatalog(): Promise<void> {
 
 beforeAll(async () => {
   // Importing ToolOrchestratorService fetches the catalog, then one catalog per non-default
-  // locale. Wait until the stand-in has answered all of them so none lands inside a test.
-  // ("en" is never fetched as a locale: it is the catalog itself.) If the service ever makes
-  // fewer boot requests than this, the wait cannot finish and this hook fails at vitest's hook
-  // timeout: recount the boot requests here.
+  // locale. No reply is registered yet, so the stand-in answers the catalog request with 503
+  // and the service skips the /admin/config request that follows a catalog it could read:
+  // 1 + N requests in all. Wait until the stand-in has answered them so none lands inside a
+  // test. ("en" is never fetched as a locale: it is the catalog itself.) If the service ever
+  // makes fewer boot requests than this, the wait cannot finish and this hook fails at
+  // vitest's hook timeout: recount the boot requests here.
   const otherLocales = PromptLocaleService.getAvailableLocales().filter((locale) => locale !== PromptLocaleService.getDefaultLocale() && locale !== "en");
   await tools.answeredAtLeast(1 + otherLocales.length);
 });
@@ -413,7 +415,7 @@ describe("responses tools-service defines are parsed by LAS", () => {
     expect(await ToolOrchestratorService.isWorkspaceAgentConnected()).toBe(false);
   });
 
-  it("C12 /admin/config has no staticRoots key, so LAS has no static roots to report", async () => {
+  it("C12 LAS has no static roots to report after reading /admin/config as tools-service sends it", async () => {
     // LAS reads `staticRoots` from this response (ToolOrchestratorService fetchSchemas,
     // refreshWorkspaceRoots, updateWorkspaceRoots); tools-service never sends it, and the
     // fixture's /admin/config body has the two keys the route sends and no other.
@@ -545,7 +547,7 @@ describe("responses tools-service defines are parsed by LAS", () => {
     expect(result).toEqual({ error: "Request body must include 'command' (string)" });
   });
 
-  it("C21 a catalog tool's success body is returned unchanged", async () => {
+  it("C21a a catalog tool's success body is returned unchanged", async () => {
     await loadCatalog();
     serve("POST /agentic/file/write", fixture.fileWritten);
     const result = await ToolOrchestratorService.executeTool("write_file", { path: "/srv/workspace/notes.md", content: "hello world" }, context);
@@ -555,7 +557,7 @@ describe("responses tools-service defines are parsed by LAS", () => {
   it.each([
     ["a 400 with code and retryable", "fileWriteRejected", "Request body must include 'content' (string)"],
     ["a 504 handler timeout", "handlerTimedOut", "Tool handler timed out after 120000ms (POST /agentic/file/write)"],
-  ] as const)("C21 %s from a catalog tool is reduced to { error } with the service's text", async (_name, key, message) => {
+  ] as const)("C21b %s from a catalog tool is reduced to { error } with the service's text", async (_name, key, message) => {
     await loadCatalog();
     serve("POST /agentic/file/write", fixture[key]);
     const result = await ToolOrchestratorService.executeTool("write_file", { path: "/srv/workspace/notes.md", content: "hello world" }, context);
