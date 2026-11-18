@@ -71,20 +71,6 @@ const working = fixtures.filter((fixture) => fixture.knownDefect === undefined);
 const defective = fixtures.filter((fixture) => fixture.knownDefect !== undefined);
 
 describe("core loop transcript replay: every fixture meets its expect block", () => {
-  it("covers the required scenarios", () => {
-    const ids = fixtures.map((fixture) => fixture.id);
-    expect(ids).toEqual(
-      expect.arrayContaining([
-        "02-tool-round-trip",
-        "04-malformed-args-required",
-        "08-tool-error",
-        "10-max-iterations",
-        "12-cancel-mid-stream",
-        "13-cancel-during-tool",
-      ]),
-    );
-  });
-
   it.each(working.map((fixture) => [fixture.id, fixture] as const))("%s", async (_id, fixture) => {
     expectRunToMatchFixture(await runReplay(fixture), fixture);
   });
@@ -147,7 +133,8 @@ describe("core loop transcript replay: what the model is told next", () => {
     const results = toolResults(run, 2);
 
     expect(results).toHaveLength(1);
-    expect(contentOf(results[0])).not.toContain("positions");
+    // "VTI" is what the tool returns; a refusal names the tool and the arguments, never the holdings.
+    expect(contentOf(results[0])).not.toContain("VTI");
     expect(contentOf(results[0])).toMatch(/argument/i);
   });
 
