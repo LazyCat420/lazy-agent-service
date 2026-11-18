@@ -20,7 +20,9 @@
  *
  * The comparison baseline is the last history line with the same suite set that neither
  * regressed nor errored, so a bad night never lowers the bar for the next one.
- * Exit codes: 0 pass count >= baseline (or first run); 1 pass count dropped; 2 a suite produced no result.
+ * Exit codes: 0 pass count >= baseline (or first run); 1 pass count dropped; 2 a suite produced no
+ * valid result (crash, unparseable output, LAS restart mid-run, harness2 tripwire). Such a run is
+ * still appended, marked `error`, and never becomes a baseline.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -56,6 +58,16 @@ const tally = (grades) => ({
   fail: grades.filter((g) => g === "fail").length,
 });
 
+/**
+ * A suite result is valid only when the child exited with one of its scored exit codes and left a
+ * parseable result. Anything else (crash, restart detected, tripwire) is an error, never a score.
+ */
+function graded(status, scoredCodes, readGrades) {
+  if (!scoredCodes.includes(status)) return { error: `exit ${status} (scored only on ${scoredCodes.join("/")})` };
+  const grades = readGrades();
+  return grades && grades.length ? { grades } : { error: "no parseable result" };
+}
+
 function basicGrades(dir) {
   const file = path.join(dir, "results.json");
   if (!fs.existsSync(file)) return null;
@@ -63,32 +75,38 @@ function basicGrades(dir) {
   return results.map((r) => String(r.grade).toLowerCase());
 }
 
+// Exit codes: security-bench and sandbox-redteam exit 1 when a check fails, which is a score.
+// run-basic-eval exits 2 when the service restarted mid-run (invalid) and 1 on script errors;
+// harness2 exits 3 when a tripwire invalidates the measurement.
 const SUITE_RUNNERS = {
   security() {
     const file = path.join(OUT, "security.json");
-    run(TSX, ["scripts/benchmarks/security-bench.mts", "--out", file]);
-    if (!fs.existsSync(file)) return null;
-    return JSON.parse(fs.readFileSync(file, "utf8")).checks.map((c) => (c.pass ? "pass" : "fail"));
+    const { status } = run(TSX, ["scripts/benchmarks/security-bench.mts", "--out", file]);
+    return graded(status, [0, 1], () =>
+      fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")).checks.map((c) => (c.pass ? "pass" : "fail")) : null,
+    );
   },
   redteam() {
-    const { stdout } = run(TSX, ["scripts/benchmarks/sandbox-redteam.mts"]);
+    const { status, stdout } = run(TSX, ["scripts/benchmarks/sandbox-redteam.mts"]);
     fs.writeFileSync(path.join(OUT, "redteam.txt"), stdout);
     // Each wall row ends with its verdict: PASS, UNPROVEN (attack dud) or FAIL (escaped).
-    const grades = [];
-    for (const line of stdout.split(/\r?\n/)) {
-      const m = /(PASS|UNPROVEN \(attack dud\)|FAIL \(escaped\))$/.exec(line);
-      if (m) grades.push(m[1] === "PASS" ? "pass" : m[1].startsWith("UNPROVEN") ? "weak" : "fail");
-    }
-    return grades.length ? grades : null;
+    return graded(status, [0, 1], () => {
+      const grades = [];
+      for (const line of stdout.split(/\r?\n/)) {
+        const m = /(PASS|UNPROVEN \(attack dud\)|FAIL \(escaped\))$/.exec(line);
+        if (m) grades.push(m[1] === "PASS" ? "pass" : m[1].startsWith("UNPROVEN") ? "weak" : "fail");
+      }
+      return grades;
+    });
   },
   basic() {
     const dir = path.join(OUT, "basic");
-    run(process.execPath, ["scripts/eval/run-basic-eval.mjs", "--out", dir]);
-    return basicGrades(dir);
+    const { status } = run(process.execPath, ["scripts/eval/run-basic-eval.mjs", "--out", dir]);
+    return graded(status, [0], () => basicGrades(dir));
   },
   chaos() {
     const dir = path.join(OUT, "chaos");
-    run(process.execPath, [
+    const { status } = run(process.execPath, [
       "scripts/eval/run-basic-eval.mjs",
       "--questions-file", "scripts/eval/chaos-questions.json",
       "--profiles", "chaos",
@@ -97,16 +115,18 @@ const SUITE_RUNNERS = {
       "--concurrency", "5",
       "--out", dir,
     ]);
-    return basicGrades(dir);
+    return graded(status, [0], () => basicGrades(dir));
   },
   harness2() {
     const state = path.join(OUT, "harness2");
-    run(TSX, ["scripts/harness2-eval/run.ts", `--name=scheduled`, `--state=${state}`]);
+    const { status } = run(TSX, ["scripts/harness2-eval/run.ts", `--name=scheduled`, `--state=${state}`]);
     const file = path.join(state, "units.json");
-    if (!fs.existsSync(file)) return null;
-    const units = JSON.parse(fs.readFileSync(file, "utf8"));
-    return Object.values(units).flatMap((u) =>
-      (u.attempts ?? []).map((a) => (a.correct ? "pass" : a.totalOk || a.dupsOk ? "weak" : "fail")),
+    return graded(status, [0], () =>
+      fs.existsSync(file)
+        ? Object.values(JSON.parse(fs.readFileSync(file, "utf8"))).flatMap((u) =>
+            (u.attempts ?? []).map((a) => (a.correct ? "pass" : a.totalOk || a.dupsOk ? "weak" : "fail")),
+          )
+        : null,
     );
   },
 };
@@ -121,11 +141,11 @@ fs.mkdirSync(OUT, { recursive: true });
 const bySuite = {};
 const errors = [];
 for (const suite of SUITES) {
-  const grades = SUITE_RUNNERS[suite]();
-  if (!grades) {
+  const result = SUITE_RUNNERS[suite]();
+  if (result.error) {
     errors.push(suite);
-    bySuite[suite] = { pass: 0, weak: 0, fail: 0, error: "no parseable result" };
-  } else bySuite[suite] = tally(grades);
+    bySuite[suite] = { pass: 0, weak: 0, fail: 0, error: result.error };
+  } else bySuite[suite] = tally(result.grades);
 }
 const totals = Object.values(bySuite).reduce((t, s) => ({ pass: t.pass + s.pass, weak: t.weak + s.weak, fail: t.fail + s.fail }), { pass: 0, weak: 0, fail: 0 });
 
@@ -144,7 +164,7 @@ const line = {
   ...totals,
   by_suite: bySuite,
   ...(regressed ? { regressed: true } : {}),
-  ...(errors.length ? { error: `no result from: ${errors.join(", ")}` } : {}),
+  ...(errors.length ? { error: `no valid result from: ${errors.join(", ")}` } : {}),
 };
 fs.mkdirSync(path.dirname(HISTORY), { recursive: true });
 fs.appendFileSync(HISTORY, `${JSON.stringify(line)}\n`);
@@ -153,7 +173,7 @@ console.log(`[evals] ${suitesKey}: pass ${totals.pass}, weak ${totals.weak}, fai
 for (const [suite, s] of Object.entries(bySuite)) console.log(`  ${suite.padEnd(9)} pass ${s.pass} weak ${s.weak} fail ${s.fail}${s.error ? ` (${s.error})` : ""}`);
 console.log(`[evals] raw outputs in ${OUT}; appended to ${HISTORY}`);
 if (errors.length) {
-  console.error(`[evals] FAIL: no result from ${errors.join(", ")}`);
+  console.error(`[evals] FAIL: no valid result from ${errors.join(", ")}`);
   process.exit(2);
 }
 if (!previous) {

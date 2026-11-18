@@ -3,8 +3,11 @@ name: evals
 # Nightly scored evals (scripts/eval/scheduled-evals.mjs). The hosted runner cannot reach the
 # deployed service or the vLLM judge, so it runs the offline suites (security, redteam) only.
 # The live suites (basic, chaos, harness2) run from the LAN: `npm run eval:scheduled -- --live`.
-# The job fails when the pass count drops below the last committed line of
-# scripts/eval/history.jsonl for the same suite set; the updated history is uploaded as an artifact.
+#
+# History: the nightly lines are carried from run to run in the Actions cache and merged with the
+# tracked scripts/eval/history.jsonl (lines start with their ISO date, so `sort -u` is
+# chronological and drops duplicates). The job fails when the pass count drops below the last
+# non-regressed line of the same suite set, i.e. the previous good nightly or a newer committed run.
 on:
   schedule:
     - cron: "41 4 * * *"
@@ -17,6 +20,8 @@ concurrency:
 jobs:
   scheduled-evals:
     runs-on: ubuntu-latest
+    env:
+      HISTORY: .checks/eval-history/history.jsonl
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -27,12 +32,29 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: restore nightly eval history
+        uses: actions/cache/restore@v4
+        with:
+          path: .checks/eval-history
+          key: eval-history-${{ github.run_id }}
+          restore-keys: eval-history-
+      - name: merge nightly history with the tracked history
+        run: |
+          mkdir -p .checks/eval-history
+          touch "$HISTORY"
+          LC_ALL=C sort -u scripts/eval/history.jsonl "$HISTORY" -o "$HISTORY"
       - name: scheduled evals (security bench, sandbox red-team)
-        run: npm run eval:scheduled -- --out .checks/evals
+        run: npm run eval:scheduled -- --history "$HISTORY" --out .checks/evals
+      - name: save nightly eval history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .checks/eval-history
+          key: eval-history-${{ github.run_id }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: eval-history
           path: |
-            scripts/eval/history.jsonl
+            .checks/eval-history
             .checks/evals

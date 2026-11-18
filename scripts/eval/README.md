@@ -79,7 +79,9 @@ Baseline on **2026-10-17**: trading **3/8**, html-notes **4/8** PASS.
 `npm run eval:scheduled` (`scripts/eval/scheduled-evals.mjs`) runs a suite set, grades every
 result pass / weak / fail, appends one dated JSON line to the tracked
 `scripts/eval/history.jsonl`, and exits 1 when the pass count is below the last recorded
-non-regressed run of the same suite set (exit 2 when a suite produced no result).
+non-regressed run of the same suite set (exit 2 when a suite produced no valid result: crash,
+unparseable output, LAS restart mid-run, harness2 tripwire; such lines are marked `error` and
+never become the baseline).
 
 | suite | source | needs |
 |---|---|---|
@@ -95,5 +97,7 @@ testrun -- npm run eval:scheduled -- --live             # + basic,chaos (LAN onl
 testrun -- npm run eval:scheduled -- --suites harness2  # explicit only
 ```
 
-The nightly GitHub workflow `.github/workflows/evals.yml` runs the offline suites and uploads the
-updated history as an artifact; commit history lines from local runs to move the bar.
+The nightly GitHub workflow `.github/workflows/evals.yml` runs the offline suites. It carries its
+own history lines from night to night in the Actions cache, merged with this tracked file, so each
+night is compared with the previous good night (or a newer committed run), and uploads the merged
+history as an artifact. Commit lines from local runs to record them in the repo.
