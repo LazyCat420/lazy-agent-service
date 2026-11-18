@@ -1,0 +1,16 @@
+{
+  "tsconfig": "tsconfig.strict.json",
+  "total": 21,
+  "files": {
+    "src/core/chat/ChatGeneration.ts": 5,
+    "src/core/loop/CoreLoop.ts": 1,
+    "src/providers/google.ts": 1,
+    "src/providers/vllm.ts": 1,
+    "src/services/AgenticLoopService.ts": 1,
+    "src/services/MemoryConsolidationService.ts": 5,
+    "src/services/OrchestratorService.ts": 3,
+    "src/services/harnesses/BaseAgenticHarness.ts": 2,
+    "src/services/harnesses/lifecycle/Finalizer.ts": 1,
+    "src/utils/ProviderStreamResilience.ts": 1
+  }
+}
