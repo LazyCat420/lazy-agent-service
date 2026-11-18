@@ -96,16 +96,14 @@ describe("authMiddleware identity resolution", () => {
     expect(anonymous.ctx).toMatchObject({ project: DEFAULT_PROJECT, username: DEFAULT_USERNAME });
   });
 
-  // DEFECT: req.project is not type-checked. A JSON body can set it to an object, which then
-  // reaches every consumer that treats it as a string (store keys, Mongo filters). Remove .fails
-  // when resolveProject only returns strings.
-  it.fails("I8a the project is a string when the body sends an object for it", async () => {
+  // Regression (fixed 2026-11-18): req.project was not type-checked, so a JSON body could set it
+  // to an object that reached every consumer treating it as a string (store keys, Mongo filters).
+  it("I8a the project is a string when the body sends an object for it", async () => {
     expect(typeof (await whoami({ json: { project: { $ne: null } } })).project).toBe("string");
   });
 
-  // DEFECT: req.project is not type-checked. A repeated query parameter makes it an array.
-  // Remove .fails when resolveProject only returns strings.
-  it.fails("I8b the project is a string when the query repeats the parameter", async () => {
+  // Regression (fixed 2026-11-18): a repeated query parameter used to make req.project an array.
+  it("I8b the project is a string when the query repeats the parameter", async () => {
     expect(typeof (await whoami({}, "?project=a&project=b")).project).toBe("string");
   });
 });

@@ -5,14 +5,15 @@ import {
 import { Request, Response, NextFunction } from "express";
 import { requestContext } from "../utils/RequestContext.ts";
 
-/** Priority: query param → body → x-project header → DEFAULT_PROJECT. */
+/**
+ * Priority: query param → body → x-project header → DEFAULT_PROJECT. Only a non-empty string
+ * counts: a repeated query parameter (array) or a JSON object in the body is skipped, so the
+ * project never reaches store keys or Mongo filters as anything but a string.
+ */
 function resolveProject(req: Request): string {
-  return (
-    (req.query?.project as string) ||
-    req.body?.project ||
-    (req.headers["x-project"] as string) ||
-    DEFAULT_PROJECT
-  );
+  const candidates: unknown[] = [req.query?.project, req.body?.project, req.headers["x-project"]];
+  const project = candidates.find((value): value is string => typeof value === "string" && value !== "");
+  return project ?? DEFAULT_PROJECT;
 }
 
 /** Prefer the first x-forwarded-for hop; normalize IPv4-mapped IPv6 addresses. */

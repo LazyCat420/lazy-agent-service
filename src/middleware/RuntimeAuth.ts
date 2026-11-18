@@ -34,7 +34,8 @@ export function runtimeAuth(req: Request, res: Response, next: NextFunction): vo
   if (!configured) { res.status(503).json({ error: { code: "RUNTIME_AUTH_UNAVAILABLE" } }); return; }
   const supplied = req.get("x-runtime-token");
   if (supplied && equal(configured, supplied)) { res.locals.runtimeBackend = true; next(); return; }
-  const bearer = req.get("authorization")?.replace(/^Bearer /, "");
+  // The auth scheme is case-insensitive (RFC 9110 §11.1); the token itself is still verified below.
+  const bearer = req.get("authorization")?.replace(/^Bearer /i, "");
   if (bearer && bearer.length < 4096) {
     const [payload, signature, extra] = bearer.split(".");
     try {
