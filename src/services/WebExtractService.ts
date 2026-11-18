@@ -315,7 +315,8 @@ export async function webExtract(url: string, charLimit = DEFAULT_CHAR_LIMIT, de
     const pending = inFlight.get(key);
     if (pending) {
       const scraped = await pending;
-      return scraped.status === "ok" ? fromScrape(scraped, true) : { ...scraped, cached: true };
+      // A failure is never cached, so it is not labelled as served from the cache.
+      return scraped.status === "ok" ? fromScrape(scraped, true) : { ...scraped, cached: false };
     }
   }
 

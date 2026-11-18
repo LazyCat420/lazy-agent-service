@@ -155,9 +155,9 @@ describe("webExtract: overlapping callers, the cache and the character limit", (
     expect(scraper.fetches()).toBe(2);
   });
 
-  // DEFECT: webExtract answers the joining caller with `{ ...scraped, cached: true }` for a failed
-  // scrape (the `pending` branch), although a failure is never cached. Remove `.fails` when fixed.
-  it.fails("W11b a failure handed to a joining caller is not labelled as served from the cache", async () => {
+  // Regression (fixed 2026-11-18): the `pending` branch used to answer the joining caller of a
+  // failed scrape with `cached: true`, although a failure is never cached.
+  it("W11b a failure handed to a joining caller is not labelled as served from the cache", async () => {
     const scraper = heldScraper();
     const both = Promise.all([
       webExtract("https://example.com/w11-label", 15_000, scraper.deps),
