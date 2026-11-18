@@ -198,7 +198,7 @@ describe("runToolBatch", () => {
     const raw = '```json\n{"query": "cats",,,\n';
     const results = await runToolBatch([makeCall("search", { __raw: raw })], baseOptions({ tools }));
     expect(results[0]).toMatchObject({ isError: true, errorCode: "TOOL_BAD_ARGS" });
-    expect(results[0].content).toBe(`Arguments were not valid JSON: ${raw.slice(0, 200)}`);
+    expect(results[0].content).toBe(`Arguments for "search" were not valid JSON: ${raw.slice(0, 200)}`);
     expect(executed).toBe(0);
   });
 

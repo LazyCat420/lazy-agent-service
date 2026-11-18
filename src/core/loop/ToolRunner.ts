@@ -7,7 +7,7 @@ import type {
   ToolBatchOptions,
   ToolCallHistory,
 } from "./types.ts";
-import { READ_TOOL_SPILL_NAME } from "./SpillBuffer.ts";
+import { DEFAULT_SPILL_READ_CHARS, READ_TOOL_SPILL_NAME, READ_TOOL_SPILL_SCHEMA } from "./SpillBuffer.ts";
 import { isReadOnlyTool } from "../../services/LocalToolRouter.ts";
 import { guardTradingToolCall, recordTradingRunOutcome } from "../../services/ToolCallGuard.ts";
 import { stripMcpPrefix } from "../../services/McpPrefix.ts";
@@ -134,10 +134,10 @@ const coerceStructured = (expected: "array" | "object", value: unknown): unknown
 };
 
 const coerceArgs = (
-  tool: CoreTool,
+  parameters: CoreTool["parameters"],
   args: Record<string, unknown>,
 ): Record<string, unknown> => {
-  const params = tool.parameters as {
+  const params = parameters as {
     properties?: Record<string, { type?: string }>;
   };
   const properties = params.properties ?? {};
@@ -396,11 +396,23 @@ function unwrapOrRepairRawArgs(
   start: number,
   now: () => number,
 ): { args: Record<string, unknown>; errorResult?: CoreToolResult } {
+  const sent: unknown = call.args;
+  if (sent === null || typeof sent !== "object" || Array.isArray(sent)) {
+    // A model that sends `"arguments": "null"` (or a list, or a bare value) parses to a non-object.
+    return {
+      args: {},
+      errorResult: {
+        toolCallId: call.id,
+        name: call.name,
+        content: `Invalid arguments for "${call.name}": arguments must be a JSON object (got ${describeValue(sent)}).`,
+        isError: true,
+        errorCode: "TOOL_BAD_ARGS",
+        durationMs: now() - start,
+      },
+    };
+  }
   const args = call.args;
   if (
-    args !== null &&
-    typeof args === "object" &&
-    !Array.isArray(args) &&
     Object.keys(args).length === 1 &&
     typeof args.__raw === "string"
   ) {
@@ -412,7 +424,7 @@ function unwrapOrRepairRawArgs(
         errorResult: {
           toolCallId: call.id,
           name: call.name,
-          content: `Arguments were not valid JSON: ${raw.slice(0, 200)}`,
+          content: `Arguments for "${call.name}" were not valid JSON: ${raw.slice(0, 200)}`,
           isError: true,
           errorCode: "TOOL_BAD_ARGS",
           durationMs: now() - start,
@@ -441,8 +453,10 @@ function tryHandleBuiltInSpillRead(
       durationMs: opts.now() - start,
     };
   }
-  const offset = typeof args.offset === "number" ? args.offset : 0;
-  const length = typeof args.length === "number" ? args.length : 8_000;
+  // Numeric strings ("11205") are taken the way coerceArgs takes them for every schema-typed tool.
+  const coerced = coerceArgs(READ_TOOL_SPILL_SCHEMA.parameters, args);
+  const offset = typeof coerced.offset === "number" ? coerced.offset : 0;
+  const length = typeof coerced.length === "number" ? coerced.length : DEFAULT_SPILL_READ_CHARS;
   const readOutcome = opts.spillBuffer!.read(spillId, offset, length);
   if (readOutcome.ok === false) {
     const errText = (readOutcome as { ok: false; error: string }).error;
@@ -498,7 +512,7 @@ function validateAndCheckStallBeforeExec(
     };
   }
 
-  args = coerceArgs(tool, args);
+  args = coerceArgs(tool.parameters, args);
   const problems = validateArgs(tool, args);
   if (problems.length > 0) {
     return {
@@ -610,13 +624,19 @@ async function runBeforeToolCallHooks(
   return { args };
 }
 
+/** A tool's return value as text. A function encodes to nothing; a BigInt or a cycle cannot be encoded. */
+function stringifyToolOutput(rawValue: unknown): string {
+  if (typeof rawValue === "string") return rawValue;
+  if (rawValue === undefined || rawValue === null) return "";
+  try {
+    return JSON.stringify(rawValue) ?? "";
+  } catch (error) {
+    return `(tool output could not be encoded as JSON: ${errorMessage(error)})`;
+  }
+}
+
 function capToolOutputContent(rawValue: unknown, opts: ToolRunnerOptions): string {
-  const raw =
-    typeof rawValue === "string"
-      ? rawValue
-      : rawValue === undefined || rawValue === null
-        ? ""
-        : JSON.stringify(rawValue);
+  const raw = stringifyToolOutput(rawValue);
   const content = raw === "" ? "(tool returned no output)" : raw;
   if (content.length <= opts.toolOutputCap) return content;
 
@@ -681,7 +701,8 @@ async function executeToolWithRace(
   const timeoutSignal = timeoutSignalFor(tool.name, timeoutMs);
   const signal = AbortSignal.any([opts.signal, timeoutSignal]);
   let outcome: { ok: true; value: unknown } | { ok: false; error: unknown } | undefined;
-  const exec = tool.execute(args, { toolCallId: call.id, signal }).then(
+  // The async wrapper turns a throw before `execute` returns its promise into a rejection (I2).
+  const exec = (async () => tool.execute(args, { toolCallId: call.id, signal }))().then(
     (value) => {
       outcome = { ok: true, value };
     },

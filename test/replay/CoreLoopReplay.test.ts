@@ -126,9 +126,9 @@ describe("core loop transcript replay: what the model is told next", () => {
     expect(contentOf(results[0])).toContain("symbol");
   });
 
-  // DEFECT: see `knownDefect` in the fixture. Today the model is shown a real tool result for a call
-  // whose arguments it never finished writing. Remove `.fails` when fixed.
-  it.fails("malformed arguments (optional arguments): the model is told its arguments did not parse", async () => {
+  // Regression (fixed 2026-11-18): CoreLoop dropped the provider's argsParseError flag, so the
+  // tool ran with `{}` and the model was shown a real result for arguments it never finished.
+  it("malformed arguments (optional arguments): the model is told its arguments did not parse", async () => {
     const run = await runReplay(loadReplayFixture("05-malformed-args-optional"));
     const results = toolResults(run, 2);
 
@@ -138,8 +138,8 @@ describe("core loop transcript replay: what the model is told next", () => {
     expect(contentOf(results[0])).toMatch(/argument/i);
   });
 
-  // DEFECT: see `knownDefect` in the fixture. Today the run dies before a second request. Remove `.fails` when fixed.
-  it.fails("null arguments: the model is told the call was rejected and the run carries on", async () => {
+  // Regression (fixed 2026-11-18): `null` arguments used to throw in ToolRunner coerceArgs and fail the run.
+  it("null arguments: the model is told the call was rejected and the run carries on", async () => {
     const run = await runReplay(loadReplayFixture("06-null-arguments"));
 
     expect(run.outcome).toBe("completed");
@@ -212,9 +212,10 @@ describe("core loop transcript replay: what the model is told next", () => {
     expect(finalizeReasons(run)).toEqual([]);
   });
 
-  // DEFECT: see `knownDefect` in the fixture. Today the cut-off text comes back as a completed
-  // answer with answerSource "model". Remove `.fails` when fixed.
-  it.fails("cancel mid-stream: the cut-off text is not reported as a completed answer", async () => {
+  // Regression (fixed 2026-11-18): the provider ends its stream cleanly on cancel (vllm.ts returns
+  // on AbortError) and the loop did not re-check the signal, so the cut-off text came back as a
+  // completed answer with answerSource "model".
+  it("cancel mid-stream: the cut-off text is not reported as a completed answer", async () => {
     const run = await runReplay(loadReplayFixture("12-cancel-mid-stream"));
 
     expect(run.outcome).toBe("cancelled");

@@ -4,7 +4,6 @@
   "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
   "model": "replay-model",
   "input": "What is AAPL trading at?",
-  "knownDefect": "The provider ends its stream cleanly when the run is cancelled (vllm.ts returns on AbortError), and CoreLoop.ts runCoreLoop does not re-check options.signal after a model turn that ended without an error: the cut-off text is returned as status 'completed', answerSource 'model'.",
   "tools": [
     {
       "name": "get_quote",

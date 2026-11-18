@@ -4,7 +4,6 @@
   "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
   "model": "replay-model",
   "input": "What is AAPL trading at?",
-  "knownDefect": "ToolRunner.ts coerceArgs calls Object.entries(null): runToolBatch rejects and the whole run fails with TypeError 'Cannot convert undefined or null to object'.",
   "tools": [
     {
       "name": "get_quote",

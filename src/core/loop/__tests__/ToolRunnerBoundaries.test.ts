@@ -82,10 +82,9 @@ const manualTimeouts = () => {
 };
 
 describe("runToolBatch invariant: never throws, one result per call", () => {
-  // DEFECT (ToolRunner.ts executeToolWithRace): `tool.execute(...)` is called outside a try, so a
-  // synchronous throw rejects the whole batch with the tool's error and every sibling result is
-  // lost. types.ts documents "Never throws (I2)". Remove `.fails` when fixed.
-  it.fails("B1 a tool that throws before returning a promise is reported as TOOL_THREW and its sibling still resolves", async () => {
+  // Regression (fixed 2026-11-18, executeToolWithRace): a synchronous throw used to reject the
+  // whole batch with the tool's error and lose every sibling result. types.ts: "Never throws (I2)".
+  it("B1 a tool that throws before returning a promise is reported as TOOL_THREW and its sibling still resolves", async () => {
     const syncThrow = makeTool("sync_throw", () => {
       throw new Error("threw before returning a promise");
     });
@@ -102,11 +101,10 @@ describe("runToolBatch invariant: never throws, one result per call", () => {
     expect(failureStreak.get("sync_throw")).toBe(1);
   });
 
-  // DEFECT (ToolRunner.ts capToolOutputContent): `JSON.stringify(rawValue)` is unguarded, so a
-  // tool result JSON cannot encode rejects the whole batch ("Do not know how to serialize a
-  // BigInt", "Converting circular structure to JSON", or a TypeError on `undefined.length` for
-  // a function). Remove `.fails` when fixed.
-  it.fails.each([
+  // Regression (fixed 2026-11-18, capToolOutputContent): a tool result JSON cannot encode used to
+  // reject the whole batch ("Do not know how to serialize a BigInt", "Converting circular
+  // structure to JSON", or a TypeError on `undefined.length` for a function).
+  it.each([
     ["a BigInt field", () => ({ rows: 3n })],
     ["a circular object", () => {
       const node: Record<string, unknown> = { name: "loop" };
@@ -144,11 +142,10 @@ describe("runToolBatch invariant: never throws, one result per call", () => {
     expect(JSON.parse(results[0].content).retry_guidance).toContain("Attempt 1/3 failed for rejects_string");
   });
 
-  // DEFECT (ToolRunner.ts coerceArgs): `Object.entries(args)` throws "Cannot convert undefined
-  // or null to object" when a known tool is called with `args: null`. The provider produces
-  // that for a model that emits `"arguments": "null"` (src/utils/openai-compat.ts JSON.parse, no object
-  // check) and CoreLoop passes it through. Remove `.fails` when fixed.
-  it.fails("B3b args of the wrong top-level shape (null from a model that sent `null`) are a TOOL_BAD_ARGS result, not a rejected batch", async () => {
+  // Regression (fixed 2026-11-18, unwrapOrRepairRawArgs): `args: null` used to reach coerceArgs,
+  // whose `Object.entries(null)` rejected the batch. The provider produces it for a model that
+  // emits `"arguments": "null"` (src/utils/openai-compat.ts JSON.parse, no object check).
+  it("B3b args of the wrong top-level shape (null from a model that sent `null`) are a TOOL_BAD_ARGS result, not a rejected batch", async () => {
     const search = recordingTool("search", "ran", {
       parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
     });
@@ -226,10 +223,10 @@ describe("runToolBatch output capping and the spill buffer", () => {
     expect(JSON.parse(pastEnd.content)).toMatchObject({ ok: true, content: "", hasMore: false });
   });
 
-  // DEFECT (ToolRunner.ts tryHandleBuiltInSpillRead): the built-in bypasses coerceArgs, so
-  // `offset: "11205"` is silently read as offset 0 and `length: "10"` as 8000: the model asks
-  // for the middle and is handed the head again, with no error. Remove `.fails` when fixed.
-  it.fails("B6b read_tool_spill takes a numeric-string offset the way every schema-typed integer arg is taken", async () => {
+  // Regression (fixed 2026-11-18, tryHandleBuiltInSpillRead): the built-in used to bypass
+  // coerceArgs, so `offset: "11205"` was read as offset 0 and `length: "10"` as 8000: the model
+  // asked for the middle and was handed the head again, with no error.
+  it("B6b read_tool_spill takes a numeric-string offset the way every schema-typed integer arg is taken", async () => {
     const full = "0123456789".repeat(3000);
     const spillBuffer = new SpillBuffer();
     const options = baseOptions({ tools: toolMap(makeTool("dump", async () => full)), spillBuffer });
@@ -686,10 +683,10 @@ describe("runToolBatch argument boundaries", () => {
       rejected: expect.stringContaining('"count" must be integer (got string "five")'),
     });
     for (const raw of ["[1, 2]", '"just text"', "42", "null", "", "{"]) {
-      expect(await send({ __raw: raw }), raw).toEqual({ rejected: `Arguments were not valid JSON: ${raw}`, code: "TOOL_BAD_ARGS" });
+      expect(await send({ __raw: raw }), raw).toEqual({ rejected: `Arguments for "typed" were not valid JSON: ${raw}`, code: "TOOL_BAD_ARGS" });
     }
     const huge = `{"text": "${"y".repeat(500)}`;
-    expect(await send({ __raw: huge })).toEqual({ rejected: `Arguments were not valid JSON: ${huge.slice(0, 200)}`, code: "TOOL_BAD_ARGS" });
+    expect(await send({ __raw: huge })).toEqual({ rejected: `Arguments for "typed" were not valid JSON: ${huge.slice(0, 200)}`, code: "TOOL_BAD_ARGS" });
     // Not the wrapper shape: a second key, or a non-string __raw, is an ordinary argument object.
     expect(await send({ __raw: '{"count": 1}', text: "t" })).toEqual({ received: { __raw: '{"count": 1}', text: "t" } });
     expect(await send({ __raw: 5 })).toEqual({ received: { __raw: 5 } });

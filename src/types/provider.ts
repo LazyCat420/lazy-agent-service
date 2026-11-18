@@ -82,6 +82,10 @@ export interface StreamToolCallChunk {
   status?: "calling" | "done" | "error";
   native?: boolean;
   thoughtSignature?: string;
+  /** The argument text did not parse (src/utils/openai-compat.ts); `args` is then `{}`. */
+  argsParseError?: boolean;
+  /** The unparseable argument text, cut to 2000 chars, when `argsParseError` is set. */
+  rawArgs?: string;
 }
 
 export interface StreamUsageChunk {

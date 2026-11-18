@@ -171,7 +171,14 @@ async function* consumeSingleModelStream(
       }
     } else if (chunk.type === "toolCall") {
       const id = chunk.id ?? `call_${step}_${state.calls.length}`;
-      const args = typeof chunk.args === "string" ? { __raw: chunk.args } : chunk.args;
+      // Unparseable argument text goes on as `__raw`: the runner repairs it once or refuses the
+      // call (TOOL_BAD_ARGS), so the tool never runs with the provider's `{}` placeholder.
+      const args =
+        typeof chunk.args === "string"
+          ? { __raw: chunk.args }
+          : chunk.argsParseError === true
+            ? { __raw: chunk.rawArgs ?? "" }
+            : chunk.args;
       state.calls.push({ id, name: chunk.name, args });
     } else if (chunk.type === "usage") {
       yield { type: "usage", usage: { ...chunk.usage } };
@@ -267,6 +274,11 @@ async function* runModelTurnWithRetries(
       }
       yield { type: "warning", code: "PROVIDER_RETRY", message: failure.message };
     }
+  }
+  // A provider may end its stream without an error when the run is cancelled (vllm.ts returns on
+  // AbortError): the text so far is cut off, not an answer.
+  if (options.signal.aborted) {
+    return { turn, modelCallsDelta, providerRetriesDelta: Math.max(0, modelCallsDelta - 1), cancelled: true };
   }
   return { turn, modelCallsDelta, providerRetriesDelta: Math.max(0, modelCallsDelta - 1) };
 }

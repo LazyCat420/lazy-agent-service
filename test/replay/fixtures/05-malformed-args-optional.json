@@ -4,7 +4,6 @@
   "source": "hand-authored in the chat.completion.chunk SSE shape recorded in src/providers/__tests__/StreamCharacterization.test.ts (openaiChatSseBody) and src/utils/__tests__/MalformedToolCallArgs.test.ts; not a capture of a live model",
   "model": "replay-model",
   "input": "List the positions in my IRA account.",
-  "knownDefect": "The provider flags unparseable argument JSON (src/utils/openai-compat.ts argsParseError/rawArgs) but CoreLoop.ts consumeModelStream drops the flag, so the core loop runs the tool with {}. The legacy harness refuses such calls (harnesses/lifecycle/ToolExecutor.ts MALFORMED_TOOL_CALL_JSON).",
   "tools": [
     {
       "name": "list_positions",
