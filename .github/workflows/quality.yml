@@ -24,7 +24,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: verify (typecheck, lint, tests, duplication, architecture, prompt budget)
+      # Blocking: green on 2026-11-17 (1 low, 6 moderate, 0 high/critical in production deps).
+      - name: dependency audit (production deps, high and critical)
+        run: pnpm audit --prod --audit-level high
+      - name: verify (typecheck, strict-mode ratchet, lint, tests, duplication, architecture, prompt budget)
         run: npm run verify
 
   quality-report:
