@@ -15,6 +15,7 @@
 import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { TRADING_MONGO_DB } from "../../config.ts";
 import logger from "../logger.ts";
+import { modelFamilyOf } from "../platform/models/ModelProfiles.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 import { REUSABLE_READ_TOOLS } from "./LocalToolRouter.ts";
 
@@ -27,40 +28,65 @@ const MAX_STACK = 4;
 const REFRESH_MS = 6 * 60 * 60 * 1000;
 const RETRY_MS = 5 * 60 * 1000;
 
-export interface RunRecord { agent: string; cycleId: string; ticker: string }
+export interface RunRecord { agent: string; cycleId: string; ticker: string; model?: string }
 export interface ToolUseRecord extends RunRecord { tool: string; argsHash: string }
 
-/** Stack per role: stackable tools the model itself called in at least MIN_PRESENCE of the
- * role's successful runs, most frequent first. Roles with fewer than MIN_RUNS runs or fewer
- * than two qualifying tools get none — one tool is not a bundle. */
+function addRunToGroup(groups: Map<string, Set<string>>, key: string, runId: string): void {
+  const set = groups.get(key) ?? new Set<string>();
+  set.add(runId);
+  groups.set(key, set);
+}
+
+function computeStackForGroup(
+  agentRuns: Set<string>,
+  toolPresence: Map<string, Set<string>> | undefined,
+): string[] | null {
+  if (agentRuns.size < MIN_RUNS || !toolPresence) return null;
+  const stack = [...toolPresence]
+    .map(([tool, seen]) => ({ tool, share: seen.size / agentRuns.size }))
+    .filter(({ share }) => share >= MIN_PRESENCE)
+    .sort((a, b) => b.share - a.share || a.tool.localeCompare(b.tool))
+    .slice(0, MAX_STACK)
+    .map(({ tool }) => tool);
+  return stack.length >= 2 ? stack : null;
+}
+
+/** Stack per role (and per `role|modelFamily` when model identity is recorded): stackable tools
+ * the model itself called in at least MIN_PRESENCE of successful runs, most frequent first.
+ * Roles/families with fewer than MIN_RUNS runs or fewer than two qualifying tools get none. */
 export function learnStacks(runs: RunRecord[], uses: ToolUseRecord[]): Map<string, string[]> {
-  const runsByAgent = new Map<string, Set<string>>();
+  const runsByKey = new Map<string, Set<string>>();
+  const runFamilies = new Map<string, string>();
   for (const r of runs) {
-    const set = runsByAgent.get(r.agent) ?? new Set<string>();
-    set.add(`${r.cycleId}|${r.ticker}`);
-    runsByAgent.set(r.agent, set);
+    const runId = `${r.cycleId}|${r.ticker}`;
+    addRunToGroup(runsByKey, r.agent, runId);
+    const family = r.model ? modelFamilyOf(r.model) : "unknown";
+    if (family !== "unknown") {
+      const famKey = `${r.agent}|${family}`;
+      addRunToGroup(runsByKey, famKey, runId);
+      runFamilies.set(`${r.agent}|${runId}`, famKey);
+    }
   }
   const present = new Map<string, Map<string, Set<string>>>();
+  const recordPresence = (groupKey: string, tool: string, runId: string) => {
+    if (!runsByKey.get(groupKey)?.has(runId)) return;
+    const byTool = present.get(groupKey) ?? new Map<string, Set<string>>();
+    byTool.set(tool, (byTool.get(tool) ?? new Set<string>()).add(runId));
+    present.set(groupKey, byTool);
+  };
   for (const u of uses) {
-    // trading-service's autoroute prefetch is not the model's choice.
     if (u.argsHash.startsWith("autoroute:")) continue;
     const tool = stripMcpPrefix(u.tool);
-    const run = `${u.cycleId}|${u.ticker}`;
-    if (!STACKABLE.has(tool) || !runsByAgent.get(u.agent)?.has(run)) continue;
-    const byTool = present.get(u.agent) ?? new Map<string, Set<string>>();
-    byTool.set(tool, (byTool.get(tool) ?? new Set<string>()).add(run));
-    present.set(u.agent, byTool);
+    const runId = `${u.cycleId}|${u.ticker}`;
+    if (!STACKABLE.has(tool)) continue;
+    recordPresence(u.agent, tool, runId);
+    const famKey = runFamilies.get(`${u.agent}|${runId}`);
+    if (famKey) recordPresence(famKey, tool, runId);
   }
   const stacks = new Map<string, string[]>();
-  for (const [agent, agentRuns] of runsByAgent) {
-    if (agentRuns.size < MIN_RUNS) continue;
-    const stack = [...(present.get(agent) ?? [])]
-      .map(([tool, seen]) => ({ tool, share: seen.size / agentRuns.size }))
-      .filter(({ share }) => share >= MIN_PRESENCE)
-      .sort((a, b) => b.share - a.share || a.tool.localeCompare(b.tool))
-      .slice(0, MAX_STACK)
-      .map(({ tool }) => tool);
-    if (stack.length >= 2) stacks.set(agent, stack);
+  for (const [groupKey, groupRuns] of runsByKey) {
+    const stack = computeStackForGroup(groupRuns, present.get(groupKey));
+    if (stack) stacks.set(groupKey, stack);
   }
   return stacks;
 }
@@ -78,21 +104,24 @@ async function refresh(): Promise<void> {
   };
   const [runDocs, useDocs] = await Promise.all([
     db.collection("v3_agent_telemetry")
-      .find({ ...scope, outcome: "SUCCESS" }, { projection: { agent_name: 1, cycle_id: 1, ticker: 1 } }).toArray(),
+      .find({ ...scope, outcome: "SUCCESS" }, { projection: { agent_name: 1, cycle_id: 1, ticker: 1, model_used: 1 } }).toArray(),
     db.collection("agent_tool_telemetry")
       .find(scope, { projection: { agent_name: 1, cycle_id: 1, ticker: 1, tool_name: 1, args_hash: 1 } }).toArray(),
   ]);
-  const run = (d: Record<string, unknown>): RunRecord =>
-    ({ agent: String(d.agent_name), cycleId: String(d.cycle_id), ticker: String(d.ticker ?? "") });
+  const run = (d: Record<string, unknown>): RunRecord => ({
+    agent: String(d.agent_name),
+    cycleId: String(d.cycle_id),
+    ticker: String(d.ticker ?? ""),
+    model: typeof d.model_used === "string" ? d.model_used : undefined,
+  });
   learned = learnStacks(runDocs.map(run),
     useDocs.map((d) => ({ ...run(d), tool: String(d.tool_name), argsHash: String(d.args_hash ?? "") })));
   logger.info(`[TradingToolStacks] learned ${JSON.stringify(Object.fromEntries(learned))}`);
 }
 
-/** The learned stack for a role, limited to its signed catalog. Empty when switched off
- * (TRADING_TOOL_STACKS=false), before the first refresh lands, or when no stack qualifies.
- * Refreshes in the background every REFRESH_MS; a request never waits on the database. */
-export function openingStack(agentName: string, allowedTools: string[]): string[] {
+/** The learned stack for a role (preferring the model family's stack when >= MIN_RUNS exist, else
+ * falling back to the role-wide stack), limited to its signed catalog. */
+export function openingStack(agentName: string, allowedTools: string[], modelId?: string): string[] {
   if ((process.env.TRADING_TOOL_STACKS || "true").toLowerCase() === "false") return [];
   if (Date.now() >= nextRefreshAt) {
     nextRefreshAt = Date.now() + REFRESH_MS;
@@ -102,6 +131,11 @@ export function openingStack(agentName: string, allowedTools: string[]): string[
     });
   }
   const allowed = new Set(allowedTools.map(stripMcpPrefix));
-  const stack = (learned.get(agentName) ?? []).filter((t) => allowed.has(t));
+  const family = modelId ? modelFamilyOf(modelId) : "unknown";
+  const candidate =
+    (family !== "unknown" ? learned.get(`${agentName}|${family}`) : undefined) ??
+    learned.get(agentName) ??
+    [];
+  const stack = candidate.filter((t) => allowed.has(t));
   return stack.length >= 2 ? stack : [];
 }

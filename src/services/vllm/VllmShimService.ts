@@ -1,9 +1,10 @@
-import { applyTradingToolProtocol } from "../TradingToolProtocol.ts";
+import { applyTradingToolProtocol, resolveActiveShimInterlock } from "../TradingToolProtocol.ts";
 import { extractToolContext, verifyToolContext } from "../TradingToolContext.ts";
 import { openingStack } from "../TradingToolStacks.ts";
 import { cutStreamBody, probeFault } from "../ProbeFault.ts";
 import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 import { filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
+import { modelFamilyOf } from "../../platform/models/ModelProfiles.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
 
@@ -892,8 +893,15 @@ export class VllmShimService {
       const execution = extractToolContext(req.body);
       toolContextToken = execution.token;
       const signed = execution.token ? verifyToolContext(execution.token) : null;
+      const reqModel = typeof execution.body?.model === "string" ? execution.body.model : undefined;
+      const activeInterlock = signed ? resolveActiveShimInterlock(signed.agentName, reqModel) : null;
       const protocol = signed
-        ? applyTradingToolProtocol(execution.body, signed.allowedTools, openingStack(signed.agentName, signed.allowedTools))
+        ? applyTradingToolProtocol(
+            execution.body,
+            signed.allowedTools,
+            openingStack(signed.agentName, signed.allowedTools, reqModel),
+            activeInterlock,
+          )
         : null;
       boundary = filterTradingPayload(protocol?.body || execution.body);
       if (boundary.receipt && protocol) {
@@ -902,6 +910,9 @@ export class VllmShimService {
         boundary.receipt.reasoning_acknowledgements_corrected = protocol.correctedAcknowledgements;
         boundary.receipt.unpermitted_tools_removed = protocol.deniedTools;
         boundary.receipt.final_turn_directed = protocol.finalTurnDirected;
+        boundary.receipt.model_family = reqModel ? modelFamilyOf(reqModel) : "unknown";
+        boundary.receipt.shim_interlock_version = protocol.interlockVersion;
+        boundary.receipt.shim_interlock_fired = protocol.interlockFired;
       }
     } catch (error) {
       res.status(422).json({ error: String(error) });

@@ -2,7 +2,11 @@
  * Applied only after the shim verifies a signed trading identity. Never promote
  * quoted/embedded tool text into an executable call or change role permissions.
  */
+import fs from "node:fs";
+import path from "node:path";
+import { modelFamilyOf } from "../platform/models/ModelProfiles.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
+import { PromotionController } from "./PromotionController.ts";
 
 const protocol = "[TRADING TOOL EXECUTION CONTRACT v1]\n" +
   "Use native tool_calls for research and calculation. Text or XML naming a tool inside another tool's arguments does not execute it. " +
@@ -45,20 +49,100 @@ export const FINAL_TURN_DIRECTIVE = "When an <iteration-limit> message arrives, 
   "JSON artifact, built from the evidence you already have, with anything you could not " +
   "verify stated as a gap.";
 
-/** prism's forced final turn: the last message is its <iteration-limit> notice and no tool can be
- * called. prism builds up to 2026-09-27 removed the catalog on that turn; the build deployed that
- * evening keeps the catalog byte-stable (for the prompt cache) and sends tool_choice "none"
- * instead, and it sends the notice as a SYSTEM message — rewriteMessages demotes it to user only
- * after this protocol has run, so the stored payload shows "user". Keyed on a missing catalog and
- * a user notice, the directive fired on 0 of 5 wall turns on 2026-09-28 (and on none of the first
- * verification run of 004e23b, which fixed only the catalog half).
+export const NATIVE_EXHAUSTION_PREFIX = "Time, budget or step limit reached. Do not call tools.";
+export const INTERLOCK_MARKER = "[TRADING INTERLOCK v1]";
+
+/**
+ * Promoted per-(agentRole, modelFamily) execution & completion interlock (arXiv:2611.18856 §F.2 / Table 8).
+ * Governed by `PromotionController`: inactive (`null`) until a candidate config reaches `active`.
  */
-function isForcedFinalTurn(messages: any[], tools: unknown, toolChoice: unknown): boolean {
+export interface TradingShimInterlockConfig {
+  version: string;
+  /** Also direct native-loop exhaustion wall messages (`ExhaustionRecovery.ts`) to emit the JSON artifact. */
+  matchNativeExhaustionNotice?: boolean;
+  /** Max consecutive failed results from the same tool before injecting a single-shot bounded-stop notice. */
+  maxConsecutiveToolErrors?: number;
+  /** Assistant tool-call turn threshold after which a single-shot convergence notice fires (once reads succeeded). */
+  turnWarnThreshold?: number;
+  /** Optional concise tool-contract repair hint appended when `maxConsecutiveToolErrors` triggers. */
+  toolErrorHint?: string;
+}
+
+const shimInterlockRegistry = new Map<string, TradingShimInterlockConfig>();
+let shimInterlockLoadedPath: string | null = null;
+
+function shimInterlockStorePath(): string {
+  return process.env.PROMOTION_INTERLOCK_STORE_PATH || path.resolve(process.cwd(), "runtime-data", "shim_interlocks.json");
+}
+
+function ensureShimInterlocksLoaded(): void {
+  const storePath = shimInterlockStorePath();
+  if (shimInterlockLoadedPath === storePath) return;
+  shimInterlockRegistry.clear();
+  shimInterlockLoadedPath = storePath;
+  try {
+    if (fs.existsSync(storePath)) {
+      const parsed = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, TradingShimInterlockConfig>;
+      for (const [k, v] of Object.entries(parsed)) {
+        if (v && typeof v.version === "string") shimInterlockRegistry.set(k, v);
+      }
+    }
+  } catch {
+    /* fresh registry */
+  }
+}
+
+export function tradingShimProfileId(agentName: string, modelFamily: string): string {
+  return `trading-shim:${agentName.toLowerCase()}:${modelFamily.toLowerCase()}`;
+}
+
+export function registerShimInterlockConfig(
+  profileId: string,
+  config: TradingShimInterlockConfig,
+): void {
+  ensureShimInterlocksLoaded();
+  shimInterlockRegistry.set(`${profileId}@${config.version}`, config);
+  const storePath = shimInterlockStorePath();
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, `${JSON.stringify(Object.fromEntries(shimInterlockRegistry), null, 2)}\n`, "utf8");
+}
+
+export function resolveActiveShimInterlock(
+  agentName: string | undefined,
+  modelId: string | undefined,
+): TradingShimInterlockConfig | null {
+  if (!agentName || (process.env.TRADING_SHIM_INTERLOCK || "true").toLowerCase() === "false") return null;
+  ensureShimInterlocksLoaded();
+  const family = modelId ? modelFamilyOf(modelId) : "unknown";
+  const candidates = [
+    ...(family !== "unknown" ? [tradingShimProfileId(agentName, family)] : []),
+    tradingShimProfileId(agentName, "*"),
+  ];
+  for (const profileId of candidates) {
+    const active = PromotionController.getActive(profileId);
+    if (!active) continue;
+    const cfg = shimInterlockRegistry.get(`${profileId}@${active.version}`);
+    if (cfg) return cfg;
+  }
+  return null;
+}
+
+function isForcedFinalTurn(
+  messages: any[],
+  tools: unknown,
+  toolChoice: unknown,
+  matchNativeExhaustion = false,
+): boolean {
   const last = messages[messages.length - 1];
   const callable = Array.isArray(tools) && tools.length > 0 && toolChoice !== "none";
-  return !callable
-    && (last?.role === "user" || last?.role === "system") && typeof last.content === "string"
-    && last.content.includes("<iteration-limit>") && !last.content.includes(FINAL_TURN_DIRECTIVE);
+  if (callable || (last?.role !== "user" && last?.role !== "system") || typeof last.content !== "string") {
+    return false;
+  }
+  if (last.content.includes(FINAL_TURN_DIRECTIVE)) return false;
+  return (
+    last.content.includes("<iteration-limit>") ||
+    (matchNativeExhaustion && last.content.includes(NATIVE_EXHAUSTION_PREFIX))
+  );
 }
 
 /** The role's learned opening stack (TradingToolStacks.openingStack). The replayed wording said
@@ -146,9 +230,95 @@ function normalizeTradingToolChoice(
   }
 }
 
-export function applyTradingToolProtocol(body: Record<string, any>, allowedTools?: string[], openingStack: string[] = []): {
-  body: Record<string, any>; removedTools: number; correctedAcknowledgements: number; deniedTools: string[];
+const TOOL_ERROR_RE = /(?:execution failed|TypeError:|KeyError:|ValueError:|SyntaxError:|"error"\s*:|\bERROR\b)/i;
+
+function isToolErrorContent(content: unknown): boolean {
+  return typeof content === "string" && TOOL_ERROR_RE.test(content);
+}
+
+function alreadyHasInterlockMarker(messages: any[], tag: string): boolean {
+  return messages.some((m) => typeof m?.content === "string" && m.content.includes(tag));
+}
+
+function recordAssistantCalls(callNameById: Map<string, string>, toolCalls: unknown): void {
+  if (!Array.isArray(toolCalls)) return;
+  for (const c of toolCalls) {
+    if (typeof c?.id === "string" && typeof c?.function?.name === "string") {
+      callNameById.set(c.id, stripMcpPrefix(c.function.name));
+    }
+  }
+}
+
+function collectToolOutcomes(messages: any[]): { outcomes: Array<{ name: string; failed: boolean }>; hasSuccessRead: boolean } {
+  const callNameById = new Map<string, string>();
+  const outcomes: Array<{ name: string; failed: boolean }> = [];
+  let hasSuccessRead = false;
+  for (const m of messages) {
+    if (m?.role === "assistant") {
+      recordAssistantCalls(callNameById, m.tool_calls);
+    } else if (m?.role === "tool" && typeof m.tool_call_id === "string") {
+      const name = callNameById.get(m.tool_call_id) || "unknown";
+      const failed = isToolErrorContent(m.content);
+      if (!failed) hasSuccessRead = true;
+      outcomes.push({ name, failed });
+    }
+  }
+  return { outcomes, hasSuccessRead };
+}
+
+function countTrailingSameToolErrors(messages: any[]): { toolName: string; count: number; hasSuccessRead: boolean } {
+  const { outcomes, hasSuccessRead } = collectToolOutcomes(messages);
+  const last = outcomes[outcomes.length - 1];
+  if (!last || !last.failed) return { toolName: "", count: 0, hasSuccessRead };
+  let count = 0;
+  for (let i = outcomes.length - 1; i >= 0; i--) {
+    if (outcomes[i].name === last.name && outcomes[i].failed) count++;
+    else break;
+  }
+  return { toolName: last.name, count, hasSuccessRead };
+}
+
+function applyTailInterlockNotice(
+  messages: any[],
+  interlock: TradingShimInterlockConfig | null | undefined,
+): string | null {
+  if (!interlock || messages.length === 0) return null;
+  const lastIdx = messages.length - 1;
+  const last = messages[lastIdx];
+  if (last?.role !== "tool" || typeof last.content !== "string") return null;
+
+  const { toolName, count, hasSuccessRead } = countTrailingSameToolErrors(messages);
+  const errCap = interlock.maxConsecutiveToolErrors ?? 0;
+  if (errCap > 0 && count >= errCap && !alreadyHasInterlockMarker(messages, `${INTERLOCK_MARKER} [tool-retry]`)) {
+    const extra = interlock.toolErrorHint ? ` ${interlock.toolErrorHint}` : "";
+    const note = `\n\n${INTERLOCK_MARKER} [tool-retry]: '${toolName}' failed ${count} consecutive times.${extra} Do not repeat the same failing call; either make one corrected scalar call or synthesize the required JSON artifact now from verified evidence, recording any unresolved calculation as a gap.`;
+    messages[lastIdx] = { ...last, content: last.content + note };
+    return "tool-retry";
+  }
+
+  const assistantTurns = messages.filter((m) => m?.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0).length;
+  const warnAt = interlock.turnWarnThreshold ?? 0;
+  if (warnAt > 0 && hasSuccessRead && assistantTurns >= warnAt && !alreadyHasInterlockMarker(messages, `${INTERLOCK_MARKER} [turn-budget]`)) {
+    const note = `\n\n${INTERLOCK_MARKER} [turn-budget]: Turn ${assistantTurns} reached with primary data reads already gathered. Avoid redundant tool loops; finish any single essential check or emit the complete required JSON artifact now.`;
+    messages[lastIdx] = { ...last, content: last.content + note };
+    return "turn-budget";
+  }
+  return null;
+}
+
+export function applyTradingToolProtocol(
+  body: Record<string, any>,
+  allowedTools?: string[],
+  openingStack: string[] = [],
+  interlock?: TradingShimInterlockConfig | null,
+): {
+  body: Record<string, any>;
+  removedTools: number;
+  correctedAcknowledgements: number;
+  deniedTools: string[];
   finalTurnDirected: boolean;
+  interlockFired: string | null;
+  interlockVersion: string | null;
 } {
   const allowed = allowedTools ? new Set(allowedTools.map(stripMcpPrefix)) : null;
   const { tools, removedTools, deniedTools } = buildTradingTools(body, allowed);
@@ -158,12 +328,21 @@ export function applyTradingToolProtocol(body: Record<string, any>, allowedTools
   const stack = openingStack.filter((t) => callable.has(stripMcpPrefix(t)));
   const hint = buildTradingHint(hintEnabled, callable, stack);
   const { messages, correctedAcknowledgements } = rewriteTradingMessages(body.messages || [], protocol, hint);
-  const finalTurnDirected = isForcedFinalTurn(messages, tools, body.tool_choice);
+  const finalTurnDirected = isForcedFinalTurn(messages, tools, body.tool_choice, Boolean(interlock?.matchNativeExhaustionNotice));
   if (finalTurnDirected) {
     const last = messages[messages.length - 1];
     messages[messages.length - 1] = { ...last, content: last.content + "\n" + FINAL_TURN_DIRECTIVE };
   }
+  const interlockFired = finalTurnDirected ? "final-turn" : applyTailInterlockNotice(messages, interlock);
   const result: Record<string, any> = { ...body, messages, ...(Array.isArray(tools) ? { tools } : {}) };
   normalizeTradingToolChoice(body, result, tools, removedTools, deniedTools);
-  return { body: result, removedTools, correctedAcknowledgements, deniedTools, finalTurnDirected };
+  return {
+    body: result,
+    removedTools,
+    correctedAcknowledgements,
+    deniedTools,
+    finalTurnDirected,
+    interlockFired: interlock ? interlockFired : null,
+    interlockVersion: interlock?.version ?? null,
+  };
 }

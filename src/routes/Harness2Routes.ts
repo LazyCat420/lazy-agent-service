@@ -5,6 +5,8 @@ import LocalProviderGateway from "../services/local-provider/index.ts";
 import { DEFAULT_IMPROVER, type Harness2Request, type ModelRef } from "../services/harness2/Harness2Service.ts";
 import { activeRun, cancelRun, getRun, startRun, waitRun } from "../services/harness2/Harness2Jobs.ts";
 import { Library } from "../services/harness2/Library.ts";
+import { SimStore, type SimMemoryCondition } from "../services/harness2/SimStore.ts";
+import { runCrsiSelftest } from "../services/harness2/CrossModelCrsiService.ts";
 import { validateTree } from "../services/harness2/HarnessTree.ts";
 import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
 
@@ -111,6 +113,24 @@ function validateRecursionAndModeFields(
   return { k, width };
 }
 
+function validateSimFields(body: Record<string, unknown>): { error?: string } {
+  if (
+    body.simCondition !== undefined &&
+    body.simCondition !== "none" &&
+    body.simCondition !== "problem-only" &&
+    body.simCondition !== "full"
+  ) {
+    return { error: "simCondition must be none, problem-only or full" };
+  }
+  if (
+    body.simRound !== undefined &&
+    (!Number.isInteger(body.simRound) || Number(body.simRound) < 1)
+  ) {
+    return { error: "simRound must be a positive integer" };
+  }
+  return {};
+}
+
 function validateBenchSlots(
   rawBench: unknown,
 ): { bench: Harness2Request["bench"] } | { error: string } {
@@ -167,6 +187,9 @@ function check(body: Record<string, unknown>): Checked {
   const modeRes = validateRecursionAndModeFields(body);
   if ("error" in modeRes) return modeRes;
 
+  const simRes = validateSimFields(body);
+  if (simRes.error) return { error: simRes.error };
+
   const benchRes = validateBenchSlots(body.bench);
   if ("error" in benchRes) return benchRes;
 
@@ -184,6 +207,8 @@ function check(body: Record<string, unknown>): Checked {
     // TCK-1020: opt-in per-mode / per-scope library instead of the one domain library.
     isolateLibrary: body.isolateLibrary === true ? true : undefined,
     libraryScope: typeof body.libraryScope === "string" && body.libraryScope.trim() ? body.libraryScope : undefined,
+    simCondition: body.simCondition as SimMemoryCondition | undefined,
+    simRound: body.simRound as number | undefined,
     solver,
     improver,
     project: typeof body.project === "string" ? body.project : undefined,
@@ -298,6 +323,32 @@ router.delete(
     const removed = new Library(domain).forget([taskId]);
     if (!removed.length) return res.status(404).json({ error: "no such entry" });
     res.json({ domain, removed });
+  }),
+);
+
+/** GET /harness2/sim/:domain — inspect Self-Improvement Memory (SIM) problems, attempts, and prompt rendering. */
+router.get(
+  "/sim/:domain",
+  asyncHandler(async (req, res) => {
+    const domain = String(req.params.domain);
+    if (!ID_RE.test(domain)) return res.status(400).json({ error: "invalid domain" });
+    const rawCond = String(req.query.condition ?? "full");
+    if (rawCond !== "none" && rawCond !== "problem-only" && rawCond !== "full") {
+      return res.status(400).json({ error: "condition must be none, problem-only or full" });
+    }
+    const store = new SimStore(domain);
+    const doc = await store.load();
+    res.json({ domain: store.domain, condition: rawCond, sim: doc, prompt: store.renderPrompt(rawCond) });
+  }),
+);
+
+/** POST /harness2/crsi/selftest — run A/A, known-answer, and mutation controls on the CRSI evaluator. */
+router.post(
+  "/crsi/selftest",
+  runtimeAuth,
+  asyncHandler(async (_req, res) => {
+    const report = await runCrsiSelftest();
+    res.status(report.passed ? 200 : 500).json(report);
   }),
 );
 

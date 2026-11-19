@@ -46,6 +46,13 @@ export class ProposerError extends Error {
   }
 }
 
+export interface SimProposalManifest {
+  citedProblemId?: string;
+  rootCause: string;
+  predicted: string[];
+  rationale: string;
+}
+
 export interface Stage {
   label: string;
   dim: "INV" | "DOM" | "AGG" | "COMPOSE";
@@ -57,6 +64,8 @@ export interface Stage {
   notes: string;
   /** Skills that `autotrigger` gave a trigger line before validation. */
   repaired: string[];
+  /** Pre-evaluation SIM diagnosis + task-fix prediction manifest (arXiv:2611.18856 §3.2). */
+  manifest?: SimProposalManifest | null;
 }
 
 export interface ModeResult {
@@ -78,6 +87,8 @@ export interface RecursionDeps {
   baseTree: Tree;
   /** Library evidence (harnessing-level recursion); "" when the domain is empty. */
   libraryText?: string;
+  /** Self-Improvement Memory (SIM) text for Proposer/Composer (arXiv:2611.18856 §3.2). */
+  simText?: string;
   width?: number;
   /** Wait before transport attempt n is backoff × (n - 1); upstream uses 10 s. */
   transportBackoffMs?: number;
@@ -110,13 +121,39 @@ export function decisionsOf(stages: Stage[]): Record<string, string> {
 const relOf = (raw: string) => raw.trim().replace(/^\.?\//, "").replace(/^context\/harness\//, "");
 const FILE_OPEN = /<file\s+path="([^"]+)"\s*>/g;
 const FILE_BLOCK = /<file\s+path="([^"]+)"\s*>\n?([\s\S]*?)<\/file>/g;
+const DIAGNOSIS_BLOCK = /<diagnosis(?:\s+problem="([^"]*)")?\s*>([\s\S]*?)<\/diagnosis>/i;
+const PREDICTED_BLOCK = /<predicted>([\s\S]*?)<\/predicted>/i;
+const RATIONALE_BLOCK = /<rationale>([\s\S]*?)<\/rationale>/i;
+
+/** Parse pre-evaluation SIM manifest from a proposer reply before any rollout runs (§3.2). */
+export function parseSimManifest(reply: string, fallbackNotes: string): SimProposalManifest | null {
+  const diag = DIAGNOSIS_BLOCK.exec(reply);
+  if (!diag) return null;
+  const rawId = (diag[1] || "").trim();
+  const citedProblemId = rawId && rawId.toUpperCase() !== "NEW" ? rawId : undefined;
+  const rootCause = diag[2].trim();
+  if (!rootCause && !citedProblemId) return null;
+  const rawPred = PREDICTED_BLOCK.exec(reply)?.[1] ?? "";
+  const predicted = rawPred
+    .split(/[,\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => Boolean(s) && s.toLowerCase() !== "none");
+  const rationale = RATIONALE_BLOCK.exec(reply)?.[1]?.trim() || fallbackNotes;
+  return { citedProblemId, rootCause: rootCause || citedProblemId || "unspecified", predicted, rationale };
+}
 
 /**
  * Apply a proposer reply to `fallback`: `<file path>` writes, `<delete path/>` removals.
  * Off-surface paths are collected in `rejected`, never applied. `unterminated` names the first
  * `<file>` block that never closes (a reply cut off mid-file).
  */
-export function applyReply(fallback: Tree, reply: string): { tree: Tree; rejected: string[]; notes: string; unterminated: string | null } {
+export function applyReply(fallback: Tree, reply: string): {
+  tree: Tree;
+  rejected: string[];
+  notes: string;
+  unterminated: string | null;
+  manifest: SimProposalManifest | null;
+} {
   const tree: Tree = { ...fallback };
   const rejected: string[] = [];
   const complete = new Set<number>();
@@ -133,7 +170,8 @@ export function applyReply(fallback: Tree, reply: string): { tree: Tree; rejecte
     else rejected.push(rel);
   }
   const notes = /<notes>([\s\S]*?)<\/notes>/.exec(reply)?.[1].trim() ?? reply.trim();
-  return { tree, rejected, notes, unterminated: open ? relOf(open[1]) : null };
+  const manifest = parseSimManifest(reply, notes);
+  return { tree, rejected, notes, unterminated: open ? relOf(open[1]) : null, manifest };
 }
 
 /** Keep the start and end of `text` within `limit` chars, marking the cut as ours. */
@@ -160,6 +198,7 @@ export interface MissionOptions {
   currentTitle?: string;
   base: RunView[];
   libraryText?: string;
+  simText?: string;
   pool?: Array<{ label: string; tree: Tree; rollout?: RunView }>;
   decisions?: Record<string, string>;
   /** What candidate diffs are measured against (default: `current`, named "current"). */
@@ -196,6 +235,10 @@ export function buildMission(job: string, opts: MissionOptions): string {
     }
     if (opts.libraryText) {
       parts.push("# LIBRARY — earlier tasks in this domain (read-only experience)\n\n" + opts.libraryText);
+    }
+    const simBlock = prompts.simProposerAddendum(opts.simText);
+    if (simBlock) {
+      parts.push(simBlock);
     }
     return parts.join("\n\n");
   };
@@ -272,6 +315,7 @@ export async function runStage(args: {
     current: fallback,
     base: args.base,
     libraryText: deps.libraryText,
+    simText: deps.simText,
     pool: args.pool,
     decisions: args.decisions,
     budget: deps.missionCharBudget ?? DEFAULT_MISSION_CHAR_BUDGET,
@@ -290,7 +334,7 @@ export async function runStage(args: {
       err = `proposer failed: ${errText(error)}`;
       break;
     }
-    const { tree, rejected, notes, unterminated } = applyReply(working, reply);
+    const { tree, rejected, notes, unterminated, manifest } = applyReply(working, reply);
     working = tree;
     workingNotes = notes;
     if (unterminated) {
@@ -310,9 +354,9 @@ export async function runStage(args: {
       err = errText(error);
       continue;
     }
-    return { label, dim, tree, keptBase: isUnchanged(fallback, tree), fellBack: false, error: "", attempts, notes, repaired };
+    return { label, dim, tree, keptBase: isUnchanged(fallback, tree), fellBack: false, error: "", attempts, notes, repaired, manifest };
   }
-  return { label, dim, tree: { ...fallback }, keptBase: false, fellBack: true, error: err.slice(0, 400), attempts, notes: "", repaired: [] };
+  return { label, dim, tree: { ...fallback }, keptBase: false, fellBack: true, error: err.slice(0, 400), attempts, notes: "", repaired: [], manifest: null };
 }
 
 async function roll(deps: RecursionDeps, label: string, tree: Tree): Promise<RunView> {

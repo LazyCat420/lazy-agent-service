@@ -51,3 +51,4 @@ data/run_store_durable.json
 runtime-data/
 
 coverage/
+.checks/

@@ -20,6 +20,39 @@ describe("learnStacks", () => {
     expect(stacks.get("v3_junior_analyst")).toEqual(["get_upcoming_events", "get_finnhub_news", "get_institutional_holdings"]);
   });
 
+  it("partitions learned stacks by model family (qwen vs deepseek) with role-wide fallback when family n < 30", () => {
+    const deepseekRuns = Array.from({ length: 40 }, (_, i) => ({
+      agent: "v3_quant_analyst",
+      cycleId: `ds-${i}`,
+      ticker: "NVDA",
+      model: "DeepSeek-V4.1-Flash-1017",
+    }));
+    const qwenRuns = Array.from({ length: 20 }, (_, i) => ({
+      agent: "v3_quant_analyst",
+      cycleId: `qw-${i}`,
+      ticker: "NVDA",
+      model: "Qwen3.8-Flash-Next",
+    }));
+    const allRuns = [...deepseekRuns, ...qwenRuns];
+    const stacks = learnStacks(allRuns, [
+      ...allRuns.map((r) => ({ ...r, tool: "get_polygon_price_history", argsHash: "h1" })),
+      ...allRuns.map((r) => ({ ...r, tool: "get_technical_indicators", argsHash: "h2" })),
+      ...deepseekRuns.map((r) => ({ ...r, tool: "get_market_data", argsHash: "h3" })),
+    ]);
+    // DeepSeek has n=40 >= 30, so its 3-tool stack is learned specifically for `v3_quant_analyst|deepseek`.
+    expect(stacks.get("v3_quant_analyst|deepseek")).toEqual([
+      "get_market_data",
+      "get_polygon_price_history",
+      "get_technical_indicators",
+    ]);
+    // Qwen has n=20 < 30, so no `|qwen` stack yet; it inherits the role-wide 2-tool stack (n=60).
+    expect(stacks.has("v3_quant_analyst|qwen")).toBe(false);
+    expect(stacks.get("v3_quant_analyst")).toEqual([
+      "get_polygon_price_history",
+      "get_technical_indicators",
+    ]);
+  });
+
   it("ignores autoroute prefetches, unsuccessful runs, thin samples and single-tool stacks", () => {
     const stacks = learnStacks([...runs("v3_fundamental_analyst", 50), ...runs("v3_quant_analyst", 29), ...runs("v3_valuation_analyst", 50)], [
       ...uses("v3_fundamental_analyst", "get_earnings_data", 50, "autoroute:abc"),

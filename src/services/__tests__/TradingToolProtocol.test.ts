@@ -1,5 +1,20 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, it, expect } from "vitest";
-import { applyTradingToolProtocol, FINAL_TURN_DIRECTIVE, PARALLEL_TOOL_HINT, openingStackLine } from "../TradingToolProtocol.ts";
+import { PromotionController } from "../PromotionController.ts";
+import {
+  applyTradingToolProtocol,
+  FINAL_TURN_DIRECTIVE,
+  INTERLOCK_MARKER,
+  NATIVE_EXHAUSTION_PREFIX,
+  PARALLEL_TOOL_HINT,
+  openingStackLine,
+  registerShimInterlockConfig,
+  resolveActiveShimInterlock,
+  tradingShimProfileId,
+} from "../TradingToolProtocol.ts";
 
 const tool = (name: string) => ({ type: "function", function: { name, parameters: { type: "object" } } });
 describe("trading execution protocol", () => {
@@ -168,5 +183,135 @@ describe("parallel tool-call hint", () => {
     const content = applyTradingToolProtocol(body(), ["get_finnhub_news", "get_upcoming_events"], stack).body.messages[0].content;
     expect(content.endsWith(PARALLEL_TOOL_HINT + "\n" + openingStackLine(["get_upcoming_events", "get_finnhub_news"]))).toBe(true);
     expect(applyTradingToolProtocol(body(), ["get_finnhub_news"], stack).body.messages[0].content).not.toContain("opening bundle");
+  });
+});
+
+describe("promoted completion & tool-retry interlock (WI-3, TC-3)", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    delete process.env.PROMOTION_INTERLOCK_STORE_PATH;
+    delete process.env.TRADING_SHIM_INTERLOCK;
+    for (const d of tmpDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  const isolatePromotion = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shim-interlock-test-"));
+    tmpDirs.push(dir);
+    process.env.PROMOTION_INTERLOCK_STORE_PATH = path.join(dir, "shim_interlocks.json");
+    (PromotionController as unknown as { state: Map<string, unknown> }).state = new Map();
+    (PromotionController as unknown as { initialized: boolean }).initialized = false;
+    (PromotionController as unknown as { storePath: string }).storePath = path.join(dir, "promo.json");
+  };
+
+  it("TC-3: keeps outgoing payload byte-identical when no active promotion exists", () => {
+    isolatePromotion();
+    const profileId = tradingShimProfileId("v3_quant_analyst", "qwen");
+    registerShimInterlockConfig(profileId, {
+      version: "1.0.0",
+      maxConsecutiveToolErrors: 2,
+      turnWarnThreshold: 6,
+      matchNativeExhaustionNotice: true,
+    });
+    // Registered in shadow only (not active): resolveActiveShimInterlock must return null.
+    PromotionController.register(profileId, "1.0.0", "shadow");
+    expect(resolveActiveShimInterlock("v3_quant_analyst", "Qwen3.8-Flash-Next")).toBeNull();
+
+    const payload = {
+      tools: [tool("get_polygon_price_history"), tool("run_equation")],
+      messages: [
+        { role: "system", content: "quant role" },
+        { role: "user", content: "## Ticker: CVI" },
+        { role: "assistant", content: null, tool_calls: [{ id: "e1", function: { name: "run_equation", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "e1", content: "Equation execution failed: TypeError: float() argument must be a real number, not 'dict'" },
+        { role: "assistant", content: null, tool_calls: [{ id: "e2", function: { name: "run_equation", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "e2", content: "Equation execution failed: TypeError: float() argument must be a real number, not 'dict'" },
+      ],
+    };
+    const baseline = applyTradingToolProtocol(payload, ["get_polygon_price_history", "run_equation"]);
+    const withInactive = applyTradingToolProtocol(
+      payload,
+      ["get_polygon_price_history", "run_equation"],
+      [],
+      resolveActiveShimInterlock("v3_quant_analyst", "Qwen3.8-Flash-Next"),
+    );
+    const hash = (x: unknown) => crypto.createHash("sha256").update(JSON.stringify(x)).digest("hex");
+    expect(hash(withInactive.body)).toBe(hash(baseline.body));
+    expect(withInactive.interlockFired).toBeNull();
+  });
+
+  it("fires single-shot tool-retry and native-exhaustion directives only after PromotionController reaches active, preserving earlier KV prefix", () => {
+    isolatePromotion();
+    const profileId = tradingShimProfileId("v3_quant_analyst", "qwen");
+    const cfg = {
+      version: "1.1.0",
+      maxConsecutiveToolErrors: 2,
+      turnWarnThreshold: 6,
+      matchNativeExhaustionNotice: true,
+      toolErrorHint: "Return scalar or flat string values in run_equation, never nested dicts.",
+    };
+    registerShimInterlockConfig(profileId, cfg);
+    PromotionController.register(profileId, "1.1.0");
+    const verdict = { outcome: "improved" as const, delta: 0.25, ciLower: 0.08, ciUpper: 0.42 };
+    PromotionController.transition({ profileId, version: "1.1.0", from: "offline_candidate", to: "shadow", reason: "s", experiment: verdict });
+    PromotionController.transition({ profileId, version: "1.1.0", from: "shadow", to: "canary_5", reason: "c5", experiment: verdict });
+    PromotionController.transition({ profileId, version: "1.1.0", from: "canary_5", to: "canary_25", reason: "c25", experiment: verdict });
+    PromotionController.transition({ profileId, version: "1.1.0", from: "canary_25", to: "active", reason: "go", experiment: verdict });
+
+    const active = resolveActiveShimInterlock("v3_quant_analyst", "Qwen3.8-Flash-Next");
+    expect(active?.version).toBe("1.1.0");
+    // DeepSeek is unaffected by Qwen's family-scoped profile.
+    expect(resolveActiveShimInterlock("v3_quant_analyst", "DeepSeek-V4.1-Flash-1017")).toBeNull();
+
+    const turn1Messages = [
+      { role: "system", content: "quant role" },
+      { role: "user", content: "## Ticker: CVI" },
+      { role: "assistant", content: null, tool_calls: [{ id: "p1", function: { name: "get_polygon_price_history", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "p1", content: '{"price_rows":252}' },
+    ];
+    const r1 = applyTradingToolProtocol(
+      { tools: [tool("get_polygon_price_history"), tool("run_equation")], messages: turn1Messages },
+      ["get_polygon_price_history", "run_equation"],
+      [],
+      active,
+    );
+    expect(r1.interlockFired).toBeNull();
+
+    const turn3Messages = [
+      ...turn1Messages,
+      { role: "assistant", content: null, tool_calls: [{ id: "e1", function: { name: "run_equation", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "e1", content: "Equation execution failed: TypeError: not 'dict'" },
+      { role: "assistant", content: null, tool_calls: [{ id: "e2", function: { name: "run_equation", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "e2", content: "Equation execution failed: TypeError: not 'dict'" },
+    ];
+    const r3 = applyTradingToolProtocol(
+      { tools: [tool("get_polygon_price_history"), tool("run_equation")], messages: turn3Messages },
+      ["get_polygon_price_history", "run_equation"],
+      [],
+      active,
+    );
+    expect(r3.interlockFired).toBe("tool-retry");
+    expect(r3.interlockVersion).toBe("1.1.0");
+    // KV-cache prefix invariant: messages[0..3] are byte-identical to turn 1!
+    expect(r3.body.messages.slice(0, 4)).toEqual(r1.body.messages.slice(0, 4));
+    expect(r3.body.messages[r3.body.messages.length - 1].content).toContain(`${INTERLOCK_MARKER} [tool-retry]`);
+    expect(r3.body.messages[r3.body.messages.length - 1].content).toContain("never nested dicts");
+
+    // Native loop exhaustion notice (`ExhaustionRecovery.ts`) is also directed to emit JSON artifact.
+    const nativeWall = applyTradingToolProtocol(
+      {
+        tools: [tool("run_equation")],
+        tool_choice: "none",
+        messages: [
+          ...turn1Messages,
+          { role: "user", content: `${NATIVE_EXHAUSTION_PREFIX} Answer the user now using only the information already gathered.` },
+        ],
+      },
+      ["run_equation"],
+      [],
+      active,
+    );
+    expect(nativeWall.finalTurnDirected).toBe(true);
+    expect(nativeWall.interlockFired).toBe("final-turn");
+    expect(nativeWall.body.messages[nativeWall.body.messages.length - 1].content).toContain(FINAL_TURN_DIRECTIVE);
   });
 });

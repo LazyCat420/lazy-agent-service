@@ -11,8 +11,9 @@ import { runSingleModel, type ModelResult } from "../BenchmarkService.ts";
 import { getProvider } from "../../providers/index.ts";
 import logger from "../../utils/logger.ts";
 import { ASK_USER_TOOL_SCHEMA } from "../harnesses/lifecycle/AskUserTool.ts";
-import { isUnchanged, materialize, type Tree } from "./HarnessTree.ts";
+import { diffTrees, isUnchanged, materialize, type Tree } from "./HarnessTree.ts";
 import { Library, hasExperience, type Experience } from "./Library.ts";
+import { SimStore, type SimMemoryCondition, type SimProblemEntry } from "./SimStore.ts";
 import * as prompts from "./Prompts.ts";
 import type { BenchPrompts, SelectionPool } from "./Prompts.ts";
 import {
@@ -80,6 +81,10 @@ export interface Harness2Request {
   isolateLibrary?: boolean;
   /** TCK-1020: narrow the library further to this scope (<domain>[/<mode>]/<libraryScope>), e.g. a run id. */
   libraryScope?: string;
+  /** Optional CRSI Self-Improvement Memory condition ("none" | "problem-only" | "full"). */
+  simCondition?: SimMemoryCondition;
+  /** Round index in a multi-round CRSI loop (defaults to 1). */
+  simRound?: number;
   project?: string;
   username?: string;
 }
@@ -125,6 +130,8 @@ export interface Harness2Result {
   experience: { edits: string; entry: Experience | null; raw: string };
   libraryEntry: string | null;
   libraryEntriesBefore: number;
+  /** SIM problem entry updated or created in this round when SIM is enabled. */
+  simEntry?: SimProblemEntry | null;
 }
 
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n…[truncated ${s.length - n} chars]` : s);
@@ -187,7 +194,7 @@ export async function selectOutput(
   bp: BenchPrompts,
   result: ModeResult,
   propose: Proposer,
-  opts: { taskId: string; pool?: SelectionPool; seed?: number; budget?: number },
+  opts: { taskId: string; pool?: SelectionPool; seed?: number; budget?: number; simText?: string },
 ): Promise<Selection> {
   const pool = opts.pool ?? "finals";
   const entrants = pool === "mixed" ? [...result.ledger.filter((l) => l.startsWith("base")), ...result.finals] : result.finals;
@@ -204,8 +211,10 @@ export async function selectOutput(
   // Each candidate gets an equal share of the mission budget, at most 40,000 chars.
   const cap = Math.min(SELECT_CANDIDATE_CHARS, Math.floor((opts.budget ?? DEFAULT_MISSION_CHAR_BUDGET) / order.length));
   const ids = Object.fromEntries(order.map((l, i) => [`a${i + 1}`, l]));
+  const simAddendum = prompts.simSelectorAddendum(opts.simText);
   const body =
     prompts.select(bp, order.length, pool) +
+    (simAddendum ? `\n\n${simAddendum}` : "") +
     "\n\n# THE REQUEST\n\n" +
     bp.work +
     "\n\n# CANDIDATES\n\n" +
@@ -577,13 +586,123 @@ function createNoSelection(pool: SelectionPool): Selection {
   };
 }
 
+export type SimOutcomeEvaluator = (args: {
+  taskId: string;
+  chosenRollout: RunView;
+  baseRollouts: RunView[];
+  predicted: string[];
+}) => {
+  passed: number;
+  total: number;
+  fixed: string[];
+  missed: string[];
+};
+
+function resolveSimRuntime(
+  req: Harness2Request,
+  providedStore?: SimStore,
+): { simCondition: SimMemoryCondition; simStore?: SimStore; simText: string } {
+  const simCondition: SimMemoryCondition = req.simCondition ?? (providedStore ? "full" : "none");
+  if (simCondition === "none") return { simCondition, simStore: providedStore, simText: "" };
+  const simStore =
+    providedStore ??
+    new SimStore(req.domain, {
+      filePath: req.libraryRoot ? `${req.libraryRoot}/${req.domain}/SIM.json` : undefined,
+      useMongo: !req.libraryRoot,
+    });
+  return { simCondition, simStore, simText: simStore.renderPrompt(simCondition) };
+}
+
+function defaultSimOutcome(delivered: boolean, predicted: string[]) {
+  return {
+    passed: delivered ? 1 : 0,
+    total: 1,
+    fixed: delivered ? predicted : [],
+    missed: delivered ? [] : predicted,
+  };
+}
+
+function buildSimAttemptFields(
+  req: Harness2Request,
+  result: ModeResult,
+  selection: Selection,
+  adoptedTree: Tree,
+) {
+  const chosenStage = result.stages.find((s) => s.label === selection.chosenLabel);
+  const manifest = chosenStage?.manifest ?? result.stages.find((s) => s.manifest)?.manifest ?? null;
+  const diff = diffTrees(req.baseTree, adoptedTree);
+  const files = [...diff.added, ...diff.modified, ...diff.removed];
+  const predicted = manifest?.predicted?.length ? manifest.predicted : [req.taskId];
+  const fallbackNote = chosenStage?.notes || selection.why;
+  return {
+    citedProblemId: manifest?.citedProblemId,
+    rootCause: manifest?.rootCause || `Harness gap on ${req.domain} (${files.join(", ") || "tree"})`,
+    what: fallbackNote || `Updated ${files.join(", ")}`,
+    rationale: manifest?.rationale || fallbackNote || "Selected in blind comparison",
+    files,
+    predicted,
+  };
+}
+
+async function recordSelectedSimAttempt(args: {
+  req: Harness2Request;
+  simStore: SimStore | undefined;
+  simCondition: SimMemoryCondition;
+  result: ModeResult;
+  selection: Selection;
+  adoptedTree: Tree;
+  chosenTreeIsBase: boolean;
+  chosen: RunView;
+  base: RunView[];
+  evaluateOutcome?: SimOutcomeEvaluator;
+  errors: string[];
+}): Promise<SimProblemEntry | null> {
+  if (!args.simStore || args.simCondition === "none" || !args.selection.ok || args.chosenTreeIsBase) {
+    return null;
+  }
+  const fields = buildSimAttemptFields(args.req, args.result, args.selection, args.adoptedTree);
+  const evalOut = args.evaluateOutcome
+    ? args.evaluateOutcome({
+        taskId: args.req.taskId,
+        chosenRollout: args.chosen,
+        baseRollouts: args.base,
+        predicted: fields.predicted,
+      })
+    : defaultSimOutcome(args.chosen.delivered, fields.predicted);
+  try {
+    return await args.simStore.recordAttempt({
+      ...fields,
+      round: args.req.simRound ?? 1,
+      sample: args.selection.chosenLabel || "agg1",
+      accepted: true,
+      fixed: evalOut.fixed,
+      missed: evalOut.missed,
+      passed: evalOut.passed,
+      total: evalOut.total,
+      domain: args.req.domain,
+      upstream: args.req.solver.provider,
+      modelId: args.req.solver.model,
+      agentRole: args.req.project,
+    });
+  } catch (error) {
+    args.errors.push(`SIM attempt not stored: ${errText(error)}`);
+    return null;
+  }
+}
+
 /**
- * Run one task: base rollouts → recursion → select → reflect → library. `execute` and
+ * Run one task: base rollouts → recursion → select → reflect → library (+ optional SIM). `execute` and
  * `propose` are injectable for tests; the route uses the real ones.
  */
 export async function runHarness2(
   req: Harness2Request,
-  deps: { execute?: Executor; propose?: Proposer; signal?: AbortSignal } & Pick<RecursionDeps, "transportBackoffMs" | "missionCharBudget"> = {},
+  deps: {
+    execute?: Executor;
+    propose?: Proposer;
+    signal?: AbortSignal;
+    simStore?: SimStore;
+    evaluateSimOutcome?: SimOutcomeEvaluator;
+  } & Pick<RecursionDeps, "transportBackoffMs" | "missionCharBudget"> = {},
 ): Promise<Harness2Result> {
   const k = req.k ?? 1;
   const pool = req.selectionPool ?? "finals";
@@ -594,17 +713,15 @@ export async function runHarness2(
     mode: req.isolateLibrary ? (req.mode ?? "parallel") : undefined,
     runScope: req.libraryScope,
   });
-  const { libraryEntriesBefore, libraryText } = loadHarnessLibraryContext(
-    library,
-    req.taskId,
-    errors,
-  );
+  const { libraryEntriesBefore, libraryText } = loadHarnessLibraryContext(library, req.taskId, errors);
+  const { simCondition, simStore, simText } = resolveSimRuntime(req, deps.simStore);
   const recDeps: RecursionDeps = {
     bp,
     execute,
     propose,
     baseTree: req.baseTree,
     libraryText,
+    simText,
     width: req.width ?? 2,
     transportBackoffMs: deps.transportBackoffMs,
     missionCharBudget: budget,
@@ -666,6 +783,7 @@ export async function runHarness2(
     pool,
     seed: req.seed,
     budget,
+    simText,
   });
   const { chosen, adoptedTree, status, outcome } = resolveSelectionOutcome(
     req,
@@ -685,6 +803,20 @@ export async function runHarness2(
       rest: outcome,
     });
   }
+
+  const simEntry = await recordSelectedSimAttempt({
+    req,
+    simStore,
+    simCondition,
+    result,
+    selection,
+    adoptedTree,
+    chosenTreeIsBase: outcome.chosenTreeIsBase,
+    chosen,
+    base,
+    evaluateOutcome: deps.evaluateSimOutcome,
+    errors,
+  });
 
   const reflected = await reflectAndStoreHarnessExperience(
     req,
@@ -706,7 +838,7 @@ export async function runHarness2(
     selection,
     errors,
     libraryEntriesBefore,
-    rest: { ...outcome, ...reflected },
+    rest: { ...outcome, ...reflected, simEntry },
   });
 }
 

@@ -71,6 +71,35 @@ identical, and then you decide on the small differences that actually matter.`;
 const KEEP_BASE = `KEEP_BASE is a real answer, not a failure. Adaptation that the evidence does not argue for is a
 regression: it costs context and buys nothing.`;
 
+/** arXiv:2611.18856 Appendix D.2 — how Proposer and Selector use Self-Improvement Memory (SIM). */
+export const SIM_GUIDANCE = `# HOW TO USE SELF-IMPROVEMENT MEMORY (SIM)
+
+1. Treat entries as prior experience, with flexibility to choose a different edit.
+2. Check the domain, benchmark, and model family/id behind each entry.
+3. Start with an existing diagnosis (cite its P-id) when it explains the current failure.
+4. Reuse the rationale and reassess the edit after a benchmark or model change.
+5. Revise, replace, or override an inherited harness modification when new evidence warrants it.
+6. Revisit a previously tested direction ONLY when new evidence justifies it; do not blindly repeat a missed edit.
+7. Create a new problem entry (\`NEW\`) when existing diagnoses do not explain the failure.
+8. Give task-specific evidence more weight in similar settings and less when both benchmark and model change.`;
+
+export const SIM_MANIFEST_FORMAT = `# SIM CHANGE MANIFEST (FROZEN BEFORE EVALUATION)
+
+Whenever you propose a harness edit (not \`KEEP_BASE\`), include these blocks before \`<notes>\`:
+- \`<diagnosis problem="P1">existing or new root-cause hypothesis</diagnosis>\` (use \`problem="NEW"\` for a new root cause)
+- \`<predicted>comma-separated task or case ids this edit is predicted to fix</predicted>\`
+- \`<rationale>why this mechanism fixes the root cause for the served model(s)</rationale>\``;
+
+export function simProposerAddendum(simText?: string): string {
+  if (!simText?.trim()) return "";
+  return `${SIM_GUIDANCE}\n\n${SIM_MANIFEST_FORMAT}\n\n${simText.trim()}`;
+}
+
+export function simSelectorAddendum(simText?: string): string {
+  if (!simText?.trim()) return "";
+  return `${SIM_GUIDANCE}\n\n${simText.trim()}`;
+}
+
 export const SURFACE = `# WHAT YOU CAN CHANGE
 
 The harness is a tree of components:
