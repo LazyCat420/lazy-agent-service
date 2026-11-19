@@ -12,9 +12,11 @@
  *    paired bootstrap CI and per-family non-inferiority validity hard gates.
  */
 import { createHash } from "node:crypto";
+import { fetch as undiciFetch } from "undici";
 import { TRADING_MONGO_DB } from "../../../config.ts";
 import { modelFamilyOf, type ModelFamily } from "../../platform/models/ModelProfiles.ts";
 import logger from "../../utils/logger.ts";
+import { STREAMING_DISPATCHER } from "../../utils/openai-compat.ts";
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
 import { stripMcpPrefix } from "../McpPrefix.ts";
 import { PromotionController, type GateEvaluation } from "../PromotionController.ts";
@@ -456,11 +458,12 @@ export function defaultHttpChatTurn(): ChatTurnFn {
       enable_thinking: false,
       chat_template_kwargs: { enable_thinking: false, thinking: false },
     };
-    const res = await fetch(`${target.baseUrl}/v1/chat/completions`, {
+    const res = await undiciFetch(`${target.baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
-      signal: signal ?? AbortSignal.timeout(420_000),
+      dispatcher: STREAMING_DISPATCHER,
+      signal: signal ?? AbortSignal.timeout(900_000),
     });
     if (!res.ok) throw new Error(`${target.label} HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const json = (await res.json()) as {
