@@ -187,6 +187,10 @@
             "type": "string"
           },
           "description": "Short catalyst codes, e.g. ['earnings_2026-07-21', 'guidance_cut']."
+        },
+        "non_earnings": {
+          "type": "boolean",
+          "description": "Set true when an event_followup at an explicit `when` is NOT an earnings report (no earnings_<date> code). Default false."
         }
       },
       "required": [
