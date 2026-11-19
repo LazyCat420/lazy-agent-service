@@ -5,6 +5,14 @@ import { cutStreamBody, probeFault } from "../ProbeFault.ts";
 import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 import { filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
 import { modelFamilyOf } from "../../platform/models/ModelProfiles.ts";
+import {
+  acquirePoolInFlight,
+  markPoolMemberDown,
+  recordPoolServed,
+  releasePoolInFlight,
+  selectQwenMember,
+  type PoolSelection,
+} from "./VllmQwenPool.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
 
@@ -1228,6 +1236,12 @@ export class VllmShimService {
   }
 
   public static async handle(req: Request, res: Response) {
+    // The shared Qwen pool is not one upstream: it chooses a member per
+    // request, so it is intercepted before resolveUpstream (which would 404
+    // an unknown name). See handlePool.
+    const poolPath = VllmShimService.poolOriginalPath(req.originalUrl);
+    if (poolPath !== null) return this.handlePool(req, res, poolPath);
+
     const resolved = this.resolveUpstream(req.originalUrl);
     if (!resolved) {
       const known = Object.keys(UPSTREAMS).filter((name) => this.upstreamEnabled(name));
@@ -1235,7 +1249,7 @@ export class VllmShimService {
         error: `vllm-shim: unknown upstream in "${req.originalUrl}" (known: ${known.join(", ")})`,
       });
     }
-    const { upstreamUrl, originalPath, upstreamName } = resolved;
+    const { originalPath, upstreamName } = resolved;
     const basePath = originalPath.split("?")[0];
 
     // Registered but outside the default active pool (jetson-2 unless opted
@@ -1272,82 +1286,247 @@ export class VllmShimService {
           unreachable: true,
         });
     }
-    const targetUrl = `${upstreamUrl}${originalPath}`;
-
     const preparedBody = await this.prepareProxyBody(req, res, basePath);
     if (preparedBody.handled) return;
-    const body = preparedBody.body;
-    const toolContextToken = preparedBody.toolContextToken;
-    const toolChoiceNone = preparedBody.toolChoiceNone;
-    const isEmbedPost = preparedBody.isEmbedPost;
 
-    const upstreamAbortController = new AbortController();
-    const fetchOnce = async (): Promise<globalThis.Response> => {
-      const headersTimeout = setTimeout(() => {
-        logger.error(`[VllmShim] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
-        upstreamAbortController.abort();
-      }, UPSTREAM_HEADERS_TIMEOUT_MS);
-      try {
-        return await fetch(targetUrl, {
-          method: req.method,
-          headers: { "Content-Type": req.headers["content-type"] || "application/json" },
-          body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(body) : undefined,
-          signal: upstreamAbortController.signal,
-        });
-      } finally {
-        clearTimeout(headersTimeout);
-      }
-    };
+    await this.proxyPrepared(req, res, basePath, preparedBody, resolved);
+  }
 
+  /**
+   * `/vllm-shim/qwen/<rest>` → `<rest>`, or null when the route is not the
+   * pool. The pool answers the same OpenAI surface as every other shim path.
+   */
+  private static poolOriginalPath(originalUrl: string): string | null {
+    const match = originalUrl.match(/^\/vllm-shim\/qwen(\/.*)?$/);
+    return match ? match[1] || "/" : null;
+  }
+
+  /**
+   * Serve one request from the shared Qwen pool.
+   *
+   * The member is chosen per request by `selectQwenMember` (lowest
+   * running+waiting plus this shim's in-flight count, with session affinity),
+   * and only boxes that are up and serving the same model id are eligible —
+   * so a TP=2 relayout that takes .131 down shrinks the pool to one member
+   * without any config change. On a connection error before any byte reached
+   * the client the request is retried once on the other member.
+   */
+  private static async handlePool(req: Request, res: Response, originalPath: string): Promise<void> {
+    const basePath = originalPath.split("?")[0];
+    const preparedBody = await this.prepareProxyBody(req, res, basePath);
+    if (preparedBody.handled) return;
+
+    const selection = await selectQwenMember({ body: preparedBody.body, headers: req.headers });
+    if (!selection) {
+      logger.warn(`[VllmShim] pool ${originalPath}: no member is up — answering 503`);
+      res.status(503).setHeader("Retry-After", "5").json({
+        error: "vllm-shim/qwen: no pool member is up and serving a model (retry)",
+        route: "/vllm-shim/qwen",
+      });
+      return;
+    }
+
+    await this.proxyPrepared(
+      req,
+      res,
+      basePath,
+      preparedBody,
+      {
+        upstreamUrl: selection.member.url,
+        upstreamName: selection.member.name,
+        originalPath,
+      },
+      selection,
+    );
+  }
+
+  /**
+   * Proxy one prepared request to an upstream, or — when `pool` is supplied —
+   * to the pool's chosen member with one failover retry. `pool` carries the
+   * chosen member's in-flight count already taken by `selectQwenMember`; this
+   * method releases it on every exit path.
+   */
+  private static async proxyPrepared(
+    req: Request,
+    res: Response,
+    basePath: string,
+    preparedBody: {
+      body: Record<string, unknown>;
+      toolContextToken?: string;
+      toolChoiceNone: boolean;
+      isEmbedPost: boolean;
+    },
+    resolved: { upstreamUrl: string; originalPath: string; upstreamName: string },
+    pool?: PoolSelection,
+  ): Promise<void> {
+    const { body } = preparedBody;
+    const { originalPath } = resolved;
+    const isModelsProbe = req.method === "GET" && basePath === "/v1/models";
     const isGated =
       req.method === "POST" &&
       (basePath === "/v1/chat/completions" || basePath === "/v1/embeddings");
-    const gate = await this.acquireUpstreamGate(isGated, upstreamName, originalPath, res);
-    if (gate.shed) return;
-    const release = gate.release;
+
+    // Pool: chosen member first, then one failover candidate of the same
+    // model. Non-pool: the single resolved upstream.
+    const attempts: { name: string; url: string; ip?: string }[] = pool
+      ? pool.candidates.slice(0, 2)
+      : [{ name: resolved.upstreamName, url: resolved.upstreamUrl }];
+    // The chosen pool member was counted at selection time; track whose count
+    // this request holds so a failover hands the count to the next member.
+    let heldMember: string | null = pool ? attempts[0].name : null;
 
     try {
-      let response = await fetchOnce();
+      for (let i = 0; i < attempts.length; i++) {
+        const member = attempts[i];
+        const gate = await this.acquireUpstreamGate(isGated, member.name, originalPath, res);
+        if (gate.shed) return;
+        const upstreamAbortController = new AbortController();
+        const targetUrl = `${member.url}${originalPath}`;
+        const fetchOnce = async (): Promise<globalThis.Response> => {
+          const headersTimeout = setTimeout(() => {
+            logger.error(`[VllmShim] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
+            upstreamAbortController.abort();
+          }, UPSTREAM_HEADERS_TIMEOUT_MS);
+          try {
+            return await fetch(targetUrl, {
+              method: req.method,
+              headers: { "Content-Type": req.headers["content-type"] || "application/json" },
+              body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(body) : undefined,
+              signal: upstreamAbortController.signal,
+            });
+          } finally {
+            clearTimeout(headersTimeout);
+          }
+        };
+
+        let slotReleased = false;
+        const releaseSlot = () => {
+          if (slotReleased) return;
+          slotReleased = true;
+          gate.release?.();
+        };
+
+        try {
+          const response = await fetchOnce();
+          await this.deliverProxyResponse(res, {
+            basePath,
+            originalPath,
+            member,
+            response,
+            fetchOnce,
+            body,
+            toolContextToken: preparedBody.toolContextToken,
+            toolChoiceNone: preparedBody.toolChoiceNone,
+            isEmbedPost: preparedBody.isEmbedPost,
+            isModelsProbe,
+            pool,
+          });
+          return;
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          // Failover only before any byte reached the client: a stream that
+          // already started cannot be replayed on another box.
+          const canFailover = !!pool && i < attempts.length - 1 && !res.headersSent;
+          if (canFailover) {
+            logger.warn(
+              `[VllmShim] pool failover: ${member.name} (${member.ip}) failed before streaming ` +
+                `(${message}); retrying on ${attempts[i + 1].name}`,
+            );
+            markPoolMemberDown(member.name);
+            if (heldMember) releasePoolInFlight(heldMember);
+            heldMember = attempts[i + 1].name;
+            acquirePoolInFlight(heldMember);
+            continue;
+          }
+          logger.error(`[VllmShim] Failed to proxy ${originalPath}: ${message}`);
+          if (!pool && isModelsProbe) {
+            this.markUpstreamUnreachable(member.name, `fetch failed: ${message}`);
+          }
+          if (!res.headersSent) {
+            res.status(502).json({ error: `vllm-shim upstream failure: ${message}` });
+          } else {
+            res.end();
+          }
+          return;
+        } finally {
+          releaseSlot();
+        }
+      }
+    } finally {
+      if (heldMember) releasePoolInFlight(heldMember);
+    }
+  }
+
+  /**
+   * Write one upstream answer back to the client, after the shim's own
+   * rewrites (model-404 healing, embedding rescale, SSE passthrough) and the
+   * pool attribution header/counter. Throws on a transport failure so the
+   * caller's failover path sees it.
+   */
+  private static async deliverProxyResponse(
+    res: Response,
+    delivery: {
+      basePath: string;
+      originalPath: string;
+      member: { name: string; url: string; ip?: string };
+      response: globalThis.Response;
+      fetchOnce: () => Promise<globalThis.Response>;
+      body: Record<string, unknown>;
+      toolContextToken?: string;
+      toolChoiceNone: boolean;
+      isEmbedPost: boolean;
+      isModelsProbe: boolean;
+      pool?: PoolSelection;
+    },
+  ): Promise<void> {
+    const { member, pool } = delivery;
+    if (pool) {
+      // Attribution survives failover: the header names the box that actually
+      // answered, and the pool counter records it.
+      res.setHeader("x-pool-box", member.ip || new URL(member.url).hostname);
+      recordPoolServed(member.name);
+    } else {
       // A /v1/models probe is routing evidence: bad statuses park the box,
       // a clean answer puts it back (see noteModelsProbeOutcome).
-      this.noteModelsProbeOutcome(isModelsProbe, upstreamName, response);
-      const preHealResponse = response;
-      response = await this.maybeAutoHealModel404(response, basePath, upstreamUrl, upstreamName, body, fetchOnce);
-      const healedLiveModel = this.stampHealedLiveModelHeader(preHealResponse, response, body, res);
-      response = await this.maybeRescaleEmbedOverflow(isEmbedPost, response, body, fetchOnce);
-
-      res.status(response.status);
-      const upstreamContentType = response.headers.get("content-type") || "";
-      res.setHeader("Content-Type", upstreamContentType || "application/json");
-
-      if (upstreamContentType.includes("text/event-stream")) {
-        await this.streamUpstreamSseResponse(response, res, toolContextToken);
-        return;
-      }
-
-      const buf = Buffer.from(await response.arrayBuffer());
-      await this.handleNonStreamJsonResponse(
-        buf,
-        upstreamContentType,
-        basePath,
-        originalPath,
-        resolved.upstreamUrl,
-        upstreamName,
-        { contextToken: toolContextToken, choiceNone: toolChoiceNone, healedLiveModel },
-        res,
-      );
-      return;
-    } catch (error: any) {
-      logger.error(`[VllmShim] Failed to proxy ${originalPath}: ${error.message}`);
-      if (isModelsProbe) {
-        this.markUpstreamUnreachable(upstreamName, `fetch failed: ${error.message}`);
-      }
-      if (!res.headersSent) {
-        return res.status(502).json({ error: `vllm-shim upstream failure: ${error.message}` });
-      }
-      return res.end();
-    } finally {
-      release?.();
+      this.noteModelsProbeOutcome(delivery.isModelsProbe, member.name, delivery.response);
     }
+
+    const preHealResponse = delivery.response;
+    const healed = await this.maybeAutoHealModel404(
+      delivery.response,
+      delivery.basePath,
+      member.url,
+      member.name,
+      delivery.body,
+      delivery.fetchOnce,
+    );
+    const healedLiveModel = this.stampHealedLiveModelHeader(preHealResponse, healed, delivery.body, res);
+    const response = await this.maybeRescaleEmbedOverflow(
+      delivery.isEmbedPost,
+      healed,
+      delivery.body,
+      delivery.fetchOnce,
+    );
+
+    res.status(response.status);
+    const upstreamContentType = response.headers.get("content-type") || "";
+    res.setHeader("Content-Type", upstreamContentType || "application/json");
+
+    if (upstreamContentType.includes("text/event-stream")) {
+      await this.streamUpstreamSseResponse(response, res, delivery.toolContextToken);
+      return;
+    }
+
+    const buf = Buffer.from(await response.arrayBuffer());
+    await this.handleNonStreamJsonResponse(
+      buf,
+      upstreamContentType,
+      delivery.basePath,
+      delivery.originalPath,
+      member.url,
+      member.name,
+      { contextToken: delivery.toolContextToken, choiceNone: delivery.toolChoiceNone, healedLiveModel },
+      res,
+    );
   }
 }
