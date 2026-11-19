@@ -16,6 +16,7 @@ import { TRADING_MONGO_DB } from "../../../config.ts";
 import { modelFamilyOf, type ModelFamily } from "../../platform/models/ModelProfiles.ts";
 import logger from "../../utils/logger.ts";
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
+import { REUSABLE_READ_TOOLS } from "../LocalToolRouter.ts";
 import { stripMcpPrefix } from "../McpPrefix.ts";
 import { PromotionController, type GateEvaluation } from "../PromotionController.ts";
 import {
@@ -151,10 +152,16 @@ export function pairedBootstrapCi(
   return { delta, ciLow: means[loIdx], ciHigh: means[hiIdx] };
 }
 
-/** Refuse to Leak: assert zero holdout case IDs appear in optimizer prompts or SIM. */
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Refuse to Leak: assert zero holdout case IDs appear as tokens in optimizer prompts or SIM. */
 export function assertNoHoldoutLeak(text: string, holdoutCases: readonly FrozenTradingCase[]): void {
+  if (!text) return;
   for (const c of holdoutCases) {
-    if (text.includes(c.caseId)) {
+    const tokenRe = new RegExp(`(?<![A-Za-z0-9_|-])${escapeRegExp(c.caseId)}(?![A-Za-z0-9_.-])`);
+    if (tokenRe.test(text)) {
       throw new Error(`Holdout leakage violation: ${c.caseId} appeared in optimizer/SIM context`);
     }
   }
@@ -222,6 +229,12 @@ function simulateFixtureToolCall(
   cursors: Map<string, number>,
 ): { content: string; isReadSuccess: boolean } {
   const cleanName = stripMcpPrefix(toolName);
+  if (!fc.allowedTools.includes(cleanName)) {
+    return {
+      content: JSON.stringify({ error: `Tool '${cleanName}' is not permitted for ${fc.agentRole}`, is_error: true }),
+      isReadSuccess: false,
+    };
+  }
   if (cleanName === "run_equation") {
     try {
       const parsedArgs = JSON.parse(rawArgs || "{}") as { code?: string };
@@ -247,7 +260,7 @@ function simulateFixtureToolCall(
   }
   return {
     content: JSON.stringify({ ticker: fc.ticker, tool: cleanName, status: "ok", source: "frozen_fixture" }),
-    isReadSuccess: true,
+    isReadSuccess: REUSABLE_READ_TOOLS.has(cleanName),
   };
 }
 
@@ -793,7 +806,7 @@ function promoteVerifiedInterlock(args: {
 
 export function evaluateHoldoutAndPromote(args: {
   agentRole: string;
-  targetFamily: ModelFamily;
+  targetFamily: ModelFamily | "*";
   candidateConfig: TradingShimInterlockConfig;
   holdoutCases: readonly FrozenTradingCase[];
   baselineEvals: readonly RolloutEvaluation[];
@@ -870,9 +883,14 @@ function classifyPredictedOutcomes(
   return { cleanPredicted, fixed, missed };
 }
 
+function matchesTargetFamily(targetFamily: ModelFamily | "*", fam: ModelFamily): boolean {
+  return targetFamily === "*" || fam === targetFamily;
+}
+
 async function runSingleCrsiRound(args: {
   round: number;
   agentRole: string;
+  targetFamily: ModelFamily | "*";
   corpus: { corpusHash: string; evolve: FrozenTradingCase[]; holdout: FrozenTradingCase[] };
   targets: readonly ModelEndpointTarget[];
   improverTarget: ModelEndpointTarget;
@@ -915,7 +933,7 @@ async function runSingleCrsiRound(args: {
   const candEvals = await evaluateSplitAcrossModels({
     cases: args.corpus.evolve,
     targets: args.targets,
-    interlockByFamily: (fam) => (fam === "qwen" ? candidateConfig : null),
+    interlockByFamily: (fam) => (matchesTargetFamily(args.targetFamily, fam) ? candidateConfig : null),
     chatTurn: args.chatTurn,
     maxTurns: args.maxTurns,
     checkBusy: args.checkBusy,
@@ -970,6 +988,7 @@ export async function runCrossModelCrsi(opts: {
   targets: readonly ModelEndpointTarget[];
   improverTarget: ModelEndpointTarget;
   simStore: SimStore;
+  targetFamily?: ModelFamily | "*";
   simCondition?: SimMemoryCondition;
   rounds?: number;
   maxTurns?: number;
@@ -987,6 +1006,7 @@ export async function runCrossModelCrsi(opts: {
   roundsRun: number;
 }> {
   const chatTurn = opts.chatTurn ?? defaultHttpChatTurn();
+  const targetFamily: ModelFamily | "*" = opts.targetFamily ?? "*";
   const simCondition = opts.simCondition ?? "full";
   const rounds = opts.rounds ?? 2;
   const improver: ImproverFn =
@@ -1017,6 +1037,7 @@ export async function runCrossModelCrsi(opts: {
     const step = await runSingleCrsiRound({
       round,
       agentRole: opts.agentRole,
+      targetFamily,
       corpus: opts.corpus,
       targets: opts.targets,
       improverTarget: opts.improverTarget,
@@ -1053,7 +1074,7 @@ export async function runCrossModelCrsi(opts: {
     evaluateSplitAcrossModels({
       cases: opts.corpus.holdout,
       targets: opts.targets,
-      interlockByFamily: (fam) => (fam === "qwen" ? retained : null),
+      interlockByFamily: (fam) => (matchesTargetFamily(targetFamily, fam) ? retained : null),
       chatTurn,
       maxTurns: opts.maxTurns,
       checkBusy: opts.checkBusy,
@@ -1063,7 +1084,7 @@ export async function runCrossModelCrsi(opts: {
 
   const holdoutVerdict = evaluateHoldoutAndPromote({
     agentRole: opts.agentRole,
-    targetFamily: "qwen",
+    targetFamily,
     candidateConfig: retained,
     holdoutCases: opts.corpus.holdout,
     baselineEvals: holdBase,
@@ -1106,10 +1127,11 @@ export async function runCrsiSelftest(): Promise<{
     toolFixtures: { get_polygon_price_history: ['{"price_rows":252}'] },
   }));
 
-  const stubChat = (mutant: boolean): ChatTurnFn => async (target, body) => {
+  const stubChat = (mutant: boolean, runSalt = 0): ChatTurnFn => async (target, body) => {
     const msgs = body.messages as Array<{ role: string; content?: string; tool_calls?: unknown[] }>;
     const toolTurns = msgs.filter((m) => m.role === "assistant" && Array.isArray(m.tool_calls)).length;
     const lastMsg = String(msgs[msgs.length - 1]?.content || "");
+    const userPrompt = String(msgs.find((m) => m.role === "user")?.content || "");
     if (mutant && target.modelFamily === "qwen") {
       return { content: "corrupted non-json prose", toolCalls: [] };
     }
@@ -1120,6 +1142,14 @@ export async function runCrsiSelftest(): Promise<{
       };
     }
     if (target.modelFamily === "deepseek") {
+      // Small balanced sampling variance across independent A/A runs so paired diffs are non-identically zero.
+      const extraRead = runSalt > 0 && toolTurns === 1 && userPrompt.endsWith(`T${runSalt % 4}`);
+      if (extraRead) {
+        return {
+          content: null,
+          toolCalls: [{ id: "p2", name: "get_polygon_price_history", arguments: '{"ticker":"T0"}' }],
+        };
+      }
       return { content: '{"summary":"ok","risk_metrics":{"vol":0.2}}', toolCalls: [] };
     }
     // Qwen loops on dict `run_equation` until interlock `[tool-retry]` fires or wall is hit.
@@ -1138,52 +1168,59 @@ export async function runCrsiSelftest(): Promise<{
     matchNativeExhaustionNotice: true,
     toolErrorHint: "Emit scalar output.",
   };
-  const baseEvals = await evaluateSplitAcrossModels({
+  const baseEvalsA = await evaluateSplitAcrossModels({
     cases: holdout,
     targets,
     interlockByFamily: () => null,
-    chatTurn: stubChat(false),
+    chatTurn: stubChat(false, 1),
+    maxTurns: 6,
+  });
+  const baseEvalsB = await evaluateSplitAcrossModels({
+    cases: holdout,
+    targets,
+    interlockByFamily: () => null,
+    chatTurn: stubChat(false, 2),
     maxTurns: 6,
   });
   const winEvals = await evaluateSplitAcrossModels({
     cases: holdout,
     targets,
-    interlockByFamily: (fam) => (fam === "qwen" ? winnerCfg : null),
-    chatTurn: stubChat(false),
+    interlockByFamily: () => winnerCfg,
+    chatTurn: stubChat(false, 1),
     maxTurns: 6,
   });
   const mutEvals = await evaluateSplitAcrossModels({
     cases: holdout,
     targets,
-    interlockByFamily: (fam) => (fam === "qwen" ? { version: "selftest-mutant-1" } : null),
-    chatTurn: stubChat(true),
+    interlockByFamily: () => ({ version: "selftest-mutant-1" }),
+    chatTurn: stubChat(true, 1),
     maxTurns: 6,
   });
 
   const aa = evaluateHoldoutAndPromote({
     agentRole: "v3_quant_analyst",
-    targetFamily: "qwen",
+    targetFamily: "*",
     candidateConfig: { version: "selftest-aa-1" },
     holdoutCases: holdout,
-    baselineEvals: baseEvals,
-    candidateEvals: baseEvals,
+    baselineEvals: baseEvalsA,
+    candidateEvals: baseEvalsB,
     dryRun: true,
   });
   const knownAnswer = evaluateHoldoutAndPromote({
     agentRole: "v3_quant_analyst",
-    targetFamily: "qwen",
+    targetFamily: "*",
     candidateConfig: winnerCfg,
     holdoutCases: holdout,
-    baselineEvals: baseEvals,
+    baselineEvals: baseEvalsA,
     candidateEvals: winEvals,
     dryRun: true,
   });
   const mutation = evaluateHoldoutAndPromote({
     agentRole: "v3_quant_analyst",
-    targetFamily: "qwen",
+    targetFamily: "*",
     candidateConfig: { version: "selftest-mutant-1" },
     holdoutCases: holdout,
-    baselineEvals: baseEvals,
+    baselineEvals: baseEvalsA,
     candidateEvals: mutEvals,
     dryRun: true,
   });

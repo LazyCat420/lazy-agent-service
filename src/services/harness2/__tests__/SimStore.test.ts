@@ -343,4 +343,37 @@ describe("SimStore (arXiv:2611.18856 Self-Improvement Memory)", () => {
     expect(renderSimPromptBlock(snap, "full", 320).length).toBeLessThanOrEqual(320);
     expect(renderSimPromptBlock(snap, "problem-only", 200).length).toBeLessThanOrEqual(200);
   });
+
+  it("skips remote Mongo save when prior Mongo load failed so remote history is never erased", async () => {
+    const updateOne = vi.fn(async () => ({}));
+    vi.spyOn(MongoWrapper, "getDb").mockReturnValue({
+      collection: () => ({
+        findOne: async () => {
+          throw new Error("transient Mongo network error");
+        },
+        updateOne,
+      }),
+    } as never);
+
+    const store = new SimStore("load-fail-guard", { filePath: makeTempFile("lf.json"), useMongo: true });
+    await store.recordAttempt({
+      rootCause: "Local offline diagnosis",
+      round: 1,
+      sample: "r1",
+      accepted: true,
+      what: "local edit",
+      files: ["a.ts"],
+      rationale: "test",
+      predicted: ["c1"],
+      fixed: ["c1"],
+      missed: [],
+      passed: 1,
+      total: 1,
+      modelId: "Qwen3.8-Flash-Next",
+    });
+
+    // Local snapshot persisted, but remote Mongo updateOne was NOT called after failed load!
+    expect(store.snapshot().problems).toHaveLength(1);
+    expect(updateOne).not.toHaveBeenCalled();
+  });
 });

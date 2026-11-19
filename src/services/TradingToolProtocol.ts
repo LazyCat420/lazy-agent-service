@@ -4,6 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import logger from "../logger.ts";
 import { modelFamilyOf } from "../platform/models/ModelProfiles.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 import { PromotionController } from "./PromotionController.ts";
@@ -70,6 +71,7 @@ export interface TradingShimInterlockConfig {
 
 const shimInterlockRegistry = new Map<string, TradingShimInterlockConfig>();
 let shimInterlockLoadedPath: string | null = null;
+let shimInterlockLoadError: string | null = null;
 
 function shimInterlockStorePath(): string {
   return process.env.PROMOTION_INTERLOCK_STORE_PATH || path.resolve(process.cwd(), "runtime-data", "shim_interlocks.json");
@@ -80,15 +82,20 @@ function ensureShimInterlocksLoaded(): void {
   if (shimInterlockLoadedPath === storePath) return;
   shimInterlockRegistry.clear();
   shimInterlockLoadedPath = storePath;
+  shimInterlockLoadError = null;
   try {
     if (fs.existsSync(storePath)) {
       const parsed = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, TradingShimInterlockConfig>;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("interlock store root must be a JSON object");
+      }
       for (const [k, v] of Object.entries(parsed)) {
         if (v && typeof v.version === "string") shimInterlockRegistry.set(k, v);
       }
     }
-  } catch {
-    /* fresh registry */
+  } catch (error) {
+    shimInterlockLoadError = error instanceof Error ? error.message : String(error);
+    logger.error(`[TradingToolProtocol] Failed parsing shim interlock store ${storePath}: ${shimInterlockLoadError}`);
   }
 }
 
@@ -111,6 +118,10 @@ export function registerShimInterlockConfig(
   config: TradingShimInterlockConfig,
 ): void {
   ensureShimInterlocksLoaded();
+  const storePath = shimInterlockStorePath();
+  if (shimInterlockLoadError) {
+    throw new Error(`Refusing to overwrite corrupt shim interlock store ${storePath}: ${shimInterlockLoadError}`);
+  }
   const key = `${profileId}@${config.version}`;
   const existing = shimInterlockRegistry.get(key);
   if (existing) {
@@ -122,9 +133,10 @@ export function registerShimInterlockConfig(
     throw new Error(`Refusing to register new config onto already-promoted ${key} (${promo.channel})`);
   }
   shimInterlockRegistry.set(key, { ...config });
-  const storePath = shimInterlockStorePath();
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, `${JSON.stringify(Object.fromEntries(shimInterlockRegistry), null, 2)}\n`, "utf8");
+  const tmpPath = `${storePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(Object.fromEntries(shimInterlockRegistry), null, 2)}\n`, "utf8");
+  fs.renameSync(tmpPath, storePath);
 }
 
 export function resolveActiveShimInterlock(
@@ -320,6 +332,24 @@ function countTrailingSameToolErrors(messages: any[]): { toolName: string; count
   return { toolName: last.name, count, hasSuccessRead };
 }
 
+function findLastAssistantToolTurnIndex(messages: any[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "assistant" && Array.isArray(messages[i].tool_calls) && messages[i].tool_calls.length > 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function crossedToolErrorCapOnLatestTurn(messages: any[], toolName: string, count: number, errCap: number): boolean {
+  if (errCap <= 0 || count < errCap) return false;
+  const lastAsstIdx = findLastAssistantToolTurnIndex(messages);
+  if (lastAsstIdx <= 0) return true;
+  const beforeTurn = countTrailingSameToolErrors(messages.slice(0, lastAsstIdx));
+  const prevSameCount = beforeTurn.toolName === toolName ? beforeTurn.count : 0;
+  return prevSameCount < errCap;
+}
+
 function applyTailInterlockNotice(
   messages: any[],
   interlock: TradingShimInterlockConfig | null | undefined,
@@ -331,9 +361,12 @@ function applyTailInterlockNotice(
 
   const { toolName, count, hasSuccessRead } = countTrailingSameToolErrors(messages);
   const errCap = interlock.maxConsecutiveToolErrors ?? 0;
-  // Fire strictly on the exact threshold crossing (`count === errCap`) so callers resending
-  // unmodified client history never receive duplicate notices on subsequent turns.
-  if (errCap > 0 && count === errCap && !alreadyHasInterlockMarker(messages, `${INTERLOCK_MARKER} [tool-retry]`)) {
+  // Fire once when the latest assistant turn crosses `errCap` (handling both single calls and
+  // parallel failing batches that jump from < errCap to >= errCap without repeating on later turns).
+  if (
+    crossedToolErrorCapOnLatestTurn(messages, toolName, count, errCap) &&
+    !alreadyHasInterlockMarker(messages, `${INTERLOCK_MARKER} [tool-retry]`)
+  ) {
     const extra = interlock.toolErrorHint ? ` ${interlock.toolErrorHint}` : "";
     const note = `\n\n${INTERLOCK_MARKER} [tool-retry]: '${toolName}' failed ${count} consecutive times.${extra} Do not repeat the same failing call; either make one corrected scalar call or synthesize the required JSON artifact now from verified evidence, recording any unresolved calculation as a gap.`;
     messages[lastIdx] = { ...last, content: last.content + note };

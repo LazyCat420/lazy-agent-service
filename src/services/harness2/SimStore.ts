@@ -378,6 +378,7 @@ export class SimStore {
   private readonly mongoDbName: string;
   private doc: SimDocument;
   private loaded = false;
+  private mongoLoadFailed = false;
 
   constructor(domain: string, opts: SimStoreOptions = {}) {
     this.domain = slug(domain);
@@ -429,10 +430,13 @@ export class SimStore {
 
   /** Hydrate from MongoDB when available; merges with any in-memory/local entries so history is never lost. */
   async load(): Promise<SimDocument> {
+    this.mongoLoadFailed = false;
     if (this.useMongo) {
       try {
         const db = MongoWrapper.getDb(this.mongoDbName);
-        if (db) {
+        if (!db) {
+          this.mongoLoadFailed = true;
+        } else {
           const stored = await db.collection(SIM_COLLECTION).findOne({ _id: this.domain as never });
           if (stored && Array.isArray((stored as unknown as SimDocument).problems)) {
             const { _id: _ignored, ...rest } = stored as Record<string, unknown>;
@@ -440,6 +444,7 @@ export class SimStore {
           }
         }
       } catch (error) {
+        this.mongoLoadFailed = true;
         logger.warn(`[SimStore] Mongo load fallback to local for ${this.domain}: ${String(error)}`);
       }
     }
@@ -447,11 +452,15 @@ export class SimStore {
     return this.snapshot();
   }
 
-  /** Persist to local JSON and (when enabled) upsert to MongoDB `harness_sim_problems`. */
+  /** Persist to local JSON and (when enabled and synced) upsert to MongoDB `harness_sim_problems`. */
   async save(): Promise<void> {
     this.doc.updatedAt = new Date().toISOString();
     this.writeLocal();
     if (!this.useMongo) return;
+    if (this.mongoLoadFailed) {
+      logger.warn(`[SimStore] Skipping remote Mongo save for ${this.domain} because prior Mongo load failed (preserving remote history).`);
+      return;
+    }
     try {
       const db = MongoWrapper.getDb(this.mongoDbName);
       if (db) {

@@ -401,4 +401,63 @@ describe("promoted completion & tool-retry interlock (WI-3, TC-3)", () => {
     );
     expect(b4.interlockFired).toBeNull();
   });
+
+  it("fires tool-retry on parallel failing batches that jump past errCap without repeating, and refuses overwriting corrupt interlock stores", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shim-corrupt-test-"));
+    tmpDirs.push(dir);
+    const corruptPath = path.join(dir, "corrupt_interlocks.json");
+    fs.writeFileSync(corruptPath, "{not-valid-json", "utf8");
+    process.env.PROMOTION_INTERLOCK_STORE_PATH = corruptPath;
+
+    const profileId = tradingShimProfileId("v3_quant_analyst", "*");
+    expect(() =>
+      registerShimInterlockConfig(profileId, { version: "3.0.0", maxConsecutiveToolErrors: 2 }),
+    ).toThrow(/Refusing to overwrite corrupt shim interlock store/);
+    // Corrupt file on disk was NOT overwritten!
+    expect(fs.readFileSync(corruptPath, "utf8")).toBe("{not-valid-json");
+
+    // Switch to clean store and test parallel jump (count 1 -> 3 in one assistant turn with errCap=2).
+    isolatePromotion();
+    const cfg = { version: "3.0.1", maxConsecutiveToolErrors: 2, toolErrorHint: "Scalar only." };
+    const beforeJump = [
+      { role: "system", content: "quant role" },
+      { role: "user", content: "## Ticker: CVI" },
+      { role: "assistant", content: null, tool_calls: [{ id: "e1", function: { name: "run_equation", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "e1", content: "Equation execution failed: TypeError: 1" },
+    ];
+    const jumpTurn = [
+      ...beforeJump,
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          { id: "e2", function: { name: "run_equation", arguments: "{}" } },
+          { id: "e3", function: { name: "run_equation", arguments: "{}" } },
+        ],
+      },
+      { role: "tool", tool_call_id: "e2", content: "Equation execution failed: TypeError: 2" },
+      { role: "tool", tool_call_id: "e3", content: "Equation execution failed: TypeError: 3" },
+    ];
+    const jumped = applyTradingToolProtocol(
+      { tools: [tool("run_equation")], messages: jumpTurn },
+      ["run_equation"],
+      [],
+      cfg,
+    );
+    expect(jumped.interlockFired).toBe("tool-retry");
+
+    // Next turn with unmodified client history (count 3 -> 4): prevSameCount is 3 >= 2, so NO second notice!
+    const afterJump = [
+      ...jumpTurn,
+      { role: "assistant", content: null, tool_calls: [{ id: "e4", function: { name: "run_equation", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "e4", content: "Equation execution failed: TypeError: 4" },
+    ];
+    const later = applyTradingToolProtocol(
+      { tools: [tool("run_equation")], messages: afterJump },
+      ["run_equation"],
+      [],
+      cfg,
+    );
+    expect(later.interlockFired).toBeNull();
+  });
 });

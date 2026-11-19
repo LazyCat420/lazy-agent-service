@@ -13,6 +13,7 @@ import {
   deterministicSplit,
   evaluateHoldoutAndPromote,
   isTradingPipelineBusy,
+  replayFrozenCase,
   runCrossModelCrsi,
   runCrsiSelftest,
   type ChatTurnFn,
@@ -312,5 +313,81 @@ describe("CrossModelCrsiService (WI-4, arXiv:2611.18856 S2 + SIM + Holdout Contr
     expect(failedVerdict.promotedChannel).toBe("offline_candidate");
     expect(PromotionController.listByProfile(tradingShimProfileId("v3_quant_analyst", "qwen"))).toEqual([]);
     expect(fs.existsSync(path.join(dir, "shim_interlocks.json"))).toBe(false);
+  });
+
+  it("applies unified S2 candidate across all target families (DeepSeek + Qwen), handles single-letter ticker prefix boundaries, and rejects unlisted replay tools", async () => {
+    isolateStores();
+    const corpus = makeSyntheticCorpus(12);
+
+    // Single-letter holdout ticker `cycle-1|S` must NOT false-match evolve `cycle-1|SPY` or `cycle-1|SNDK`,
+    // while still catching an actual `cycle-1|S` leak!
+    const singleTickerHoldout: FrozenTradingCase[] = [
+      { ...corpus.holdout[0], caseId: "cycle-v3-1794113650|S", cycleId: "cycle-v3-1794113650", ticker: "S" },
+    ];
+    expect(() => assertNoHoldoutLeak("case=cycle-v3-1794113650|SPY\ncase=cycle-v3-1794113650|SNDK", singleTickerHoldout)).not.toThrow();
+    expect(() => assertNoHoldoutLeak("predicted=[cycle-v3-1794113650|S, cycle-v3-1794113650|SPY]", singleTickerHoldout)).toThrow(
+      /Holdout leakage violation/,
+    );
+
+    // Unlisted / hallucinated tools return an error envelope and do NOT count as evidenceCompleted!
+    const unlistedRollout = await replayFrozenCase({
+      frozenCase: corpus.evolve[0],
+      target: TARGETS[1],
+      interlock: null,
+      maxTurns: 3,
+      chatTurn: async (_t, body) => {
+        const turns = (body.messages as Array<{ role: string; tool_calls?: unknown[] }>).filter(
+          (m) => m.role === "assistant" && Array.isArray(m.tool_calls),
+        ).length;
+        if (turns === 0) {
+          return { content: null, toolCalls: [{ id: "bad1", name: "hallucinated_tool", arguments: "{}" }] };
+        }
+        return { content: '{"summary":"no real evidence","risk_metrics":{"vol":0.1}}', toolCalls: [] };
+      },
+    });
+    expect(unlistedRollout.artifactValid).toBe(true);
+    expect(unlistedRollout.evidenceCompleted).toBe(false);
+    expect(unlistedRollout.compositeScore).toBe(0);
+
+    // Unified S2 synthesis evaluates candidate on BOTH DeepSeek and Qwen: if a bad candidate breaks DeepSeek
+    // when interlock is non-null, `non_inferior_validity_deepseek` blocks promotion!
+    const simStore = new SimStore("unified-s2-gate", { useMongo: false });
+    const regressedOnDeepSeek = await runCrossModelCrsi({
+      agentRole: "v3_quant_analyst",
+      corpus,
+      targets: TARGETS,
+      improverTarget: TARGETS[0],
+      simStore,
+      rounds: 1,
+      minHoldoutCases: 2,
+      improver: async () =>
+        [
+          '<diagnosis problem="NEW">Test unified cross-family gate</diagnosis>',
+          `<predicted>${corpus.evolve[0].caseId}</predicted>`,
+          "<rationale>Candidate applied to all families.</rationale>",
+          '```json\n{"maxConsecutiveToolErrors": 2, "turnWarnThreshold": 3}\n```',
+        ].join("\n"),
+      chatTurn: async (target, body) => {
+        const msgs = body.messages as Array<{ role: string; content?: string; tool_calls?: unknown[] }>;
+        const turns = msgs.filter((m) => m.role === "assistant" && Array.isArray(m.tool_calls)).length;
+        const last = String(msgs[msgs.length - 1]?.content || "");
+        if (turns === 0) {
+          return { content: null, toolCalls: [{ id: "p1", name: "get_polygon_price_history", arguments: "{}" }] };
+        }
+        if (target.modelFamily === "deepseek") {
+          // Prove DeepSeek actually receives the candidate interlock on turn 3 (`turnWarnThreshold: 3`):
+          if (turns < 3) {
+            return { content: null, toolCalls: [{ id: `d${turns}`, name: "get_polygon_price_history", arguments: "{}" }] };
+          }
+          if (last.includes("[TRADING INTERLOCK v1]")) {
+            return { content: "BROKEN_BY_CANDIDATE_ON_DEEPSEEK", toolCalls: [] };
+          }
+          return { content: '{"summary":"ok","risk_metrics":{"vol":0.2}}', toolCalls: [] };
+        }
+        return { content: '{"summary":"ok","risk_metrics":{"vol":0.2}}', toolCalls: [] };
+      },
+    });
+    // Rejected already on evolve because DeepSeek validity dropped under the candidate!
+    expect(regressedOnDeepSeek.retainedConfig).toBeNull();
   });
 });
