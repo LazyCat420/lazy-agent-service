@@ -269,32 +269,49 @@ function formatPerModel(perModel?: Record<string, SimPerModelOutcome>): string {
   return ` | per_model=[${parts.join("; ")}]`;
 }
 
-function renderAttemptLine(a: SimAttempt, compactWhat: boolean): string {
-  const what = compactWhat && a.what.length > 160 ? `${a.what.slice(0, 160)}…[superseded detail compacted]` : a.what;
+function truncateField(value: string, maxLen: number, tag: string): string {
+  return value.length > maxLen ? `${value.slice(0, maxLen)}…[${tag}]` : value;
+}
+
+function renderAttemptLine(a: SimAttempt, level: 0 | 1 | 2): string {
   const sup = a.supersededByRound !== undefined ? ` (later revised in r${a.supersededByRound})` : "";
+  if (level >= 2) {
+    return `  - [r${a.round}/${a.sample}] accepted=${a.accepted}${sup} | passed=${a.passed}/${a.total} | fixed=${a.fixed.length} missed=${a.missed.length}`;
+  }
+  const what = level >= 1 ? truncateField(a.what, 140, "compacted") : a.what;
+  const rationale = level >= 1 ? truncateField(a.rationale, 140, "compacted") : a.rationale;
   const files = a.files.length ? a.files.join(", ") : "(config)";
   return [
     `  - [r${a.round}/${a.sample}] accepted=${a.accepted}${sup} | domain=${a.domain} | model=${a.provenance.modelFamily}/${a.provenance.modelId}`,
     `    files: ${files}`,
     `    what: ${what}`,
-    `    rationale: ${a.rationale}`,
+    `    rationale: ${rationale}`,
     `    outcomes: passed=${a.passed}/${a.total} | predicted=[${a.predicted.join(", ")}] | fixed=[${a.fixed.join(", ")}] | missed=[${a.missed.join(", ")}]${formatPerModel(a.perModel)}`,
   ].join("\n");
 }
 
+function clampSimBudget(text: string, capChars: number): string {
+  if (capChars <= 0) return "";
+  if (text.length <= capChars) return text;
+  const suffix = "\n…[SIM compacted to budget]";
+  if (capChars <= suffix.length) return text.slice(0, capChars);
+  return `${text.slice(0, capChars - suffix.length)}${suffix}`;
+}
+
 function renderFullSim(doc: SimDocument, capChars: number): string {
-  if (doc.problems.length === 0) return "";
-  const compactSet = new Set<string>();
+  if (doc.problems.length === 0 || capChars <= 0) return "";
+  const levelMap = new Map<string, 0 | 1 | 2>();
   const supersededRefs: string[] = [];
+  const allRefs: string[] = [];
   for (const p of doc.problems) {
     for (let idx = 0; idx < p.attempts.length; idx++) {
-      if (p.attempts[idx].supersededByRound !== undefined) {
-        supersededRefs.push(`${p.id}#${idx}`);
-      }
+      const ref = `${p.id}#${idx}`;
+      allRefs.push(ref);
+      if (p.attempts[idx].supersededByRound !== undefined) supersededRefs.push(ref);
     }
   }
 
-  const build = (): string => {
+  const build = (trimNames: boolean): string => {
     const header = [
       "# SELF-IMPROVEMENT MEMORY (SIM)",
       ...(doc.carriedFrom
@@ -308,19 +325,25 @@ function renderFullSim(doc: SimDocument, capChars: number): string {
       "",
     ];
     const blocks = doc.problems.map((p) => {
-      const rows = p.attempts.map((a, idx) => renderAttemptLine(a, compactSet.has(`${p.id}#${idx}`)));
-      return `## ${p.id} (opened r${p.openedRound}): ${p.name}\n${rows.join("\n")}`;
+      const title = trimNames ? truncateField(p.name, 140, "trimmed") : p.name;
+      const rows = p.attempts.map((a, idx) => renderAttemptLine(a, levelMap.get(`${p.id}#${idx}`) ?? 0));
+      return `## ${p.id} (opened r${p.openedRound}): ${title}\n${rows.join("\n")}`;
     });
     return [...header, ...blocks].join("\n\n");
   };
 
-  let rendered = build();
-  while (rendered.length > capChars && supersededRefs.length > 0) {
-    const victim = supersededRefs.shift()!;
-    compactSet.add(victim);
-    rendered = build();
+  let rendered = build(false);
+  for (const ref of supersededRefs) {
+    if (rendered.length <= capChars) return rendered;
+    levelMap.set(ref, 1);
+    rendered = build(false);
   }
-  return rendered;
+  for (const ref of allRefs) {
+    if (rendered.length <= capChars) return rendered;
+    levelMap.set(ref, 2);
+    rendered = build(true);
+  }
+  return clampSimBudget(rendered, capChars);
 }
 
 /** Render SIM according to the active transfer condition (Cold/Transfer = none, Problem-Only, Full SIM). */
@@ -329,10 +352,10 @@ export function renderSimPromptBlock(
   condition: SimMemoryCondition = "full",
   capChars: number = SIM_PROMPT_CHAR_CAP,
 ): string {
-  if (condition === "none" || doc.problems.length === 0) return "";
+  if (condition === "none" || doc.problems.length === 0 || capChars <= 0) return "";
   if (condition === "problem-only") {
     const lines = doc.problems.map((p) => `- ${p.id} (opened r${p.openedRound}): ${p.name}`);
-    return `# SELF-IMPROVEMENT MEMORY (ROOT CAUSES ONLY)\n\n${lines.join("\n")}`;
+    return clampSimBudget(`# SELF-IMPROVEMENT MEMORY (ROOT CAUSES ONLY)\n\n${lines.join("\n")}`, capChars);
   }
   return renderFullSim(doc, capChars);
 }
@@ -354,6 +377,7 @@ export class SimStore {
   private readonly useMongo: boolean;
   private readonly mongoDbName: string;
   private doc: SimDocument;
+  private loaded = false;
 
   constructor(domain: string, opts: SimStoreOptions = {}) {
     this.domain = slug(domain);
@@ -383,7 +407,27 @@ export class SimStore {
     fs.renameSync(tmpFile, this.filePath);
   }
 
-  /** Hydrate from MongoDB when available; falls back cleanly to local state. */
+  private mergeRemoteIntoLocal(remote: SimDocument): void {
+    if (this.doc.problems.length === 0) {
+      this.doc = remote;
+      return;
+    }
+    const combined: SimDocument = structuredClone(remote);
+    combined.aliases = { ...remote.aliases, ...this.doc.aliases };
+    for (const localProb of this.doc.problems) {
+      const target = findOrCreateProblem(combined, undefined, localProb.name, localProb.openedRound);
+      for (const att of localProb.attempts) {
+        const dup = target.attempts.some(
+          (x) => x.round === att.round && x.sample === att.sample && x.what === att.what,
+        );
+        if (!dup) target.attempts.push(structuredClone(att));
+      }
+    }
+    combined.nextId = Math.max(remote.nextId, this.doc.nextId, combined.problems.length + 1);
+    this.doc = mergeIdenticalRootCauses(combined);
+  }
+
+  /** Hydrate from MongoDB when available; merges with any in-memory/local entries so history is never lost. */
   async load(): Promise<SimDocument> {
     if (this.useMongo) {
       try {
@@ -392,13 +436,14 @@ export class SimStore {
           const stored = await db.collection(SIM_COLLECTION).findOne({ _id: this.domain as never });
           if (stored && Array.isArray((stored as unknown as SimDocument).problems)) {
             const { _id: _ignored, ...rest } = stored as Record<string, unknown>;
-            this.doc = rest as unknown as SimDocument;
+            this.mergeRemoteIntoLocal(rest as unknown as SimDocument);
           }
         }
       } catch (error) {
         logger.warn(`[SimStore] Mongo load fallback to local for ${this.domain}: ${String(error)}`);
       }
     }
+    this.loaded = true;
     return this.snapshot();
   }
 
@@ -426,6 +471,9 @@ export class SimStore {
   /** Append one selected candidate's outcome (including missed/regressed attempts) and persist. */
   async recordAttempt(input: RecordSimAttemptInput): Promise<SimProblemEntry> {
     validateNoGraderLeak(input);
+    if (this.useMongo && !this.loaded) {
+      await this.load();
+    }
     const entry = findOrCreateProblem(this.doc, input.citedProblemId, input.rootCause, input.round);
     const attempt = buildSimAttempt(this.domain, input);
     markSupersededAttempts(entry, attempt);

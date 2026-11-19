@@ -598,10 +598,10 @@ export type SimOutcomeEvaluator = (args: {
   missed: string[];
 };
 
-function resolveSimRuntime(
+async function resolveSimRuntime(
   req: Harness2Request,
   providedStore?: SimStore,
-): { simCondition: SimMemoryCondition; simStore?: SimStore; simText: string } {
+): Promise<{ simCondition: SimMemoryCondition; simStore?: SimStore; simText: string }> {
   const simCondition: SimMemoryCondition = req.simCondition ?? (providedStore ? "full" : "none");
   if (simCondition === "none") return { simCondition, simStore: providedStore, simText: "" };
   const simStore =
@@ -610,27 +610,37 @@ function resolveSimRuntime(
       filePath: req.libraryRoot ? `${req.libraryRoot}/${req.domain}/SIM.json` : undefined,
       useMongo: !req.libraryRoot,
     });
+  await simStore.load();
   return { simCondition, simStore, simText: simStore.renderPrompt(simCondition) };
 }
 
-function defaultSimOutcome(delivered: boolean, predicted: string[]) {
+function unverifiedSimOutcome(delivered: boolean) {
   return {
     passed: delivered ? 1 : 0,
     total: 1,
-    fixed: delivered ? predicted : [],
-    missed: delivered ? [] : predicted,
+    fixed: [] as string[],
+    missed: [] as string[],
   };
+}
+
+function findRejectedEditedStage(baseTree: Tree, result: ModeResult) {
+  return result.stages.find((s) => {
+    const diff = diffTrees(baseTree, s.tree);
+    return diff.added.length > 0 || diff.modified.length > 0 || diff.removed.length > 0;
+  });
 }
 
 function buildSimAttemptFields(
   req: Harness2Request,
   result: ModeResult,
   selection: Selection,
-  adoptedTree: Tree,
+  targetTree: Tree,
+  rejectedStageLabel?: string,
 ) {
-  const chosenStage = result.stages.find((s) => s.label === selection.chosenLabel);
+  const stageLabel = rejectedStageLabel ?? selection.chosenLabel;
+  const chosenStage = result.stages.find((s) => s.label === stageLabel);
   const manifest = chosenStage?.manifest ?? result.stages.find((s) => s.manifest)?.manifest ?? null;
-  const diff = diffTrees(req.baseTree, adoptedTree);
+  const diff = diffTrees(req.baseTree, targetTree);
   const files = [...diff.added, ...diff.modified, ...diff.removed];
   const predicted = manifest?.predicted?.length ? manifest.predicted : [req.taskId];
   const fallbackNote = chosenStage?.notes || selection.why;
@@ -657,24 +667,35 @@ async function recordSelectedSimAttempt(args: {
   evaluateOutcome?: SimOutcomeEvaluator;
   errors: string[];
 }): Promise<SimProblemEntry | null> {
-  if (!args.simStore || args.simCondition === "none" || !args.selection.ok || args.chosenTreeIsBase) {
-    return null;
-  }
-  const fields = buildSimAttemptFields(args.req, args.result, args.selection, args.adoptedTree);
-  const evalOut = args.evaluateOutcome
-    ? args.evaluateOutcome({
-        taskId: args.req.taskId,
-        chosenRollout: args.chosen,
-        baseRollouts: args.base,
-        predicted: fields.predicted,
-      })
-    : defaultSimOutcome(args.chosen.delivered, fields.predicted);
+  if (!args.simStore || args.simCondition === "none" || !args.selection.ok) return null;
+  const rejectedStage = args.chosenTreeIsBase ? findRejectedEditedStage(args.req.baseTree, args.result) : undefined;
+  if (args.chosenTreeIsBase && !rejectedStage) return null;
+
+  const accepted = !args.chosenTreeIsBase;
+  const targetTree = accepted ? args.adoptedTree : rejectedStage!.tree;
+  const fields = buildSimAttemptFields(args.req, args.result, args.selection, targetTree, rejectedStage?.label);
+  const evalOut = !accepted
+    ? { passed: 0, total: 1, fixed: [] as string[], missed: fields.predicted }
+    : args.evaluateOutcome
+      ? args.evaluateOutcome({
+          taskId: args.req.taskId,
+          chosenRollout: args.chosen,
+          baseRollouts: args.base,
+          predicted: fields.predicted,
+        })
+      : unverifiedSimOutcome(args.chosen.delivered);
+  const rationale = !accepted
+    ? `${fields.rationale} (rejected: base rollout outperformed proposal)`
+    : args.evaluateOutcome
+      ? fields.rationale
+      : `${fields.rationale} (case-fix predictions unverified without evaluator)`;
   try {
     return await args.simStore.recordAttempt({
       ...fields,
+      rationale,
       round: args.req.simRound ?? 1,
-      sample: args.selection.chosenLabel || "agg1",
-      accepted: true,
+      sample: (accepted ? args.selection.chosenLabel : rejectedStage?.label) || "agg1",
+      accepted,
       fixed: evalOut.fixed,
       missed: evalOut.missed,
       passed: evalOut.passed,
@@ -714,7 +735,7 @@ export async function runHarness2(
     runScope: req.libraryScope,
   });
   const { libraryEntriesBefore, libraryText } = loadHarnessLibraryContext(library, req.taskId, errors);
-  const { simCondition, simStore, simText } = resolveSimRuntime(req, deps.simStore);
+  const { simCondition, simStore, simText } = await resolveSimRuntime(req, deps.simStore);
   const recDeps: RecursionDeps = {
     bp,
     execute,

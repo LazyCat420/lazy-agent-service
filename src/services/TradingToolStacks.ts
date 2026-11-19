@@ -18,6 +18,8 @@ import logger from "../logger.ts";
 import { modelFamilyOf } from "../platform/models/ModelProfiles.ts";
 import { stripMcpPrefix } from "./McpPrefix.ts";
 import { REUSABLE_READ_TOOLS } from "./LocalToolRouter.ts";
+import { PromotionController } from "./PromotionController.ts";
+import { tradingShimProfileId } from "./TradingToolProtocol.ts";
 
 /** Reusable data reads keyed by the ticker; web search and scraping take free text. */
 const STACKABLE = new Set([...REUSABLE_READ_TOOLS].filter((t) => t !== "lazy_web_search" && t !== "scrape_url"));
@@ -119,9 +121,24 @@ async function refresh(): Promise<void> {
   logger.info(`[TradingToolStacks] learned ${JSON.stringify(Object.fromEntries(learned))}`);
 }
 
-/** The learned stack for a role (preferring the model family's stack when >= MIN_RUNS exist, else
- * falling back to the role-wide stack), limited to its signed catalog. */
-export function openingStack(agentName: string, allowedTools: string[], modelId?: string): string[] {
+function isFamilyStackPromoted(agentName: string, family: string): boolean {
+  if (family === "unknown") return false;
+  return Boolean(
+    PromotionController.getActive(tradingShimProfileId(agentName, family)) ||
+      PromotionController.getActive(tradingShimProfileId(agentName, "*")),
+  );
+}
+
+/** The learned stack for a role, limited to its signed catalog.
+ * Model-family-specific stacks (`agent|family`) are selected only once a matching
+ * `trading-shim:<agent>:<family|*>` promotion is `active` (or when `opts.allowUnpromotedFamily`
+ * is explicitly set during offline evaluation), keeping baseline live prompts unchanged. */
+export function openingStack(
+  agentName: string,
+  allowedTools: string[],
+  modelId?: string,
+  opts?: { allowUnpromotedFamily?: boolean },
+): string[] {
   if ((process.env.TRADING_TOOL_STACKS || "true").toLowerCase() === "false") return [];
   if (Date.now() >= nextRefreshAt) {
     nextRefreshAt = Date.now() + REFRESH_MS;
@@ -132,8 +149,11 @@ export function openingStack(agentName: string, allowedTools: string[], modelId?
   }
   const allowed = new Set(allowedTools.map(stripMcpPrefix));
   const family = modelId ? modelFamilyOf(modelId) : "unknown";
+  const useFamily =
+    family !== "unknown" &&
+    (opts?.allowUnpromotedFamily === true || isFamilyStackPromoted(agentName, family));
   const candidate =
-    (family !== "unknown" ? learned.get(`${agentName}|${family}`) : undefined) ??
+    (useFamily ? learned.get(`${agentName}|${family}`) : undefined) ??
     learned.get(agentName) ??
     [];
   const stack = candidate.filter((t) => allowed.has(t));

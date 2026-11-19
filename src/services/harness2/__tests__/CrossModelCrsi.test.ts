@@ -3,12 +3,16 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import harness2Router from "../../../routes/Harness2Routes.ts";
+import MongoWrapper from "../../../wrappers/MongoWrapper.ts";
 import { PromotionController } from "../../PromotionController.ts";
+import { tradingShimProfileId } from "../../TradingToolProtocol.ts";
 import {
   assertNoHoldoutLeak,
   deterministicSplit,
+  evaluateHoldoutAndPromote,
+  isTradingPipelineBusy,
   runCrossModelCrsi,
   runCrsiSelftest,
   type ChatTurnFn,
@@ -19,6 +23,7 @@ import { SimStore } from "../SimStore.ts";
 
 const tmpDirs: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   delete process.env.PROMOTION_INTERLOCK_STORE_PATH;
   delete process.env.HARNESS2_SIM_PATH;
   delete process.env.RUNTIME_API_TOKEN;
@@ -212,8 +217,8 @@ describe("CrossModelCrsiService (WI-4, arXiv:2611.18856 S2 + SIM + Holdout Contr
     ).rejects.toThrow(/Live trading cycle became busy/);
   });
 
-  it("exposes GET /harness2/sim/:domain and POST /harness2/crsi/selftest behind runtimeAuth", async () => {
-    isolateStores();
+  it("exposes open GET /harness2/sim/:domain and runtimeAuth-protected POST /harness2/crsi/selftest without mutating production stores", async () => {
+    const dir = isolateStores();
     process.env.RUNTIME_API_TOKEN = "test-crsi-token";
     const store = new SimStore("route-sim", { useMongo: false });
     await store.recordAttempt({
@@ -255,8 +260,57 @@ describe("CrossModelCrsiService (WI-4, arXiv:2611.18856 S2 + SIM + Holdout Contr
       });
       expect(selftestRes.status).toBe(200);
       expect(((await selftestRes.json()) as { passed: boolean }).passed).toBe(true);
+      // Selftest is pure dry-run: zero fake records in PromotionController or shim_interlocks.json!
+      expect(PromotionController.listByProfile(tradingShimProfileId("v3_quant_analyst", "qwen"))).toEqual([]);
+      expect(fs.existsSync(path.join(dir, "shim_interlocks.json"))).toBe(false);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it("fails closed when MongoDB busy-check is unavailable or throws, and prevents failed reruns from mutating promoted interlocks", async () => {
+    const dir = isolateStores();
+    vi.spyOn(MongoWrapper, "getDb").mockReturnValue(undefined as never);
+    expect(await isTradingPipelineBusy()).toBe(true);
+
+    vi.spyOn(MongoWrapper, "getDb").mockReturnValue({
+      collection: () => ({
+        findOne: async () => {
+          throw new Error("mongo socket reset");
+        },
+      }),
+    } as never);
+    expect(await isTradingPipelineBusy()).toBe(true);
+
+    const corpus = makeSyntheticCorpus(10);
+    const baseEval = corpus.holdout.map((c) => ({
+      caseId: c.caseId,
+      endpointLabel: "dell1",
+      modelId: "Qwen3.8-Flash-Next",
+      modelFamily: "qwen" as const,
+      artifactValid: true,
+      evidenceCompleted: true,
+      loopsUsed: 2,
+      elapsedMs: 10,
+      interlockFired: null,
+      compositeScore: 0.95,
+      finalPreview: "{}",
+    }));
+    const worseEval = baseEval.map((e) => ({ ...e, artifactValid: false, compositeScore: 0 }));
+
+    // Failed evaluation must NOT write candidate config to shim_interlocks.json or PromotionController.
+    const failedVerdict = evaluateHoldoutAndPromote({
+      agentRole: "v3_quant_analyst",
+      targetFamily: "qwen",
+      candidateConfig: { version: "crsi-failed-v1", maxConsecutiveToolErrors: 1 },
+      holdoutCases: corpus.holdout,
+      baselineEvals: baseEval,
+      candidateEvals: worseEval,
+      minHoldoutCases: 2,
+    });
+    expect(failedVerdict.status).toBe("failed");
+    expect(failedVerdict.promotedChannel).toBe("offline_candidate");
+    expect(PromotionController.listByProfile(tradingShimProfileId("v3_quant_analyst", "qwen"))).toEqual([]);
+    expect(fs.existsSync(path.join(dir, "shim_interlocks.json"))).toBe(false);
   });
 });

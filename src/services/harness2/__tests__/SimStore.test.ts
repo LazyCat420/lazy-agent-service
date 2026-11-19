@@ -290,4 +290,57 @@ describe("SimStore (arXiv:2611.18856 Self-Improvement Memory)", () => {
     expect(clean.attempts[0].what).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
     expect(renderSimPromptBlock(store.snapshot(), "full", 500)).toContain("[REDACTED_SECRET]");
   });
+
+  it("enforces maxChars cap across full and problem-only modes and hydrates Mongo before recordAttempt", async () => {
+    const mongoDocs = new Map<string, Record<string, unknown>>();
+    vi.spyOn(MongoWrapper, "getDb").mockReturnValue({
+      collection: () => ({
+        findOne: async (q: { _id: string }) => mongoDocs.get(q._id) ?? null,
+        updateOne: async (q: { _id: string }, u: { $set: Record<string, unknown> }) => {
+          mongoDocs.set(q._id, { _id: q._id, ...u.$set });
+        },
+      }),
+    } as never);
+
+    // Seed MongoDB from instance A
+    const storeA = new SimStore("mongo-hydrate-guard", { filePath: makeTempFile("a.json"), useMongo: true });
+    await storeA.recordAttempt({
+      rootCause: `Remote root cause ${"X".repeat(260)}`,
+      round: 1,
+      sample: "r1",
+      accepted: true,
+      what: `edit-1 ${"W".repeat(400)}`,
+      files: ["a.ts"],
+      rationale: `rationale-1 ${"R".repeat(400)}`,
+      predicted: ["c1"],
+      fixed: ["c1"],
+      missed: [],
+      passed: 1,
+      total: 1,
+      modelId: "DeepSeek-V4.1-Flash-1017",
+    });
+
+    // Instance B has a cold empty local file and calls recordAttempt WITHOUT explicit load(): must preserve P1!
+    const storeB = new SimStore("mongo-hydrate-guard", { filePath: makeTempFile("b.json"), useMongo: true });
+    await storeB.recordAttempt({
+      rootCause: `Second root cause ${"Y".repeat(260)}`,
+      round: 2,
+      sample: "r2",
+      accepted: false,
+      what: `edit-2 ${"Z".repeat(400)}`,
+      files: ["b.ts"],
+      rationale: `rationale-2 ${"Q".repeat(400)}`,
+      predicted: ["c2"],
+      fixed: [],
+      missed: ["c2"],
+      passed: 0,
+      total: 1,
+      modelId: "Qwen3.8-Flash-Next",
+    });
+
+    const snap = storeB.snapshot();
+    expect(snap.problems).toHaveLength(2);
+    expect(renderSimPromptBlock(snap, "full", 320).length).toBeLessThanOrEqual(320);
+    expect(renderSimPromptBlock(snap, "problem-only", 200).length).toBeLessThanOrEqual(200);
+  });
 });

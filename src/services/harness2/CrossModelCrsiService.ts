@@ -20,6 +20,7 @@ import { stripMcpPrefix } from "../McpPrefix.ts";
 import { PromotionController, type GateEvaluation } from "../PromotionController.ts";
 import {
   applyTradingToolProtocol,
+  isTradingToolErrorContent,
   registerShimInterlockConfig,
   tradingShimProfileId,
   type TradingShimInterlockConfig,
@@ -241,7 +242,7 @@ function simulateFixtureToolCall(
     const idx = cursors.get(cleanName) ?? 0;
     cursors.set(cleanName, Math.min(idx + 1, recorded.length - 1));
     const content = recorded[idx];
-    const failed = /(?:execution failed|TypeError:|KeyError:|ValueError:)/i.test(content);
+    const failed = isTradingToolErrorContent(content);
     return { content, isReadSuccess: !failed };
   }
   return {
@@ -391,16 +392,26 @@ export function summarizeArm(evals: readonly RolloutEvaluation[]): ArmSummary {
   };
 }
 
-/** Check whether the live trading pipeline is busy (`pipeline_state.singleton_id == "current"`). */
+/**
+ * Fail-closed check whether the live trading pipeline is busy (`pipeline_state.singleton_id == "current"`
+ * or any running `v3_system_commands`). Returns `true` (busy) if the DB handle is missing or the query throws.
+ */
 export async function isTradingPipelineBusy(mongoDbName = TRADING_MONGO_DB): Promise<boolean> {
   try {
     const db = MongoWrapper.getDb(mongoDbName);
-    if (!db) return false;
-    const state = await db.collection("pipeline_state").findOne({ singleton_id: "current" } as never);
+    if (!db) {
+      logger.warn(`[CrossModelCRSI] MongoDB ${mongoDbName} unavailable during busy check; failing closed.`);
+      return true;
+    }
+    const [state, runningCmd] = await Promise.all([
+      db.collection("pipeline_state").findOne({ singleton_id: "current" } as never),
+      db.collection("v3_system_commands").findOne({ status: "running" } as never),
+    ]);
     const status = String((state as Record<string, unknown> | null)?.status || "").toLowerCase();
-    return BUSY_STATUSES.has(status);
-  } catch {
-    return false;
+    return BUSY_STATUSES.has(status) || Boolean(runningCmd);
+  } catch (error) {
+    logger.warn(`[CrossModelCRSI] busy check failed (${String(error)}); failing closed.`);
+    return true;
   }
 }
 
@@ -701,12 +712,42 @@ function evaluateValidityHardGates(baseline: ArmSummary, candidate: ArmSummary):
   return gates;
 }
 
+function buildCandidateInterlockVersion(
+  corpusHash: string,
+  simCondition: SimMemoryCondition,
+  round: number,
+  cfg: Omit<TradingShimInterlockConfig, "version">,
+): string {
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify({
+        corpusHash,
+        simCondition,
+        round,
+        matchNativeExhaustionNotice: Boolean(cfg.matchNativeExhaustionNotice),
+        maxConsecutiveToolErrors: cfg.maxConsecutiveToolErrors ?? null,
+        turnWarnThreshold: cfg.turnWarnThreshold ?? null,
+        toolErrorHint: cfg.toolErrorHint ?? null,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 8);
+  return `crsi-${corpusHash.slice(0, 8)}-${simCondition}-r${round}-${digest}`;
+}
+
+function dryRunTargetChannel(allGatesPassed: boolean, delta: number, ciLow: number, underpowered: boolean, promoteToCanary?: boolean): string {
+  if (!allGatesPassed || !(delta > 0 && ciLow > 0)) return "offline_candidate";
+  if (underpowered || !promoteToCanary) return "shadow";
+  return "canary_5";
+}
+
 function promoteVerifiedInterlock(args: {
   profileId: string;
   config: TradingShimInterlockConfig;
   allGatesPassed: boolean;
   underpowered: boolean;
   promoteToCanary?: boolean;
+  dryRun?: boolean;
   delta: number;
   ciLow: number;
   ciHigh: number;
@@ -714,9 +755,18 @@ function promoteVerifiedInterlock(args: {
   minCases: number;
   hardGates: GateEvaluation[];
 }): string {
+  if (args.dryRun) {
+    return dryRunTargetChannel(args.allGatesPassed, args.delta, args.ciLow, args.underpowered, args.promoteToCanary);
+  }
+  if (!args.allGatesPassed || !(args.delta > 0 && args.ciLow > 0)) {
+    return "offline_candidate";
+  }
   registerShimInterlockConfig(args.profileId, args.config);
+  const existing = PromotionController.get(args.profileId, args.config.version);
+  if (existing && existing.channel !== "offline_candidate") {
+    return existing.channel;
+  }
   PromotionController.register(args.profileId, args.config.version);
-  if (!args.allGatesPassed || !(args.delta > 0 && args.ciLow > 0)) return "offline_candidate";
   const exp = { outcome: "improved" as const, delta: args.delta, ciLower: args.ciLow, ciUpper: args.ciHigh };
   const toShadow = PromotionController.transition({
     profileId: args.profileId,
@@ -750,6 +800,7 @@ export function evaluateHoldoutAndPromote(args: {
   candidateEvals: readonly RolloutEvaluation[];
   minHoldoutCases?: number;
   promoteToCanary?: boolean;
+  dryRun?: boolean;
   seed?: number;
 }): HoldoutVerdict {
   const minCases = args.minHoldoutCases ?? MIN_CRSI_HOLDOUT_CASES;
@@ -773,6 +824,7 @@ export function evaluateHoldoutAndPromote(args: {
     allGatesPassed,
     underpowered,
     promoteToCanary: args.promoteToCanary,
+    dryRun: args.dryRun,
     delta,
     ciLow,
     ciHigh,
@@ -851,15 +903,19 @@ async function runSingleCrsiRound(args: {
   assertNoHoldoutLeak(prompt, args.corpus.holdout);
 
   const reply = await args.improver(prompt, `crsi-r${args.round}`, args.signal);
-  const parsed = parseProposedInterlock(reply, `crsi-${args.corpus.corpusHash.slice(0, 8)}-r${args.round}`);
+  const parsed = parseProposedInterlock(reply, `crsi-${args.corpus.corpusHash.slice(0, 8)}-${args.simCondition}-r${args.round}`);
   if (!parsed.config) {
     return { retained: args.retained, currentEvals: args.currentEvals, currentSummary: args.currentSummary };
   }
+  const candidateConfig: TradingShimInterlockConfig = {
+    ...parsed.config,
+    version: buildCandidateInterlockVersion(args.corpus.corpusHash, args.simCondition, args.round, parsed.config),
+  };
 
   const candEvals = await evaluateSplitAcrossModels({
     cases: args.corpus.evolve,
     targets: args.targets,
-    interlockByFamily: (fam) => (fam === "qwen" ? parsed.config : null),
+    interlockByFamily: (fam) => (fam === "qwen" ? candidateConfig : null),
     chatTurn: args.chatTurn,
     maxTurns: args.maxTurns,
     checkBusy: args.checkBusy,
@@ -883,7 +939,7 @@ async function runSingleCrsiRound(args: {
       round: args.round,
       sample: `r${args.round}`,
       accepted,
-      what: JSON.stringify(parsed.config),
+      what: JSON.stringify(candidateConfig),
       files: ["TradingToolProtocol.ts"],
       rationale: parsed.rationale,
       predicted: cleanPredicted,
@@ -904,7 +960,7 @@ async function runSingleCrsiRound(args: {
   if (!accepted) {
     return { retained: args.retained, currentEvals: args.currentEvals, currentSummary: args.currentSummary };
   }
-  return { retained: parsed.config, currentEvals: candEvals, currentSummary: candSummary };
+  return { retained: candidateConfig, currentEvals: candEvals, currentSummary: candSummary };
 }
 
 /** Run N rounds of S2 Unified Cross-Model CRSI on `evolve`, recording to `SimStore`, then verify on `holdout`. */
@@ -1111,6 +1167,7 @@ export async function runCrsiSelftest(): Promise<{
     holdoutCases: holdout,
     baselineEvals: baseEvals,
     candidateEvals: baseEvals,
+    dryRun: true,
   });
   const knownAnswer = evaluateHoldoutAndPromote({
     agentRole: "v3_quant_analyst",
@@ -1119,6 +1176,7 @@ export async function runCrsiSelftest(): Promise<{
     holdoutCases: holdout,
     baselineEvals: baseEvals,
     candidateEvals: winEvals,
+    dryRun: true,
   });
   const mutation = evaluateHoldoutAndPromote({
     agentRole: "v3_quant_analyst",
@@ -1127,6 +1185,7 @@ export async function runCrsiSelftest(): Promise<{
     holdoutCases: holdout,
     baselineEvals: baseEvals,
     candidateEvals: mutEvals,
+    dryRun: true,
   });
 
   const checks = {

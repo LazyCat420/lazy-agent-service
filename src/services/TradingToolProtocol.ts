@@ -58,7 +58,7 @@ export const INTERLOCK_MARKER = "[TRADING INTERLOCK v1]";
  */
 export interface TradingShimInterlockConfig {
   version: string;
-  /** Also direct native-loop exhaustion wall messages (`ExhaustionRecovery.ts`) to emit the JSON artifact. */
+  /** Also direct native CoreLoop final-pass wall messages (`CoreLoop.ts` `FINAL_PASS_INSTRUCTION`) to emit the JSON artifact. */
   matchNativeExhaustionNotice?: boolean;
   /** Max consecutive failed results from the same tool before injecting a single-shot bounded-stop notice. */
   maxConsecutiveToolErrors?: number;
@@ -96,12 +96,32 @@ export function tradingShimProfileId(agentName: string, modelFamily: string): st
   return `trading-shim:${agentName.toLowerCase()}:${modelFamily.toLowerCase()}`;
 }
 
+function canonicalInterlockJson(cfg: TradingShimInterlockConfig): string {
+  return JSON.stringify({
+    version: cfg.version,
+    matchNativeExhaustionNotice: Boolean(cfg.matchNativeExhaustionNotice),
+    maxConsecutiveToolErrors: cfg.maxConsecutiveToolErrors ?? null,
+    turnWarnThreshold: cfg.turnWarnThreshold ?? null,
+    toolErrorHint: cfg.toolErrorHint ?? null,
+  });
+}
+
 export function registerShimInterlockConfig(
   profileId: string,
   config: TradingShimInterlockConfig,
 ): void {
   ensureShimInterlocksLoaded();
-  shimInterlockRegistry.set(`${profileId}@${config.version}`, config);
+  const key = `${profileId}@${config.version}`;
+  const existing = shimInterlockRegistry.get(key);
+  if (existing) {
+    if (canonicalInterlockJson(existing) === canonicalInterlockJson(config)) return;
+    throw new Error(`Refusing to overwrite immutable shim interlock config for ${key}`);
+  }
+  const promo = PromotionController.get(profileId, config.version);
+  if (promo && promo.channel !== "offline_candidate") {
+    throw new Error(`Refusing to register new config onto already-promoted ${key} (${promo.channel})`);
+  }
+  shimInterlockRegistry.set(key, { ...config });
   const storePath = shimInterlockStorePath();
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, `${JSON.stringify(Object.fromEntries(shimInterlockRegistry), null, 2)}\n`, "utf8");
@@ -230,10 +250,32 @@ function normalizeTradingToolChoice(
   }
 }
 
-const TOOL_ERROR_RE = /(?:execution failed|TypeError:|KeyError:|ValueError:|SyntaxError:|"error"\s*:|\bERROR\b)/i;
+const STRICT_TOOL_ERROR_RE =
+  /^(?:Error:|Tool error:|Equation execution failed:|Execution failed:|Traceback \(most recent call last\):)|(?:^|\n)\s*(?:TypeError|ValueError|KeyError|ZeroDivisionError|RuntimeError|SyntaxError|NameError|AttributeError|IndexError):/;
 
-function isToolErrorContent(content: unknown): boolean {
-  return typeof content === "string" && TOOL_ERROR_RE.test(content);
+function isJsonErrorEnvelope(trimmed: string): boolean | null {
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    if (parsed.is_error === true) return true;
+    if (typeof parsed.error === "string" && parsed.error.trim().length > 0) return true;
+    if (parsed.error !== null && typeof parsed.error === "object") return true;
+    if (typeof parsed.status === "string" && /^(?:error|failed)$/i.test(parsed.status.trim())) return true;
+    return false;
+  } catch {
+    return null;
+  }
+}
+
+/** Shared failure-envelope classifier for live shim interlocks and offline CRSI trace replay. */
+export function isTradingToolErrorContent(content: unknown): boolean {
+  if (typeof content !== "string") return false;
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  const jsonVerdict = isJsonErrorEnvelope(trimmed);
+  if (jsonVerdict !== null) return jsonVerdict;
+  return STRICT_TOOL_ERROR_RE.test(trimmed);
 }
 
 function alreadyHasInterlockMarker(messages: any[], tag: string): boolean {
@@ -258,7 +300,7 @@ function collectToolOutcomes(messages: any[]): { outcomes: Array<{ name: string;
       recordAssistantCalls(callNameById, m.tool_calls);
     } else if (m?.role === "tool" && typeof m.tool_call_id === "string") {
       const name = callNameById.get(m.tool_call_id) || "unknown";
-      const failed = isToolErrorContent(m.content);
+      const failed = isTradingToolErrorContent(m.content);
       if (!failed) hasSuccessRead = true;
       outcomes.push({ name, failed });
     }
@@ -289,7 +331,9 @@ function applyTailInterlockNotice(
 
   const { toolName, count, hasSuccessRead } = countTrailingSameToolErrors(messages);
   const errCap = interlock.maxConsecutiveToolErrors ?? 0;
-  if (errCap > 0 && count >= errCap && !alreadyHasInterlockMarker(messages, `${INTERLOCK_MARKER} [tool-retry]`)) {
+  // Fire strictly on the exact threshold crossing (`count === errCap`) so callers resending
+  // unmodified client history never receive duplicate notices on subsequent turns.
+  if (errCap > 0 && count === errCap && !alreadyHasInterlockMarker(messages, `${INTERLOCK_MARKER} [tool-retry]`)) {
     const extra = interlock.toolErrorHint ? ` ${interlock.toolErrorHint}` : "";
     const note = `\n\n${INTERLOCK_MARKER} [tool-retry]: '${toolName}' failed ${count} consecutive times.${extra} Do not repeat the same failing call; either make one corrected scalar call or synthesize the required JSON artifact now from verified evidence, recording any unresolved calculation as a gap.`;
     messages[lastIdx] = { ...last, content: last.content + note };
@@ -298,7 +342,7 @@ function applyTailInterlockNotice(
 
   const assistantTurns = messages.filter((m) => m?.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0).length;
   const warnAt = interlock.turnWarnThreshold ?? 0;
-  if (warnAt > 0 && hasSuccessRead && assistantTurns >= warnAt && !alreadyHasInterlockMarker(messages, `${INTERLOCK_MARKER} [turn-budget]`)) {
+  if (warnAt > 0 && hasSuccessRead && assistantTurns === warnAt && !alreadyHasInterlockMarker(messages, `${INTERLOCK_MARKER} [turn-budget]`)) {
     const note = `\n\n${INTERLOCK_MARKER} [turn-budget]: Turn ${assistantTurns} reached with primary data reads already gathered. Avoid redundant tool loops; finish any single essential check or emit the complete required JSON artifact now.`;
     messages[lastIdx] = { ...last, content: last.content + note };
     return "turn-budget";

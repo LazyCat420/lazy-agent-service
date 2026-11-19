@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import MongoWrapper from "../../../wrappers/MongoWrapper.ts";
 import { materialize, type Tree } from "../HarnessTree.ts";
 import { runHarness2 } from "../Harness2Service.ts";
 import { parseSimManifest, type Executor } from "../Recursion.ts";
@@ -11,6 +12,7 @@ const BASE: Tree = { "systemprompt.md": "You are a quantitative trading analyst.
 
 const tmpDirs: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const d of tmpDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -162,5 +164,135 @@ describe("Harness2 + SIM integration (WI-2, arXiv:2611.18856 Eq. 3)", () => {
     expect(r2.simEntry?.attempts).toHaveLength(2);
     expect(r2.simEntry?.attempts[0].supersededByRound).toBe(2);
     expect(r2.simEntry?.attempts[1].provenance.modelFamily).toBe("qwen");
+  });
+
+  it("hydrates SIM from Mongo before rendering, leaves unverified predictions empty, and records rejected proposals", async () => {
+    const dir = tmpDir();
+    const mongoDocs = new Map<string, Record<string, unknown>>();
+    vi.spyOn(MongoWrapper, "getDb").mockReturnValue({
+      collection: () => ({
+        findOne: async (q: { _id: string }) => mongoDocs.get(q._id) ?? null,
+        updateOne: async (q: { _id: string }, u: { $set: Record<string, unknown> }) => {
+          mongoDocs.set(q._id, { _id: q._id, ...u.$set });
+        },
+      }),
+    } as never);
+
+    // Seed MongoDB with P1 from an earlier host/process.
+    const remoteSeed = new SimStore("mongo-sim-domain", {
+      filePath: path.join(dir, "remote-seed.json"),
+      useMongo: true,
+    });
+    await remoteSeed.recordAttempt({
+      rootCause: "Prior Mongo root cause",
+      round: 1,
+      sample: "seed",
+      accepted: true,
+      what: "prior edit",
+      files: ["systemprompt.md"],
+      rationale: "seeded in mongo",
+      predicted: ["seed-case"],
+      fixed: ["seed-case"],
+      missed: [],
+      passed: 1,
+      total: 1,
+      modelId: "DeepSeek-V4.1-Flash-1017",
+    });
+
+    // Fresh cold store with no local file: runHarness2 must call load() before rendering!
+    const freshStore = new SimStore("mongo-sim-domain", {
+      filePath: path.join(dir, "fresh-local.json"),
+      useMongo: true,
+    });
+    const seenPrompts: string[] = [];
+    const acceptedUnverified = await runHarness2(
+      {
+        taskId: "unverified-task",
+        task: "Answer JSON.",
+        domain: "mongo-sim-domain",
+        baseTree: BASE,
+        solver: { provider: "vllm-4", model: "Qwen3.8-Flash-Next" },
+        k: 1,
+        selectionPool: "mixed",
+        simCondition: "full",
+        simRound: 2,
+        libraryRoot: dir,
+      },
+      {
+        simStore: freshStore,
+        execute: async (tree) => {
+          const out = materialize(tree).includes("new-rule") ? '{"ok":2}' : '{"ok":1}';
+          return { ok: true, delivered: true, output: out, trajectory: out, error: "" };
+        },
+        propose: async (prompt, label) => {
+          seenPrompts.push(`${label}:${prompt}`);
+          if (label === "select") {
+            const m = /## (a\d)\s*\n\s*\{"ok":2\}/.exec(prompt);
+            return `<why>picked new</why>\n\`\`\`choice\n${m?.[1] ?? "a1"}\n\`\`\``;
+          }
+          if (label === "experience") return "NO_ENTRY";
+          if (label.startsWith("inv") || label.startsWith("agg")) {
+            return [
+              '<file path="tool_guidance.md">new-rule</file>',
+              '<diagnosis problem="NEW">Unverified edit diagnosis</diagnosis>',
+              "<predicted>case-unverified</predicted>",
+              "<rationale>No evaluator provided.</rationale>",
+              "<notes>added new-rule</notes>",
+            ].join("\n");
+          }
+          return "<notes>KEEP_BASE</notes>";
+        },
+      },
+    );
+
+    expect(seenPrompts.some((p) => p.includes("Prior Mongo root cause"))).toBe(true);
+    // Without evaluateSimOutcome, fixed & missed stay empty rather than falsely claiming fixed!
+    expect(acceptedUnverified.simEntry?.attempts[0].fixed).toEqual([]);
+    expect(acceptedUnverified.simEntry?.attempts[0].missed).toEqual([]);
+    expect(freshStore.snapshot().problems).toHaveLength(2);
+
+    // Rejected proposal (base rollout beats proposed edit in mixed pool) is recorded with accepted=false!
+    const rejectedRun = await runHarness2(
+      {
+        taskId: "rejected-task",
+        task: "Answer JSON.",
+        domain: "mongo-sim-domain",
+        baseTree: BASE,
+        solver: { provider: "vllm-4", model: "Qwen3.8-Flash-Next" },
+        k: 1,
+        selectionPool: "mixed",
+        simCondition: "full",
+        simRound: 3,
+        libraryRoot: dir,
+      },
+      {
+        simStore: freshStore,
+        execute: async (tree) => {
+          const out = materialize(tree).includes("worse-edit") ? '{"worse":true}' : '{"base_better":true}';
+          return { ok: true, delivered: true, output: out, trajectory: out, error: "" };
+        },
+        propose: async (prompt, label) => {
+          if (label === "select") {
+            const m = /## (a\d)\s*\n\s*\{"base_better":true\}/.exec(prompt);
+            return `<why>base outperformed worse edit</why>\n\`\`\`choice\n${m?.[1] ?? "a1"}\n\`\`\``;
+          }
+          if (label === "experience") return "NO_ENTRY";
+          if (label.startsWith("inv") || label.startsWith("agg")) {
+            return [
+              '<file path="guardrails.md">worse-edit</file>',
+              '<diagnosis problem="NEW">Overly aggressive truncation</diagnosis>',
+              "<predicted>case-reg</predicted>",
+              "<rationale>Tried aggressive cut.</rationale>",
+              "<notes>tried worse-edit</notes>",
+            ].join("\n");
+          }
+          return "<notes>KEEP_BASE</notes>";
+        },
+      },
+    );
+
+    expect(rejectedRun.chosenTreeIsBase).toBe(true);
+    expect(rejectedRun.simEntry?.attempts[0].accepted).toBe(false);
+    expect(rejectedRun.simEntry?.attempts[0].missed).toEqual(["case-reg"]);
   });
 });

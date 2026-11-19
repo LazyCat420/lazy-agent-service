@@ -8,6 +8,7 @@ import {
   applyTradingToolProtocol,
   FINAL_TURN_DIRECTIVE,
   INTERLOCK_MARKER,
+  isTradingToolErrorContent,
   NATIVE_EXHAUSTION_PREFIX,
   PARALLEL_TOOL_HINT,
   openingStackLine,
@@ -296,7 +297,7 @@ describe("promoted completion & tool-retry interlock (WI-3, TC-3)", () => {
     expect(r3.body.messages[r3.body.messages.length - 1].content).toContain(`${INTERLOCK_MARKER} [tool-retry]`);
     expect(r3.body.messages[r3.body.messages.length - 1].content).toContain("never nested dicts");
 
-    // Native loop exhaustion notice (`ExhaustionRecovery.ts`) is also directed to emit JSON artifact.
+    // Native CoreLoop final-pass notice (`CoreLoop.ts` `FINAL_PASS_INSTRUCTION`) is also directed to emit JSON artifact.
     const nativeWall = applyTradingToolProtocol(
       {
         tools: [tool("run_equation")],
@@ -313,5 +314,91 @@ describe("promoted completion & tool-retry interlock (WI-3, TC-3)", () => {
     expect(nativeWall.finalTurnDirected).toBe(true);
     expect(nativeWall.interlockFired).toBe("final-turn");
     expect(nativeWall.body.messages[nativeWall.body.messages.length - 1].content).toContain(FINAL_TURN_DIRECTIVE);
+  });
+
+  it("fires tool-retry and turn-budget notices strictly once across unmodified client history, ignores prose error words, and refuses mutating registered interlock versions", () => {
+    isolatePromotion();
+    const profileId = tradingShimProfileId("v3_quant_analyst", "qwen");
+    const cfg = {
+      version: "2.0.0",
+      maxConsecutiveToolErrors: 2,
+      turnWarnThreshold: 3,
+      toolErrorHint: "Emit scalar output.",
+    };
+    registerShimInterlockConfig(profileId, cfg);
+    // Idempotent re-registration of identical config is allowed; mutating the config under the same version throws!
+    expect(() => registerShimInterlockConfig(profileId, { ...cfg })).not.toThrow();
+    expect(() =>
+      registerShimInterlockConfig(profileId, { ...cfg, maxConsecutiveToolErrors: 5 }),
+    ).toThrow(/Refusing to overwrite immutable shim interlock config/);
+
+    // Error classifier ignores prose "standard error" / "tracking error" and JSON `{"error": null}`.
+    expect(isTradingToolErrorContent('{"error": null, "tracking_error": 0.02, "note": "standard error 1.1%"}')).toBe(false);
+    expect(isTradingToolErrorContent("Finnhub article: margin of error narrows in Q4 guidance")).toBe(false);
+    expect(isTradingToolErrorContent('{"error": "Upstream timeout", "is_error": true}')).toBe(true);
+    expect(isTradingToolErrorContent("Equation execution failed: TypeError: not 'dict'")).toBe(true);
+
+    // Client resends unmodified history (without INTERLOCK_MARKER) on Turn N+1: notice fires at count===2, NOT at count===3!
+    const clientMsgsTurn2 = [
+      { role: "system", content: "quant role" },
+      { role: "user", content: "## Ticker: CVI" },
+      { role: "assistant", content: null, tool_calls: [{ id: "e1", function: { name: "run_equation", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "e1", content: "Equation execution failed: TypeError: 1" },
+      { role: "assistant", content: null, tool_calls: [{ id: "e2", function: { name: "run_equation", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "e2", content: "Equation execution failed: TypeError: 2" },
+    ];
+    const atCrossing = applyTradingToolProtocol(
+      { tools: [tool("run_equation"), tool("get_polygon_price_history")], messages: clientMsgsTurn2 },
+      ["run_equation", "get_polygon_price_history"],
+      [],
+      cfg,
+    );
+    expect(atCrossing.interlockFired).toBe("tool-retry");
+
+    const clientMsgsTurn3 = [
+      ...clientMsgsTurn2, // client's unmodified messages (no INTERLOCK_MARKER)
+      { role: "assistant", content: null, tool_calls: [{ id: "e3", function: { name: "run_equation", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "e3", content: "Equation execution failed: TypeError: 3" },
+    ];
+    const afterCrossing = applyTradingToolProtocol(
+      { tools: [tool("run_equation"), tool("get_polygon_price_history")], messages: clientMsgsTurn3 },
+      ["run_equation", "get_polygon_price_history"],
+      [],
+      cfg,
+    );
+    expect(afterCrossing.interlockFired).toBeNull();
+    expect(afterCrossing.body.messages[afterCrossing.body.messages.length - 1].content).not.toContain(INTERLOCK_MARKER);
+
+    // Turn-budget fires strictly at assistantTurns === 3 (not 4) and counts JSON `{"error": null}` as a valid read!
+    const budgetMsgs3 = [
+      { role: "system", content: "quant role" },
+      { role: "user", content: "## Ticker: CVI" },
+      { role: "assistant", content: null, tool_calls: [{ id: "r1", function: { name: "get_polygon_price_history", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "r1", content: '{"error": null, "tracking_error": 0.03}' },
+      { role: "assistant", content: null, tool_calls: [{ id: "r2", function: { name: "get_polygon_price_history", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "r2", content: '{"price_rows": 252}' },
+      { role: "assistant", content: null, tool_calls: [{ id: "r3", function: { name: "get_polygon_price_history", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "r3", content: '{"price_rows": 252}' },
+    ];
+    const b3 = applyTradingToolProtocol(
+      { tools: [tool("run_equation"), tool("get_polygon_price_history")], messages: budgetMsgs3 },
+      ["run_equation", "get_polygon_price_history"],
+      [],
+      cfg,
+    );
+    expect(b3.interlockFired).toBe("turn-budget");
+
+    const budgetMsgs4 = [
+      ...budgetMsgs3,
+      { role: "assistant", content: null, tool_calls: [{ id: "r4", function: { name: "get_polygon_price_history", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "r4", content: '{"price_rows": 252}' },
+    ];
+    const b4 = applyTradingToolProtocol(
+      { tools: [tool("run_equation"), tool("get_polygon_price_history")], messages: budgetMsgs4 },
+      ["run_equation", "get_polygon_price_history"],
+      [],
+      cfg,
+    );
+    expect(b4.interlockFired).toBeNull();
   });
 });

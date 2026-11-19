@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
+import { PromotionController } from "../PromotionController.ts";
+import { tradingShimProfileId } from "../TradingToolProtocol.ts";
 import { learnStacks, openingStack, type RunRecord, type ToolUseRecord } from "../TradingToolStacks.ts";
 
 const runs = (agent: string, n: number): RunRecord[] =>
@@ -86,5 +88,63 @@ describe("openingStack", () => {
     expect(openingStack("v3_junior_analyst", ["get_upcoming_events"])).toEqual([]);
     process.env.TRADING_TOOL_STACKS = "false";
     expect(openingStack("v3_junior_analyst", catalog)).toEqual([]);
+  });
+
+  it("keeps role-wide baseline stack for live payloads until family promotion is active", async () => {
+    const dsRuns = Array.from({ length: 35 }, (_, i) => ({
+      agent_name: "v3_quant_analyst",
+      cycle_id: `cycle-ds-${i}`,
+      ticker: "NVDA",
+      model_used: "DeepSeek-V4.1-Flash-1017",
+    }));
+    const qwenRuns = Array.from({ length: 35 }, (_, i) => ({
+      agent_name: "v3_quant_analyst",
+      cycle_id: `cycle-qw-${i}`,
+      ticker: "NVDA",
+      model_used: "Qwen3.8-Flash-Next",
+    }));
+    const allRuns = [...dsRuns, ...qwenRuns];
+    const docs: Record<string, Record<string, unknown>[]> = {
+      v3_agent_telemetry: allRuns,
+      agent_tool_telemetry: [
+        // Both families call price_history + market_data -> role-wide baseline stack has 2 tools
+        ...allRuns.flatMap((r) => [
+          { ...r, tool_name: "get_polygon_price_history", args_hash: "h" },
+          { ...r, tool_name: "get_market_data", args_hash: "h" },
+        ]),
+        // Only DeepSeek also calls technical_indicators (>= 90% of DeepSeek runs, 50% role-wide)
+        ...dsRuns.map((r) => ({ ...r, tool_name: "get_technical_indicators", args_hash: "h" })),
+      ],
+    };
+    const find = vi.fn((collection: string) => ({ toArray: async () => docs[collection] }));
+    vi.spyOn(MongoWrapper, "getDb").mockReturnValue({ collection: (name: string) => ({ find: () => find(name) }) } as never);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 8 * 60 * 60 * 1000);
+    vi.spyOn(PromotionController, "getActive").mockReturnValue(undefined);
+
+    const catalog = ["get_polygon_price_history", "get_market_data", "get_technical_indicators"];
+    openingStack("v3_quant_analyst", catalog, "DeepSeek-V4.1-Flash-1017");
+    await vi.waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+
+    // Unpromoted: DeepSeek still receives the role-wide baseline stack (zero unpromoted payload drift).
+    await vi.waitFor(() =>
+      expect(openingStack("v3_quant_analyst", catalog, "DeepSeek-V4.1-Flash-1017")).toEqual([
+        "get_market_data",
+        "get_polygon_price_history",
+      ]),
+    );
+
+    // Offline evaluation opt-in or active PromotionController selects the DeepSeek-specific 3-tool stack.
+    expect(
+      openingStack("v3_quant_analyst", catalog, "DeepSeek-V4.1-Flash-1017", { allowUnpromotedFamily: true }),
+    ).toEqual(["get_market_data", "get_polygon_price_history", "get_technical_indicators"]);
+
+    vi.spyOn(PromotionController, "getActive").mockImplementation((pid: string) =>
+      pid === tradingShimProfileId("v3_quant_analyst", "deepseek") ? ({ version: "1.0.0", channel: "active" } as never) : undefined,
+    );
+    expect(openingStack("v3_quant_analyst", catalog, "DeepSeek-V4.1-Flash-1017")).toEqual([
+      "get_market_data",
+      "get_polygon_price_history",
+      "get_technical_indicators",
+    ]);
   });
 });
