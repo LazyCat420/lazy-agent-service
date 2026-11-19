@@ -37,6 +37,7 @@ interface BoxSim {
   chatFails?: boolean;
   chatHangs?: boolean;
   chatDiesMidBody?: boolean;
+  modelsDiesMidBody?: boolean;
   sse?: boolean;
   sseHangs?: boolean;
 }
@@ -91,6 +92,7 @@ function installFetch(sims: Record<string, BoxSim>) {
     const path = url.slice(base.length);
     if (path.startsWith("/v1/models")) {
       if (sim.up === false) throw new TypeError("fetch failed");
+      if (sim.modelsDiesMidBody) return dyingBodyResponse();
       return jsonResponse({ object: "list", data: [{ id: sim.model ?? MODEL }] });
     }
     if (path.startsWith("/metrics")) {
@@ -334,6 +336,36 @@ describe("/vllm-shim/qwen is not one of the legacy routes", () => {
   it("leaves /dell1 and /dell2 resolving to their single upstreams", () => {
     expect(VllmShimService.resolveUpstream("/vllm-shim/dell1/v1/chat/completions")?.upstreamUrl).toBe(D131);
     expect(VllmShimService.resolveUpstream("/vllm-shim/dell2/v1/chat/completions")?.upstreamUrl).toBe(D37);
+  });
+
+  it("a legacy /dell1 models body-read failure still parks the upstream (QP-R1)", async () => {
+    // Pre-pool, ANY failure of a /v1/models call — including a body read that
+    // dies after the 200 headers — marked the box unreachable. The pool
+    // refactor must not drop that for the legacy routes.
+    const fetchMock = installFetch({ [D131]: { modelsDiesMidBody: true }, [D37]: {} });
+    const request = {
+      originalUrl: "/vllm-shim/dell1/v1/models",
+      method: "GET",
+      headers: {},
+      body: undefined,
+    };
+    const res = shimResponse();
+    await VllmShimService.handle(
+      request as unknown as ExpressRequest,
+      res as unknown as ExpressResponse,
+    );
+    expect(res.statusCode).toBe(502);
+    expect(VllmShimService.upstreamUnreachable("dell1")).toBe(true);
+
+    // The next probe is answered locally: no new upstream round trip.
+    const callsBefore = fetchMock.mock.calls.length;
+    const res2 = shimResponse();
+    await VllmShimService.handle(
+      request as unknown as ExpressRequest,
+      res2 as unknown as ExpressResponse,
+    );
+    expect(res2.statusCode).toBe(503);
+    expect(fetchMock.mock.calls.length).toBe(callsBefore);
   });
 });
 

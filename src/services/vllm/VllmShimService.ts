@@ -1513,9 +1513,10 @@ export class VllmShimService {
   /**
    * Log and answer one failed proxy attempt.
    *
-   * A fetch-phase failure on a legacy models probe also parks the box; a
-   * delivery-phase failure never touches rotation, because the upstream did
-   * answer. Nothing here retries — failover is decided by the caller.
+   * A legacy models probe parks the box on ANY failure — fetch or delivery —
+   * exactly as the pre-pool code did. The pool never touches rotation here:
+   * its liveness comes from the two-strike `/v1/models` probe. Nothing here
+   * retries; failover is decided by the caller.
    */
   private static reportProxyFailure(
     res: Response,
@@ -1525,11 +1526,11 @@ export class VllmShimService {
     opts: { pool?: PoolSelection; isModelsProbe: boolean; phase: "fetch" | "delivery" },
   ): void {
     logger.error(
-      opts.phase === "fetch"
-        ? `[VllmShim] Failed to proxy ${originalPath}: ${message}`
-        : `[VllmShim] Failed to deliver ${originalPath} from ${member.name}: ${message}`,
+      opts.pool && opts.phase === "delivery"
+        ? `[VllmShim] Failed to deliver ${originalPath} from ${member.name}: ${message}`
+        : `[VllmShim] Failed to proxy ${originalPath}: ${message}`,
     );
-    if (opts.phase === "fetch" && !opts.pool && opts.isModelsProbe) {
+    if (!opts.pool && opts.isModelsProbe) {
       this.markUpstreamUnreachable(member.name, `fetch failed: ${message}`);
     }
     if (!res.headersSent) {
