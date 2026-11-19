@@ -59,6 +59,14 @@ export const QWEN_POOL_MEMBERS: readonly QwenPoolMember[] = [
 /** Members currently held out of rotation after a failed connect (ms). */
 const MEMBER_DOWN_COOLDOWN_MS = 30_000;
 
+/**
+ * Consecutive `/v1/models` failures before a member leaves rotation. One 3 s
+ * timeout is not evidence of a dead box: with a single strike, a simultaneous
+ * blip on both Dells would otherwise produce a 503 storm while both engines
+ * are serving. Two strikes are.
+ */
+const PROBE_STRIKE_LIMIT = 2;
+
 /** Engine gauge cache lifetime — short on purpose (see module note). */
 const GAUGE_TTL_MS = 1_000;
 
@@ -95,6 +103,8 @@ const gaugePending = new Map<string, Promise<GaugeSample>>();
 const healthCache = new Map<string, HealthSample>();
 const healthPending = new Map<string, Promise<HealthSample>>();
 const downUntil = new Map<string, number>();
+const probeFailures = new Map<string, number>();
+const lastFailureAt = new Map<string, number>();
 const inFlight = new Map<string, number>();
 const served = new Map<string, number>();
 const affinity = new Map<string, { member: string; at: number }>();
@@ -107,6 +117,8 @@ export function resetQwenPoolState(): void {
   healthCache.clear();
   healthPending.clear();
   downUntil.clear();
+  probeFailures.clear();
+  lastFailureAt.clear();
   inFlight.clear();
   served.clear();
   affinity.clear();
@@ -115,13 +127,22 @@ export function resetQwenPoolState(): void {
 
 /**
  * Test seam: drop only the cached gauge/model samples so a suite can simulate
- * a different load without losing affinity or counters.
+ * a different load without losing affinity, counters or probe strikes.
  */
 export function clearPoolCaches(): void {
   gaugeCache.clear();
   gaugePending.clear();
   healthCache.clear();
   healthPending.clear();
+}
+
+/**
+ * Affinity keys in LRU order (oldest first). Diagnostics and the LRU test use
+ * it; the keys themselves are session identifiers, so `/health` never exports
+ * them.
+ */
+export function qwenPoolAffinityKeys(): string[] {
+  return [...affinity.keys()];
 }
 
 /**
@@ -177,6 +198,7 @@ export function pickPoolModel(payload: unknown): string | null {
 function markDown(member: QwenPoolMember, reason: string): void {
   const until = Date.now() + MEMBER_DOWN_COOLDOWN_MS;
   const previous = downUntil.get(member.name) || 0;
+  lastFailureAt.set(member.name, Date.now());
   if (previous <= Date.now()) {
     logger.warn(
       `[VllmQwenPool] member "${member.name}" (${member.ip}) out of rotation for ` +
@@ -253,19 +275,32 @@ async function probeHealth(member: QwenPoolMember): Promise<HealthSample> {
   if (pending) return pending;
 
   const promise = (async (): Promise<HealthSample> => {
-    let sample: HealthSample = { at: Date.now(), up: false, model: null };
+    const fail = (reason: string): HealthSample => {
+      const strikes = (probeFailures.get(member.name) || 0) + 1;
+      probeFailures.set(member.name, strikes);
+      lastFailureAt.set(member.name, Date.now());
+      if (strikes >= PROBE_STRIKE_LIMIT) {
+        markDown(member, `${reason} (${strikes} consecutive probe failures)`);
+      }
+      // One strike keeps the member eligible: a transient blip must not evict
+      // a healthy box. Its model id is unknown for this probe, though.
+      return { at: Date.now(), up: strikes < PROBE_STRIKE_LIMIT, model: null };
+    };
+
+    let sample: HealthSample;
     try {
       const response = await fetch(`${member.url.replace(/\/$/, "")}/v1/models`, {
         signal: AbortSignal.timeout(3000),
       });
       if (response.ok) {
         sample = { at: Date.now(), up: true, model: pickPoolModel(await response.json()) };
+        probeFailures.set(member.name, 0);
         downUntil.delete(member.name);
       } else {
-        markDown(member, `HTTP ${response.status} on /v1/models`);
+        sample = fail(`HTTP ${response.status} on /v1/models`);
       }
     } catch (error: unknown) {
-      markDown(member, `fetch failed: ${error instanceof Error ? error.message : String(error)}`);
+      sample = fail(`fetch failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     healthCache.set(member.name, sample);
     return sample;
@@ -317,11 +352,26 @@ function pruneAffinity(): void {
   for (const [key, entry] of affinity) {
     if (now - entry.at > AFFINITY_TTL_MS) affinity.delete(key);
   }
-  while (affinity.size > AFFINITY_MAX_ENTRIES) {
+  const cap =
+    Number(process.env.VLLM_SHIM_POOL_AFFINITY_MAX_ENTRIES) > 0
+      ? Number(process.env.VLLM_SHIM_POOL_AFFINITY_MAX_ENTRIES)
+      : AFFINITY_MAX_ENTRIES;
+  while (affinity.size > cap) {
     const oldest = affinity.keys().next().value;
     if (oldest === undefined) break;
     affinity.delete(oldest);
   }
+}
+
+/**
+ * Record (or refresh) a session's box. Delete-then-set is what makes the map
+ * LRU: `Map.set` on an existing key keeps its original insertion position, so
+ * without the delete a hot session would be evicted like a cold one.
+ */
+function rememberAffinity(key: string, member: string): void {
+  affinity.delete(key);
+  affinity.set(key, { member, at: Date.now() });
+  pruneAffinity();
 }
 
 export interface PoolSelection {
@@ -337,15 +387,41 @@ export interface PoolSelection {
 /**
  * Pick the member for one request.
  *
- * Returns null when no member is up and serving a model — the caller answers
- * 503 rather than proxying to a dead box. The chosen member's in-flight count
- * is incremented here (at selection time) so a burst spreads before the
- * gauges catch up; the caller MUST release it via `releasePoolInFlight`.
+ * Only members that pass the two-strike liveness probe are candidates; when
+ * every member is out of rotation the least recently failed one is returned
+ * anyway, so a simultaneous probe blip never turns into a 503 storm. The
+ * chosen member's in-flight count is incremented here (at selection time) so
+ * a burst spreads before the gauges catch up; the caller MUST release it via
+ * `releasePoolInFlight`.
  */
-export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelection | null> {
-  const health = await Promise.all(QWEN_POOL_MEMBERS.map((m) => probeHealth(m)));
+export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelection> {
+  // Health probes and gauge scrapes are independent: run them together so a
+  // cold cache costs one 3 s round, not two sequential ones.
+  const [health, gauges] = await Promise.all([
+    Promise.all(QWEN_POOL_MEMBERS.map((m) => probeHealth(m))),
+    Promise.all(QWEN_POOL_MEMBERS.map((m) => readGauges(m))),
+  ]);
+  const loads: Record<string, number> = {};
+  QWEN_POOL_MEMBERS.forEach((m, i) => {
+    loads[m.name] = gauges[i].running + gauges[i].waiting + (inFlight.get(m.name) || 0);
+  });
+  const sessionKey = poolSessionKey(req);
+
   const live = QWEN_POOL_MEMBERS.filter((_, i) => health[i].up);
-  if (live.length === 0) return null;
+  if (live.length === 0) {
+    // Every member is out of rotation. Still try the least recently failed
+    // one: both engines can be serving while both probes blipped, and a 503
+    // storm would be worse than one attempt against a possibly-live box.
+    const fallback = QWEN_POOL_MEMBERS.reduce((a, b) =>
+      (lastFailureAt.get(a.name) ?? 0) <= (lastFailureAt.get(b.name) ?? 0) ? a : b,
+    );
+    logger.warn(
+      `[VllmQwenPool] every member is out of rotation; trying the least recently ` +
+        `failed one (${fallback.name} / ${fallback.ip}) instead of shedding the request`,
+    );
+    acquirePoolInFlight(fallback.name);
+    return { member: fallback, candidates: [fallback], loads, sessionKey };
+  }
 
   // Group by model id; a member whose model is unknown can only serve alone.
   const requestedModel = req.body?.model;
@@ -359,13 +435,6 @@ export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelec
   let candidates = live.filter((m) => health[QWEN_POOL_MEMBERS.indexOf(m)].model === targetModel);
   if (candidates.length === 0) candidates = [live[0]];
 
-  const gauges = await Promise.all(candidates.map((m) => readGauges(m)));
-  const loads: Record<string, number> = {};
-  candidates.forEach((m, i) => {
-    loads[m.name] = gauges[i].running + gauges[i].waiting + (inFlight.get(m.name) || 0);
-  });
-
-  const sessionKey = poolSessionKey(req);
   const minLoad = Math.min(...candidates.map((m) => loads[m.name]));
 
   let chosen: QwenPoolMember | undefined;
@@ -383,14 +452,31 @@ export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelec
   }
 
   acquirePoolInFlight(chosen.name);
-  if (sessionKey) affinity.set(sessionKey, { member: chosen.name, at: Date.now() });
+  if (sessionKey) rememberAffinity(sessionKey, chosen.name);
 
   const ordered = [chosen, ...candidates.filter((m) => m.name !== chosen.name)];
   return { member: chosen, candidates: ordered, loads, sessionKey };
 }
 
+export interface QwenPoolMemberStats {
+  name: string;
+  ip: string;
+  up: boolean;
+  model: string | null;
+  running: number | null;
+  waiting: number | null;
+  inFlight: number;
+  served: number;
+}
+
+export interface QwenPoolStats {
+  route: string;
+  members: QwenPoolMemberStats[];
+  served: Record<string, number>;
+}
+
 /** Snapshot for `/health` and logs: which box served how much, and current load. */
-export function qwenPoolStats(): Record<string, unknown> {
+export function qwenPoolStats(): QwenPoolStats {
   return {
     route: "/vllm-shim/qwen",
     members: QWEN_POOL_MEMBERS.map((m) => {

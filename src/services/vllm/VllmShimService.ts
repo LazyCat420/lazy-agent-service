@@ -1043,38 +1043,65 @@ export class VllmShimService {
     return current;
   }
 
+  /**
+   * Forward an upstream SSE body. Returns true only when the stream ended on
+   * its own — an idle abort or a client disconnect is a partial delivery and
+   * must not be counted as served.
+   */
   private static async streamUpstreamSseResponse(
     response: globalThis.Response,
     res: Response,
     toolContextToken?: string,
-  ): Promise<void> {
+    idleTimeoutMs?: number,
+  ): Promise<boolean> {
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders?.();
 
+    let completed = true;
     if (response.body) {
-      const reader = (response.body as any).getReader();
+      const reader = response.body.getReader();
       const toolStream = toolContextToken ? new TradingToolStream(toolContextToken) : null;
       let clientDisconnected = false;
+      let idleExpired = false;
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
       const handleClientDisconnect = () => {
         clientDisconnected = true;
         reader.cancel?.().catch(() => {});
       };
+      // Re-arm before every read: a stream that stops producing bytes for
+      // `idleTimeoutMs` is a stalled generation, not a slow one — abort it so
+      // the member's in-flight count and gate slot are released.
+      const armIdleTimer = () => {
+        if (!idleTimeoutMs) return;
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          idleExpired = true;
+          logger.warn(
+            `[VllmShim] pool upstream stream idle for ${idleTimeoutMs}ms — aborting the passthrough`,
+          );
+          reader.cancel?.().catch(() => {});
+        }, idleTimeoutMs);
+      };
       res.on("close", handleClientDisconnect);
       try {
         while (true) {
+          armIdleTimer();
           const { done, value } = await reader.read();
-          if (done || clientDisconnected) break;
+          if (done || clientDisconnected || idleExpired) break;
           res.write(toolStream ? toolStream.push(value) : value);
         }
-        if (toolStream && !clientDisconnected) res.write(toolStream.finish());
+        if (toolStream && !clientDisconnected && !idleExpired) res.write(toolStream.finish());
+        completed = !clientDisconnected && !idleExpired;
       } finally {
+        clearTimeout(idleTimer);
         res.off("close", handleClientDisconnect);
         reader.cancel?.().catch(() => {});
       }
     }
     res.end();
+    return completed;
   }
 
   private static async handleModelsJsonResponse(
@@ -1306,10 +1333,12 @@ export class VllmShimService {
    *
    * The member is chosen per request by `selectQwenMember` (lowest
    * running+waiting plus this shim's in-flight count, with session affinity),
-   * and only boxes that are up and serving the same model id are eligible —
-   * so a TP=2 relayout that takes .131 down shrinks the pool to one member
-   * without any config change. On a connection error before any byte reached
-   * the client the request is retried once on the other member.
+   * and only boxes that pass the two-strike liveness probe and serve the same
+   * model id are eligible — so a TP=2 relayout that takes .131 down shrinks
+   * the pool to one member without any config change. When every member is
+   * out of rotation the least recently failed one is still tried. A request is
+   * retried once on the other member only when the first fetch rejected before
+   * a response arrived; anything the upstream accepted is never replayed.
    */
   private static async handlePool(req: Request, res: Response, originalPath: string): Promise<void> {
     const basePath = originalPath.split("?")[0];
@@ -1317,15 +1346,6 @@ export class VllmShimService {
     if (preparedBody.handled) return;
 
     const selection = await selectQwenMember({ body: preparedBody.body, headers: req.headers });
-    if (!selection) {
-      logger.warn(`[VllmShim] pool ${originalPath}: no member is up — answering 503`);
-      res.status(503).setHeader("Retry-After", "5").json({
-        error: "vllm-shim/qwen: no pool member is up and serving a model (retry)",
-        route: "/vllm-shim/qwen",
-      });
-      return;
-    }
-
     await this.proxyPrepared(
       req,
       res,
@@ -1338,6 +1358,23 @@ export class VllmShimService {
       },
       selection,
     );
+  }
+
+  /** Headers timeout, env-overridable so a test can drive it in milliseconds. */
+  private static upstreamHeadersTimeoutMs(): number {
+    const raw = Number(process.env.VLLM_SHIM_UPSTREAM_HEADERS_TIMEOUT_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : UPSTREAM_HEADERS_TIMEOUT_MS;
+  }
+
+  /**
+   * Idle timeout for the pool's SSE passthrough: no upstream bytes for this
+   * long means the engine has stalled a stream we are holding open, so we
+   * abort it and release the slot instead of waiting on a dead reader forever.
+   * Pool only — the legacy routes keep their previous unbounded behaviour.
+   */
+  private static poolStreamIdleTimeoutMs(): number {
+    const raw = Number(process.env.VLLM_SHIM_POOL_STREAM_IDLE_TIMEOUT_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
   }
 
   /**
@@ -1382,11 +1419,14 @@ export class VllmShimService {
         if (gate.shed) return;
         const upstreamAbortController = new AbortController();
         const targetUrl = `${member.url}${originalPath}`;
+        let headersTimedOut = false;
+        const headersTimeoutMs = this.upstreamHeadersTimeoutMs();
         const fetchOnce = async (): Promise<globalThis.Response> => {
           const headersTimeout = setTimeout(() => {
-            logger.error(`[VllmShim] Upstream headers timeout after ${UPSTREAM_HEADERS_TIMEOUT_MS}ms for ${originalPath}`);
+            headersTimedOut = true;
+            logger.error(`[VllmShim] Upstream headers timeout after ${headersTimeoutMs}ms for ${originalPath}`);
             upstreamAbortController.abort();
-          }, UPSTREAM_HEADERS_TIMEOUT_MS);
+          }, headersTimeoutMs);
           try {
             return await fetch(targetUrl, {
               method: req.method,
@@ -1407,7 +1447,38 @@ export class VllmShimService {
         };
 
         try {
-          const response = await fetchOnce();
+          let response: globalThis.Response;
+          try {
+            response = await fetchOnce();
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            // Failover ONLY when the fetch rejected before any response
+            // arrived, and never after our own headers timeout: that abort
+            // means the box is still generating, so replaying the POST would
+            // run it twice and burn a second max_batch_size slot.
+            const canFailover = !!pool && i < attempts.length - 1 && !headersTimedOut;
+            if (canFailover) {
+              logger.warn(
+                `[VllmShim] pool failover: ${member.name} (${member.ip}) failed before a response ` +
+                  `(${message}); retrying on ${attempts[i + 1].name}`,
+              );
+              markPoolMemberDown(member.name);
+              if (heldMember) releasePoolInFlight(heldMember);
+              heldMember = attempts[i + 1].name;
+              acquirePoolInFlight(heldMember);
+              continue;
+            }
+            this.reportProxyFailure(res, originalPath, member, message, {
+              pool,
+              isModelsProbe,
+              phase: "fetch",
+            });
+            return;
+          }
+
+          // From here the upstream accepted the request: a delivery failure
+          // (mid-body death, rewrite error, idle abort) is reported, never
+          // replayed on the other box.
           await this.deliverProxyResponse(res, {
             basePath,
             originalPath,
@@ -1424,29 +1495,11 @@ export class VllmShimService {
           return;
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : String(error);
-          // Failover only before any byte reached the client: a stream that
-          // already started cannot be replayed on another box.
-          const canFailover = !!pool && i < attempts.length - 1 && !res.headersSent;
-          if (canFailover) {
-            logger.warn(
-              `[VllmShim] pool failover: ${member.name} (${member.ip}) failed before streaming ` +
-                `(${message}); retrying on ${attempts[i + 1].name}`,
-            );
-            markPoolMemberDown(member.name);
-            if (heldMember) releasePoolInFlight(heldMember);
-            heldMember = attempts[i + 1].name;
-            acquirePoolInFlight(heldMember);
-            continue;
-          }
-          logger.error(`[VllmShim] Failed to proxy ${originalPath}: ${message}`);
-          if (!pool && isModelsProbe) {
-            this.markUpstreamUnreachable(member.name, `fetch failed: ${message}`);
-          }
-          if (!res.headersSent) {
-            res.status(502).json({ error: `vllm-shim upstream failure: ${message}` });
-          } else {
-            res.end();
-          }
+          this.reportProxyFailure(res, originalPath, member, message, {
+            pool,
+            isModelsProbe,
+            phase: "delivery",
+          });
           return;
         } finally {
           releaseSlot();
@@ -1454,6 +1507,35 @@ export class VllmShimService {
       }
     } finally {
       if (heldMember) releasePoolInFlight(heldMember);
+    }
+  }
+
+  /**
+   * Log and answer one failed proxy attempt.
+   *
+   * A fetch-phase failure on a legacy models probe also parks the box; a
+   * delivery-phase failure never touches rotation, because the upstream did
+   * answer. Nothing here retries — failover is decided by the caller.
+   */
+  private static reportProxyFailure(
+    res: Response,
+    originalPath: string,
+    member: { name: string; ip?: string },
+    message: string,
+    opts: { pool?: PoolSelection; isModelsProbe: boolean; phase: "fetch" | "delivery" },
+  ): void {
+    logger.error(
+      opts.phase === "fetch"
+        ? `[VllmShim] Failed to proxy ${originalPath}: ${message}`
+        : `[VllmShim] Failed to deliver ${originalPath} from ${member.name}: ${message}`,
+    );
+    if (opts.phase === "fetch" && !opts.pool && opts.isModelsProbe) {
+      this.markUpstreamUnreachable(member.name, `fetch failed: ${message}`);
+    }
+    if (!res.headersSent) {
+      res.status(502).json({ error: `vllm-shim upstream failure: ${message}` });
+    } else {
+      res.end();
     }
   }
 
@@ -1482,9 +1564,8 @@ export class VllmShimService {
     const { member, pool } = delivery;
     if (pool) {
       // Attribution survives failover: the header names the box that actually
-      // answered, and the pool counter records it.
+      // answered. The counter is bumped only once the response is delivered.
       res.setHeader("x-pool-box", member.ip || new URL(member.url).hostname);
-      recordPoolServed(member.name);
     } else {
       // A /v1/models probe is routing evidence: bad statuses park the box,
       // a clean answer puts it back (see noteModelsProbeOutcome).
@@ -1513,7 +1594,13 @@ export class VllmShimService {
     res.setHeader("Content-Type", upstreamContentType || "application/json");
 
     if (upstreamContentType.includes("text/event-stream")) {
-      await this.streamUpstreamSseResponse(response, res, delivery.toolContextToken);
+      const delivered = await this.streamUpstreamSseResponse(
+        response,
+        res,
+        delivery.toolContextToken,
+        pool ? this.poolStreamIdleTimeoutMs() : undefined,
+      );
+      if (pool && delivered) recordPoolServed(member.name);
       return;
     }
 
@@ -1528,5 +1615,6 @@ export class VllmShimService {
       { contextToken: delivery.toolContextToken, choiceNone: delivery.toolChoiceNone, healedLiveModel },
       res,
     );
+    if (pool) recordPoolServed(member.name);
   }
 }
