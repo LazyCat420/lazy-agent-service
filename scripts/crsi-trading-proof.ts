@@ -92,9 +92,14 @@ async function main(): Promise<void> {
       throw new Error(`Insufficient non-truncated ${AGENT} trace cases: evolve=${fullCorpus.evolve.length}, holdout=${fullCorpus.holdout.length}`);
     }
 
-    // Prioritize multi-loop recorded cases on evolve & holdout so the stimulus actually exercises tool-loop behavior!
-    const pickActive = <T extends { recordedLoops: number }>(items: T[], n: number): T[] =>
-      [...items].sort((a, b) => b.recordedLoops - a.recordedLoops).slice(0, n);
+    // Prioritize multi-loop recorded cases (>=3 loops) with compact user prompts so shared LAN boxes prefill fast.
+    const pickActive = <T extends { recordedLoops: number; userPrompt: string }>(items: T[], n: number): T[] => {
+      const multiLoop = items.filter((c) => c.recordedLoops >= 3);
+      const pool = multiLoop.length >= n ? multiLoop : items;
+      return [...pool]
+        .sort((a, b) => a.userPrompt.length - b.userPrompt.length || b.recordedLoops - a.recordedLoops)
+        .slice(0, n);
+    };
     const evolveSlice = pickActive(fullCorpus.evolve, EVOLVE_LIMIT);
     const holdoutSlice = pickActive(fullCorpus.holdout, HOLDOUT_LIMIT);
 

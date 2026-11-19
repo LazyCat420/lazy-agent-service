@@ -293,7 +293,7 @@ export async function replayFrozenCase(args: {
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
       const prepared = applyTradingToolProtocol(
-        { model: target.modelId, messages, tools: fc.tools, temperature: 0.1, min_p: 0, max_tokens: 8192 },
+        { model: target.modelId, messages, tools: fc.tools, temperature: 0.1, min_p: 0, max_tokens: 4096 },
         fc.allowedTools,
         args.openingStack ?? [],
         interlock,
@@ -327,7 +327,7 @@ export async function replayFrozenCase(args: {
         content: "Time, budget or step limit reached. Do not call tools. Answer the user now using only the information already gathered.",
       });
       const wall = applyTradingToolProtocol(
-        { model: target.modelId, messages, tools: fc.tools, tool_choice: "none", temperature: 0.1, min_p: 0, max_tokens: 8192 },
+        { model: target.modelId, messages, tool_choice: "none", temperature: 0.1, min_p: 0, max_tokens: 4096 },
         fc.allowedTools,
         args.openingStack ?? [],
         interlock,
@@ -460,7 +460,7 @@ export function defaultHttpChatTurn(): ChatTurnFn {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
-      signal: signal ?? AbortSignal.timeout(180_000),
+      signal: signal ?? AbortSignal.timeout(420_000),
     });
     if (!res.ok) throw new Error(`${target.label} HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const json = (await res.json()) as {
