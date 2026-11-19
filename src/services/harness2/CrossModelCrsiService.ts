@@ -16,7 +16,6 @@ import { TRADING_MONGO_DB } from "../../../config.ts";
 import { modelFamilyOf, type ModelFamily } from "../../platform/models/ModelProfiles.ts";
 import logger from "../../utils/logger.ts";
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
-import { REUSABLE_READ_TOOLS } from "../LocalToolRouter.ts";
 import { stripMcpPrefix } from "../McpPrefix.ts";
 import { PromotionController, type GateEvaluation } from "../PromotionController.ts";
 import { openingStack } from "../TradingToolStacks.ts";
@@ -178,7 +177,8 @@ export function stripStoredProtocolPrefix(systemContent: string): string {
 }
 
 function extractJsonObject(raw: string): Record<string, unknown> | null {
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const withoutThink = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  const cleaned = withoutThink.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   const candidates = [cleaned];
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
@@ -223,6 +223,8 @@ export function computeCompositeScore(
   return Number((0.7 + 0.3 * efficiency).toFixed(6));
 }
 
+const NON_EVIDENCE_TOOLS = new Set(["think", "whiteboard_write", "whiteboard_annotate", "emit_structured_output"]);
+
 function simulateFixtureToolCall(
   fc: FrozenTradingCase,
   toolName: string,
@@ -257,11 +259,11 @@ function simulateFixtureToolCall(
     cursors.set(cleanName, Math.min(idx + 1, recorded.length - 1));
     const content = recorded[idx];
     const failed = isTradingToolErrorContent(content);
-    return { content, isReadSuccess: !failed };
+    return { content, isReadSuccess: !failed && !NON_EVIDENCE_TOOLS.has(cleanName) };
   }
   return {
     content: JSON.stringify({ ticker: fc.ticker, tool: cleanName, status: "ok", source: "frozen_fixture" }),
-    isReadSuccess: REUSABLE_READ_TOOLS.has(cleanName),
+    isReadSuccess: !NON_EVIDENCE_TOOLS.has(cleanName),
   };
 }
 
@@ -291,7 +293,7 @@ export async function replayFrozenCase(args: {
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
       const prepared = applyTradingToolProtocol(
-        { model: target.modelId, messages, tools: fc.tools, temperature: 0.1, min_p: 0, max_tokens: 2048 },
+        { model: target.modelId, messages, tools: fc.tools, temperature: 0.1, min_p: 0, max_tokens: 8192 },
         fc.allowedTools,
         args.openingStack ?? [],
         interlock,
@@ -325,7 +327,7 @@ export async function replayFrozenCase(args: {
         content: "Time, budget or step limit reached. Do not call tools. Answer the user now using only the information already gathered.",
       });
       const wall = applyTradingToolProtocol(
-        { model: target.modelId, messages, tools: fc.tools, tool_choice: "none", temperature: 0.1, min_p: 0, max_tokens: 2048 },
+        { model: target.modelId, messages, tools: fc.tools, tool_choice: "none", temperature: 0.1, min_p: 0, max_tokens: 8192 },
         fc.allowedTools,
         args.openingStack ?? [],
         interlock,
@@ -451,6 +453,7 @@ export function defaultHttpChatTurn(): ChatTurnFn {
       ...body,
       model: target.modelId,
       stream: false,
+      enable_thinking: false,
       chat_template_kwargs: { enable_thinking: false, thinking: false },
     };
     const res = await fetch(`${target.baseUrl}/v1/chat/completions`, {

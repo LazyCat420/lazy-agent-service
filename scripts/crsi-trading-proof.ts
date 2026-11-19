@@ -111,10 +111,10 @@ async function main(): Promise<void> {
       `Live endpoints discovered: ${deepseekTarget.label}=${deepseekTarget.modelFamily}/${deepseekTarget.modelId}, ${qwenTarget.label}=${qwenTarget.modelFamily}/${qwenTarget.modelId}`,
     );
 
-    const logRollout = (phase: string) => (ev: { caseId: string; modelFamily: string; loopsUsed: number; artifactValid: boolean; compositeScore: number; elapsedMs: number; interlockFired: string | null }) => {
+    const logRollout = (phase: string) => (ev: { caseId: string; modelFamily: string; loopsUsed: number; artifactValid: boolean; evidenceCompleted: boolean; compositeScore: number; elapsedMs: number; interlockFired: string | null; error?: string }) => {
       log(
         phase,
-        `  rollout ${ev.caseId} [${ev.modelFamily}] loops=${ev.loopsUsed} valid=${ev.artifactValid} score=${ev.compositeScore} interlock=${ev.interlockFired ?? "none"} (${Math.round(ev.elapsedMs / 1000)}s)`,
+        `  rollout ${ev.caseId} [${ev.modelFamily}] loops=${ev.loopsUsed} valid=${ev.artifactValid} ev=${ev.evidenceCompleted} score=${ev.compositeScore} interlock=${ev.interlockFired ?? "none"} (${Math.round(ev.elapsedMs / 1000)}s)${ev.error ? ` err=${ev.error.slice(0, 80)}` : ""}`,
       );
     };
     const chatTurn = defaultHttpChatTurn();
