@@ -38,8 +38,8 @@ const arg = (name: string, fallback: string) =>
 
 const AGENT = arg("agent", "v3_quant_analyst");
 const EVOLVE_LIMIT = Number(arg("evolve", "2"));
-const HOLDOUT_LIMIT = Number(arg("holdout", "3"));
-const ROUNDS = Number(arg("rounds", "2"));
+const HOLDOUT_LIMIT = Number(arg("holdout", "2"));
+const ROUNDS = Number(arg("rounds", "1"));
 const MAX_TURNS = Number(arg("max-turns", "5"));
 const OUT_FILE = path.resolve(
   process.cwd(),
@@ -202,6 +202,7 @@ async function main(): Promise<void> {
       simStore: smokeSim,
       simCondition: "full",
       rounds: ROUNDS,
+      roundOffset: 1, // Continues as Round 2+ building on Rung 3's Round 1 SIM problem history!
       maxTurns: MAX_TURNS,
       minHoldoutCases: 30,
       promoteToCanary: false, // DECISION-5: cap initial promotion at `shadow` for operator review

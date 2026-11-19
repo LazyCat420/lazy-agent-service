@@ -1024,6 +1024,7 @@ export async function runCrossModelCrsi(opts: {
   targetFamily?: ModelFamily | "*";
   simCondition?: SimMemoryCondition;
   rounds?: number;
+  roundOffset?: number;
   maxTurns?: number;
   minHoldoutCases?: number;
   promoteToCanary?: boolean;
@@ -1046,6 +1047,7 @@ export async function runCrossModelCrsi(opts: {
   const targetFamily: ModelFamily | "*" = opts.targetFamily ?? "*";
   const simCondition = opts.simCondition ?? "full";
   const rounds = opts.rounds ?? 2;
+  const startRound = (opts.roundOffset ?? 0) + 1;
   const improver: ImproverFn =
     opts.improver ??
     (async (prompt, _label, signal) => {
@@ -1071,7 +1073,7 @@ export async function runCrossModelCrsi(opts: {
   const evolveBaseline = summarizeArm(currentEvals);
   let currentSummary = evolveBaseline;
 
-  for (let round = 1; round <= rounds; round++) {
+  for (let round = startRound; round < startRound + rounds; round++) {
     const step = await runSingleCrsiRound({
       round,
       agentRole: opts.agentRole,
