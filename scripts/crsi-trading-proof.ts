@@ -25,7 +25,9 @@ const { SimStore } = await import("../src/services/harness2/SimStore.ts");
 const {
   assertNoHoldoutLeak,
   buildFrozenTradingCorpus,
+  defaultHttpChatTurn,
   discoverLiveEndpointTarget,
+  evaluateSplitAcrossModels,
   isTradingPipelineBusy,
   runCrossModelCrsi,
   runCrsiSelftest,
@@ -35,10 +37,10 @@ const arg = (name: string, fallback: string) =>
   (process.argv.find((a) => a.startsWith(`--${name}=`)) ?? `--${name}=${fallback}`).split("=").slice(1).join("=");
 
 const AGENT = arg("agent", "v3_quant_analyst");
-const EVOLVE_LIMIT = Number(arg("evolve", "3"));
-const HOLDOUT_LIMIT = Number(arg("holdout", "4"));
+const EVOLVE_LIMIT = Number(arg("evolve", "2"));
+const HOLDOUT_LIMIT = Number(arg("holdout", "3"));
 const ROUNDS = Number(arg("rounds", "2"));
-const MAX_TURNS = Number(arg("max-turns", "6"));
+const MAX_TURNS = Number(arg("max-turns", "5"));
 const OUT_FILE = path.resolve(
   process.cwd(),
   arg("out", `.checks/crsi-quant-proof-${new Date().toISOString().slice(0, 10)}.json`),
@@ -109,10 +111,29 @@ async function main(): Promise<void> {
       `Live endpoints discovered: ${deepseekTarget.label}=${deepseekTarget.modelFamily}/${deepseekTarget.modelId}, ${qwenTarget.label}=${qwenTarget.modelFamily}/${qwenTarget.modelId}`,
     );
 
-    // ── Rung 3: 1-Round 2-Case Smoke with MongoDB-Backed SimStore ──
-    log("RUNG-3", `Running 1-round live smoke on 2 evolve cases (${evolveSlice.slice(0, 2).map((c) => c.caseId).join(", ")})...`);
+    const logRollout = (phase: string) => (ev: { caseId: string; modelFamily: string; loopsUsed: number; artifactValid: boolean; compositeScore: number; elapsedMs: number; interlockFired: string | null }) => {
+      log(
+        phase,
+        `  rollout ${ev.caseId} [${ev.modelFamily}] loops=${ev.loopsUsed} valid=${ev.artifactValid} score=${ev.compositeScore} interlock=${ev.interlockFired ?? "none"} (${Math.round(ev.elapsedMs / 1000)}s)`,
+      );
+    };
+    const chatTurn = defaultHttpChatTurn();
+    const checkBusy = () => isTradingPipelineBusy(TRADING_MONGO_DB);
+
+    // ── Rung 3: 1-Round Smoke with MongoDB-Backed SimStore (computing shared evolve baseline once) ──
+    log("RUNG-3", `Computing shared evolve baseline (${evolveSlice.map((c) => c.caseId).join(", ")})...`);
+    const sharedEvolveBaseline = await evaluateSplitAcrossModels({
+      cases: evolveSlice,
+      targets: [deepseekTarget, qwenTarget],
+      interlockByFamily: () => null,
+      chatTurn,
+      maxTurns: MAX_TURNS,
+      checkBusy,
+      onRollout: logRollout("RUNG-3:base"),
+    });
     const smokeSim = new SimStore(`trading-crsi-${AGENT}`, { useMongo: true, mongoDbName: TRADING_MONGO_DB });
     await smokeSim.load();
+    const smokeCaseIds = new Set(evolveSlice.slice(0, 2).map((c) => c.caseId));
     const smokeOut = await runCrossModelCrsi({
       agentRole: AGENT,
       corpus: { corpusHash: `${fullCorpus.corpusHash}-smoke`, evolve: evolveSlice.slice(0, 2), holdout: [] },
@@ -122,14 +143,30 @@ async function main(): Promise<void> {
       simCondition: "full",
       rounds: 1,
       maxTurns: MAX_TURNS,
-      checkBusy: () => isTradingPipelineBusy(TRADING_MONGO_DB),
+      precomputedEvolveBaseline: sharedEvolveBaseline.filter((e) => smokeCaseIds.has(e.caseId)),
+      chatTurn,
+      checkBusy,
+      onRollout: logRollout("RUNG-3:smoke"),
     });
     log(
       "RUNG-3",
       `PASS smoke evolve score ${smokeOut.evolveBaseline.meanScore} -> ${smokeOut.evolveFinal.meanScore}; SIM problems=${smokeSim.snapshot().problems.length}`,
     );
 
-    // ── Rung 4: Paired `Full SIM` (carrying Rung 3 SIM) vs `No SIM` + Blind Holdout Proof ──
+    // ── Rung 4: Paired `Full SIM` (carrying Rung 3 SIM) vs `No SIM` (dryRun control) + Blind Holdout Proof ──
+    log(
+      "RUNG-4",
+      `Computing shared blind holdout baseline (${holdoutSlice.map((c) => c.caseId).join(", ")})...`,
+    );
+    const sharedHoldoutBaseline = await evaluateSplitAcrossModels({
+      cases: holdoutSlice,
+      targets: [deepseekTarget, qwenTarget],
+      interlockByFamily: () => null,
+      chatTurn,
+      maxTurns: MAX_TURNS,
+      checkBusy,
+      onRollout: logRollout("RUNG-4:holdBase"),
+    });
     log(
       "RUNG-4",
       `Running paired ${ROUNDS}-round CRSI (${evolveSlice.length} evolve, ${holdoutSlice.length} holdout) across ${deepseekTarget.modelId} + ${qwenTarget.modelId}...`,
@@ -149,7 +186,12 @@ async function main(): Promise<void> {
       maxTurns: MAX_TURNS,
       minHoldoutCases: 30,
       promoteToCanary: false,
-      checkBusy: () => isTradingPipelineBusy(TRADING_MONGO_DB),
+      dryRun: true, // R3-F2: No-SIM control arm never writes to production PromotionController / shim_interlocks.json
+      precomputedEvolveBaseline: sharedEvolveBaseline,
+      precomputedHoldoutBaseline: sharedHoldoutBaseline,
+      chatTurn,
+      checkBusy,
+      onRollout: logRollout("RUNG-4:noSim"),
     });
 
     const fullSimRun = await runCrossModelCrsi({
@@ -163,7 +205,11 @@ async function main(): Promise<void> {
       maxTurns: MAX_TURNS,
       minHoldoutCases: 30,
       promoteToCanary: false, // DECISION-5: cap initial promotion at `shadow` for operator review
-      checkBusy: () => isTradingPipelineBusy(TRADING_MONGO_DB),
+      precomputedEvolveBaseline: sharedEvolveBaseline,
+      precomputedHoldoutBaseline: sharedHoldoutBaseline,
+      chatTurn,
+      checkBusy,
+      onRollout: logRollout("RUNG-4:fullSim"),
     });
 
     if (fs.existsSync(noSimStore.filePath)) fs.rmSync(noSimStore.filePath, { force: true });

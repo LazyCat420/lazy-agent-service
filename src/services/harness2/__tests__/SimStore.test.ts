@@ -375,5 +375,28 @@ describe("SimStore (arXiv:2611.18856 Self-Improvement Memory)", () => {
     // Local snapshot persisted, but remote Mongo updateOne was NOT called after failed load!
     expect(store.snapshot().problems).toHaveLength(1);
     expect(updateOne).not.toHaveBeenCalled();
+
+    // Corrupt local SIM.json must NOT be overwritten on recordAttempt!
+    const badPath = makeTempFile("corrupt-sim.json");
+    fs.writeFileSync(badPath, "{broken-sim-json", "utf8");
+    const corruptLocal = new SimStore("corrupt-local", { filePath: badPath, useMongo: false });
+    await expect(
+      corruptLocal.recordAttempt({
+        rootCause: "Should refuse write",
+        round: 1,
+        sample: "r1",
+        accepted: true,
+        what: "x",
+        files: [],
+        rationale: "y",
+        predicted: [],
+        fixed: [],
+        missed: [],
+        passed: 1,
+        total: 1,
+        modelId: "Qwen3.8-Flash-Next",
+      }),
+    ).rejects.toThrow(/Refusing to overwrite corrupt local SIM file/);
+    expect(fs.readFileSync(badPath, "utf8")).toBe("{broken-sim-json");
   });
 });

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import harness2Router from "../../../routes/Harness2Routes.ts";
 import MongoWrapper from "../../../wrappers/MongoWrapper.ts";
 import { PromotionController } from "../../PromotionController.ts";
+import * as ToolStacks from "../../TradingToolStacks.ts";
 import { tradingShimProfileId } from "../../TradingToolProtocol.ts";
 import {
   assertNoHoldoutLeak,
@@ -299,19 +300,20 @@ describe("CrossModelCrsiService (WI-4, arXiv:2611.18856 S2 + SIM + Holdout Contr
     }));
     const worseEval = baseEval.map((e) => ({ ...e, artifactValid: false, compositeScore: 0 }));
 
-    // Failed evaluation must NOT write candidate config to shim_interlocks.json or PromotionController.
+    // Failed evaluation must NOT write candidate config to shim_interlocks.json or PromotionController,
+    // even when pairedCases < minHoldoutCases (reports "failed", never masked as "underpowered" — R3-F3)!
     const failedVerdict = evaluateHoldoutAndPromote({
       agentRole: "v3_quant_analyst",
-      targetFamily: "qwen",
+      targetFamily: "*",
       candidateConfig: { version: "crsi-failed-v1", maxConsecutiveToolErrors: 1 },
       holdoutCases: corpus.holdout,
       baselineEvals: baseEval,
       candidateEvals: worseEval,
-      minHoldoutCases: 2,
+      minHoldoutCases: 30,
     });
     expect(failedVerdict.status).toBe("failed");
     expect(failedVerdict.promotedChannel).toBe("offline_candidate");
-    expect(PromotionController.listByProfile(tradingShimProfileId("v3_quant_analyst", "qwen"))).toEqual([]);
+    expect(PromotionController.listByProfile(tradingShimProfileId("v3_quant_analyst", "*"))).toEqual([]);
     expect(fs.existsSync(path.join(dir, "shim_interlocks.json"))).toBe(false);
   });
 
@@ -389,5 +391,41 @@ describe("CrossModelCrsiService (WI-4, arXiv:2611.18856 S2 + SIM + Holdout Contr
     });
     // Rejected already on evolve because DeepSeek validity dropped under the candidate!
     expect(regressedOnDeepSeek.retainedConfig).toBeNull();
+
+    // Verify evaluateSplitAcrossModels passes allowUnpromotedFamily=false on baseline and true on candidate (R3-F1),
+    // and dryRun=true on runCrossModelCrsi leaves PromotionController untouched (R3-F2).
+    const stackSpy = vi.spyOn(ToolStacks, "openingStack");
+    const dryOut = await runCrossModelCrsi({
+      agentRole: "v3_quant_analyst",
+      corpus,
+      targets: TARGETS,
+      improverTarget: TARGETS[0],
+      simStore: new SimStore("dry-run-control", { useMongo: false }),
+      rounds: 1,
+      minHoldoutCases: 2,
+      dryRun: true,
+      improver: async () =>
+        [
+          '<diagnosis problem="NEW">Bounded retries</diagnosis>',
+          `<predicted>${corpus.evolve[0].caseId}</predicted>`,
+          "<rationale>Dry run check.</rationale>",
+          '```json\n{"maxConsecutiveToolErrors": 2, "matchNativeExhaustionNotice": true}\n```',
+        ].join("\n"),
+      chatTurn: dualFamilyStubChat,
+    });
+    expect(dryOut.holdoutVerdict?.status).toBe("passed");
+    expect(stackSpy).toHaveBeenCalledWith(
+      "v3_quant_analyst",
+      expect.any(Array),
+      "Qwen3.8-Flash-Next",
+      { allowUnpromotedFamily: false },
+    );
+    expect(stackSpy).toHaveBeenCalledWith(
+      "v3_quant_analyst",
+      expect.any(Array),
+      "Qwen3.8-Flash-Next",
+      { allowUnpromotedFamily: true },
+    );
+    expect(PromotionController.listByProfile(tradingShimProfileId("v3_quant_analyst", "*"))).toEqual([]);
   });
 });

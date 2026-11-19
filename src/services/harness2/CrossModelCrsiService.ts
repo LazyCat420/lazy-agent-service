@@ -19,6 +19,7 @@ import MongoWrapper from "../../wrappers/MongoWrapper.ts";
 import { REUSABLE_READ_TOOLS } from "../LocalToolRouter.ts";
 import { stripMcpPrefix } from "../McpPrefix.ts";
 import { PromotionController, type GateEvaluation } from "../PromotionController.ts";
+import { openingStack } from "../TradingToolStacks.ts";
 import {
   applyTradingToolProtocol,
   isTradingToolErrorContent,
@@ -290,7 +291,7 @@ export async function replayFrozenCase(args: {
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
       const prepared = applyTradingToolProtocol(
-        { model: target.modelId, messages, tools: fc.tools, temperature: 0.1, min_p: 0, max_tokens: 4096 },
+        { model: target.modelId, messages, tools: fc.tools, temperature: 0.1, min_p: 0, max_tokens: 2048 },
         fc.allowedTools,
         args.openingStack ?? [],
         interlock,
@@ -324,7 +325,7 @@ export async function replayFrozenCase(args: {
         content: "Time, budget or step limit reached. Do not call tools. Answer the user now using only the information already gathered.",
       });
       const wall = applyTradingToolProtocol(
-        { model: target.modelId, messages, tools: fc.tools, tool_choice: "none", temperature: 0.1, min_p: 0, max_tokens: 4096 },
+        { model: target.modelId, messages, tools: fc.tools, tool_choice: "none", temperature: 0.1, min_p: 0, max_tokens: 2048 },
         fc.allowedTools,
         args.openingStack ?? [],
         interlock,
@@ -661,13 +662,14 @@ function buildS2ImproverPrompt(args: {
   ].join("\n\n");
 }
 
-async function evaluateSplitAcrossModels(args: {
+export async function evaluateSplitAcrossModels(args: {
   cases: readonly FrozenTradingCase[];
   targets: readonly ModelEndpointTarget[];
   interlockByFamily: (family: ModelFamily) => TradingShimInterlockConfig | null;
   chatTurn: ChatTurnFn;
   maxTurns?: number;
   checkBusy?: () => Promise<boolean>;
+  onRollout?: (ev: RolloutEvaluation) => void;
   signal?: AbortSignal;
 }): Promise<RolloutEvaluation[]> {
   const results: RolloutEvaluation[] = [];
@@ -677,16 +679,23 @@ async function evaluateSplitAcrossModels(args: {
       throw new Error("Live trading cycle became busy; aborting off-cycle CRSI replay immediately");
     }
     const perTarget = await Promise.all(
-      args.targets.map((target) =>
-        replayFrozenCase({
+      args.targets.map(async (target) => {
+        const interlock = args.interlockByFamily(target.modelFamily);
+        const stack = openingStack(c.agentRole, c.allowedTools, target.modelId, {
+          allowUnpromotedFamily: Boolean(interlock),
+        });
+        const ev = await replayFrozenCase({
           frozenCase: c,
           target,
-          interlock: args.interlockByFamily(target.modelFamily),
+          interlock,
+          openingStack: stack,
           maxTurns: args.maxTurns,
           chatTurn: args.chatTurn,
           signal: args.signal,
-        }),
-      ),
+        });
+        args.onRollout?.(ev);
+        return ev;
+      }),
     );
     results.push(...perTarget);
   }
@@ -824,13 +833,9 @@ export function evaluateHoldoutAndPromote(args: {
   const hardGates = evaluateValidityHardGates(baseline, candidate);
   const allGatesPassed = hardGates.every((g) => g.passed);
   const underpowered = diffs.length < minCases;
-  const status: HoldoutVerdict["status"] = !allGatesPassed
-    ? "failed"
-    : underpowered
-      ? "underpowered"
-      : delta > 0 && ciLow > 0
-        ? "passed"
-        : "failed";
+  const positiveSignal = delta > 0 && ciLow > 0;
+  const status: HoldoutVerdict["status"] =
+    !allGatesPassed || !positiveSignal ? "failed" : underpowered ? "underpowered" : "passed";
   const promotedChannel = promoteVerifiedInterlock({
     profileId: tradingShimProfileId(args.agentRole, args.targetFamily),
     config: args.candidateConfig,
@@ -903,6 +908,7 @@ async function runSingleCrsiRound(args: {
   improver: ImproverFn;
   maxTurns?: number;
   checkBusy?: () => Promise<boolean>;
+  onRollout?: (ev: RolloutEvaluation) => void;
   signal?: AbortSignal;
 }): Promise<{
   retained: TradingShimInterlockConfig | null;
@@ -937,6 +943,7 @@ async function runSingleCrsiRound(args: {
     chatTurn: args.chatTurn,
     maxTurns: args.maxTurns,
     checkBusy: args.checkBusy,
+    onRollout: args.onRollout,
     signal: args.signal,
   });
   const candSummary = summarizeArm(candEvals);
@@ -981,6 +988,29 @@ async function runSingleCrsiRound(args: {
   return { retained: candidateConfig, currentEvals: candEvals, currentSummary: candSummary };
 }
 
+async function resolveBaselineRollouts(
+  precomputed: readonly RolloutEvaluation[] | undefined,
+  cases: readonly FrozenTradingCase[],
+  targets: readonly ModelEndpointTarget[],
+  chatTurn: ChatTurnFn,
+  maxTurns: number | undefined,
+  checkBusy: (() => Promise<boolean>) | undefined,
+  onRollout: ((ev: RolloutEvaluation) => void) | undefined,
+  signal: AbortSignal | undefined,
+): Promise<RolloutEvaluation[]> {
+  if (precomputed) return [...precomputed];
+  return evaluateSplitAcrossModels({
+    cases,
+    targets,
+    interlockByFamily: () => null,
+    chatTurn,
+    maxTurns,
+    checkBusy,
+    onRollout,
+    signal,
+  });
+}
+
 /** Run N rounds of S2 Unified Cross-Model CRSI on `evolve`, recording to `SimStore`, then verify on `holdout`. */
 export async function runCrossModelCrsi(opts: {
   agentRole: string;
@@ -994,9 +1024,13 @@ export async function runCrossModelCrsi(opts: {
   maxTurns?: number;
   minHoldoutCases?: number;
   promoteToCanary?: boolean;
+  dryRun?: boolean;
+  precomputedEvolveBaseline?: readonly RolloutEvaluation[];
+  precomputedHoldoutBaseline?: readonly RolloutEvaluation[];
   chatTurn?: ChatTurnFn;
   improver?: ImproverFn;
   checkBusy?: () => Promise<boolean>;
+  onRollout?: (ev: RolloutEvaluation) => void;
   signal?: AbortSignal;
 }): Promise<{
   retainedConfig: TradingShimInterlockConfig | null;
@@ -1021,15 +1055,16 @@ export async function runCrossModelCrsi(opts: {
     });
 
   let retained: TradingShimInterlockConfig | null = null;
-  let currentEvals = await evaluateSplitAcrossModels({
-    cases: opts.corpus.evolve,
-    targets: opts.targets,
-    interlockByFamily: () => null,
+  let currentEvals = await resolveBaselineRollouts(
+    opts.precomputedEvolveBaseline,
+    opts.corpus.evolve,
+    opts.targets,
     chatTurn,
-    maxTurns: opts.maxTurns,
-    checkBusy: opts.checkBusy,
-    signal: opts.signal,
-  });
+    opts.maxTurns,
+    opts.checkBusy,
+    opts.onRollout,
+    opts.signal,
+  );
   const evolveBaseline = summarizeArm(currentEvals);
   let currentSummary = evolveBaseline;
 
@@ -1050,6 +1085,7 @@ export async function runCrossModelCrsi(opts: {
       improver,
       maxTurns: opts.maxTurns,
       checkBusy: opts.checkBusy,
+      onRollout: opts.onRollout,
       signal: opts.signal,
     });
     retained = step.retained;
@@ -1061,26 +1097,26 @@ export async function runCrossModelCrsi(opts: {
     return { retainedConfig: retained, evolveBaseline, evolveFinal: currentSummary, holdoutVerdict: null, roundsRun: rounds };
   }
 
-  const [holdBase, holdCand] = await Promise.all([
-    evaluateSplitAcrossModels({
-      cases: opts.corpus.holdout,
-      targets: opts.targets,
-      interlockByFamily: () => null,
-      chatTurn,
-      maxTurns: opts.maxTurns,
-      checkBusy: opts.checkBusy,
-      signal: opts.signal,
-    }),
-    evaluateSplitAcrossModels({
-      cases: opts.corpus.holdout,
-      targets: opts.targets,
-      interlockByFamily: (fam) => (matchesTargetFamily(targetFamily, fam) ? retained : null),
-      chatTurn,
-      maxTurns: opts.maxTurns,
-      checkBusy: opts.checkBusy,
-      signal: opts.signal,
-    }),
-  ]);
+  const holdBase = await resolveBaselineRollouts(
+    opts.precomputedHoldoutBaseline,
+    opts.corpus.holdout,
+    opts.targets,
+    chatTurn,
+    opts.maxTurns,
+    opts.checkBusy,
+    opts.onRollout,
+    opts.signal,
+  );
+  const holdCand = await evaluateSplitAcrossModels({
+    cases: opts.corpus.holdout,
+    targets: opts.targets,
+    interlockByFamily: (fam) => (matchesTargetFamily(targetFamily, fam) ? retained : null),
+    chatTurn,
+    maxTurns: opts.maxTurns,
+    checkBusy: opts.checkBusy,
+    onRollout: opts.onRollout,
+    signal: opts.signal,
+  });
 
   const holdoutVerdict = evaluateHoldoutAndPromote({
     agentRole: opts.agentRole,
@@ -1091,6 +1127,7 @@ export async function runCrossModelCrsi(opts: {
     candidateEvals: holdCand,
     minHoldoutCases: opts.minHoldoutCases,
     promoteToCanary: opts.promoteToCanary,
+    dryRun: opts.dryRun,
   });
 
   logger.info(

@@ -379,6 +379,7 @@ export class SimStore {
   private doc: SimDocument;
   private loaded = false;
   private mongoLoadFailed = false;
+  private localLoadError: string | null = null;
 
   constructor(domain: string, opts: SimStoreOptions = {}) {
     this.domain = slug(domain);
@@ -390,20 +391,28 @@ export class SimStore {
   }
 
   private readLocalOrEmpty(): SimDocument {
+    this.localLoadError = null;
     try {
       if (fs.existsSync(this.filePath)) {
-        const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as SimDocument;
-        if (parsed && Array.isArray(parsed.problems)) return parsed;
+        const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as unknown;
+        if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as SimDocument).problems)) {
+          throw new Error("SIM.json root must contain a problems array");
+        }
+        return parsed as SimDocument;
       }
     } catch (error) {
-      logger.warn(`[SimStore] failed reading local SIM ${this.filePath}: ${String(error)}`);
+      this.localLoadError = error instanceof Error ? error.message : String(error);
+      logger.warn(`[SimStore] failed reading local SIM ${this.filePath}: ${this.localLoadError}`);
     }
     return emptySimDocument(this.domain);
   }
 
   private writeLocal(): void {
+    if (this.localLoadError) {
+      throw new Error(`Refusing to overwrite corrupt local SIM file ${this.filePath}: ${this.localLoadError}`);
+    }
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    const tmpFile = `${this.filePath}.tmp`;
+    const tmpFile = `${this.filePath}.${process.pid}.tmp`;
     fs.writeFileSync(tmpFile, `${JSON.stringify(this.doc, null, 2)}\n`, "utf8");
     fs.renameSync(tmpFile, this.filePath);
   }
@@ -424,7 +433,7 @@ export class SimStore {
         if (!dup) target.attempts.push(structuredClone(att));
       }
     }
-    combined.nextId = Math.max(remote.nextId, this.doc.nextId, combined.problems.length + 1);
+    combined.nextId = Math.max(combined.nextId, remote.nextId, this.doc.nextId, combined.problems.length + 1);
     this.doc = mergeIdenticalRootCauses(combined);
   }
 
