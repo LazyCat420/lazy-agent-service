@@ -60,8 +60,8 @@ export const QWEN_POOL_MEMBERS: readonly QwenPoolMember[] = [
 const MEMBER_DOWN_COOLDOWN_MS = 30_000;
 
 /**
- * Consecutive `/v1/models` failures before a member leaves rotation. One 3 s
- * timeout is not evidence of a dead box: with a single strike, a simultaneous
+ * Consecutive `/v1/models` failures before a member leaves rotation. One ~1.2 s
+ * timeout (configurable via `VLLM_SHIM_POOL_PROBE_TIMEOUT_MS`) is not evidence of a dead box: with a single strike, a simultaneous
  * blip on both Dells would otherwise produce a 503 storm while both engines
  * are serving. Two strikes are.
  */
@@ -401,7 +401,7 @@ export interface PoolSelection {
  */
 export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelection> {
   // Health probes and gauge scrapes are independent: run them together so a
-  // cold cache costs one 3 s round, not two sequential ones.
+  // cold cache costs one probe round (~1.2 s default), not two sequential ones.
   const [health, gauges] = await Promise.all([
     Promise.all(QWEN_POOL_MEMBERS.map((m) => probeHealth(m))),
     Promise.all(QWEN_POOL_MEMBERS.map((m) => readGauges(m))),

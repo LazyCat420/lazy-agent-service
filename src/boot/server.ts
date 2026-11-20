@@ -219,7 +219,7 @@ function installCompatRoutes(app: Express, mcpAdapter: McpAdapter): void {
   // the pooled Qwen route /vllm-shim/qwen for vllm-4/vllm-5 via compose env;
   // legacy per-member routes /vllm-shim/dell1 and /vllm-shim/dell2 remain
   // swapped vs the physical boxes: dell1 -> dellbox2@10.0.0.131, dell2 ->
-  // dellbox1@10.0.0.37; see VllmShimService UPSTREAMS) so a model swap on any
+  // dellbox1@10.0.0.37; see VllmShimService UPSTREAMS) so a
   // model swap on any box can never silently strand a thinking-flag spelling.
   // This service is the gateway (:5591); prism-service is retired and no route
   // forwards to it. See VllmShimService for why.

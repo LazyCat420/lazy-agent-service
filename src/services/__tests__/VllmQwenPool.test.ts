@@ -308,7 +308,7 @@ describe("/vllm-shim/qwen routing", () => {
   });
 
   it("keeps serving through a simultaneous single probe blip instead of 503 (QP-4)", async () => {
-    // A single 3 s `/v1/models` timeout is not evidence a box is dead: both
+    // A single `/v1/models` probe timeout (~1.2 s default) is not evidence a box is dead: both
     // engines can be serving while both probes blip, so neither leaves
     // rotation on the first strike and the request is attempted.
     installFetch({ [D37]: { up: false }, [D131]: { up: false } });
