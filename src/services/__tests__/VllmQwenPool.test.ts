@@ -36,6 +36,7 @@ interface BoxSim {
   waiting?: number;
   chatFails?: boolean;
   chatHangs?: boolean;
+  modelsHangs?: boolean;
   chatDiesMidBody?: boolean;
   modelsDiesMidBody?: boolean;
   sse?: boolean;
@@ -91,11 +92,25 @@ function installFetch(sims: Record<string, BoxSim>) {
     const sim = sims[base] ?? {};
     const path = url.slice(base.length);
     if (path.startsWith("/v1/models")) {
+      if (sim.modelsHangs) {
+        const { promise, reject } = Promise.withResolvers<Response>();
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+        return promise;
+      }
       if (sim.up === false) throw new TypeError("fetch failed");
       if (sim.modelsDiesMidBody) return dyingBodyResponse();
       return jsonResponse({ object: "list", data: [{ id: sim.model ?? MODEL }] });
     }
     if (path.startsWith("/metrics")) {
+      if (sim.modelsHangs) {
+        const { promise, reject } = Promise.withResolvers<Response>();
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+        return promise;
+      }
       if (sim.up === false) throw new TypeError("fetch failed");
       return new Response(
         `tensorfold:num_requests_running ${sim.running ?? 0}\n` +
@@ -163,7 +178,7 @@ interface PoolChatRequest {
   originalUrl: string;
   method: string;
   headers: Record<string, string>;
-  body: { model: string; messages: { role: string; content: string }[]; user?: string };
+  body?: { model?: string; messages?: { role: string; content: string }[]; user?: string };
 }
 
 const chatRequest = (user?: string, headers: Record<string, string> = {}): PoolChatRequest => ({
@@ -483,6 +498,34 @@ describe("review fixes (QP-1..QP-6)", () => {
       expect(res.output).toContain('data: {"delta":"hi"}');
     } finally {
       delete process.env.VLLM_SHIM_POOL_STREAM_IDLE_TIMEOUT_MS;
+    }
+  });
+
+  it("QP-7: single-strike first member or hanging probe routes pooled /v1/models to live member", async () => {
+    installFetch({ [D37]: { up: false }, [D131]: {} });
+    const strikeRes = await send({
+      originalUrl: "/vllm-shim/qwen/v1/models",
+      method: "GET",
+      headers: {},
+    });
+    expect(strikeRes.statusCode).toBe(200);
+    expect(strikeRes.headers["x-pool-box"]).toBe("10.0.0.131");
+
+    resetQwenPoolState();
+    process.env.VLLM_SHIM_POOL_PROBE_TIMEOUT_MS = "30";
+    try {
+      installFetch({ [D37]: { modelsHangs: true }, [D131]: {} });
+      const startedAt = Date.now();
+      const hangRes = await send({
+        originalUrl: "/vllm-shim/qwen/v1/models",
+        method: "GET",
+        headers: {},
+      });
+      expect(hangRes.statusCode).toBe(200);
+      expect(hangRes.headers["x-pool-box"]).toBe("10.0.0.131");
+      expect(Date.now() - startedAt).toBeLessThan(500);
+    } finally {
+      delete process.env.VLLM_SHIM_POOL_PROBE_TIMEOUT_MS;
     }
   });
 });

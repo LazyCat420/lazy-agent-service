@@ -235,6 +235,11 @@ export function recordPoolServed(name: string): void {
   served.set(name, (served.get(name) || 0) + 1);
 }
 
+function probeTimeoutMs(): number {
+  const n = Number(process.env.VLLM_SHIM_POOL_PROBE_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 1200;
+}
+
 /** Read (and cache for ~1s) one member's engine gauges. Never throws. */
 async function readGauges(member: QwenPoolMember): Promise<GaugeSample> {
   const cached = gaugeCache.get(member.name);
@@ -246,7 +251,7 @@ async function readGauges(member: QwenPoolMember): Promise<GaugeSample> {
     let sample: GaugeSample = { at: Date.now(), running: 0, waiting: 0 };
     try {
       const response = await fetch(`${member.url.replace(/\/$/, "")}/metrics`, {
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(probeTimeoutMs()),
       });
       if (response.ok) {
         const parsed = parsePoolGauges(await response.text());
@@ -290,7 +295,7 @@ async function probeHealth(member: QwenPoolMember): Promise<HealthSample> {
     let sample: HealthSample;
     try {
       const response = await fetch(`${member.url.replace(/\/$/, "")}/v1/models`, {
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(probeTimeoutMs()),
       });
       if (response.ok) {
         sample = { at: Date.now(), up: true, model: pickPoolModel(await response.json()) };
@@ -423,17 +428,21 @@ export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelec
     return { member: fallback, candidates: [fallback], loads, sessionKey };
   }
 
-  // Group by model id; a member whose model is unknown can only serve alone.
+  // Group by model id; prefer a live member with a known model over a single-strike unknown one.
   const requestedModel = req.body?.model;
   const requested = typeof requestedModel === "string" ? requestedModel : null;
-  const firstModel = health[QWEN_POOL_MEMBERS.indexOf(live[0])].model;
+  const knownLive = live.find((m) => health[QWEN_POOL_MEMBERS.indexOf(m)].model !== null);
+  const firstModel = knownLive ? health[QWEN_POOL_MEMBERS.indexOf(knownLive)].model : null;
   const targetModel =
     requested && live.some((m) => health[QWEN_POOL_MEMBERS.indexOf(m)].model === requested)
       ? requested
       : firstModel;
 
-  let candidates = live.filter((m) => health[QWEN_POOL_MEMBERS.indexOf(m)].model === targetModel);
-  if (candidates.length === 0) candidates = [live[0]];
+  let candidates =
+    targetModel === null
+      ? [...live]
+      : live.filter((m) => health[QWEN_POOL_MEMBERS.indexOf(m)].model === targetModel);
+  if (candidates.length === 0) candidates = [...live];
 
   const minLoad = Math.min(...candidates.map((m) => loads[m.name]));
 

@@ -216,10 +216,10 @@ function installCompatRoutes(app: Express, mcpAdapter: McpAdapter): void {
   });
   // vLLM translation shim. ALL PROVIDER_VLLM_*_URL entries in the vault point
   // here (/vllm-shim/gold-spark, /vllm-shim/jetson, /vllm-shim/jetson-2, and
-  // the Qwen boxes /vllm-shim/dell1, /vllm-shim/dell2 via compose env —
-  // legacy route names, SWAPPED vs the physical boxes: dell1 reaches
-  // dellbox2@10.0.0.131, dell2 reaches dellbox1@10.0.0.37; see the UPSTREAMS
-  // note in VllmShimService) so a
+  // the pooled Qwen route /vllm-shim/qwen for vllm-4/vllm-5 via compose env;
+  // legacy per-member routes /vllm-shim/dell1 and /vllm-shim/dell2 remain
+  // swapped vs the physical boxes: dell1 -> dellbox2@10.0.0.131, dell2 ->
+  // dellbox1@10.0.0.37; see VllmShimService UPSTREAMS) so a model swap on any
   // model swap on any box can never silently strand a thinking-flag spelling.
   // This service is the gateway (:5591); prism-service is retired and no route
   // forwards to it. See VllmShimService for why.
