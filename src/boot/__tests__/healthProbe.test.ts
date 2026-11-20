@@ -8,14 +8,19 @@
  *   mongo alone; cache holds within 10 s; error text never leaks URL
  *   credentials.
  */
+import type { Express, NextFunction, Request, Response } from "express";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   createHealthProbe,
   publicErrorText,
   type BoxTarget,
+  type HealthProbe,
   type HealthProbeDeps,
+  type HealthReport,
 } from "../healthProbe.ts";
+import { installHealthRoutes } from "../server.ts";
+import { markPoolMemberDown, resetQwenPoolState } from "../../services/vllm/VllmQwenPool.ts";
 
 const BOXES: BoxTarget[] = [
   { name: "vllm", url: "http://10.0.0.20:8000" },
@@ -257,5 +262,72 @@ describe("publicErrorText", () => {
     expect(text).not.toContain("hunter2");
     expect(text).not.toContain("user:");
     expect(text).toContain("[redacted]@");
+  });
+});
+
+describe("installHealthRoutes /health pool degradation", () => {
+  type RouteHandler = (req: Request, res: Response, next: NextFunction) => Promise<void> | void;
+
+  function mountHealthRoute(report: HealthReport): () => Promise<{ status: number; body: Record<string, unknown> }> {
+    let handler: RouteHandler | undefined;
+    const fakeApp = {
+      get: (path: string, fn: RouteHandler) => {
+        if (path === "/health") handler = fn;
+      },
+    } as unknown as Express;
+    const stubProbe: HealthProbe = {
+      check: async () => report,
+      reset: () => {},
+    };
+    installHealthRoutes(fakeApp, stubProbe);
+    return async () => {
+      if (!handler) throw new Error("/health handler was not registered");
+      let status = 0;
+      let body: Record<string, unknown> = {};
+      const res = {
+        status(code: number) {
+          status = code;
+          return this;
+        },
+        json(payload: Record<string, unknown>) {
+          body = payload;
+          return this;
+        },
+      } as unknown as Response;
+      await handler({} as Request, res, (err?: unknown) => {
+        if (err) throw err;
+      });
+      return { status, body };
+    };
+  }
+
+  it("promotes ok to degraded (still HTTP 200) when a Qwen pool member is down, and leaves down/503 alone", async () => {
+    resetQwenPoolState();
+    try {
+      const okCall = mountHealthRoute({
+        status: "ok",
+        checks: { mongo: { ok: true, ms: 1 } },
+        httpStatus: 200,
+      });
+      const healthy = await okCall();
+      expect(healthy.status).toBe(200);
+      expect(healthy.body.status).toBe("ok");
+
+      markPoolMemberDown("dell2");
+      const degraded = await okCall();
+      expect(degraded.status).toBe(200);
+      expect(degraded.body.status).toBe("degraded");
+
+      const downCall = mountHealthRoute({
+        status: "down",
+        checks: { mongo: { ok: false, ms: 1, error: "down" } },
+        httpStatus: 503,
+      });
+      const outage = await downCall();
+      expect(outage.status).toBe(503);
+      expect(outage.body.status).toBe("down");
+    } finally {
+      resetQwenPoolState();
+    }
   });
 });

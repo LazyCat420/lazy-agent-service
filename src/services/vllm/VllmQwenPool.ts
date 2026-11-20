@@ -70,6 +70,9 @@ const PROBE_STRIKE_LIMIT = 2;
 /** Engine gauge cache lifetime — short on purpose (see module note). */
 const GAUGE_TTL_MS = 1_000;
 
+/** Max age before a carried-forward gauge reading from a failing `/metrics` scrape expires back to 0. */
+const GAUGE_STALE_MAX_MS = 10_000;
+
 /** `/v1/models` liveness/model-id cache lifetime. */
 const MODEL_TTL_MS = 10_000;
 
@@ -87,7 +90,10 @@ const NON_GENERATION_MODELS: Record<string, true> = {
 };
 
 interface GaugeSample {
+  /** Timestamp of the last scrape attempt (controls the 1 s retry TTL). */
   at: number;
+  /** Timestamp of the last successful `/metrics` scrape (0 if none / expired). */
+  scrapedAt: number;
   running: number;
   waiting: number;
 }
@@ -253,23 +259,29 @@ async function readGauges(member: QwenPoolMember): Promise<GaugeSample> {
   if (pending) return pending;
 
   const promise = (async (): Promise<GaugeSample> => {
-    let sample: GaugeSample = cached
-      ? { at: Date.now(), running: cached.running, waiting: cached.waiting }
-      : { at: Date.now(), running: 0, waiting: 0 };
     try {
       const response = await fetch(`${member.url.replace(/\/$/, "")}/metrics`, {
         signal: AbortSignal.timeout(gaugeTimeoutMs()),
       });
       if (response.ok) {
         const parsed = parsePoolGauges(await response.text());
-        sample = { at: Date.now(), ...parsed };
+        const now = Date.now();
+        const sample: GaugeSample = { at: now, scrapedAt: now, ...parsed };
+        gaugeCache.set(member.name, sample);
+        return sample;
       }
     } catch {
-      // A gauge scrape failure is not evidence the box is down or idle — keep
-      // the prior reading when available instead of resetting a busy box to 0.
+      // A gauge scrape failure is not evidence the box is down or idle — fall
+      // through to preserve a bounded-age prior reading instead of resetting to 0.
     }
-    gaugeCache.set(member.name, sample);
-    return sample;
+    const now = Date.now();
+    const keepPrior =
+      cached && cached.scrapedAt > 0 && now - cached.scrapedAt < GAUGE_STALE_MAX_MS;
+    const fallback: GaugeSample = keepPrior
+      ? { at: now, scrapedAt: cached.scrapedAt, running: cached.running, waiting: cached.waiting }
+      : { at: now, scrapedAt: 0, running: 0, waiting: 0 };
+    gaugeCache.set(member.name, fallback);
+    return fallback;
   })().finally(() => gaugePending.delete(member.name));
 
   gaugePending.set(member.name, promise);
@@ -408,7 +420,7 @@ export interface PoolSelection {
  */
 export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelection> {
   // Health probes and gauge scrapes are independent: run them together so a
-  // cold cache costs one probe round (~1.2 s default), not two sequential ones.
+  // cold cache costs one round (~1.5 s max under default timeouts), not two sequential ones.
   const [health, gauges] = await Promise.all([
     Promise.all(QWEN_POOL_MEMBERS.map((m) => probeHealth(m))),
     Promise.all(QWEN_POOL_MEMBERS.map((m) => readGauges(m))),
@@ -493,18 +505,23 @@ export interface QwenPoolStats {
 
 /** Snapshot for `/health` and logs: which box served how much, and current load. */
 export function qwenPoolStats(): QwenPoolStats {
+  const now = Date.now();
   return {
     route: "/vllm-shim/qwen",
     members: QWEN_POOL_MEMBERS.map((m) => {
       const gauge = gaugeCache.get(m.name);
+      const freshGauge =
+        gauge && gauge.scrapedAt > 0 && now - gauge.scrapedAt < GAUGE_STALE_MAX_MS
+          ? gauge
+          : null;
       const health = healthCache.get(m.name);
       return {
         name: m.name,
         ip: m.ip,
         up: health ? health.up && !poolMemberDown(m) : !poolMemberDown(m),
         model: health?.model ?? null,
-        running: gauge?.running ?? null,
-        waiting: gauge?.waiting ?? null,
+        running: freshGauge?.running ?? null,
+        waiting: freshGauge?.waiting ?? null,
         inFlight: inFlight.get(m.name) || 0,
         served: served.get(m.name) || 0,
       };

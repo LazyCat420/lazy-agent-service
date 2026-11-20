@@ -531,25 +531,48 @@ describe("review fixes (QP-1..QP-6)", () => {
     }
   });
 
-  it("QP-8: failed /metrics scrape preserves prior gauge reading instead of resetting to idle 0", async () => {
-    installFetch({ [D37]: { running: 4, waiting: 2 }, [D131]: { running: 1, waiting: 0 } });
-    const first = await send(chatRequest());
-    expect(first.headers["x-pool-box"]).toBe("10.0.0.131");
-
-    // Force gauge cache expiry (via clearPoolCaches? No: test failed scrape after TTL via fake timers or direct unit check):
+  it("QP-8: failed /metrics scrape preserves prior gauge briefly then expires stale counts", async () => {
     vi.useFakeTimers();
     try {
+      installFetch({ [D37]: { running: 4, waiting: 2 }, [D131]: { running: 1, waiting: 0 } });
+      const first = await send(chatRequest());
+      expect(first.headers["x-pool-box"]).toBe("10.0.0.131");
+
+      // Advance past the 1 s gauge TTL (health stays cached for 10 s) so only
+      // /metrics is re-scraped and fails; the recent prior reading stays valid.
       vi.advanceTimersByTime(1500);
       installFetch({ [D37]: { up: false, chatFails: false }, [D131]: { running: 1, waiting: 0 } });
-      // Wait — probeHealth up:false keeps up:true on 1 strike, while /metrics fails!
       const second = await send(chatRequest());
       expect(second.headers["x-pool-box"]).toBe("10.0.0.131");
-      const stats = qwenPoolStats();
-      const d37Stats = stats.members.find((m) => m.name === "dell2");
-      expect(d37Stats?.running).toBe(4);
-      expect(d37Stats?.waiting).toBe(2);
+      const midStats = qwenPoolStats().members.find((m) => m.name === "dell2");
+      expect(midStats?.running).toBe(4);
+      expect(midStats?.waiting).toBe(2);
+
+      // Advance past the 10 s stale-gauge bound: repeated failed scrapes no
+      // longer carry stale 4/2 counts forward forever (health recovers too, stats
+      // report null unknown gauges, and routing resets load to 0 vs D131's 1).
+      vi.advanceTimersByTime(9000);
+      installFetch({ [D37]: { up: false, chatFails: false }, [D131]: { running: 1, waiting: 0 } });
+      await send(chatRequest("after-expiry"));
+      const expiredStats = qwenPoolStats().members.find((m) => m.name === "dell2");
+      expect(expiredStats?.running).toBeNull();
+      expect(expiredStats?.waiting).toBeNull();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("QP-9: GET /v1/models discovery probes do not inflate pool.served counts", async () => {
+    installFetch({ [D37]: {}, [D131]: {} });
+    const probeRes = await send({
+      originalUrl: "/vllm-shim/qwen/v1/models",
+      method: "GET",
+      headers: {},
+    });
+    expect(probeRes.statusCode).toBe(200);
+    expect(servedTotal()).toBe(0);
+
+    await send(chatRequest("real-chat"));
+    expect(servedTotal()).toBe(1);
   });
 });

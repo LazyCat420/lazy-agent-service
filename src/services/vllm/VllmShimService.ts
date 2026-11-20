@@ -1603,7 +1603,7 @@ export class VllmShimService {
         delivery.toolContextToken,
         pool ? this.poolStreamIdleTimeoutMs() : undefined,
       );
-      if (pool && delivered) recordPoolServed(member.name);
+      if (pool && delivered && !delivery.isModelsProbe) recordPoolServed(member.name);
       return;
     }
 
@@ -1618,6 +1618,6 @@ export class VllmShimService {
       { contextToken: delivery.toolContextToken, choiceNone: delivery.toolChoiceNone, healedLiveModel },
       res,
     );
-    if (pool) recordPoolServed(member.name);
+    if (pool && !delivery.isModelsProbe) recordPoolServed(member.name);
   }
 }

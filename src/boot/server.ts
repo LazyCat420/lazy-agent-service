@@ -11,7 +11,7 @@ import McpAdapter from "../services/McpAdapter.ts";
 import MongoWrapper from "../wrappers/MongoWrapper.ts";
 import { getInstancesByType } from "../providers/instance-registry.ts";
 import { MONGO_DB_NAME } from "../../config.ts";
-import { createHealthProbe } from "./healthProbe.ts";
+import { createHealthProbe, type HealthProbe } from "./healthProbe.ts";
 
 // Routes
 import chatRouter from "../routes/ChatRoutes.ts";
@@ -130,7 +130,7 @@ function isBoxEnabled(baseUrl: string): boolean {
   }
 }
 
-function installHealthRoutes(app: Express): void {
+export function installHealthRoutes(app: Express, probeOverride?: HealthProbe): void {
   // LF-11: the static `{"status":"ok"}` kept the container green while Mongo
   // or every model box was dead. This probe pings the Mongo connection the
   // service already holds and GETs <base>/v1/models on every configured vLLM
@@ -140,18 +140,20 @@ function installHealthRoutes(app: Express): void {
   // container unhealthy, and only a total outage (Mongo down or every box
   // down) answers 503. Results are cached 10 s so a probe storm cannot
   // hammer the boxes.
-  const healthProbe = createHealthProbe({
-    pingMongo: async () => {
-      const db = MongoWrapper.getDb(MONGO_DB_NAME);
-      await db.command({ ping: 1 });
-    },
-    listBoxes: () =>
-      getInstancesByType(PROVIDERS.VLLM).map((entry) => ({
-        name: entry.id,
-        url: entry.baseUrl,
-        enabled: isBoxEnabled(entry.baseUrl),
-      })),
-  });
+  const healthProbe =
+    probeOverride ??
+    createHealthProbe({
+      pingMongo: async () => {
+        const db = MongoWrapper.getDb(MONGO_DB_NAME);
+        await db.command({ ping: 1 });
+      },
+      listBoxes: () =>
+        getInstancesByType(PROVIDERS.VLLM).map((entry) => ({
+          name: entry.id,
+          url: entry.baseUrl,
+          enabled: isBoxEnabled(entry.baseUrl),
+        })),
+    });
   app.get("/", (_req: Request, res: Response) => {
     res.json({
       name: "Lazy Agent Service",
