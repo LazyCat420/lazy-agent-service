@@ -240,7 +240,12 @@ function probeTimeoutMs(): number {
   return Number.isFinite(n) && n > 0 ? n : 1200;
 }
 
-/** Read (and cache for ~1s) one member's engine gauges. Never throws. */
+function gaugeTimeoutMs(): number {
+  const n = Number(process.env.VLLM_SHIM_POOL_GAUGE_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 1500;
+}
+
+/** Read (and cache for ~1s) one member's engine gauges, preserving the last known reading on failure. */
 async function readGauges(member: QwenPoolMember): Promise<GaugeSample> {
   const cached = gaugeCache.get(member.name);
   if (cached && Date.now() - cached.at < GAUGE_TTL_MS) return cached;
@@ -248,18 +253,20 @@ async function readGauges(member: QwenPoolMember): Promise<GaugeSample> {
   if (pending) return pending;
 
   const promise = (async (): Promise<GaugeSample> => {
-    let sample: GaugeSample = { at: Date.now(), running: 0, waiting: 0 };
+    let sample: GaugeSample = cached
+      ? { at: Date.now(), running: cached.running, waiting: cached.waiting }
+      : { at: Date.now(), running: 0, waiting: 0 };
     try {
       const response = await fetch(`${member.url.replace(/\/$/, "")}/metrics`, {
-        signal: AbortSignal.timeout(probeTimeoutMs()),
+        signal: AbortSignal.timeout(gaugeTimeoutMs()),
       });
       if (response.ok) {
         const parsed = parsePoolGauges(await response.text());
         sample = { at: Date.now(), ...parsed };
       }
     } catch {
-      // A gauge scrape failure is not evidence the box is down — the models
-      // probe decides liveness. Treat unknown load as zero and keep going.
+      // A gauge scrape failure is not evidence the box is down or idle — keep
+      // the prior reading when available instead of resetting a busy box to 0.
     }
     gaugeCache.set(member.name, sample);
     return sample;

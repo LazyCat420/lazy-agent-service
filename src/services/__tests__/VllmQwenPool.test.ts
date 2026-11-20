@@ -513,6 +513,7 @@ describe("review fixes (QP-1..QP-6)", () => {
 
     resetQwenPoolState();
     process.env.VLLM_SHIM_POOL_PROBE_TIMEOUT_MS = "30";
+    process.env.VLLM_SHIM_POOL_GAUGE_TIMEOUT_MS = "30";
     try {
       installFetch({ [D37]: { modelsHangs: true }, [D131]: {} });
       const startedAt = Date.now();
@@ -526,6 +527,29 @@ describe("review fixes (QP-1..QP-6)", () => {
       expect(Date.now() - startedAt).toBeLessThan(500);
     } finally {
       delete process.env.VLLM_SHIM_POOL_PROBE_TIMEOUT_MS;
+      delete process.env.VLLM_SHIM_POOL_GAUGE_TIMEOUT_MS;
+    }
+  });
+
+  it("QP-8: failed /metrics scrape preserves prior gauge reading instead of resetting to idle 0", async () => {
+    installFetch({ [D37]: { running: 4, waiting: 2 }, [D131]: { running: 1, waiting: 0 } });
+    const first = await send(chatRequest());
+    expect(first.headers["x-pool-box"]).toBe("10.0.0.131");
+
+    // Force gauge cache expiry (via clearPoolCaches? No: test failed scrape after TTL via fake timers or direct unit check):
+    vi.useFakeTimers();
+    try {
+      vi.advanceTimersByTime(1500);
+      installFetch({ [D37]: { up: false, chatFails: false }, [D131]: { running: 1, waiting: 0 } });
+      // Wait — probeHealth up:false keeps up:true on 1 strike, while /metrics fails!
+      const second = await send(chatRequest());
+      expect(second.headers["x-pool-box"]).toBe("10.0.0.131");
+      const stats = qwenPoolStats();
+      const d37Stats = stats.members.find((m) => m.name === "dell2");
+      expect(d37Stats?.running).toBe(4);
+      expect(d37Stats?.waiting).toBe(2);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

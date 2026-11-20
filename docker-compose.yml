@@ -24,9 +24,10 @@ services:
       # instances vllm-4 / vllm-5. Both default to the shared `/vllm-shim/qwen`
       # request pool; the legacy per-box member routes `/vllm-shim/dell1` and
       # `/vllm-shim/dell2` remain swapped vs physical hosts (`dell1` -> 10.0.0.131
-      # dellbox2, `dell2` -> 10.0.0.37 dellbox1). The 5 + 5 = 10 admission slots
-      # assume both boxes are in rotation (dropping to one member for GLM TP=2
-      # queues up to 10 requests onto the remaining 5-slot engine).
+      # dellbox2, `dell2` -> 10.0.0.37 dellbox1). Both vllm-4 and vllm-5 /health checks
+      # test pool availability (`pool.members[].up` reports individual Dell status and
+      # degrades `/health` when a member drops); 5 + 5 = 10 slots assume both boxes
+      # are in rotation (1-box GLM TP=2 layout queues up to 10 onto a 5-slot engine).
       - PROVIDER_VLLM_4_URL=${PROVIDER_VLLM_4_URL:-http://10.0.0.16:5591/vllm-shim/qwen}
       - PROVIDER_VLLM_4_NICKNAME=${PROVIDER_VLLM_4_NICKNAME:-Qwen pool A}
       - PROVIDER_VLLM_4_CONCURRENCY=${PROVIDER_VLLM_4_CONCURRENCY:-5}

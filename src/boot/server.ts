@@ -163,13 +163,16 @@ function installHealthRoutes(app: Express): void {
   app.get("/health", async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const report = await healthProbe.check();
+      const pool = qwenPoolStats();
+      const anyMemberDown = pool.members.some((m) => !m.up);
+      const status = report.status === "ok" && anyMemberDown ? "degraded" : report.status;
       // Pool attribution rides the status endpoint: `served` counts how many
-      // responses each Qwen box answered since boot, and running/waiting are
-      // the gauges the pool routes on. Additive — status/checks unchanged.
+      // responses each Qwen box answered since boot, running/waiting are
+      // the gauges the pool routes on, and a down member promotes ok -> degraded.
       res.status(report.httpStatus).json({
-        status: report.status,
+        status,
         checks: report.checks,
-        pool: qwenPoolStats(),
+        pool,
       });
     } catch (error) {
       next(error);
