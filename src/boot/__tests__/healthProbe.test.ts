@@ -20,7 +20,7 @@ import {
   type HealthReport,
 } from "../healthProbe.ts";
 import { installHealthRoutes } from "../server.ts";
-import { markPoolMemberDown, resetQwenPoolState } from "../../services/vllm/VllmQwenPool.ts";
+import { markPoolMemberDown, resetPoolState } from "../../services/vllm/VllmPool.ts";
 
 const BOXES: BoxTarget[] = [
   { name: "vllm", url: "http://10.0.0.20:8000" },
@@ -301,8 +301,8 @@ describe("installHealthRoutes /health pool degradation", () => {
     };
   }
 
-  it("promotes ok to degraded (still HTTP 200) when a Qwen pool member is down, and leaves down/503 alone", async () => {
-    resetQwenPoolState();
+  it("promotes ok to degraded (still HTTP 200) when a Dell pool member is down, and leaves down/503 alone", async () => {
+    resetPoolState();
     try {
       const okCall = mountHealthRoute({
         status: "ok",
@@ -327,7 +327,7 @@ describe("installHealthRoutes /health pool degradation", () => {
       expect(outage.status).toBe(503);
       expect(outage.body.status).toBe("down");
     } finally {
-      resetQwenPoolState();
+      resetPoolState();
     }
   });
 });

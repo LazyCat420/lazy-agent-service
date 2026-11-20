@@ -10,9 +10,9 @@ import {
   markPoolMemberDown,
   recordPoolServed,
   releasePoolInFlight,
-  selectQwenMember,
+  selectPoolMember,
   type PoolSelection,
-} from "./VllmQwenPool.ts";
+} from "./VllmPool.ts";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
 
@@ -60,11 +60,12 @@ const UPSTREAMS: Record<string, string> = {
   // 8000-fallback dance it left behind cost 957 failed connects in one cycle.
   "jetson": process.env.VLLM_SHIM_JETSON_URL || "http://10.0.0.30:8000",
   "jetson-2": process.env.VLLM_SHIM_JETSON_2_URL || "http://10.0.0.30:8001",
-  // Qwen3.8-Flash-Next on TensorFold (max_batch_size 5 each), added
-  // 2026-11-03 so trading-cycle panel seats can spill off Gold Spark. These
-  // boxes also serve the agent-pool's qwen/qwen37 subagents directly (not
-  // through this shim), so no shim cap: the trading admission controller
-  // reads the engine's own running/waiting counts instead.
+  // The Dell boxes (2026-11-03), added so trading-cycle panel seats can spill
+  // off Gold Spark. Both serve DeepSeek-V4.1-Flash-1017 today; the model id is
+  // discovered live from /v1/models, nothing here hardcodes a model name. These
+  // boxes also serve the agent-pool's subagents directly (not through this
+  // shim), so no shim cap: the trading admission controller reads the engine's
+  // own running/waiting counts instead.
   // NOTE (2026-11-16): the route names dell1/dell2 are legacy and SWAPPED vs
   // the physical machines — ssh logins dellbox1@10.0.0.37 / dellbox2@10.0.0.131
   // are ground truth (authoritative table: spark-console boxes.json identity
@@ -74,6 +75,9 @@ const UPSTREAMS: Record<string, string> = {
   // env vars directly (without routing through /vllm-shim/dell1 or /vllm-shim/dell2);
   // legacy callers still address those paths, while compose defaults for vllm-4/vllm-5
   // point at pooled `/vllm-shim/qwen`, and instance ids vllm-4/vllm-5 stay permanent.
+  // NOTE (2026-11-20): the Dells run one TP=2 cluster and only .37 (member `dell2`)
+  // has an API, so the pool defaults to `dell2` alone. Set
+  // VLLM_SHIM_POOL_MEMBERS=dell2,dell1 when two standalone engines are back.
   "dell1": process.env.VLLM_SHIM_DELL1_URL || "http://10.0.0.131:8888", // physical dellbox2 (pool member dell1)
   "dell2": process.env.VLLM_SHIM_DELL2_URL || "http://10.0.0.37:8888", // physical dellbox1 (pool member dell2)
 };
@@ -1265,7 +1269,7 @@ export class VllmShimService {
   }
 
   public static async handle(req: Request, res: Response) {
-    // The shared Qwen pool is not one upstream: it chooses a member per
+    // The shared Dell pool is not one upstream: it chooses a member per
     // request, so it is intercepted before resolveUpstream (which would 404
     // an unknown name). See handlePool.
     const poolPath = VllmShimService.poolOriginalPath(req.originalUrl);
@@ -1331,9 +1335,9 @@ export class VllmShimService {
   }
 
   /**
-   * Serve one request from the shared Qwen pool.
+   * Serve one request from the shared Dell pool.
    *
-   * The member is chosen per request by `selectQwenMember` (lowest
+   * The member is chosen per request by `selectPoolMember` (lowest
    * running+waiting plus this shim's in-flight count, with session affinity),
    * and only boxes that pass the two-strike liveness probe and serve the same
    * model id are eligible — so a TP=2 relayout that takes .131 down shrinks
@@ -1347,7 +1351,7 @@ export class VllmShimService {
     const preparedBody = await this.prepareProxyBody(req, res, basePath);
     if (preparedBody.handled) return;
 
-    const selection = await selectQwenMember({ body: preparedBody.body, headers: req.headers });
+    const selection = await selectPoolMember({ body: preparedBody.body, headers: req.headers });
     await this.proxyPrepared(
       req,
       res,
@@ -1382,7 +1386,7 @@ export class VllmShimService {
   /**
    * Proxy one prepared request to an upstream, or — when `pool` is supplied —
    * to the pool's chosen member with one failover retry. `pool` carries the
-   * chosen member's in-flight count already taken by `selectQwenMember`; this
+   * chosen member's in-flight count already taken by `selectPoolMember`; this
    * method releases it on every exit path.
    */
   private static async proxyPrepared(

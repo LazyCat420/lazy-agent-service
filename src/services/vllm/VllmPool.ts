@@ -2,33 +2,41 @@ import { createHash } from "node:crypto";
 import logger from "../../logger.js";
 
 /**
- * The shared Qwen request pool behind `/vllm-shim/qwen`.
+ * The shared Dell request pool behind `/vllm-shim/qwen` (legacy route name;
+ * kept as-is because callers' PROVIDER_VLLM_*_URL entries point at it).
  *
- * WHY (2026-11-19, user decision "option A"): the two Dell boxes each serve
- * Qwen3.8-Flash-Next (TensorFold, max_batch_size 5) and are addressed today as
- * two independent shim routes. A backlog on one box therefore stays on that
- * box while the other idles, even though the caller only cares that SOME box
- * answers. This module makes the two boxes one pool at the REQUEST level: each
- * arrival goes to the member with the lowest load, so a queue on one box
- * spills to the other immediately instead of at the next caller restart.
+ * WHY (2026-11-19, user decision "option A"): the Dell boxes were addressed as
+ * two independent shim routes, so a backlog on one box stayed there while the
+ * other idled, even though the caller only cares that SOME box answers. This
+ * module makes the boxes one pool at the REQUEST level: each arrival goes to
+ * the member with the lowest load, so a queue on one box spills to the other
+ * immediately instead of at the next caller restart.
  *
  * Load is `num_requests_running + num_requests_waiting` from the engine's own
  * `/metrics`, plus this shim's in-flight count for that member. The gauges are
  * cached for ~1s (they are a scrape, not a counter) and the local count is
- * what makes a burst of N arrivals spread across both boxes inside that
- * second instead of all landing on the same member.
+ * what makes a burst of N arrivals spread across the members inside that
+ * second instead of all landing on the same one.
  *
  * Session affinity: a request that carries a session key stays on the box that
  * served it before, so the engine's prompt cache stays warm — unless that box
  * is at least 2 requests deeper than the least-loaded member, at which point
  * latency wins over cache.
  *
- * Members: only boxes that answer `/v1/models` AND serve the same model id.
- * When the Dells are switched to the GLM TP=2 layout (.131 down), the pool
- * shrinks to the single live member without any config change.
+ * The model is discovered live from each member's `/v1/models` (today both
+ * boxes serve DeepSeek-V4.1-Flash-1017). Only boxes that answer AND serve the
+ * same model id are pooled together, so a mixed deployment keeps a request on
+ * the box that serves its model.
+ *
+ * Members come from `VLLM_SHIM_POOL_MEMBERS` (comma-separated upstream names,
+ * trimmed, empty entries dropped). The default is `dell2` — the TP=2 layout:
+ * the two Dells run one cluster whose only API is 10.0.0.37:8888 (member
+ * `dell2`); 10.0.0.131 (`dell1`) has none. Set
+ * `VLLM_SHIM_POOL_MEMBERS=dell2,dell1` when the Dells run two standalone
+ * engines again.
  */
 
-export interface QwenPoolMember {
+export interface PoolMember {
   /** Shim upstream name (legacy, SWAPPED vs the physical boxes). */
   name: string;
   /** Base URL of the engine. */
@@ -37,24 +45,61 @@ export interface QwenPoolMember {
   ip: string;
 }
 
+/** Pool used when `VLLM_SHIM_POOL_MEMBERS` is unset or empty. */
+const DEFAULT_POOL_MEMBERS = "dell2";
+
+/**
+ * Build the pool from a `VLLM_SHIM_POOL_MEMBERS` spec. Pure (env injectable) so
+ * tests can exercise membership without re-importing this module. Unknown
+ * names and unparsable URLs are warned about once and skipped; duplicates keep
+ * the first entry.
+ */
+export function buildPoolMembers(
+  spec: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): PoolMember[] {
+  const raw = spec === undefined || spec.trim() === "" ? DEFAULT_POOL_MEMBERS : spec;
+  const members: PoolMember[] = [];
+  const seen = new Set<string>();
+  for (const name of raw.split(",").map((n) => n.trim()).filter((n) => n.length > 0)) {
+    if (seen.has(name)) continue;
+    const url =
+      name === "dell2"
+        ? env.VLLM_SHIM_DELL2_URL || "http://10.0.0.37:8888" // physical dellbox1
+        : name === "dell1"
+          ? env.VLLM_SHIM_DELL1_URL || "http://10.0.0.131:8888" // physical dellbox2
+          : undefined;
+    if (!url) {
+      logger.warn(`[VllmPool] unknown pool member "${name}" in VLLM_SHIM_POOL_MEMBERS; skipping`);
+      continue;
+    }
+    let ip: string;
+    try {
+      ip = new URL(url).hostname;
+    } catch {
+      logger.warn(`[VllmPool] unparsable URL for pool member "${name}": ${url}; skipping`);
+      continue;
+    }
+    seen.add(name);
+    members.push({ name, url, ip });
+  }
+  // A spec whose every entry was skipped would leave selection with nothing to
+  // pick; fall back to the known-good default rather than crash per request.
+  if (members.length === 0 && raw !== DEFAULT_POOL_MEMBERS) {
+    return buildPoolMembers(DEFAULT_POOL_MEMBERS, env);
+  }
+  return members;
+}
+
 /**
  * The pool. Route names are legacy and swapped (see UPSTREAMS in
  * VllmShimService): `dell2` reaches physical dellbox1@10.0.0.37 and `dell1`
  * reaches physical dellbox2@10.0.0.131. The `ip` field is the physical truth
  * and is what callers see in `x-pool-box`.
  */
-export const QWEN_POOL_MEMBERS: readonly QwenPoolMember[] = [
-  {
-    name: "dell2",
-    url: process.env.VLLM_SHIM_DELL2_URL || "http://10.0.0.37:8888", // physical dellbox1
-    ip: "10.0.0.37",
-  },
-  {
-    name: "dell1",
-    url: process.env.VLLM_SHIM_DELL1_URL || "http://10.0.0.131:8888", // physical dellbox2
-    ip: "10.0.0.131",
-  },
-];
+export const POOL_MEMBERS: readonly PoolMember[] = buildPoolMembers(
+  process.env.VLLM_SHIM_POOL_MEMBERS,
+);
 
 /** Members currently held out of rotation after a failed connect (ms). */
 const MEMBER_DOWN_COOLDOWN_MS = 30_000;
@@ -117,7 +162,7 @@ const affinity = new Map<string, { member: string; at: number }>();
 let tieBreakCursor = 0;
 
 /** Test seam: forget every cached sample, counter and affinity. */
-export function resetQwenPoolState(): void {
+export function resetPoolState(): void {
   gaugeCache.clear();
   gaugePending.clear();
   healthCache.clear();
@@ -147,7 +192,7 @@ export function clearPoolCaches(): void {
  * it; the keys themselves are session identifiers, so `/health` never exports
  * them.
  */
-export function qwenPoolAffinityKeys(): string[] {
+export function poolAffinityKeys(): string[] {
   return [...affinity.keys()];
 }
 
@@ -201,13 +246,13 @@ export function pickPoolModel(payload: unknown): string | null {
   return null;
 }
 
-function markDown(member: QwenPoolMember, reason: string): void {
+function markDown(member: PoolMember, reason: string): void {
   const until = Date.now() + MEMBER_DOWN_COOLDOWN_MS;
   const previous = downUntil.get(member.name) || 0;
   lastFailureAt.set(member.name, Date.now());
   if (previous <= Date.now()) {
     logger.warn(
-      `[VllmQwenPool] member "${member.name}" (${member.ip}) out of rotation for ` +
+      `[VllmPool] member "${member.name}" (${member.ip}) out of rotation for ` +
         `${MEMBER_DOWN_COOLDOWN_MS}ms: ${reason}`,
     );
   }
@@ -215,13 +260,13 @@ function markDown(member: QwenPoolMember, reason: string): void {
 }
 
 /** True while a failed connect has this member out of rotation. */
-export function poolMemberDown(member: QwenPoolMember): boolean {
+export function poolMemberDown(member: PoolMember): boolean {
   return (downUntil.get(member.name) || 0) > Date.now();
 }
 
 /** Take a member out of rotation after a failed connect (exported for tests). */
 export function markPoolMemberDown(name: string): void {
-  const member = QWEN_POOL_MEMBERS.find((m) => m.name === name);
+  const member = POOL_MEMBERS.find((m) => m.name === name);
   if (member) markDown(member, "connect failed");
 }
 
@@ -252,7 +297,7 @@ function gaugeTimeoutMs(): number {
 }
 
 /** Read (and cache for ~1s) one member's engine gauges, preserving the last known reading on failure. */
-async function readGauges(member: QwenPoolMember): Promise<GaugeSample> {
+async function readGauges(member: PoolMember): Promise<GaugeSample> {
   const cached = gaugeCache.get(member.name);
   if (cached && Date.now() - cached.at < GAUGE_TTL_MS) return cached;
   const pending = gaugePending.get(member.name);
@@ -289,7 +334,7 @@ async function readGauges(member: QwenPoolMember): Promise<GaugeSample> {
 }
 
 /** Probe one member's `/v1/models` for liveness and its served model id. */
-async function probeHealth(member: QwenPoolMember): Promise<HealthSample> {
+async function probeHealth(member: PoolMember): Promise<HealthSample> {
   if (poolMemberDown(member)) {
     return { at: Date.now(), up: false, model: null };
   }
@@ -400,9 +445,9 @@ function rememberAffinity(key: string, member: string): void {
 
 export interface PoolSelection {
   /** The member chosen for this request; its in-flight count is already taken. */
-  member: QwenPoolMember;
+  member: PoolMember;
   /** Chosen member first, then other live members of the same model (failover order). */
-  candidates: QwenPoolMember[];
+  candidates: PoolMember[];
   /** Per-member load used for the pick (running + waiting + shim in-flight). */
   loads: Record<string, number>;
   sessionKey: string | null;
@@ -418,29 +463,29 @@ export interface PoolSelection {
  * a burst spreads before the gauges catch up; the caller MUST release it via
  * `releasePoolInFlight`.
  */
-export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelection> {
+export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelection> {
   // Health probes and gauge scrapes are independent: run them together so a
   // cold cache costs one round (~1.5 s max under default timeouts), not two sequential ones.
   const [health, gauges] = await Promise.all([
-    Promise.all(QWEN_POOL_MEMBERS.map((m) => probeHealth(m))),
-    Promise.all(QWEN_POOL_MEMBERS.map((m) => readGauges(m))),
+    Promise.all(POOL_MEMBERS.map((m) => probeHealth(m))),
+    Promise.all(POOL_MEMBERS.map((m) => readGauges(m))),
   ]);
   const loads: Record<string, number> = {};
-  QWEN_POOL_MEMBERS.forEach((m, i) => {
+  POOL_MEMBERS.forEach((m, i) => {
     loads[m.name] = gauges[i].running + gauges[i].waiting + (inFlight.get(m.name) || 0);
   });
   const sessionKey = poolSessionKey(req);
 
-  const live = QWEN_POOL_MEMBERS.filter((_, i) => health[i].up);
+  const live = POOL_MEMBERS.filter((_, i) => health[i].up);
   if (live.length === 0) {
     // Every member is out of rotation. Still try the least recently failed
     // one: both engines can be serving while both probes blipped, and a 503
     // storm would be worse than one attempt against a possibly-live box.
-    const fallback = QWEN_POOL_MEMBERS.reduce((a, b) =>
+    const fallback = POOL_MEMBERS.reduce((a, b) =>
       (lastFailureAt.get(a.name) ?? 0) <= (lastFailureAt.get(b.name) ?? 0) ? a : b,
     );
     logger.warn(
-      `[VllmQwenPool] every member is out of rotation; trying the least recently ` +
+      `[VllmPool] every member is out of rotation; trying the least recently ` +
         `failed one (${fallback.name} / ${fallback.ip}) instead of shedding the request`,
     );
     acquirePoolInFlight(fallback.name);
@@ -450,22 +495,22 @@ export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelec
   // Group by model id; prefer a live member with a known model over a single-strike unknown one.
   const requestedModel = req.body?.model;
   const requested = typeof requestedModel === "string" ? requestedModel : null;
-  const knownLive = live.find((m) => health[QWEN_POOL_MEMBERS.indexOf(m)].model !== null);
-  const firstModel = knownLive ? health[QWEN_POOL_MEMBERS.indexOf(knownLive)].model : null;
+  const knownLive = live.find((m) => health[POOL_MEMBERS.indexOf(m)].model !== null);
+  const firstModel = knownLive ? health[POOL_MEMBERS.indexOf(knownLive)].model : null;
   const targetModel =
-    requested && live.some((m) => health[QWEN_POOL_MEMBERS.indexOf(m)].model === requested)
+    requested && live.some((m) => health[POOL_MEMBERS.indexOf(m)].model === requested)
       ? requested
       : firstModel;
 
   let candidates =
     targetModel === null
       ? [...live]
-      : live.filter((m) => health[QWEN_POOL_MEMBERS.indexOf(m)].model === targetModel);
+      : live.filter((m) => health[POOL_MEMBERS.indexOf(m)].model === targetModel);
   if (candidates.length === 0) candidates = [...live];
 
   const minLoad = Math.min(...candidates.map((m) => loads[m.name]));
 
-  let chosen: QwenPoolMember | undefined;
+  let chosen: PoolMember | undefined;
   if (sessionKey) {
     pruneAffinity();
     const previous = affinity.get(sessionKey)?.member;
@@ -486,7 +531,7 @@ export async function selectQwenMember(req: PoolRequestShape): Promise<PoolSelec
   return { member: chosen, candidates: ordered, loads, sessionKey };
 }
 
-export interface QwenPoolMemberStats {
+export interface PoolMemberStats {
   name: string;
   ip: string;
   up: boolean;
@@ -497,18 +542,18 @@ export interface QwenPoolMemberStats {
   served: number;
 }
 
-export interface QwenPoolStats {
+export interface PoolStats {
   route: string;
-  members: QwenPoolMemberStats[];
+  members: PoolMemberStats[];
   served: Record<string, number>;
 }
 
 /** Snapshot for `/health` and logs: which box served how much, and current load. */
-export function qwenPoolStats(): QwenPoolStats {
+export function poolStats(): PoolStats {
   const now = Date.now();
   return {
     route: "/vllm-shim/qwen",
-    members: QWEN_POOL_MEMBERS.map((m) => {
+    members: POOL_MEMBERS.map((m) => {
       const gauge = gaugeCache.get(m.name);
       const freshGauge =
         gauge && gauge.scrapedAt > 0 && now - gauge.scrapedAt < GAUGE_STALE_MAX_MS
@@ -526,6 +571,6 @@ export function qwenPoolStats(): QwenPoolStats {
         served: served.get(m.name) || 0,
       };
     }),
-    served: Object.fromEntries(QWEN_POOL_MEMBERS.map((m) => [m.name, served.get(m.name) || 0])),
+    served: Object.fromEntries(POOL_MEMBERS.map((m) => [m.name, served.get(m.name) || 0])),
   };
 }

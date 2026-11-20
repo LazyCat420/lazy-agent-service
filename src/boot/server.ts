@@ -30,7 +30,7 @@ import { createObsidianCompletionRouter } from "../routes/ObsidianCompletionRout
 import contractRouter from "../routes/ContractRoutes.ts";
 import openAIEmbeddingsRouter from "../routes/OpenAIEmbeddingsRoutes.ts";
 import { VllmShimService } from "../services/vllm/VllmShimService.js";
-import { qwenPoolStats } from "../services/vllm/VllmQwenPool.ts";
+import { poolStats } from "../services/vllm/VllmPool.ts";
 import wallgardenRouter from "../routes/WallgardenRoutes.js";
 
 /** Endpoint registry (single source of truth for health check + startup logs). */
@@ -165,12 +165,13 @@ export function installHealthRoutes(app: Express, probeOverride?: HealthProbe): 
   app.get("/health", async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const report = await healthProbe.check();
-      const pool = qwenPoolStats();
+      const pool = poolStats();
       const anyMemberDown = pool.members.some((m) => !m.up);
       const status = report.status === "ok" && anyMemberDown ? "degraded" : report.status;
       // Pool attribution rides the status endpoint: `served` counts how many
-      // responses each Qwen box answered since boot, running/waiting are
-      // the gauges the pool routes on, and a down member promotes ok -> degraded.
+      // responses each Dell pool member answered since boot, running/waiting
+      // are the gauges the pool routes on, and a down member promotes
+      // ok -> degraded.
       res.status(report.httpStatus).json({
         status,
         checks: report.checks,
@@ -221,7 +222,8 @@ function installCompatRoutes(app: Express, mcpAdapter: McpAdapter): void {
   });
   // vLLM translation shim. ALL PROVIDER_VLLM_*_URL entries in the vault point
   // here (/vllm-shim/gold-spark, /vllm-shim/jetson, /vllm-shim/jetson-2, and
-  // the pooled Qwen route /vllm-shim/qwen for vllm-4/vllm-5 via compose env;
+  // the pooled route /vllm-shim/qwen (legacy name) for vllm-4/vllm-5 via
+  // compose env;
   // legacy per-member routes /vllm-shim/dell1 and /vllm-shim/dell2 remain
   // swapped vs the physical boxes: dell1 -> dellbox2@10.0.0.131, dell2 ->
   // dellbox1@10.0.0.37; see VllmShimService UPSTREAMS) so a

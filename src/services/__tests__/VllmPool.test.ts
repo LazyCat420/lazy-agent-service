@@ -1,33 +1,43 @@
 /**
- * The shared Qwen pool route `/vllm-shim/qwen`.
+ * The shared Dell pool route `/vllm-shim/qwen` (legacy route name).
  *
- * Context (2026-11-19, user decision "option A"): both Dell boxes serve
- * Qwen3.8-Flash-Next, but today they are two independent shim routes, so a
- * backlog on one box never spills to the other. These tests pin the four
- * behaviours that make the pool useful: least-loaded pick (including a burst
- * that must spread before the engine gauges catch up), session affinity with
- * its 2-deep release threshold, member dropout on down/different model, and
- * one failover retry before any byte is streamed.
+ * Context (2026-11-19, user decision "option A"): the Dell boxes were two
+ * independent shim routes, so a backlog on one box never spilled to the other.
+ * The model is discovered live (today DeepSeek-V4.1-Flash-1017); nothing here
+ * depends on a model name. These tests pin the behaviours that make the pool
+ * useful: least-loaded pick (including a burst that must spread before the
+ * engine gauges catch up), session affinity with its 2-deep release threshold,
+ * member dropout on down/different model, and one failover retry before any
+ * byte is streamed.
+ *
+ * The two-member suites below need BOTH members loaded, so the membership env
+ * is set before this module graph is imported (vi.hoisted runs first).
  */
 import { EventEmitter } from "node:events";
 import type { Request as ExpressRequest, Response as ExpressResponse } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.hoisted(() => {
+  process.env.VLLM_SHIM_POOL_MEMBERS = "dell2,dell1";
+});
+
 import { VllmShimService } from "../vllm/VllmShimService.js";
 import {
+  buildPoolMembers,
   clearPoolCaches,
   parsePoolGauges,
   pickPoolModel,
   poolMemberDown,
   poolSessionKey,
-  qwenPoolAffinityKeys,
-  qwenPoolStats,
-  QWEN_POOL_MEMBERS,
-  resetQwenPoolState,
-} from "../vllm/VllmQwenPool.js";
+  poolAffinityKeys,
+  poolStats,
+  POOL_MEMBERS,
+  resetPoolState,
+} from "../vllm/VllmPool.js";
 
 const D37 = "http://10.0.0.37:8888"; // physical dellbox1
 const D131 = "http://10.0.0.131:8888"; // physical dellbox2
-const MODEL = "Qwen3.8-Flash-Next";
+const MODEL = "DeepSeek-V4.1-Flash-1017";
 
 interface BoxSim {
   up?: boolean;
@@ -201,7 +211,7 @@ async function send(request: PoolChatRequest) {
   return res;
 }
 
-beforeEach(() => resetQwenPoolState());
+beforeEach(() => resetPoolState());
 afterEach(() => vi.unstubAllGlobals());
 
 describe("parsePoolGauges", () => {
@@ -340,7 +350,7 @@ describe("/vllm-shim/qwen routing", () => {
     installFetch({ [D37]: {}, [D131]: {} });
     await send(chatRequest("stats-a"));
     await send(chatRequest("stats-b"));
-    const stats = qwenPoolStats();
+    const stats = poolStats();
     const total = stats.members.reduce((sum, m) => sum + m.served, 0);
     expect(total).toBe(2);
     expect(stats.members.map((m) => m.ip).sort()).toEqual(["10.0.0.131", "10.0.0.37"]);
@@ -385,7 +395,7 @@ describe("/vllm-shim/qwen is not one of the legacy routes", () => {
 });
 
 describe("review fixes (QP-1..QP-6)", () => {
-  const servedTotal = () => qwenPoolStats().members.reduce((sum, m) => sum + m.served, 0);
+  const servedTotal = () => poolStats().members.reduce((sum, m) => sum + m.served, 0);
 
   it("QP-1: never fails over once the upstream accepted the request (mid-body death)", async () => {
     // The engine received and started the POST; replaying it on the other box
@@ -420,7 +430,7 @@ describe("review fixes (QP-1..QP-6)", () => {
   it("QP-2: counts a request as served once, only after delivery", async () => {
     installFetch({ [D37]: {}, [D131]: {} });
     await send(chatRequest("qp2"));
-    const stats = qwenPoolStats();
+    const stats = poolStats();
     expect(stats.members.reduce((sum, m) => sum + m.served, 0)).toBe(1);
     expect(stats.members.filter((m) => m.served === 1)).toHaveLength(1);
   });
@@ -443,26 +453,26 @@ describe("review fixes (QP-1..QP-6)", () => {
       installFetch({ [D37]: {}, [D131]: {} });
       await send(chatRequest("A"));
       await send(chatRequest("B"));
-      expect(qwenPoolAffinityKeys()).toEqual(["u:A", "u:B"]);
+      expect(poolAffinityKeys()).toEqual(["u:A", "u:B"]);
 
       // Re-using A must move it to the tail, not leave it at the head.
       clearPoolCaches();
       installFetch({ [D37]: { running: 1 }, [D131]: {} });
       await send(chatRequest("A"));
-      expect(qwenPoolAffinityKeys()).toEqual(["u:B", "u:A"]);
+      expect(poolAffinityKeys()).toEqual(["u:B", "u:A"]);
 
       // Inserting C at the cap evicts B (oldest), never the hot A.
       clearPoolCaches();
       installFetch({ [D37]: {}, [D131]: {} });
       await send(chatRequest("C"));
-      expect(qwenPoolAffinityKeys()).toEqual(["u:A", "u:C"]);
+      expect(poolAffinityKeys()).toEqual(["u:A", "u:C"]);
     } finally {
       delete process.env.VLLM_SHIM_POOL_AFFINITY_MAX_ENTRIES;
     }
   });
 
   it("QP-4: one probe failure does not evict a member; two consecutive ones do", async () => {
-    const dellbox1 = QWEN_POOL_MEMBERS[0]; // dell2 / 10.0.0.37
+    const dellbox1 = POOL_MEMBERS[0]; // dell2 / 10.0.0.37
     installFetch({ [D37]: { up: false }, [D131]: {} });
     await send(chatRequest("qp4-a"));
     expect(poolMemberDown(dellbox1)).toBe(false);
@@ -511,7 +521,7 @@ describe("review fixes (QP-1..QP-6)", () => {
     expect(strikeRes.statusCode).toBe(200);
     expect(strikeRes.headers["x-pool-box"]).toBe("10.0.0.131");
 
-    resetQwenPoolState();
+    resetPoolState();
     process.env.VLLM_SHIM_POOL_PROBE_TIMEOUT_MS = "30";
     process.env.VLLM_SHIM_POOL_GAUGE_TIMEOUT_MS = "30";
     try {
@@ -544,7 +554,7 @@ describe("review fixes (QP-1..QP-6)", () => {
       installFetch({ [D37]: { up: false, chatFails: false }, [D131]: { running: 1, waiting: 0 } });
       const second = await send(chatRequest());
       expect(second.headers["x-pool-box"]).toBe("10.0.0.131");
-      const midStats = qwenPoolStats().members.find((m) => m.name === "dell2");
+      const midStats = poolStats().members.find((m) => m.name === "dell2");
       expect(midStats?.running).toBe(4);
       expect(midStats?.waiting).toBe(2);
 
@@ -554,7 +564,7 @@ describe("review fixes (QP-1..QP-6)", () => {
       vi.advanceTimersByTime(9000);
       installFetch({ [D37]: { up: false, chatFails: false }, [D131]: { running: 1, waiting: 0 } });
       await send(chatRequest("after-expiry"));
-      const expiredStats = qwenPoolStats().members.find((m) => m.name === "dell2");
+      const expiredStats = poolStats().members.find((m) => m.name === "dell2");
       expect(expiredStats?.running).toBeNull();
       expect(expiredStats?.waiting).toBeNull();
     } finally {
@@ -574,5 +584,25 @@ describe("review fixes (QP-1..QP-6)", () => {
 
     await send(chatRequest("real-chat"));
     expect(servedTotal()).toBe(1);
+  });
+});
+
+describe("buildPoolMembers", () => {
+  it("defaults to the TP=2 layout: one member dell2 at 10.0.0.37", () => {
+    const members = buildPoolMembers(undefined, {});
+    expect(members).toHaveLength(1);
+    expect(members[0]).toMatchObject({ name: "dell2", ip: "10.0.0.37" });
+  });
+
+  it("loads both members from a two-name spec, dell1 at 10.0.0.131", () => {
+    const members = buildPoolMembers("dell2,dell1", {});
+    expect(members.map((m) => m.name)).toEqual(["dell2", "dell1"]);
+    expect(members[1]).toMatchObject({ name: "dell1", ip: "10.0.0.131" });
+  });
+
+  it("trims entries, drops empty ones and skips unknown names", () => {
+    const members = buildPoolMembers(" dell2 , , nope ", {});
+    expect(members.map((m) => m.name)).toEqual(["dell2"]);
+    expect(members[0]).toMatchObject({ name: "dell2", ip: "10.0.0.37" });
   });
 });
