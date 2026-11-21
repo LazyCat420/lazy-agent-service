@@ -1,0 +1,47 @@
+{
+  "profile_id": "trading-linear-v1",
+  "version": "1.0.0",
+  "contract_version": "1.0.0",
+  "role": "linear-trading-harness",
+  "workflow_type": "application_workflow",
+  "description": "Unified 3-stage linear data-first trading pipeline (A/A extractor, code+critic data verification, unchecked final trader agent).",
+  "system_prompt": "Execute the 3-stage linear trading pipeline strictly over verified local whiteboard ledger data.",
+  "model_constraints": {
+    "default_model": "auto",
+    "allowed_models": [
+      "auto"
+    ],
+    "allowed_providers": [
+      "vllm-2",
+      "vllm-4",
+      "vllm-5",
+      "vllm-shim"
+    ],
+    "temperature_range": [
+      0.0,
+      0.5
+    ]
+  },
+  "allowed_global_capabilities": [
+    "global.time.now@1.2"
+  ],
+  "budget_limits": {
+    "max_tokens": 32768,
+    "max_tool_calls": 6,
+    "max_retries": 1,
+    "max_duration_ms": 180000
+  },
+  "retention_class": "AUDITED_SESSION",
+  "allowed_local_tools": [
+    "trading.whiteboard.read_ledger_entry@1.0",
+    "trading.research.lazy_web_search@1.0"
+  ],
+  "local_tool_policy": {
+    "trading.whiteboard.read_ledger_entry": {
+      "effect": "read"
+    },
+    "trading.research.lazy_web_search": {
+      "effect": "read"
+    }
+  }
+}

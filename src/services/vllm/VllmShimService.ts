@@ -1712,6 +1712,9 @@ export class VllmShimService {
       // Attribution survives failover: the header names the box that actually
       // answered. The counter is bumped only once the response is delivered.
       res.setHeader("x-pool-box", member.ip || new URL(member.url).hostname);
+      if (pool.sameBoxFallback) {
+        res.setHeader("x-pool-fallback", "1");
+      }
     } else {
       // A /v1/models probe is routing evidence: bad statuses park the box,
       // a clean answer puts it back (see noteModelsProbeOutcome).

@@ -6,7 +6,6 @@ import { DEFAULT_IMPROVER, type Harness2Request, type ModelRef } from "../servic
 import { activeRun, cancelRun, getRun, startRun, waitRun } from "../services/harness2/Harness2Jobs.ts";
 import { Library } from "../services/harness2/Library.ts";
 import { SimStore, type SimMemoryCondition } from "../services/harness2/SimStore.ts";
-import { runCrsiSelftest } from "../services/harness2/CrossModelCrsiService.ts";
 import { validateTree } from "../services/harness2/HarnessTree.ts";
 import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
 
@@ -339,16 +338,6 @@ router.get(
     const store = new SimStore(domain);
     const doc = await store.load();
     res.json({ domain: store.domain, condition: rawCond, sim: doc, prompt: store.renderPrompt(rawCond) });
-  }),
-);
-
-/** POST /harness2/crsi/selftest — run A/A, known-answer, and mutation controls on the CRSI evaluator. */
-router.post(
-  "/crsi/selftest",
-  runtimeAuth,
-  asyncHandler(async (_req, res) => {
-    const report = await runCrsiSelftest();
-    res.status(report.passed ? 200 : 500).json(report);
   }),
 );
 

@@ -26,6 +26,7 @@ import webhookRouter from "../routes/WebhookRoutes.ts";
 import platformRouter from "../routes/PlatformRoutes.ts";
 import executeRouter from "../routes/ExecuteRoutes.ts";
 import runRouter from "../routes/RunRoutes.ts";
+import tradingDeskRouter from "../routes/TradingDeskRoutes.ts";
 import { createObsidianCompletionRouter } from "../routes/ObsidianCompletionRoutes.ts";
 import contractRouter from "../routes/ContractRoutes.ts";
 import openAIEmbeddingsRouter from "../routes/OpenAIEmbeddingsRoutes.ts";
@@ -46,6 +47,7 @@ export const ENDPOINTS = {
     "/custom-agents",
     "/webhooks",
     "/v1/runs",
+    "/v1/trading/linear-desk",
     "/v1/embeddings",
     "/obsidian-completions",
   ],
@@ -204,6 +206,7 @@ function installAuthenticatedRoutes(app: Express): void {
   app.use("/execute", executeRouter);
   app.use("/platform", platformRouter);
   app.use("/v1/runs", runRouter);
+  app.use("/v1/trading", tradingDeskRouter);
   app.use("/v1/contracts", contractRouter);
   app.use("/v1/embeddings", openAIEmbeddingsRouter);
 

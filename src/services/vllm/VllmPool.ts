@@ -46,7 +46,13 @@ export interface PoolMember {
 }
 
 /** Pool used when `VLLM_SHIM_POOL_MEMBERS` is unset or empty. */
-const DEFAULT_POOL_MEMBERS = "dell2";
+const DEFAULT_POOL_MEMBERS = "gold-spark,dell2";
+
+const MEMBER_URL_DEFAULTS: Record<string, (env: NodeJS.ProcessEnv) => string> = {
+  "gold-spark": (env) => env.VLLM_SHIM_GOLD_SPARK_URL || "http://10.0.0.141:8000",
+  dell2: (env) => env.VLLM_SHIM_DELL2_URL || "http://10.0.0.37:8888", // physical dellbox1
+  dell1: (env) => env.VLLM_SHIM_DELL1_URL || "http://10.0.0.131:8888", // physical dellbox2
+};
 
 /**
  * Build the pool from a `VLLM_SHIM_POOL_MEMBERS` spec. Pure (env injectable) so
@@ -63,12 +69,7 @@ export function buildPoolMembers(
   const seen = new Set<string>();
   for (const name of raw.split(",").map((n) => n.trim()).filter((n) => n.length > 0)) {
     if (seen.has(name)) continue;
-    const url =
-      name === "dell2"
-        ? env.VLLM_SHIM_DELL2_URL || "http://10.0.0.37:8888" // physical dellbox1
-        : name === "dell1"
-          ? env.VLLM_SHIM_DELL1_URL || "http://10.0.0.131:8888" // physical dellbox2
-          : undefined;
+    const url = MEMBER_URL_DEFAULTS[name]?.(env);
     if (!url) {
       logger.warn(`[VllmPool] unknown pool member "${name}" in VLLM_SHIM_POOL_MEMBERS; skipping`);
       continue;
@@ -397,6 +398,17 @@ async function probeHealth(member: PoolMember): Promise<HealthSample> {
 export interface PoolRequestShape {
   body?: Record<string, unknown> | undefined;
   headers?: Record<string, unknown> | undefined;
+  /** Optional explicit member preference for paired A/A calls across physical boxes. */
+  preferredMember?: string;
+}
+
+export function extractPreferredMember(req: PoolRequestShape): string | null {
+  if (typeof req.preferredMember === "string" && req.preferredMember.trim()) {
+    return req.preferredMember.trim();
+  }
+  const raw = req.headers?.["x-pool-prefer-member"];
+  const val = Array.isArray(raw) ? raw[0] : raw;
+  return typeof val === "string" && val.trim() ? val.trim() : null;
 }
 
 export function poolSessionKey(req: PoolRequestShape): string | null {
@@ -457,6 +469,35 @@ export interface PoolSelection {
   /** Per-member load used for the pick (running + waiting + shim in-flight). */
   loads: Record<string, number>;
   sessionKey: string | null;
+  /** True when a requested preferredMember was unavailable and fell back to another box. */
+  sameBoxFallback?: boolean;
+}
+
+function choosePoolCandidate(
+  candidates: PoolMember[],
+  loads: Record<string, number>,
+  sessionKey: string | null,
+  preferred: string | null,
+): { chosen: PoolMember; sameBoxFallback: boolean } {
+  if (preferred) {
+    const pinned = candidates.find((m) => m.name === preferred);
+    if (pinned) return { chosen: pinned, sameBoxFallback: false };
+  }
+  const minLoad = Math.min(...candidates.map((m) => loads[m.name]));
+  let chosen: PoolMember | undefined;
+  if (sessionKey) {
+    pruneAffinity();
+    const previous = affinity.get(sessionKey)?.member;
+    const prevMember = previous ? candidates.find((m) => m.name === previous) : undefined;
+    // Keep the warm prompt cache unless the old box is >= 2 deeper.
+    if (prevMember && loads[prevMember.name] - minLoad < 2) chosen = prevMember;
+  }
+  if (!chosen) {
+    const lowest = candidates.filter((m) => loads[m.name] === minLoad);
+    chosen = lowest[tieBreakCursor % lowest.length];
+    tieBreakCursor = (tieBreakCursor + 1) % 1_000_000;
+  }
+  return { chosen, sameBoxFallback: Boolean(preferred) };
 }
 
 /**
@@ -481,6 +522,7 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
     loads[m.name] = gauges[i].running + gauges[i].waiting + (inFlight.get(m.name) || 0);
   });
   const sessionKey = poolSessionKey(req);
+  const preferred = extractPreferredMember(req);
 
   const live = POOL_MEMBERS.filter((_, i) => health[i].up);
   if (live.length === 0) {
@@ -495,7 +537,13 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
         `failed one (${fallback.name} / ${fallback.ip}) instead of shedding the request`,
     );
     acquirePoolInFlight(fallback.name);
-    return { member: fallback, candidates: [fallback], loads, sessionKey };
+    return {
+      member: fallback,
+      candidates: [fallback],
+      loads,
+      sessionKey,
+      sameBoxFallback: Boolean(preferred && fallback.name !== preferred),
+    };
   }
 
   // Group by model id; prefer a live member with a known model over a single-strike unknown one.
@@ -514,27 +562,18 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
       : live.filter((m) => health[POOL_MEMBERS.indexOf(m)].model === targetModel);
   if (candidates.length === 0) candidates = [...live];
 
-  const minLoad = Math.min(...candidates.map((m) => loads[m.name]));
-
-  let chosen: PoolMember | undefined;
-  if (sessionKey) {
-    pruneAffinity();
-    const previous = affinity.get(sessionKey)?.member;
-    const prevMember = previous ? candidates.find((m) => m.name === previous) : undefined;
-    // Keep the warm prompt cache unless the old box is >= 2 deeper.
-    if (prevMember && loads[prevMember.name] - minLoad < 2) chosen = prevMember;
-  }
-  if (!chosen) {
-    const lowest = candidates.filter((m) => loads[m.name] === minLoad);
-    chosen = lowest[tieBreakCursor % lowest.length];
-    tieBreakCursor = (tieBreakCursor + 1) % 1_000_000;
-  }
+  const { chosen, sameBoxFallback } = choosePoolCandidate(
+    candidates,
+    loads,
+    sessionKey,
+    preferred,
+  );
 
   acquirePoolInFlight(chosen.name);
   if (sessionKey) rememberAffinity(sessionKey, chosen.name);
 
   const ordered = [chosen, ...candidates.filter((m) => m.name !== chosen.name)];
-  return { member: chosen, candidates: ordered, loads, sessionKey };
+  return { member: chosen, candidates: ordered, loads, sessionKey, sameBoxFallback };
 }
 
 export interface PoolMemberStats {

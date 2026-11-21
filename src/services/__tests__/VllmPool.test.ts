@@ -585,13 +585,41 @@ describe("review fixes (QP-1..QP-6)", () => {
     await send(chatRequest("real-chat"));
     expect(servedTotal()).toBe(1);
   });
+
+  it("pins to x-pool-prefer-member when healthy and sets x-pool-fallback when preferred member is down", async () => {
+    installFetch({ [D37]: { running: 0 }, [D131]: { running: 4 } });
+    const pinned = await send({
+      originalUrl: "/vllm-shim/qwen/v1/chat/completions",
+      method: "POST",
+      headers: { "x-pool-prefer-member": "dell1" },
+      body: { model: MODEL, messages: [{ role: "user", content: "pin-test" }] },
+    });
+    expect(pinned.headers["x-pool-box"]).toBe("10.0.0.131");
+    expect(pinned.headers["x-pool-fallback"]).toBeUndefined();
+
+    // Two strikes knock dell1 out of rotation -> request falls back to dell2 with x-pool-fallback=1.
+    clearPoolCaches();
+    installFetch({ [D37]: { running: 0 }, [D131]: { up: false } });
+    await send(chatRequest("strike-1"));
+    clearPoolCaches();
+    installFetch({ [D37]: { running: 0 }, [D131]: { up: false } });
+    const fallback = await send({
+      originalUrl: "/vllm-shim/qwen/v1/chat/completions",
+      method: "POST",
+      headers: { "x-pool-prefer-member": "dell1" },
+      body: { model: MODEL, messages: [{ role: "user", content: "pin-fallback" }] },
+    });
+    expect(fallback.headers["x-pool-box"]).toBe("10.0.0.37");
+    expect(fallback.headers["x-pool-fallback"]).toBe("1");
+  });
 });
 
 describe("buildPoolMembers", () => {
-  it("defaults to the TP=2 layout: one member dell2 at 10.0.0.37", () => {
+  it("defaults to the unified local pool: gold-spark (10.0.0.141) and dell2 (10.0.0.37)", () => {
     const members = buildPoolMembers(undefined, {});
-    expect(members).toHaveLength(1);
-    expect(members[0]).toMatchObject({ name: "dell2", ip: "10.0.0.37" });
+    expect(members).toHaveLength(2);
+    expect(members[0]).toMatchObject({ name: "gold-spark", ip: "10.0.0.141" });
+    expect(members[1]).toMatchObject({ name: "dell2", ip: "10.0.0.37" });
   });
 
   it("loads both members from a two-name spec, dell1 at 10.0.0.131", () => {
@@ -604,5 +632,10 @@ describe("buildPoolMembers", () => {
     const members = buildPoolMembers(" dell2 , , nope ", {});
     expect(members.map((m) => m.name)).toEqual(["dell2"]);
     expect(members[0]).toMatchObject({ name: "dell2", ip: "10.0.0.37" });
+  });
+
+  it("includes gold-spark at 10.0.0.141 and honors preferredMember pinning", () => {
+    const members = buildPoolMembers("gold-spark,dell2", {});
+    expect(members.map((m) => m.ip)).toEqual(["10.0.0.141", "10.0.0.37"]);
   });
 });
