@@ -13,28 +13,40 @@ const LedgerEntrySchema = z.object({
   raw: z.unknown().optional(),
 });
 
-const LinearDeskRequestSchema = z.object({
-  ticker: z.string().min(1).max(16),
-  cycle_id: z.string().min(1).max(160),
-  ledger_entries: z.record(z.string(), LedgerEntrySchema),
-  portfolio_context: z.object({
-    held: z.boolean(),
-    shares_owned: z.number().default(0),
-    avg_cost: z.number().nullable().default(null),
-    cash_usd: z.number().default(0),
-    max_position_pct: z.number().min(0).max(100).default(15),
-    equity_usd: z.number().optional(),
-  }),
-  macro_snapshot: z
-    .object({
-      vix: z.number().nullable().optional(),
-      spy_20d_return: z.number().nullable().optional(),
-      yield_10y_2y: z.number().nullable().optional(),
-      regime_note: z.string().optional(),
-    })
-    .optional(),
-  followup_tools: z.array(z.string()).optional(),
-});
+const LinearDeskRequestSchema = z
+  .object({
+    ticker: z.string().min(1).max(16),
+    cycle_id: z.string().min(1).max(160),
+    ledger_entries: z.record(z.string(), LedgerEntrySchema),
+    portfolio_context: z.object({
+      held: z.boolean(),
+      shares_owned: z.number().default(0),
+      avg_cost: z.number().nullable().default(null),
+      cash_usd: z.number().default(0),
+      max_position_pct: z.number().min(0).max(100).default(15),
+      equity_usd: z.number().optional(),
+    }),
+    macro_snapshot: z
+      .object({
+        vix: z.number().nullable().optional(),
+        spy_20d_return: z.number().nullable().optional(),
+        yield_10y_2y: z.number().nullable().optional(),
+        regime_note: z.string().optional(),
+      })
+      .optional(),
+    followup_tools: z.array(z.string()).optional(),
+  })
+  .superRefine((data, ctx) => {
+    for (const [key, entry] of Object.entries(data.ledger_entries)) {
+      if (entry.fact_id !== key) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["ledger_entries", key, "fact_id"],
+          message: `ledger_entries key '${key}' must equal entry.fact_id '${entry.fact_id}'`,
+        });
+      }
+    }
+  });
 
 export function createTradingDeskRouter(deps: LinearDeskDeps = {}): Router {
   const router = Router();

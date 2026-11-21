@@ -532,13 +532,20 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
     };
   }
 
-  // Group by model id; pick the least-loaded live member first so unpinned
-  // requests distribute across the pool instead of pinning to index 0.
-  // When an explicit member pin is given without a specific model, match that member's model.
+  // Group by model id; respect requested model, preferred member pin, or
+  // existing session-affinity member's model first (for mixed-model pools), and
+  // use load to choose among live members serving the target model.
   const requestedModel = req.body?.model;
   const requested = typeof requestedModel === "string" && requestedModel !== "auto" ? requestedModel : null;
   const preferredLive = preferred ? live.find((m) => m.name === preferred) : undefined;
   const preferredModel = preferredLive ? health[POOL_MEMBERS.indexOf(preferredLive)].model : null;
+  let affinityModel: string | null = null;
+  if (sessionKey) {
+    pruneAffinity();
+    const prevName = affinity.get(sessionKey)?.member;
+    const prevLive = prevName ? live.find((m) => m.name === prevName) : undefined;
+    affinityModel = prevLive ? health[POOL_MEMBERS.indexOf(prevLive)].model : null;
+  }
   const knownLive = [...live]
     .filter((m) => health[POOL_MEMBERS.indexOf(m)].model !== null)
     .sort((a, b) => loads[a.name] - loads[b.name])[0];
@@ -546,7 +553,7 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
   const targetModel =
     requested && live.some((m) => health[POOL_MEMBERS.indexOf(m)].model === requested)
       ? requested
-      : preferredModel ?? firstModel;
+      : preferredModel ?? affinityModel ?? firstModel;
 
   let candidates =
     targetModel === null

@@ -8,6 +8,6 @@ Implements problem-indexed Self-Improvement Memory (`SimStore`), per-`(agent_nam
 
 ## Hard Invariants
 
-1. **100% Local Inference:** Every model slug is resolved dynamically at call time via `GET /v1/models` (`discoverLiveEndpointTarget`). Zero cloud models enter product or trading inference.
+1. **100% Local Inference:** Every model slug is resolved dynamically at call time via `GET /v1/models` (`discoverPoolModel` / `pickPoolModel` and live shim model discovery). Zero cloud models enter product or trading inference.
 2. **Shadow-Capped Live Safety:** Unpromoted per-family stacks and candidate interlocks never alter live `/vllm-shim` traffic (`allowUnpromotedFamily: false` on live turns; promotion remains shadow-capped).
 3. **Canonical Tool Schema Sync (`M10`):** `schedule_research` in `tool_schemas/trading/research-scheduling.json` declares `non_earnings` (`boolean`) in lockstep with `trading-service/app/tools/research_tools.py`.

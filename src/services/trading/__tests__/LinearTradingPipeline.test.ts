@@ -447,4 +447,179 @@ describe("POST /v1/trading/linear-desk route + runtimeAuth", () => {
     expect(body.decision.action).toBe("AVOID");
     expect(body.aa_noise_metrics.fact_flip_share).toBe(0);
   });
+
+  it("rejects mismatched ledger_entries record key vs entry.fact_id with 400 (claude:R3-F5)", async () => {
+    const badRes = await fetch(`${baseUrl}/linear-desk`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-runtime-token": TOKEN },
+      body: JSON.stringify({
+        ticker: "NVDA",
+        cycle_id: "cycle-v3-201",
+        ledger_entries: {
+          wrong_key: LEDGER.fct_price_nvda,
+        },
+        portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+      }),
+    });
+    expect(badRes.status).toBe(400);
+  });
+});
+
+describe("Round 3 hardening invariants (numeric consistency, critic scoping, Stage 1 repair)", () => {
+  it("rejects contradictory value vs raw_number (codex:R3-F1) and tight small-value/unmatched-metric checks (claude:R3-F3)", () => {
+    const contradictory = makeFact({ value: "$999", raw_number: 185.5 });
+    const smallEpsLedger: Record<string, LedgerEntry> = {
+      fct_eps: {
+        fact_id: "fct_eps",
+        tool_name: "get_earnings_data",
+        ticker: "NVDA",
+        summary: "EPS was 0.05",
+        raw: { eps: 0.05 },
+      },
+      fct_fund: LEDGER.fct_fund_nvda,
+    };
+    const smallBad = makeFact({ fact_id: "fct_eps", metric: "eps", value: "0.07", raw_number: 0.07 });
+    const unmatchedMetric = makeFact({
+      fact_id: "fct_fund",
+      metric: "unseen_fabricated_ratio",
+      value: "28.4x",
+      raw_number: 28.4,
+    });
+    const smallGood = makeFact({ fact_id: "fct_eps", metric: "eps", value: "0.05", raw_number: 0.05 });
+
+    const out = verifyFactsAgainstLedger([contradictory, smallBad, unmatchedMetric, smallGood], "NVDA", {
+      ...LEDGER,
+      ...smallEpsLedger,
+    });
+    expect(out.verifiedFacts.map((f) => f.fact_id)).toEqual(["fct_eps"]);
+    expect(out.hallucinationCount).toBe(3);
+  });
+
+  it("prevents Stage 2 Critic from injecting ungrounded summary/catalysts or silently dropping verified facts (codex:R3-F2, claude:R3-F1)", async () => {
+    const req: LinearDeskRequest = {
+      ticker: "NVDA",
+      cycle_id: "cycle-r3-critic",
+      ledger_entries: LEDGER,
+      portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+    };
+    const deps: LinearDeskDeps = {
+      acquireTarget: async (preferredMember) => ({
+        boxName: preferredMember || "gold-spark",
+        modelId: "dyn",
+        sameBoxFallback: false,
+        release: () => {},
+        model: (mReq) => ({
+          async *[Symbol.asyncIterator]() {
+            const sys = String(mReq.messages[0]?.content || "");
+            if (sys.includes("Stage 1")) {
+              const facts = [makeFact()];
+              if (preferredMember === "dell2") {
+                // Triggers Stage 2 Critic via uncorroborated second fact
+                facts.push(makeFact({ fact_id: "fct_fund_nvda", metric: "forward_pe", value: "28.4", raw_number: 28.4 }));
+              }
+              yield JSON.stringify({
+                summary: "Stage 1 verified summary",
+                facts,
+                catalysts: ["Blackwell ramp"],
+                risks: ["Export caps"],
+                data_gaps: ["No Q4 guidance"],
+              });
+            } else if (sys.includes("Stage 2")) {
+              // Critic tries to overwrite summary, inject fake catalyst/risk, and silently omit fct_fund_nvda
+              yield JSON.stringify({
+                summary: "CRITIC HALLUCINATED BUYOUT RUMOR",
+                facts: [makeFact()],
+                catalysts: ["Blackwell ramp", "INVENTED ACQUISITION"],
+                risks: ["INVENTED BANKRUPTCY"],
+                data_gaps: ["Invented gap"],
+                dropped_facts: [],
+                notes: [],
+              });
+            } else {
+              yield JSON.stringify({
+                action: "BUY",
+                entry_mode: "enter_now",
+                entry_condition: null,
+                position_size_pct: 10,
+                stop_loss: 170,
+                take_profit: 210,
+                cited_fact_ids: ["fct_price_nvda"],
+                decision_thesis: "Buying at 185.50.",
+              });
+            }
+          },
+        }),
+      }),
+    };
+    const res = await runLinearDeskPipeline(req, deps);
+    expect(res.dossier.summary).toBe("Stage 1 verified summary");
+    expect(res.dossier.catalysts).toEqual(["Blackwell ramp"]);
+    expect(res.dossier.risks).toEqual([]);
+    expect(res.dossier.data_gaps).toEqual([]);
+    // Both pre-verified facts remain because fct_fund_nvda was not in dropped_facts
+    expect(res.dossier.facts.map((f) => f.fact_id).sort()).toEqual(["fct_fund_nvda", "fct_price_nvda"]);
+  });
+
+  it("coerces numeric value / string raw_number and repairs Stage 1 schema slip in 1 retry (claude:R3-F2)", async () => {
+    const req: LinearDeskRequest = {
+      ticker: "NVDA",
+      cycle_id: "cycle-r3-repair",
+      ledger_entries: { fct_price_nvda: LEDGER.fct_price_nvda },
+      portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+    };
+    const deps: LinearDeskDeps = {
+      acquireTarget: async (preferredMember) => {
+        let stage1Calls = 0;
+        return {
+          boxName: preferredMember || "gold-spark",
+          modelId: "dyn",
+          sameBoxFallback: false,
+          release: () => {},
+          model: (mReq) => ({
+            async *[Symbol.asyncIterator]() {
+              const sys = String(mReq.messages[0]?.content || "");
+              if (sys.includes("Stage 1")) {
+                stage1Calls += 1;
+                if (preferredMember === "gold-spark" && stage1Calls === 1) {
+                  yield "not valid json";
+                  return;
+                }
+                yield JSON.stringify({
+                  summary: "Repaired Stage 1",
+                  facts: [
+                    {
+                      fact_id: "fct_price_nvda",
+                      category: "unknown_bucket",
+                      metric: "close",
+                      value: 185.5,
+                      raw_number: "185.5",
+                      ticker: "NVDA",
+                    },
+                  ],
+                  catalysts: [],
+                  risks: [],
+                  data_gaps: [],
+                });
+              } else {
+                yield JSON.stringify({
+                  action: "HOLD",
+                  entry_mode: "none",
+                  entry_condition: null,
+                  position_size_pct: 0,
+                  stop_loss: null,
+                  take_profit: null,
+                  cited_fact_ids: ["fct_price_nvda"],
+                  decision_thesis: "Hold at 185.50.",
+                });
+              }
+            },
+          }),
+        };
+      },
+    };
+    const res = await runLinearDeskPipeline(req, deps);
+    expect(res.dossier.facts[0]?.category).toBe("fundamental");
+    expect(res.dossier.facts[0]?.value).toBe("185.5");
+    expect(res.dossier.facts[0]?.raw_number).toBe(185.5);
+  });
 });

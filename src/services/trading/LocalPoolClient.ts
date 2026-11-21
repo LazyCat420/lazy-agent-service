@@ -1,3 +1,4 @@
+import logger from "../../logger.js";
 import type { ChatMessage, StreamChunk } from "../../types/provider.ts";
 import type { CoreModel, CoreModelRequest } from "../../core/loop/types.ts";
 import {
@@ -90,6 +91,7 @@ export async function acquireLocalPoolTarget(preferredMember?: string): Promise<
     headers: preferredMember ? { "x-pool-prefer-member": preferredMember } : undefined,
   });
   let heldName: string | null = selection.member.name;
+  const discoveryErrors: string[] = [];
   try {
     for (const candidate of selection.candidates) {
       try {
@@ -106,11 +108,15 @@ export async function acquireLocalPoolTarget(preferredMember?: string): Promise<
             Boolean(selection.sameBoxFallback) ||
             (Boolean(preferredMember) && candidate.name !== preferredMember),
         };
-      } catch {
-        // try next healthy candidate
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(`[LocalPoolClient] /v1/models discovery failed on ${candidate.name}: ${msg}`);
+        discoveryErrors.push(`${candidate.name}: ${msg}`);
       }
     }
-    throw new Error("No healthy local DeepSeek pool box available from /v1/models");
+    throw new Error(
+      `No healthy local DeepSeek pool box available from /v1/models (${discoveryErrors.join("; ") || "no candidates"})`,
+    );
   } catch (err) {
     if (heldName) {
       releasePoolInFlight(heldName);
@@ -191,12 +197,53 @@ function combinedCallSignal(
   return AbortSignal.any(signals);
 }
 
+async function acquireSemaphoreWithAbort(
+  sem: { acquire: (timeoutMs: number) => Promise<() => void> },
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<() => void> {
+  if (signal.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("Aborted before acquiring pool slot");
+  }
+  return await new Promise<() => void>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      reject(signal.reason instanceof Error ? signal.reason : new Error("Aborted while waiting for pool slot"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    sem.acquire(timeoutMs).then(
+      (release) => {
+        signal.removeEventListener("abort", onAbort);
+        if (settled || signal.aborted) {
+          release();
+          if (!settled) {
+            settled = true;
+            reject(signal.reason instanceof Error ? signal.reason : new Error("Aborted after acquiring pool slot"));
+          }
+          return;
+        }
+        settled = true;
+        resolve(release);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
+      },
+    );
+  });
+}
+
 /**
  * Create a `CoreModel` backed by a local pool member (`gold-spark` or `dell2`)
  * discovered via `/v1/models`. Acquires `VllmShimService.semaphoreFor(member)`
- * around every completion request so shared box concurrency caps (e.g. gold-spark
- * max 4) are honored, while `LinearStageTarget.release` frees pool in-flight
- * accounting when the stage completes.
+ * around every completion request (racing cleanly against abort/deadline so no
+ * slot waits on dead callers), while `LinearStageTarget.release` frees pool
+ * in-flight accounting when the stage completes.
  */
 export function createPoolCoreModel(
   target: { member: PoolMember; modelId: string },
@@ -205,14 +252,15 @@ export function createPoolCoreModel(
   return (request: CoreModelRequest): AsyncIterable<StreamChunk> => ({
     async *[Symbol.asyncIterator]() {
       const url = `${target.member.url.replace(/\/$/, "")}/v1/chat/completions`;
+      const callSignal = combinedCallSignal(request.signal, params.signal);
       const sem = VllmShimService.semaphoreFor(target.member.name);
-      const releaseSem = sem ? await sem.acquire(60_000) : null;
+      const releaseSem = sem ? await acquireSemaphoreWithAbort(sem, 60_000, callSignal) : null;
       try {
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(buildCompletionPayload(target.modelId, request, params)),
-          signal: combinedCallSignal(request.signal, params.signal),
+          signal: callSignal,
         });
         if (!res.ok) {
           const text = await res.text();

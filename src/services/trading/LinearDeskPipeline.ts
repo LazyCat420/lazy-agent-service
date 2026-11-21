@@ -63,14 +63,41 @@ function loadLinearProfilePolicy(): LinearProfilePolicy {
 
 const LINEAR_PROFILE = loadLinearProfilePolicy();
 
+const VALID_CATEGORIES = [
+  "price",
+  "valuation",
+  "fundamental",
+  "technical",
+  "news",
+  "earnings",
+  "macro",
+  "risk",
+] as const;
+
 const ExtractedFactSchema = z.object({
   fact_id: z.string().min(1),
   category: z
-    .enum(["price", "valuation", "fundamental", "technical", "news", "earnings", "macro", "risk"])
+    .preprocess((v) => {
+      if (typeof v !== "string") return "fundamental";
+      const low = v.trim().toLowerCase();
+      return (VALID_CATEGORIES as readonly string[]).includes(low) ? low : "fundamental";
+    }, z.enum(VALID_CATEGORIES))
     .default("fundamental"),
   metric: z.string().min(1),
-  value: z.string().min(1),
-  raw_number: z.number().finite().nullable().optional(),
+  value: z.preprocess(
+    (v) => (typeof v === "number" && Number.isFinite(v) ? String(v) : v),
+    z.string().min(1),
+  ) as z.ZodType<string>,
+  raw_number: z.preprocess((v) => {
+    if (typeof v === "string") {
+      const cleaned = v.replace(/,/g, "").trim();
+      if (cleaned) {
+        const parsed = Number(cleaned);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    return v;
+  }, z.number().finite().nullable().optional()),
   ticker: z.string().optional(),
   as_of: z.string().optional(),
   summary: z.string().default(""),
@@ -337,6 +364,55 @@ function traderMessages(
   ];
 }
 
+function filterToStage1List(criticItems: string[], stage1Items: string[]): string[] {
+  const byNorm = new Map<string, string>();
+  for (const item of stage1Items) {
+    const key = item.trim().toLowerCase();
+    if (key && !byNorm.has(key)) byNorm.set(key, item);
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of criticItems) {
+    const key = item.trim().toLowerCase();
+    const canonical = byNorm.get(key);
+    if (canonical && !seen.has(key)) {
+      seen.add(key);
+      out.push(canonical);
+    }
+  }
+  return out;
+}
+
+async function parseStageWithRepair<T>(
+  target: LinearStageTarget,
+  initialMessages: ChatMessage[],
+  tools: CoreTool[],
+  maxSteps: number,
+  schema: z.ZodType<T>,
+  label: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  let messages = initialMessages;
+  const maxAttempts = Math.max(1, 1 + LINEAR_PROFILE.maxRetries);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const raw = await runCoreStage(target, messages, tools, maxSteps, signal);
+    try {
+      return parseJsonStrict(raw, schema, label);
+    } catch (err) {
+      if (attempt + 1 >= maxAttempts) throw err;
+      messages = [
+        ...messages,
+        { role: "assistant", content: raw },
+        {
+          role: "user",
+          content: `Schema repair required: ${err instanceof Error ? err.message : String(err)}. Return valid raw JSON only.`,
+        },
+      ];
+    }
+  }
+  throw new Error(`${label} exhausted retry budget`);
+}
+
 async function runExtractorSeed(
   req: LinearDeskRequest,
   preferredMember: string,
@@ -346,8 +422,15 @@ async function runExtractorSeed(
 ): Promise<{ boxName: string; modelId: string; sameBoxFallback: boolean; output: ResearchExtractionOutput }> {
   const target = await acquire(preferredMember, seed, 0.2);
   try {
-    const raw = await runCoreStage(target, extractorMessages(req), tools, 4, req.signal);
-    const output = parseJsonStrict(raw, ResearchExtractionSchema, `Stage 1 Extractor (${preferredMember})`);
+    const output = await parseStageWithRepair(
+      target,
+      extractorMessages(req),
+      tools,
+      4,
+      ResearchExtractionSchema,
+      `Stage 1 Extractor (${preferredMember})`,
+      req.signal,
+    );
     return { boxName: target.boxName, modelId: target.modelId, sameBoxFallback: target.sameBoxFallback, output };
   } finally {
     target.release();
@@ -394,29 +477,36 @@ async function runCriticStage(
     );
     const cleaned = parseJsonStrict(raw, CriticCleanupSchema, "Stage 2 Data Critic");
     const dropped = [...cleaned.dropped_facts];
-    const admittedFromCandidates: ExtractedFact[] = [];
+    const explicitDropIds = new Set(cleaned.dropped_facts.map((d) => d.fact_id));
+    const admittedById = new Map<string, ExtractedFact>();
     for (const f of cleaned.facts) {
       const origin = candidateById.get(f.fact_id);
       if (!origin) {
         dropped.push({ fact_id: f.fact_id, reason: "not_in_stage1_candidates" });
         continue;
       }
-      admittedFromCandidates.push({
+      admittedById.set(f.fact_id, {
         ...f,
         uncorroborated: origin.uncorroborated ?? false,
       });
     }
-    const postCheck = verifyFactsAgainstLedger(admittedFromCandidates, req.ticker, req.ledger_entries);
+    // Preserve pre-verified Stage 1 facts unless explicitly dropped by the critic (claude:R3-F1)
+    for (const verifiedPre of preCheck.verifiedFacts) {
+      if (!admittedById.has(verifiedPre.fact_id) && !explicitDropIds.has(verifiedPre.fact_id)) {
+        admittedById.set(verifiedPre.fact_id, verifiedPre);
+      }
+    }
+    const postCheck = verifyFactsAgainstLedger(Array.from(admittedById.values()), req.ticker, req.ledger_entries);
     for (const m of postCheck.mismatches) {
       dropped.push({ fact_id: m.fact_id, reason: m.detail });
     }
     return {
       dossier: {
-        summary: cleaned.summary || reconciled.summary,
+        summary: reconciled.summary,
         facts: postCheck.verifiedFacts,
-        catalysts: cleaned.catalysts,
-        risks: cleaned.risks,
-        data_gaps: cleaned.data_gaps,
+        catalysts: filterToStage1List(cleaned.catalysts, reconciled.catalysts),
+        risks: filterToStage1List(cleaned.risks, reconciled.risks),
+        data_gaps: filterToStage1List(cleaned.data_gaps, reconciled.dataGaps),
       },
       report: {
         passed: postCheck.mismatches.length === 0,
@@ -439,27 +529,16 @@ async function runTraderStage(
   const schema = buildTraderSchema(req.portfolio_context.held);
   const target = await acquire(undefined, 404, 0.2);
   try {
-    const baseMsgs = traderMessages(req, dossier);
-    let messages: ChatMessage[] = baseMsgs;
-    let lastRaw = "";
-    const maxAttempts = Math.max(1, 1 + LINEAR_PROFILE.maxRetries);
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      lastRaw = await runCoreStage(target, messages, [], 1, req.signal);
-      try {
-        return { decision: parseJsonStrict(lastRaw, schema, "Stage 3 Final Trader"), modelId: target.modelId };
-      } catch (err) {
-        if (attempt + 1 >= maxAttempts) throw err;
-        messages = [
-          ...messages,
-          { role: "assistant", content: lastRaw },
-          {
-            role: "user",
-            content: `Schema repair required: ${err instanceof Error ? err.message : String(err)}. Return valid raw JSON only.`,
-          },
-        ];
-      }
-    }
-    throw new Error("Stage 3 Final Trader exhausted retry budget");
+    const decision = await parseStageWithRepair(
+      target,
+      traderMessages(req, dossier),
+      [],
+      1,
+      schema,
+      "Stage 3 Final Trader",
+      req.signal,
+    );
+    return { decision, modelId: target.modelId };
   } finally {
     target.release();
   }

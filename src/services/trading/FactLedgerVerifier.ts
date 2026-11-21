@@ -67,11 +67,69 @@ function numbersMatchWithinTolerance(
   for (const target of scaledCandidates) {
     for (const ref of ledgerNumbers) {
       const diff = Math.abs(target - ref);
-      const scale = Math.max(Math.abs(ref), 1);
-      if (diff <= 0.02 || diff / scale <= 0.01) return true;
+      if (diff <= 1e-4) return true;
+      const refAbs = Math.abs(ref);
+      if (refAbs > 0 && diff / refAbs <= 0.01) return true;
     }
   }
   return false;
+}
+
+function metricReferencedInText(metric: string, text: string | undefined): boolean {
+  const normText = normalizeKey(text || "");
+  if (!normText) return false;
+  const parts = metric
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((p) => p.length >= 2);
+  if (parts.length === 0) return false;
+  return parts.some((p) => normText.includes(p));
+}
+
+function verifyRawAndValueConsistency(
+  factId: string,
+  fact: ExtractedFact,
+  parsedValue: { num: number; isPercent: boolean } | null,
+): FactMismatch | null {
+  if (
+    typeof fact.raw_number !== "number" ||
+    !Number.isFinite(fact.raw_number) ||
+    parsedValue === null
+  ) {
+    return null;
+  }
+  const allowPctScale = parsedValue.isPercent || (fact.value || "").includes("%");
+  if (!numbersMatchWithinTolerance(fact.raw_number, [parsedValue.num], allowPctScale)) {
+    return {
+      fact_id: factId,
+      reason: "number_mismatch",
+      detail: `Fact value '${fact.value}' contradicts raw_number=${fact.raw_number} (${fact.metric})`,
+    };
+  }
+  return null;
+}
+
+function collectCandidateLedgerNumbers(
+  metric: string,
+  category: ExtractedFact["category"],
+  entry: LedgerEntry,
+): { numbers: number[]; missingRequiredFieldMatch: boolean } {
+  const fieldSpecific = extractMatchedFieldNumbers(entry.raw, metric);
+  if (fieldSpecific) {
+    return { numbers: fieldSpecific, missingRequiredFieldMatch: false };
+  }
+  const hasStructuredRaw =
+    Boolean(entry.raw) && typeof entry.raw === "object" && !Array.isArray(entry.raw) &&
+    Object.keys(entry.raw as Record<string, unknown>).length > 0;
+  if (hasStructuredRaw && NUMERIC_CATEGORIES.has(category) && !metricReferencedInText(metric, entry.summary)) {
+    return { numbers: [], missingRequiredFieldMatch: true };
+  }
+  const ledgerNumbers: number[] = [];
+  extractNumbersFromUnknown(entry.summary, ledgerNumbers);
+  if (!hasStructuredRaw) {
+    extractNumbersFromUnknown(entry.raw, ledgerNumbers);
+  }
+  return { numbers: ledgerNumbers, missingRequiredFieldMatch: false };
 }
 
 function parseScalarValueNumber(value: string): { num: number; isPercent: boolean } | null {
@@ -117,6 +175,9 @@ function verifyNumericClaim(
   entry: LedgerEntry,
 ): FactMismatch | null {
   const parsedValue = parseScalarValueNumber(fact.value);
+  const consistencyMismatch = verifyRawAndValueConsistency(factId, fact, parsedValue);
+  if (consistencyMismatch) return consistencyMismatch;
+
   const candidateNum =
     typeof fact.raw_number === "number" && Number.isFinite(fact.raw_number)
       ? fact.raw_number
@@ -132,16 +193,16 @@ function verifyNumericClaim(
         }
       : null;
   }
-  const fieldSpecific = extractMatchedFieldNumbers(entry.raw, fact.metric);
-  const ledgerNumbers: number[] = [];
-  if (fieldSpecific) {
-    ledgerNumbers.push(...fieldSpecific);
-  } else {
-    extractNumbersFromUnknown(entry.summary, ledgerNumbers);
-    extractNumbersFromUnknown(entry.raw, ledgerNumbers);
+  const { numbers, missingRequiredFieldMatch } = collectCandidateLedgerNumbers(fact.metric, fact.category, entry);
+  if (missingRequiredFieldMatch) {
+    return {
+      fact_id: factId,
+      reason: "number_mismatch",
+      detail: `Metric '${fact.metric}' not matched in structured ledger entry ${factId}`,
+    };
   }
   const allowPctScale = Boolean(parsedValue?.isPercent || fact.value.includes("%"));
-  if (!numbersMatchWithinTolerance(candidateNum, ledgerNumbers, allowPctScale)) {
+  if (!numbersMatchWithinTolerance(candidateNum, numbers, allowPctScale)) {
     return {
       fact_id: factId,
       reason: "number_mismatch",
@@ -154,11 +215,11 @@ function verifyNumericClaim(
 function verifySingleFact(
   fact: ExtractedFact,
   deskTicker: string,
-  ledgerById: Record<string, LedgerEntry>,
+  ledgerByFactId: Map<string, LedgerEntry>,
 ): FactMismatch | null {
   const wantTicker = deskTicker.trim().toUpperCase();
   const factId = (fact.fact_id || "").trim();
-  const entry = Object.hasOwn(ledgerById, factId) ? ledgerById[factId] : undefined;
+  const entry = factId ? ledgerByFactId.get(factId) : undefined;
   if (!entry) {
     return {
       fact_id: factId || "(empty)",
@@ -172,8 +233,8 @@ function verifySingleFact(
 /**
  * Deterministic zero-token verifier comparing extracted facts against raw
  * `whiteboard_ledger` entries (`fct_<sha1>`). Verifies fact_id existence, exact
- * ledger entry and fact ticker match, and numeric values (preferring metric-matched
- * structured raw fields and excluding date tokens).
+ * ledger entry and fact ticker match, raw_number/value consistency, and numeric
+ * values (requiring metric-matched raw or summary evidence and excluding date tokens).
  */
 export function verifyFactsAgainstLedger(
   facts: ExtractedFact[],
@@ -183,9 +244,15 @@ export function verifyFactsAgainstLedger(
   const verifiedFacts: ExtractedFact[] = [];
   const invalidFacts: ExtractedFact[] = [];
   const mismatches: FactMismatch[] = [];
+  const byFactId = new Map<string, LedgerEntry>();
+  for (const [key, entry] of Object.entries(ledgerEntries || {})) {
+    if (!entry) continue;
+    const fid = (entry.fact_id || key).trim();
+    if (fid) byFactId.set(fid, entry);
+  }
 
   for (const fact of facts) {
-    const mismatch = verifySingleFact(fact, deskTicker, ledgerEntries);
+    const mismatch = verifySingleFact(fact, deskTicker, byFactId);
     if (mismatch) {
       invalidFacts.push(fact);
       mismatches.push(mismatch);
