@@ -305,11 +305,15 @@ function compactPromptRaw(raw: unknown, hasSummary: boolean): unknown {
   }
 }
 
-function formatPromptLedgerEntry(e: LedgerEntry, fallbackTicker: string): Record<string, unknown> {
+function formatPromptLedgerEntry(
+  e: LedgerEntry,
+  fallbackTicker: string,
+  recordKey = "",
+): Record<string, unknown> {
   const summary = (e.summary || "").slice(0, 500);
   const raw = compactPromptRaw(e.raw, Boolean(summary));
   return {
-    fact_id: e.fact_id,
+    fact_id: (e.fact_id || recordKey).trim(),
     tool_name: e.tool_name,
     ticker: e.ticker || fallbackTicker,
     as_of: e.as_of || "",
@@ -319,7 +323,9 @@ function formatPromptLedgerEntry(e: LedgerEntry, fallbackTicker: string): Record
 }
 
 function renderLedgerPrompt(req: LinearDeskRequest): string {
-  const items = Object.values(req.ledger_entries || {}).map((e) => formatPromptLedgerEntry(e, req.ticker));
+  const items = Object.entries(req.ledger_entries || {}).map(([key, e]) =>
+    formatPromptLedgerEntry(e, req.ticker, key),
+  );
   return JSON.stringify({ ticker: req.ticker, cycle_id: req.cycle_id, ledger_entries: items });
 }
 
@@ -342,10 +348,10 @@ function criticMessages(
   risks: string[],
   dataGaps: string[],
 ): ChatMessage[] {
-  const citedIds = new Set(candidateFacts.map((f) => f.fact_id));
-  const scopedLedger = Object.values(req.ledger_entries || {})
-    .filter((e) => citedIds.has(e.fact_id))
-    .map((e) => formatPromptLedgerEntry(e, req.ticker));
+  const citedIds = new Set(candidateFacts.map((f) => (f.fact_id || "").trim()));
+  const scopedLedger = Object.entries(req.ledger_entries || {})
+    .filter(([key, e]) => citedIds.has((e.fact_id || key).trim()))
+    .map(([key, e]) => formatPromptLedgerEntry(e, req.ticker, key));
   return [
     {
       role: "system",

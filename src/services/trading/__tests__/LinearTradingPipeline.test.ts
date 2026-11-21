@@ -709,5 +709,65 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
     expect(stage2Call!.user).not.toContain(bulkyPayload);
     expect(stage2Call!.user).not.toContain("fct_unused_extra");
     expect(stage3Call?.maxTokens).toBe(1024);
+
+    // Entry omitting fact_id falls back to its record key in Stage 1/2 prompts & scoping (codex:R1-F1)
+    recordedPrompts.length = 0;
+    const keyedLedger = {
+      ...largeLedger,
+      fct_keyed_only: {
+        fact_id: "",
+        tool_name: "get_earnings_data",
+        ticker: "NVDA",
+        summary: "Revenue $35.1B",
+        raw: { revenue_b: 35.1 },
+      } as LedgerEntry,
+    };
+    const keyedDeps: LinearDeskDeps = {
+      acquireTarget: async (preferredMember, _seed, _temp, maxTokens) => ({
+        boxName: preferredMember || "gold-spark",
+        modelId: "dyn",
+        sameBoxFallback: false,
+        release: () => {},
+        model: (mReq) => ({
+          async *[Symbol.asyncIterator]() {
+            const sys = String(mReq.messages[0]?.content || "");
+            const user = String(mReq.messages[1]?.content || "");
+            recordedPrompts.push({ sys, user, toolCount: mReq.tools.length, maxTokens });
+            if (sys.includes("Stage 1")) {
+              const facts = [makeFact()];
+              if (preferredMember === "dell2") {
+                facts.push(makeFact({ fact_id: "fct_keyed_only", category: "earnings", metric: "revenue_b", value: "35.1", raw_number: 35.1 }));
+              }
+              yield JSON.stringify({ summary: "Keyed", facts, catalysts: [], risks: [], data_gaps: [] });
+            } else if (sys.includes("Stage 2")) {
+              yield JSON.stringify({
+                summary: "Keyed cleaned",
+                facts: [makeFact(), makeFact({ fact_id: "fct_keyed_only", category: "earnings", metric: "revenue_b", value: "35.1", raw_number: 35.1 })],
+                catalysts: [],
+                risks: [],
+                data_gaps: [],
+                dropped_facts: [],
+                notes: [],
+              });
+            } else {
+              yield JSON.stringify({
+                action: "HOLD",
+                entry_mode: "none",
+                entry_condition: null,
+                position_size_pct: 0,
+                stop_loss: null,
+                take_profit: null,
+                cited_fact_ids: ["fct_keyed_only"],
+                decision_thesis: "Hold with $35.1B revenue.",
+              });
+            }
+          },
+        }),
+      }),
+    };
+    const keyedRes = await runLinearDeskPipeline({ ...req, ledger_entries: keyedLedger }, keyedDeps);
+    expect(keyedRes.dossier.facts.map((f) => f.fact_id)).toContain("fct_keyed_only");
+    const keyedStage2 = recordedPrompts.find((p) => p.sys.includes("Stage 2"));
+    expect(keyedStage2?.user).toContain("fct_keyed_only");
   });
 });
