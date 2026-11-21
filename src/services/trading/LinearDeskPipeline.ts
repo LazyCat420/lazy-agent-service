@@ -297,9 +297,10 @@ async function defaultAcquireTarget(
 
 function compactPromptRaw(raw: unknown, hasSummary: boolean): unknown {
   if (raw === undefined || raw === null) return undefined;
-  if (!hasSummary) return raw;
   try {
-    return JSON.stringify(raw).length <= 600 ? raw : undefined;
+    const serialized = JSON.stringify(raw);
+    if (serialized.length <= 600) return raw;
+    return hasSummary ? undefined : serialized.slice(0, 600);
   } catch {
     return undefined;
   }

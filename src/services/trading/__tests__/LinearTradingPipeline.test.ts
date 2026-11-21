@@ -769,5 +769,31 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
     expect(keyedRes.dossier.facts.map((f) => f.fact_id)).toContain("fct_keyed_only");
     const keyedStage2 = recordedPrompts.find((p) => p.sys.includes("Stage 2"));
     expect(keyedStage2?.user).toContain("fct_keyed_only");
+
+    // Oversized raw payload without summary is also capped at 600 chars (codex:R2-F1)
+    recordedPrompts.length = 0;
+    const summarylessBulk = "B".repeat(750);
+    await runLinearDeskPipeline(
+      {
+        ...req,
+        ledger_entries: {
+          ...largeLedger,
+          fct_no_summary: {
+            fact_id: "fct_no_summary",
+            tool_name: "get_earnings_data",
+            ticker: "NVDA",
+            summary: "",
+            raw: { blob: summarylessBulk },
+          },
+        },
+      },
+      deps,
+    );
+    const noSummaryStage1 = recordedPrompts.filter((p) => p.sys.includes("Stage 1"));
+    expect(noSummaryStage1).toHaveLength(2);
+    for (const s1 of noSummaryStage1) {
+      expect(s1.user).not.toContain("B".repeat(610));
+      expect(s1.user).toContain("B".repeat(200));
+    }
   });
 });
