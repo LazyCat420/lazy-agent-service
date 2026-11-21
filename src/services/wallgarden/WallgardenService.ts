@@ -312,6 +312,54 @@ export function buildDomainFocusBlock(focus: unknown, seedDomains?: unknown): st
   return body ? `\n${body}${seedLine}` : "";
 }
 
+// ── Brainstorm request telemetry ───────────────────────────
+// The dashboard's finance focus gate (app.js FINANCE_LEXICON) decides whether
+// to send `domainFocus`. The backend's request log needs the same notion of
+// "finance" to report how finance-heavy the incoming interests are; the
+// lexicon is mirrored here for MEASUREMENT ONLY — no prompt, gate or response
+// shape reads it.
+export const FINANCE_LEXICON: readonly string[] = [
+  "equities", "equity market", "stocks", "stock market", "stock picks",
+  "earnings", "dividends", "valuation", "etf", "etfs", "etf flows",
+  "index fund", "mutual fund", "investment portfolio", "stock portfolio",
+  "macro", "macroeconomics", "inflation", "cpi", "fomc",
+  "federal reserve", "rate cut", "rate cuts", "rate hike", "rate hikes",
+  "interest rate", "interest rates", "bond market", "treasury bond",
+  "treasury yields", "bond yields", "commodities", "commodity market", "crude oil",
+  "oil price", "oil futures", "gold price", "silver price",
+  "natural gas", "opec", "personal finance", "budgeting", "retirement",
+  "401k", "roth ira", "mortgage", "crypto", "cryptocurrency", "bitcoin",
+  "ethereum", "altcoin", "defi", "blockchain", "day trading",
+  "stock trading", "options trading", "forex", "investing",
+  "investment", "finance", "financial", "economy", "gdp", "recession",
+  "hedge fund", "private equity", "venture capital", "ipo", "short selling",
+];
+
+let _financeLexiconRe: RegExp | null = null;
+
+function financeLexiconRe(): RegExp {
+  if (!_financeLexiconRe) {
+    const terms = FINANCE_LEXICON.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    _financeLexiconRe = new RegExp(`\\b(?:${terms.join("|")})\\b`, "i");
+  }
+  return _financeLexiconRe;
+}
+
+/**
+ * Unweighted finance share over the request's `interests`. The client's
+ * weighted gate share is not part of the request contract, so this is the
+ * server's own view of the same question; paired with `domain_focus` it shows
+ * whether a finance-heavy request actually opened the gate. null = no interests
+ * to divide by (the route rejects those before calling this).
+ */
+export function financeShareOfInterests(interests: unknown): number | null {
+  if (!Array.isArray(interests) || interests.length === 0) return null;
+  const phrases = interests.filter((t): t is string => typeof t === "string" && t.trim() !== "");
+  if (phrases.length === 0) return null;
+  const finance = phrases.filter(t => financeLexiconRe().test(t)).length;
+  return Math.round((finance / phrases.length) * 1000) / 1000;
+}
+
 // ── Helpers ─────────────────────────────────────────────────
 
 /** Query a single vLLM box for its currently loaded model */

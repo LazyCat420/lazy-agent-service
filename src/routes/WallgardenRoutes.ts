@@ -10,6 +10,8 @@ import {
   judgeTopicGrounding,
   recommendChannels,
   validateDomainFocus,
+  normalizeDomainFocus,
+  financeShareOfInterests,
   type BrainstormContext,
   type SimilarContext,
   type LikedVideoInput,
@@ -99,6 +101,18 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
     if (focusError) {
       return res.status(400).json({ error: focusError });
     }
+
+    // One structured line per brainstorm request so the finance-feed yield is
+    // visible server-side: the finance share of the interests the client sent,
+    // the focus the client's own-likes gate decided, and how many seed domains
+    // it carried. Measurement only — none of these fields reach the prompt.
+    logger.info(
+      `[WallgardenRoutes] /brainstorm ${JSON.stringify({
+        finance_share: financeShareOfInterests(interests),
+        domain_focus: normalizeDomainFocus(domainFocus) ?? null,
+        seed_domains: Array.isArray(seedDomains) ? seedDomains.length : 0,
+      })}`
+    );
 
     const raw = await brainstormTopics({
       interests,
