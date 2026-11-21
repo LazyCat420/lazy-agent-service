@@ -264,6 +264,12 @@ export function poolMemberDown(member: PoolMember): boolean {
   return (downUntil.get(member.name) || 0) > Date.now();
 }
 
+/** Remaining cooldown in ms for a pool member (0 when active). */
+export function poolMemberCooldownMs(name: string): number {
+  const until = downUntil.get(name) || 0;
+  return Math.max(0, until - Date.now());
+}
+
 /** Take a member out of rotation after a failed connect (exported for tests). */
 export function markPoolMemberDown(name: string): void {
   const member = POOL_MEMBERS.find((m) => m.name === name);
@@ -297,7 +303,7 @@ function gaugeTimeoutMs(): number {
 }
 
 /** Read (and cache for ~1s) one member's engine gauges, preserving the last known reading on failure. */
-async function readGauges(member: PoolMember): Promise<GaugeSample> {
+export async function readGauges(member: PoolMember): Promise<GaugeSample> {
   const cached = gaugeCache.get(member.name);
   if (cached && Date.now() - cached.at < GAUGE_TTL_MS) return cached;
   const pending = gaugePending.get(member.name);

@@ -6,13 +6,17 @@ import { TradingToolStream, bindToolResponse } from "../TradingToolStream.ts";
 import { filterTradingPayload, recordPayload, recordProviderSnapshot } from "../learning/TradingLearningBoundary.ts";
 import { modelFamilyOf } from "../../platform/models/ModelProfiles.ts";
 import {
+  POOL_MEMBERS,
   acquirePoolInFlight,
   markPoolMemberDown,
+  poolMemberCooldownMs,
+  poolStats,
+  readGauges,
   recordPoolServed,
   releasePoolInFlight,
   selectPoolMember,
   type PoolSelection,
-} from "./VllmPool.ts";
+} from "./VllmPool.js";
 import { type Request, type Response } from "express";
 import logger from "../../logger.js";
 
@@ -263,6 +267,25 @@ interface DsmlToolCall {
   id: string;
   type: "function";
   function: { name: string; arguments: string };
+}
+
+export interface UpstreamPoolStatusItem {
+  name: string;
+  ip: string;
+  up: boolean;
+  served_models: string[];
+  running: number | null;
+  waiting: number | null;
+  in_flight: number;
+  max_concurrent: number;
+  cooldown_remaining_ms: number;
+}
+
+export interface PoolAndUpstreamStatusResponse {
+  ok: boolean;
+  timestamp: string;
+  healthy_generation_boxes: number;
+  upstreams: UpstreamPoolStatusItem[];
 }
 
 export class VllmShimService {
@@ -857,6 +880,112 @@ export class VllmShimService {
    * Resolves the active generation model from an upstream vLLM instance by querying its /v1/models endpoint.
    * Filters out non-LLM models (e.g. gliner) and embedding-only models.
    */
+  public static async resolveUpstreamServedModels(upstreamUrl: string): Promise<{ up: boolean; models: string[] }> {
+    try {
+      const response = await fetch(`${upstreamUrl.replace(/\/$/, "")}/v1/models`, {
+        signal: AbortSignal.timeout(1500),
+      });
+      if (!response.ok) return { up: false, models: [] };
+      const data = (await response.json()) as Record<string, any>;
+      const filtered = this.filterModels(data);
+      const list = ((filtered as Record<string, any>).data || (filtered as Record<string, any>).models || []) as Array<Record<string, any>>;
+      const models = list
+        .map((m) => (typeof m?.id === "string" ? m.id : typeof m?.name === "string" ? m.name : ""))
+        .filter(Boolean);
+      return { up: true, models };
+    } catch {
+      return { up: false, models: [] };
+    }
+  }
+
+  private static resolveHostIp(upstreamUrl: string, fallback: string): string {
+    try {
+      return new URL(upstreamUrl).hostname || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  private static async probeSingleUpstreamStatus(
+    name: string,
+    memberStats: ReturnType<typeof poolStats>["members"][number] | undefined,
+    poolMember: (typeof POOL_MEMBERS)[number] | undefined,
+  ): Promise<UpstreamPoolStatusItem> {
+    const resolved = this.resolveUpstream(`/vllm-shim/${name}/v1/models`);
+    const upstreamUrl = resolved?.upstreamUrl || UPSTREAMS[name];
+    const ip = this.resolveHostIp(upstreamUrl, name);
+    const cooldownMs = Math.max(
+      poolMemberCooldownMs(name),
+      Math.max(0, (this.unreachableUntil.get(name) || 0) - Date.now()),
+    );
+    const sem = this.semaphores.get(this.capacityGroup(name));
+    const maxConcurrent = this.limitFor(name);
+
+    let up = false;
+    let servedModels: string[] = [];
+    if (cooldownMs === 0) {
+      const probe = await this.resolveUpstreamServedModels(upstreamUrl);
+      up = probe.up;
+      servedModels = probe.models;
+    } else if (memberStats?.model) {
+      servedModels = [memberStats.model];
+    }
+
+    let running: number | null = memberStats?.running ?? null;
+    let waiting: number | null = memberStats?.waiting ?? null;
+    if (up && poolMember && (running === null || waiting === null)) {
+      try {
+        const g = await readGauges(poolMember);
+        running = g.running;
+        waiting = g.waiting;
+      } catch {
+        // keep nulls when /metrics is unavailable
+      }
+    }
+
+    const inFlight = Math.max(sem?.inFlight ?? 0, memberStats?.inFlight ?? 0);
+    return {
+      name,
+      ip,
+      up,
+      served_models: servedModels,
+      running,
+      waiting,
+      in_flight: inFlight,
+      max_concurrent: maxConcurrent,
+      cooldown_remaining_ms: cooldownMs,
+    };
+  }
+
+  public static async getPoolAndUpstreamStatus(): Promise<PoolAndUpstreamStatusResponse> {
+    const primaryNames = Object.keys(UPSTREAMS).filter(
+      (name) => name !== "gold-spark-vision" && this.upstreamEnabled(name),
+    );
+    const statsByMember = new Map(poolStats().members.map((m) => [m.name, m]));
+    const poolByMember = new Map(POOL_MEMBERS.map((m) => [m.name, m]));
+
+    const upstreams: UpstreamPoolStatusItem[] = await Promise.all(
+      primaryNames.map((name) =>
+        this.probeSingleUpstreamStatus(name, statsByMember.get(name), poolByMember.get(name)),
+      ),
+    );
+
+    const healthyGen = upstreams.filter(
+      (u) =>
+        u.up &&
+        u.served_models.some(
+          (m) => !/embed/i.test(m) && !this.NON_LLM_MODELS.has(m.toLowerCase()),
+        ),
+    ).length;
+
+    return {
+      ok: healthyGen >= 1,
+      timestamp: new Date().toISOString(),
+      healthy_generation_boxes: healthyGen,
+      upstreams,
+    };
+  }
+
   public static async resolveUpstreamActiveModel(upstreamUrl: string): Promise<string | null> {
     try {
       const response = await fetch(`${upstreamUrl}/v1/models`, {
@@ -1269,6 +1398,16 @@ export class VllmShimService {
   }
 
   public static async handle(req: Request, res: Response) {
+    const cleanPath = req.originalUrl.split("?")[0];
+    if (req.method === "GET" && (cleanPath === "/vllm-shim/pool-status" || cleanPath === "/vllm-shim/pool-status/")) {
+      const status = await this.getPoolAndUpstreamStatus();
+      return res.status(200).json(status);
+    }
+    if (req.method === "GET" && (cleanPath === "/vllm-shim/canary" || cleanPath === "/vllm-shim/canary/")) {
+      const status = await this.getPoolAndUpstreamStatus();
+      return res.status(status.ok ? 200 : 503).json(status);
+    }
+
     // The shared Dell pool is not one upstream: it chooses a member per
     // request, so it is intercepted before resolveUpstream (which would 404
     // an unknown name). See handlePool.
