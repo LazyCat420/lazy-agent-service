@@ -53,13 +53,32 @@ describe("FactLedgerVerifier (0-GPU control + mutation checks)", () => {
     });
     const wrongId = makeFact({ fact_id: "fct_invented_999" });
     const wrongTicker = makeFact({ ticker: "AAPL" });
+    const missingTicker = makeFact({ ticker: "" });
     const wrongNumber = makeFact({ metric: "last_close", raw_number: 310.0, value: "$310.00" });
+    const crossFieldNumber = makeFact({ fact_id: "fct_fund_nvda", metric: "forward_pe", value: "62x", raw_number: 62 });
+    const dateNumber = makeFact({ metric: "year_check", value: "2026", raw_number: 2026 });
+    const otherTickerLedger = {
+      ...LEDGER,
+      fct_aapl: { fact_id: "fct_aapl", tool_name: "get_market_data", ticker: "AAPL", summary: "AAPL 225.0", raw: { close: 225.0 } },
+    };
+    const crossTickerEntry = makeFact({ fact_id: "fct_aapl", metric: "close", value: "$225.00", raw_number: 225.0 });
+    const nullRawValid = makeFact({ metric: "close", value: "$185.50", raw_number: null });
+    const nullRawBad = makeFact({ metric: "close", value: "$999.00", raw_number: null });
 
-    const res = verifyFactsAgainstLedger([good, goodPct, wrongId, wrongTicker, wrongNumber], "NVDA", LEDGER);
-    expect(res.verifiedFacts).toHaveLength(2);
-    expect(res.hallucinationCount).toBe(3);
+    const res = verifyFactsAgainstLedger(
+      [good, goodPct, nullRawValid, wrongId, wrongTicker, missingTicker, wrongNumber, crossFieldNumber, dateNumber, crossTickerEntry, nullRawBad],
+      "NVDA",
+      otherTickerLedger,
+    );
+    expect(res.verifiedFacts).toHaveLength(3);
+    expect(res.hallucinationCount).toBe(8);
     expect(res.mismatches.map((m) => m.reason)).toEqual([
       "unknown_fact_id",
+      "ticker_mismatch",
+      "ticker_mismatch",
+      "number_mismatch",
+      "number_mismatch",
+      "number_mismatch",
       "ticker_mismatch",
       "number_mismatch",
     ]);
@@ -186,11 +205,111 @@ describe("LinearDeskPipeline end-to-end & schema enforcement", () => {
     expect(avoid.decision.action).toBe("AVOID");
   });
 
+  it("drops critic-invented non-candidate facts and preserves uncorroborated provenance", async () => {
+    const deps: LinearDeskDeps = {
+      acquireTarget: async (preferredMember) => ({
+        boxName: preferredMember || "gold-spark",
+        modelId: "dynamic-model",
+        sameBoxFallback: false,
+        release: () => {},
+        model: (req) => ({
+          async *[Symbol.asyncIterator]() {
+            const sys = String(req.messages[0]?.content || "");
+            if (sys.includes("Stage 1")) {
+              const facts = [makeFact()];
+              if (preferredMember === "dell2") facts[0] = makeFact({ metric: "close", value: "$185.51", raw_number: 185.51 });
+              if (preferredMember === "gold-spark") {
+                facts.push(makeFact({ metric: "rsi_14", value: "99.0", raw_number: 99.0 })); // triggers Stage 2 critic via uncorroborated + mismatch
+              }
+              yield JSON.stringify({ summary: "s1", facts, catalysts: [], risks: [], data_gaps: [] });
+            } else if (sys.includes("Stage 2")) {
+              yield JSON.stringify({
+                summary: "s2",
+                facts: [
+                  makeFact(),
+                  makeFact({ fact_id: "fct_fund_nvda", category: "fundamental", metric: "forward_pe", value: "28.4x", raw_number: 28.4 }),
+                ],
+                catalysts: [],
+                risks: [],
+                data_gaps: [],
+                dropped_facts: [],
+                notes: [],
+              });
+            } else {
+              yield JSON.stringify({
+                action: "HOLD",
+                entry_mode: "none",
+                entry_condition: null,
+                position_size_pct: 0,
+                stop_loss: null,
+                take_profit: null,
+                cited_fact_ids: ["fct_price_nvda"],
+                decision_thesis: "Holding on verified price $185.50.",
+              });
+            }
+          },
+        }),
+      }),
+    };
+    const out = await runLinearDeskPipeline(baseReq, deps);
+    expect(out.dossier.facts.map((f) => f.fact_id)).toEqual(["fct_price_nvda"]);
+    expect(out.critic_report.dropped_facts).toContainEqual({
+      fact_id: "fct_fund_nvda",
+      reason: "not_in_stage1_candidates",
+    });
+  });
+
   it("loads trading-linear-v1 profile cleanly via ProfileRegistry", async () => {
     const loaded = await ProfileRegistry.loadProfilesFromDisk();
     expect(loaded).toBeGreaterThan(0);
     const prof = await ProfileRegistry.loadProfile("trading-linear-v1", "1.0.0");
     expect(prof?.profile_id).toBe("trading-linear-v1");
+  });
+});
+
+import {
+  clearPoolCaches,
+  poolStats,
+  resetPoolState,
+} from "../../vllm/VllmPool.ts";
+import { acquireLocalPoolTarget, releasePoolTarget } from "../LocalPoolClient.ts";
+
+describe("LocalPoolClient discovery-fallback in-flight accounting", () => {
+  it("transfers in-flight slot to the surviving candidate when preferred discovery fails", async () => {
+    resetPoolState();
+    clearPoolCaches();
+    let callIdx = 0;
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/metrics")) {
+        return new Response("vllm:num_requests_running 0\nvllm:num_requests_waiting 0\n", { status: 200 });
+      }
+      if (url.includes("10.0.0.141") && url.endsWith("/v1/models")) {
+        callIdx += 1;
+        // Succeed during selectPoolMember probe, then fail in discoverPoolModel so it falls back to dell2
+        if (callIdx >= 2) return new Response("err", { status: 502 });
+      }
+      return new Response(JSON.stringify({ data: [{ id: "dynamic-model" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const acquired = await acquireLocalPoolTarget("gold-spark");
+      expect(acquired.member.name).toBe("dell2");
+      expect(acquired.sameBoxFallback).toBe(true);
+      const statsBeforeRelease = poolStats().members;
+      expect(statsBeforeRelease.find((m) => m.name === "gold-spark")?.inFlight).toBe(0);
+      expect(statsBeforeRelease.find((m) => m.name === "dell2")?.inFlight).toBe(1);
+      releasePoolTarget(acquired.member.name);
+      const statsAfterRelease = poolStats().members;
+      expect(statsAfterRelease.find((m) => m.name === "dell2")?.inFlight).toBe(0);
+    } finally {
+      globalThis.fetch = origFetch;
+      resetPoolState();
+    }
   });
 });
 

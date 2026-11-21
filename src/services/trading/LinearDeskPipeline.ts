@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { z } from "zod";
 import { runCoreLoop } from "../../core/loop/CoreLoop.ts";
 import type { ChatMessage, CoreModel, CoreTool } from "../../core/loop/types.ts";
@@ -17,6 +19,45 @@ import type {
   ResearchExtractionOutput,
   TraderDecision,
 } from "./types.ts";
+
+interface LinearProfilePolicy {
+  maxDurationMs: number;
+  maxToolCalls: number;
+  maxRetries: number;
+  allowedTools: Set<string>;
+}
+
+function loadLinearProfilePolicy(): LinearProfilePolicy {
+  const fallback: LinearProfilePolicy = {
+    maxDurationMs: 180_000,
+    maxToolCalls: 6,
+    maxRetries: 1,
+    allowedTools: new Set(["read_ledger_entry", "lazy_web_search", "get_upcoming_events"]),
+  };
+  try {
+    const profilePath = resolve(process.cwd(), "profiles", "trading-linear-v1.json");
+    const parsed = JSON.parse(readFileSync(profilePath, "utf8")) as {
+      budget_limits?: { max_duration_ms?: number; max_tool_calls?: number; max_retries?: number };
+      allowed_local_tools?: string[];
+    };
+    const allowed = new Set<string>();
+    for (const ref of parsed.allowed_local_tools || []) {
+      const noVersion = ref.split("@")[0];
+      const shortName = noVersion.split(".").pop();
+      if (shortName) allowed.add(shortName);
+    }
+    return {
+      maxDurationMs: parsed.budget_limits?.max_duration_ms ?? fallback.maxDurationMs,
+      maxToolCalls: parsed.budget_limits?.max_tool_calls ?? fallback.maxToolCalls,
+      maxRetries: parsed.budget_limits?.max_retries ?? fallback.maxRetries,
+      allowedTools: allowed.size > 0 ? allowed : fallback.allowedTools,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+const LINEAR_PROFILE = loadLinearProfilePolicy();
 
 const ExtractedFactSchema = z.object({
   fact_id: z.string().min(1),
@@ -136,20 +177,29 @@ function parseJsonStrict<T>(raw: string, schema: z.ZodType<T>, stage: string): T
   return checked.data;
 }
 
-function buildCoreTools(req: LinearDeskRequest, deps: LinearDeskDeps): CoreTool[] {
+function buildCoreTools(
+  req: LinearDeskRequest,
+  deps: LinearDeskDeps,
+  budget: { calls: number; maxCalls: number },
+): CoreTool[] {
   const names = req.followup_tools?.length ? req.followup_tools : ["read_ledger_entry", "lazy_web_search"];
   return names
-    .filter((name) => Boolean(DEFAULT_FOLLOWUP_TOOLS[name]))
+    .filter((name) => Boolean(DEFAULT_FOLLOWUP_TOOLS[name]) && LINEAR_PROFILE.allowedTools.has(name))
     .map((name) => ({
       name,
       description: DEFAULT_FOLLOWUP_TOOLS[name].description,
       parameters: DEFAULT_FOLLOWUP_TOOLS[name].parameters,
       execute: async (args) => {
+        if (budget.calls >= budget.maxCalls) {
+          throw new Error(`Follow-up tool budget exhausted (max ${budget.maxCalls})`);
+        }
+        budget.calls += 1;
         if (deps.executeTool) return deps.executeTool(name, args, req);
         return routeLocalTool(name, args, {
           agentName: "v3_linear_extractor",
           cycleId: req.cycle_id,
           ticker: req.ticker,
+          signal: req.signal,
         });
       },
     }));
@@ -318,6 +368,13 @@ async function runCriticStage(
     };
   }
 
+  const candidateById = new Map<string, ExtractedFact>();
+  for (const cand of allCandidates) {
+    if (!candidateById.has(cand.fact_id) || cand.uncorroborated === false) {
+      candidateById.set(cand.fact_id, cand);
+    }
+  }
+
   const target = await acquire(undefined, 303, 0.1);
   try {
     const raw = await runCoreStage(
@@ -328,11 +385,23 @@ async function runCriticStage(
       req.signal,
     );
     const cleaned = parseJsonStrict(raw, CriticCleanupSchema, "Stage 2 Data Critic");
-    const postCheck = verifyFactsAgainstLedger(cleaned.facts, req.ticker, req.ledger_entries);
-    const dropped = [
-      ...cleaned.dropped_facts,
-      ...postCheck.mismatches.map((m) => ({ fact_id: m.fact_id, reason: m.detail })),
-    ];
+    const dropped = [...cleaned.dropped_facts];
+    const admittedFromCandidates: ExtractedFact[] = [];
+    for (const f of cleaned.facts) {
+      const origin = candidateById.get(f.fact_id);
+      if (!origin) {
+        dropped.push({ fact_id: f.fact_id, reason: "not_in_stage1_candidates" });
+        continue;
+      }
+      admittedFromCandidates.push({
+        ...f,
+        uncorroborated: origin.uncorroborated ?? false,
+      });
+    }
+    const postCheck = verifyFactsAgainstLedger(admittedFromCandidates, req.ticker, req.ledger_entries);
+    for (const m of postCheck.mismatches) {
+      dropped.push({ fact_id: m.fact_id, reason: m.detail });
+    }
     return {
       dossier: {
         summary: cleaned.summary || reconciled.summary,
@@ -363,21 +432,26 @@ async function runTraderStage(
   const target = await acquire(undefined, 404, 0.2);
   try {
     const baseMsgs = traderMessages(req, dossier);
-    const firstRaw = await runCoreStage(target, baseMsgs, [], 1, req.signal);
-    try {
-      return { decision: parseJsonStrict(firstRaw, schema, "Stage 3 Final Trader"), modelId: target.modelId };
-    } catch (firstErr) {
-      const retryMsgs: ChatMessage[] = [
-        ...baseMsgs,
-        { role: "assistant", content: firstRaw },
-        {
-          role: "user",
-          content: `Schema repair required: ${firstErr instanceof Error ? firstErr.message : String(firstErr)}. Return valid raw JSON only.`,
-        },
-      ];
-      const secondRaw = await runCoreStage(target, retryMsgs, [], 1, req.signal);
-      return { decision: parseJsonStrict(secondRaw, schema, "Stage 3 Final Trader"), modelId: target.modelId };
+    let messages: ChatMessage[] = baseMsgs;
+    let lastRaw = "";
+    const maxAttempts = Math.max(1, 1 + LINEAR_PROFILE.maxRetries);
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      lastRaw = await runCoreStage(target, messages, [], 1, req.signal);
+      try {
+        return { decision: parseJsonStrict(lastRaw, schema, "Stage 3 Final Trader"), modelId: target.modelId };
+      } catch (err) {
+        if (attempt + 1 >= maxAttempts) throw err;
+        messages = [
+          ...messages,
+          { role: "assistant", content: lastRaw },
+          {
+            role: "user",
+            content: `Schema repair required: ${err instanceof Error ? err.message : String(err)}. Return valid raw JSON only.`,
+          },
+        ];
+      }
     }
+    throw new Error("Stage 3 Final Trader exhausted retry budget");
   } finally {
     target.release();
   }
@@ -394,11 +468,14 @@ export async function runLinearDeskPipeline(
   deps: LinearDeskDeps = {},
 ): Promise<LinearDeskResponse> {
   const acquire = deps.acquireTarget ?? defaultAcquireTarget;
-  const tools = buildCoreTools(req, deps);
+  const deadlineSignal = AbortSignal.timeout(LINEAR_PROFILE.maxDurationMs);
+  const combinedSignal = req.signal ? AbortSignal.any([req.signal, deadlineSignal]) : deadlineSignal;
+  const scopedReq: LinearDeskRequest = { ...req, signal: combinedSignal };
+  const tools = buildCoreTools(scopedReq, deps, { calls: 0, maxCalls: LINEAR_PROFILE.maxToolCalls });
 
   const [seedA, seedB] = await Promise.all([
-    runExtractorSeed(req, "gold-spark", 101, tools, acquire),
-    runExtractorSeed(req, "dell2", 202, tools, acquire),
+    runExtractorSeed(scopedReq, "gold-spark", 101, tools, acquire),
+    runExtractorSeed(scopedReq, "dell2", 202, tools, acquire),
   ]);
 
   const reconciled = reconcileAaExtractions({
@@ -410,8 +487,8 @@ export async function runLinearDeskPipeline(
     outputB: seedB.output,
   });
 
-  const { dossier, report } = await runCriticStage(req, reconciled, acquire);
-  const { decision, modelId } = await runTraderStage(req, dossier, acquire);
+  const { dossier, report } = await runCriticStage(scopedReq, reconciled, acquire);
+  const { decision, modelId } = await runTraderStage(scopedReq, dossier, acquire);
 
   return {
     ticker: req.ticker.toUpperCase(),

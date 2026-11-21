@@ -1,6 +1,7 @@
 import type { ChatMessage, StreamChunk } from "../../types/provider.ts";
 import type { CoreModel, CoreModelRequest } from "../../core/loop/types.ts";
 import {
+  acquirePoolInFlight,
   pickPoolModel,
   recordPoolServed,
   releasePoolInFlight,
@@ -88,13 +89,15 @@ export async function acquireLocalPoolTarget(preferredMember?: string): Promise<
     body: {},
     headers: preferredMember ? { "x-pool-prefer-member": preferredMember } : undefined,
   });
-  let released = false;
+  let heldName: string | null = selection.member.name;
   try {
     for (const candidate of selection.candidates) {
       try {
         const modelId = await discoverPoolModel(candidate);
-        if (candidate.name !== selection.member.name) {
-          releasePoolInFlight(selection.member.name);
+        if (candidate.name !== heldName) {
+          acquirePoolInFlight(candidate.name);
+          if (heldName) releasePoolInFlight(heldName);
+          heldName = candidate.name;
         }
         return {
           member: candidate,
@@ -109,9 +112,9 @@ export async function acquireLocalPoolTarget(preferredMember?: string): Promise<
     }
     throw new Error("No healthy local DeepSeek pool box available from /v1/models");
   } catch (err) {
-    if (!released) {
-      releasePoolInFlight(selection.member.name);
-      released = true;
+    if (heldName) {
+      releasePoolInFlight(heldName);
+      heldName = null;
     }
     throw err;
   }
@@ -178,9 +181,22 @@ function completionChunks(parsed: Record<string, any>, allowTools: boolean): Str
   return out;
 }
 
+function combinedCallSignal(
+  requestSignal: AbortSignal | undefined,
+  paramSignal: AbortSignal | undefined,
+  timeoutMs = 180_000,
+): AbortSignal {
+  const timeoutSig = AbortSignal.timeout(timeoutMs);
+  const signals = [requestSignal, paramSignal, timeoutSig].filter(Boolean) as AbortSignal[];
+  return AbortSignal.any(signals);
+}
+
 /**
  * Create a `CoreModel` backed by a local pool member (`gold-spark` or `dell2`)
- * discovered via `/v1/models`. Releases pool in-flight accounting on every exit.
+ * discovered via `/v1/models`. Acquires `VllmShimService.semaphoreFor(member)`
+ * around every completion request so shared box concurrency caps (e.g. gold-spark
+ * max 4) are honored, while `LinearStageTarget.release` frees pool in-flight
+ * accounting when the stage completes.
  */
 export function createPoolCoreModel(
   target: { member: PoolMember; modelId: string },
@@ -189,23 +205,29 @@ export function createPoolCoreModel(
   return (request: CoreModelRequest): AsyncIterable<StreamChunk> => ({
     async *[Symbol.asyncIterator]() {
       const url = `${target.member.url.replace(/\/$/, "")}/v1/chat/completions`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildCompletionPayload(target.modelId, request, params)),
-        signal: request.signal,
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`vLLM ${target.member.name} HTTP ${res.status}: ${text.slice(0, 300)}`);
+      const sem = VllmShimService.semaphoreFor(target.member.name);
+      const releaseSem = sem ? await sem.acquire(60_000) : null;
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildCompletionPayload(target.modelId, request, params)),
+          signal: combinedCallSignal(request.signal, params.signal),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`vLLM ${target.member.name} HTTP ${res.status}: ${text.slice(0, 300)}`);
+        }
+        const rawJson = (await res.json()) as Record<string, any>;
+        const allowTools = request.tools.length > 0 && request.toolChoice !== "none";
+        const parsed = allowTools ? VllmShimService.normalizeToolCalls(rawJson) : rawJson;
+        for (const chunk of completionChunks(parsed, allowTools)) {
+          yield chunk;
+        }
+        recordPoolServed(target.member.name);
+      } finally {
+        releaseSem?.();
       }
-      const rawJson = (await res.json()) as Record<string, any>;
-      const allowTools = request.tools.length > 0 && request.toolChoice !== "none";
-      const parsed = allowTools ? VllmShimService.normalizeToolCalls(rawJson) : rawJson;
-      for (const chunk of completionChunks(parsed, allowTools)) {
-        yield chunk;
-      }
-      recordPoolServed(target.member.name);
     },
   });
 }

@@ -34,13 +34,17 @@
   "retention_class": "AUDITED_SESSION",
   "allowed_local_tools": [
     "trading.whiteboard.read_ledger_entry@1.0",
-    "trading.research.lazy_web_search@1.0"
+    "trading.research.lazy_web_search@1.0",
+    "trading.research.get_upcoming_events@1.0"
   ],
   "local_tool_policy": {
     "trading.whiteboard.read_ledger_entry": {
       "effect": "read"
     },
     "trading.research.lazy_web_search": {
+      "effect": "read"
+    },
+    "trading.research.get_upcoming_events": {
       "effect": "read"
     }
   }

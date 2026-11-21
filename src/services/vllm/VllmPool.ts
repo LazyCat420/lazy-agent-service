@@ -2,38 +2,21 @@ import { createHash } from "node:crypto";
 import logger from "../../logger.js";
 
 /**
- * The shared Dell request pool behind `/vllm-shim/qwen` (legacy route name;
+ * The shared local vLLM request pool behind `/vllm-shim/qwen` (legacy route name;
  * kept as-is because callers' PROVIDER_VLLM_*_URL entries point at it).
  *
- * WHY (2026-11-19, user decision "option A"): the Dell boxes were addressed as
- * two independent shim routes, so a backlog on one box stayed there while the
- * other idled, even though the caller only cares that SOME box answers. This
- * module makes the boxes one pool at the REQUEST level: each arrival goes to
- * the member with the lowest load, so a queue on one box spills to the other
- * immediately instead of at the next caller restart.
- *
- * Load is `num_requests_running + num_requests_waiting` from the engine's own
- * `/metrics`, plus this shim's in-flight count for that member. The gauges are
- * cached for ~1s (they are a scrape, not a counter) and the local count is
- * what makes a burst of N arrivals spread across the members inside that
- * second instead of all landing on the same one.
- *
- * Session affinity: a request that carries a session key stays on the box that
- * served it before, so the engine's prompt cache stays warm — unless that box
- * is at least 2 requests deeper than the least-loaded member, at which point
- * latency wins over cache.
- *
- * The model is discovered live from each member's `/v1/models` (today both
- * boxes serve DeepSeek-V4.1-Flash-1017). Only boxes that answer AND serve the
- * same model id are pooled together, so a mixed deployment keeps a request on
- * the box that serves its model.
- *
  * Members come from `VLLM_SHIM_POOL_MEMBERS` (comma-separated upstream names,
- * trimmed, empty entries dropped). The default is `dell2` — the TP=2 layout:
- * the two Dells run one cluster whose only API is 10.0.0.37:8888 (member
- * `dell2`); 10.0.0.131 (`dell1`) has none. Set
- * `VLLM_SHIM_POOL_MEMBERS=dell2,dell1` when the Dells run two standalone
- * engines again.
+ * trimmed, empty entries dropped). The default is `gold-spark,dell2`:
+ * `gold-spark` (`10.0.0.141:8000`) and `dell2` (`10.0.0.37:8888`, the Dell TP=2
+ * cluster across `dellbox1`+`dellbox2`, whose sole API endpoint is `10.0.0.37`).
+ * Set `VLLM_SHIM_POOL_MEMBERS=gold-spark,dell2,dell1` only if `dell1` (`10.0.0.131`)
+ * runs a standalone engine again.
+ *
+ * Load is `num_requests_running + num_requests_waiting` from each engine's
+ * `/metrics`, plus this shim's in-flight count for that member. Only live
+ * members serving the same discovered `/v1/models` model ID are pooled together
+ * unless an explicit `x-pool-prefer-member` / `preferredMember` pin targets a
+ * specific box for paired A/A calls.
  */
 
 export interface PoolMember {
@@ -469,6 +452,8 @@ export interface PoolSelection {
   /** Per-member load used for the pick (running + waiting + shim in-flight). */
   loads: Record<string, number>;
   sessionKey: string | null;
+  /** Explicit member requested via preferredMember / x-pool-prefer-member, if any. */
+  preferred?: string | null;
   /** True when a requested preferredMember was unavailable and fell back to another box. */
   sameBoxFallback?: boolean;
 }
@@ -542,19 +527,23 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
       candidates: [fallback],
       loads,
       sessionKey,
+      preferred,
       sameBoxFallback: Boolean(preferred && fallback.name !== preferred),
     };
   }
 
   // Group by model id; prefer a live member with a known model over a single-strike unknown one.
+  // When an explicit member pin is given without a specific model, match that member's model.
   const requestedModel = req.body?.model;
-  const requested = typeof requestedModel === "string" ? requestedModel : null;
+  const requested = typeof requestedModel === "string" && requestedModel !== "auto" ? requestedModel : null;
+  const preferredLive = preferred ? live.find((m) => m.name === preferred) : undefined;
+  const preferredModel = preferredLive ? health[POOL_MEMBERS.indexOf(preferredLive)].model : null;
   const knownLive = live.find((m) => health[POOL_MEMBERS.indexOf(m)].model !== null);
   const firstModel = knownLive ? health[POOL_MEMBERS.indexOf(knownLive)].model : null;
   const targetModel =
     requested && live.some((m) => health[POOL_MEMBERS.indexOf(m)].model === requested)
       ? requested
-      : firstModel;
+      : preferredModel ?? firstModel;
 
   let candidates =
     targetModel === null
@@ -573,7 +562,7 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
   if (sessionKey) rememberAffinity(sessionKey, chosen.name);
 
   const ordered = [chosen, ...candidates.filter((m) => m.name !== chosen.name)];
-  return { member: chosen, candidates: ordered, loads, sessionKey, sameBoxFallback };
+  return { member: chosen, candidates: ordered, loads, sessionKey, preferred, sameBoxFallback };
 }
 
 export interface PoolMemberStats {

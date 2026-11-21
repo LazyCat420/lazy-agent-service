@@ -79,9 +79,10 @@ const UPSTREAMS: Record<string, string> = {
   // env vars directly (without routing through /vllm-shim/dell1 or /vllm-shim/dell2);
   // legacy callers still address those paths, while compose defaults for vllm-4/vllm-5
   // point at pooled `/vllm-shim/qwen`, and instance ids vllm-4/vllm-5 stay permanent.
-  // NOTE (2026-11-20): the Dells run one TP=2 cluster and only .37 (member `dell2`)
-  // has an API, so the pool defaults to `dell2` alone. Set
-  // VLLM_SHIM_POOL_MEMBERS=dell2,dell1 when two standalone engines are back.
+  // NOTE: the Dells run one TP=2 cluster whose API is .37 (member `dell2`);
+  // `gold-spark` (10.0.0.141:8000) and `dell2` (10.0.0.37:8888) form the
+  // default VllmPool (`VLLM_SHIM_POOL_MEMBERS=gold-spark,dell2`). Set
+  // `VLLM_SHIM_POOL_MEMBERS=gold-spark,dell2,dell1` if .131 returns standalone.
   "dell1": process.env.VLLM_SHIM_DELL1_URL || "http://10.0.0.131:8888", // physical dellbox2 (pool member dell1)
   "dell2": process.env.VLLM_SHIM_DELL2_URL || "http://10.0.0.37:8888", // physical dellbox1 (pool member dell2)
 };
@@ -1712,7 +1713,7 @@ export class VllmShimService {
       // Attribution survives failover: the header names the box that actually
       // answered. The counter is bumped only once the response is delivered.
       res.setHeader("x-pool-box", member.ip || new URL(member.url).hostname);
-      if (pool.sameBoxFallback) {
+      if (pool.sameBoxFallback || (pool.preferred && member.name !== pool.preferred)) {
         res.setHeader("x-pool-fallback", "1");
       }
     } else {

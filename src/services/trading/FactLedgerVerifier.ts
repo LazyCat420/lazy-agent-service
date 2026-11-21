@@ -1,6 +1,11 @@
 import type { ExtractedFact, FactMismatch, FactVerificationResult, LedgerEntry } from "./types.ts";
 
+const ISO_DATE_RE = /\b\d{4}-\d{1,2}-\d{1,2}(?:[T ][0-9:.Z+-]+)?\b/g;
 const NUM_RE = /[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?/g;
+
+function normalizeKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
 
 function extractNumbersFromUnknown(value: unknown, out: number[], depth = 0): void {
   if (depth > 8 || value === null || value === undefined) return;
@@ -9,7 +14,8 @@ function extractNumbersFromUnknown(value: unknown, out: number[], depth = 0): vo
     return;
   }
   if (typeof value === "string") {
-    const matches = value.match(NUM_RE);
+    const cleaned = value.replace(ISO_DATE_RE, " ");
+    const matches = cleaned.match(NUM_RE);
     if (matches) {
       for (const token of matches) {
         const parsed = Number(token.replace(/,/g, ""));
@@ -29,8 +35,34 @@ function extractNumbersFromUnknown(value: unknown, out: number[], depth = 0): vo
   }
 }
 
-function numbersMatchWithinTolerance(candidate: number, ledgerNumbers: number[]): boolean {
-  const scaledCandidates = [candidate, candidate / 100, candidate * 100];
+function extractMatchedFieldNumbers(raw: unknown, metric: string): number[] | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const target = normalizeKey(metric);
+  if (!target) return null;
+  const record = raw as Record<string, unknown>;
+  const matched: number[] = [];
+  let foundKey = false;
+  for (const [k, v] of Object.entries(record)) {
+    const nk = normalizeKey(k);
+    if (
+      nk === target ||
+      nk.startsWith(`${target}pct`) ||
+      target.startsWith(`${nk}pct`) ||
+      (target === "lastclose" && (nk === "close" || nk === "price" || nk === "lastprice"))
+    ) {
+      foundKey = true;
+      extractNumbersFromUnknown(v, matched);
+    }
+  }
+  return foundKey && matched.length > 0 ? matched : null;
+}
+
+function numbersMatchWithinTolerance(
+  candidate: number,
+  ledgerNumbers: number[],
+  allowPctScale: boolean,
+): boolean {
+  const scaledCandidates = allowPctScale ? [candidate, candidate / 100, candidate * 100] : [candidate];
   for (const target of scaledCandidates) {
     for (const ref of ledgerNumbers) {
       const diff = Math.abs(target - ref);
@@ -41,11 +73,22 @@ function numbersMatchWithinTolerance(candidate: number, ledgerNumbers: number[])
   return false;
 }
 
+function parseScalarValueNumber(value: string): { num: number; isPercent: boolean } | null {
+  const trimmed = (value || "").trim().replace(ISO_DATE_RE, " ");
+  if (!trimmed) return null;
+  const m = trimmed.match(/^[$€£]?\s*([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(%|x|B|M|K)?$/i);
+  if (!m) return null;
+  const num = Number(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(num)) return null;
+  return { num, isPercent: m[2] === "%" };
+}
+
 function verifySingleFact(
   fact: ExtractedFact,
   deskTicker: string,
   ledgerById: Record<string, LedgerEntry>,
 ): FactMismatch | null {
+  const wantTicker = deskTicker.trim().toUpperCase();
   const factId = (fact.fact_id || "").trim();
   const entry = ledgerById[factId];
   if (!entry) {
@@ -55,23 +98,45 @@ function verifySingleFact(
       detail: `Fact ID '${factId}' does not exist in whiteboard_ledger`,
     };
   }
-  const factTicker = (fact.ticker || "").trim().toUpperCase();
-  if (factTicker && factTicker !== deskTicker.toUpperCase()) {
+  const entryTicker = (entry.ticker || "").trim().toUpperCase();
+  if (entryTicker && entryTicker !== wantTicker) {
     return {
       fact_id: factId,
       reason: "ticker_mismatch",
-      detail: `Fact ticker '${factTicker}' does not match desk ticker '${deskTicker}'`,
+      detail: `Ledger entry '${factId}' belongs to '${entryTicker}', not desk ticker '${wantTicker}'`,
     };
   }
-  if (typeof fact.raw_number === "number" && Number.isFinite(fact.raw_number)) {
+  const factTicker = (fact.ticker || "").trim().toUpperCase();
+  if (!factTicker || factTicker !== wantTicker) {
+    return {
+      fact_id: factId,
+      reason: "ticker_mismatch",
+      detail: factTicker
+        ? `Fact ticker '${factTicker}' does not match desk ticker '${wantTicker}'`
+        : `Fact '${factId}' omits required ticker '${wantTicker}'`,
+    };
+  }
+
+  const parsedValue = parseScalarValueNumber(fact.value);
+  const candidateNum =
+    typeof fact.raw_number === "number" && Number.isFinite(fact.raw_number)
+      ? fact.raw_number
+      : parsedValue?.num ?? null;
+  if (candidateNum !== null) {
+    const fieldSpecific = extractMatchedFieldNumbers(entry.raw, fact.metric);
     const ledgerNumbers: number[] = [];
-    extractNumbersFromUnknown(entry.summary, ledgerNumbers);
-    extractNumbersFromUnknown(entry.raw, ledgerNumbers);
-    if (!numbersMatchWithinTolerance(fact.raw_number, ledgerNumbers)) {
+    if (fieldSpecific) {
+      ledgerNumbers.push(...fieldSpecific);
+    } else {
+      extractNumbersFromUnknown(entry.summary, ledgerNumbers);
+      extractNumbersFromUnknown(entry.raw, ledgerNumbers);
+    }
+    const allowPctScale = Boolean(parsedValue?.isPercent || fact.value.includes("%"));
+    if (!numbersMatchWithinTolerance(candidateNum, ledgerNumbers, allowPctScale)) {
       return {
         fact_id: factId,
         reason: "number_mismatch",
-        detail: `Number ${fact.raw_number} not found within tolerance in ledger entry ${factId}`,
+        detail: `Number ${candidateNum} (${fact.metric}) not found within tolerance in ledger entry ${factId}`,
       };
     }
   }
@@ -80,8 +145,9 @@ function verifySingleFact(
 
 /**
  * Deterministic zero-token verifier comparing extracted facts against raw
- * `whiteboard_ledger` entries (`fct_<sha1>`). Catches invented IDs, wrong-ticker
- * leaks, and numerical hallucinations before LLM criticism or final decisions.
+ * `whiteboard_ledger` entries (`fct_<sha1>`). Verifies fact_id existence, exact
+ * ledger entry and fact ticker match, and numeric values (preferring metric-matched
+ * structured raw fields and excluding date tokens).
  */
 export function verifyFactsAgainstLedger(
   facts: ExtractedFact[],

@@ -33,6 +33,7 @@ import {
   poolStats,
   POOL_MEMBERS,
   resetPoolState,
+  selectPoolMember,
 } from "../vllm/VllmPool.js";
 
 const D37 = "http://10.0.0.37:8888"; // physical dellbox1
@@ -611,6 +612,26 @@ describe("review fixes (QP-1..QP-6)", () => {
     });
     expect(fallback.headers["x-pool-box"]).toBe("10.0.0.37");
     expect(fallback.headers["x-pool-fallback"]).toBe("1");
+
+    // Proxy failover when preferred member passes probes but POST /chat fails before response.
+    clearPoolCaches();
+    installFetch({ [D37]: { running: 0 }, [D131]: { running: 0, chatFails: true } });
+    const proxyFailover = await send({
+      originalUrl: "/vllm-shim/qwen/v1/chat/completions",
+      method: "POST",
+      headers: { "x-pool-prefer-member": "dell1" },
+      body: { model: MODEL, messages: [{ role: "user", content: "proxy-failover" }] },
+    });
+    expect(proxyFailover.headers["x-pool-box"]).toBe("10.0.0.37");
+    expect(proxyFailover.headers["x-pool-fallback"]).toBe("1");
+  });
+
+  it("honors direct selectPoolMember preferredMember pinning", async () => {
+    installFetch({ [D37]: { running: 0 }, [D131]: { running: 2 } });
+    const sel = await selectPoolMember({ preferredMember: "dell1", body: { model: "auto" } });
+    expect(sel.member.name).toBe("dell1");
+    expect(sel.sameBoxFallback).toBe(false);
+    expect(sel.preferred).toBe("dell1");
   });
 });
 
@@ -634,7 +655,7 @@ describe("buildPoolMembers", () => {
     expect(members[0]).toMatchObject({ name: "dell2", ip: "10.0.0.37" });
   });
 
-  it("includes gold-spark at 10.0.0.141 and honors preferredMember pinning", () => {
+  it("includes gold-spark at 10.0.0.141 and dell2 at 10.0.0.37 in order", () => {
     const members = buildPoolMembers("gold-spark,dell2", {});
     expect(members.map((m) => m.ip)).toEqual(["10.0.0.141", "10.0.0.37"]);
   });
