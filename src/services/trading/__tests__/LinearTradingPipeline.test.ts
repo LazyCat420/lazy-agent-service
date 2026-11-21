@@ -622,4 +622,92 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
     expect(res.dossier.facts[0]?.value).toBe("185.5");
     expect(res.dossier.facts[0]?.raw_number).toBe(185.5);
   });
+
+  it("compacts bulky raw payloads in prompts while verifying full raw ledger and scoping critic entries", async () => {
+    const bulkyPayload = "A".repeat(750);
+    const largeLedger: Record<string, LedgerEntry> = {
+      fct_price_nvda: LEDGER.fct_price_nvda,
+      fct_news_bulk: {
+        fact_id: "fct_news_bulk",
+        tool_name: "get_finnhub_news",
+        ticker: "NVDA",
+        summary: "NVDA sentiment positive at 185.50.",
+        raw: { article_blob: bulkyPayload, close: 185.5 },
+      },
+      fct_fund_nvda: LEDGER.fct_fund_nvda,
+      fct_earn_nvda: { fact_id: "fct_earn_nvda", tool_name: "get_earnings_data", ticker: "NVDA", summary: "EPS beat 0.89", raw: { eps: 0.89 } },
+      fct_tech_nvda: { fact_id: "fct_tech_nvda", tool_name: "get_technical_indicators", ticker: "NVDA", summary: "RSI 54.2", raw: { rsi_14: 54.2 } },
+      fct_unused_extra: { fact_id: "fct_unused_extra", tool_name: "get_institutional_holdings", ticker: "NVDA", summary: "Institutional ownership 65%", raw: { inst_pct: 65 } },
+    };
+
+    const recordedPrompts: Array<{ sys: string; user: string; toolCount: number; maxTokens?: number }> = [];
+    const req: LinearDeskRequest = {
+      ticker: "NVDA",
+      cycle_id: "cycle-compact-1",
+      ledger_entries: largeLedger,
+      portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+    };
+    const deps: LinearDeskDeps = {
+      acquireTarget: async (preferredMember, _seed, _temp, maxTokens) => ({
+        boxName: preferredMember || "gold-spark",
+        modelId: "dyn",
+        sameBoxFallback: false,
+        release: () => {},
+        model: (mReq) => ({
+          async *[Symbol.asyncIterator]() {
+            const sys = String(mReq.messages[0]?.content || "");
+            const user = String(mReq.messages[1]?.content || "");
+            recordedPrompts.push({ sys, user, toolCount: mReq.tools.length, maxTokens });
+            if (sys.includes("Stage 1")) {
+              const facts = [makeFact()];
+              if (preferredMember === "dell2") {
+                facts.push(makeFact({ fact_id: "fct_news_bulk", category: "news", metric: "close", value: "$185.50", raw_number: 185.5 }));
+              }
+              yield JSON.stringify({ summary: "Compact", facts, catalysts: [], risks: [], data_gaps: [] });
+            } else if (sys.includes("Stage 2")) {
+              yield JSON.stringify({
+                summary: "Compact cleaned",
+                facts: [makeFact(), makeFact({ fact_id: "fct_news_bulk", category: "news", metric: "close", value: "$185.50", raw_number: 185.5 })],
+                catalysts: [],
+                risks: [],
+                data_gaps: [],
+                dropped_facts: [],
+                notes: [],
+              });
+            } else {
+              yield JSON.stringify({
+                action: "HOLD",
+                entry_mode: "none",
+                entry_condition: null,
+                position_size_pct: 0,
+                stop_loss: null,
+                take_profit: null,
+                cited_fact_ids: ["fct_price_nvda"],
+                decision_thesis: "Holding on verified close 185.50.",
+              });
+            }
+          },
+        }),
+      }),
+    };
+
+    const res = await runLinearDeskPipeline(req, deps);
+    expect(res.dossier.facts.map((f) => f.fact_id).sort()).toEqual(["fct_news_bulk", "fct_price_nvda"]);
+
+    const stage1Calls = recordedPrompts.filter((p) => p.sys.includes("Stage 1"));
+    const stage2Call = recordedPrompts.find((p) => p.sys.includes("Stage 2"));
+    const stage3Call = recordedPrompts.find((p) => p.sys.includes("Stage 3"));
+    expect(stage1Calls).toHaveLength(2);
+    for (const s1 of stage1Calls) {
+      expect(s1.toolCount).toBe(0);
+      expect(s1.maxTokens).toBe(1536);
+      expect(s1.user).not.toContain(bulkyPayload);
+      expect(s1.user).toContain("NVDA sentiment positive at 185.50.");
+    }
+    expect(stage2Call).toBeDefined();
+    expect(stage2Call!.maxTokens).toBe(1536);
+    expect(stage2Call!.user).not.toContain(bulkyPayload);
+    expect(stage2Call!.user).not.toContain("fct_unused_extra");
+    expect(stage3Call?.maxTokens).toBe(1024);
+  });
 });

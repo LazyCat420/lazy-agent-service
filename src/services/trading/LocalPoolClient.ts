@@ -190,7 +190,7 @@ function completionChunks(parsed: Record<string, any>, allowTools: boolean): Str
 function combinedCallSignal(
   requestSignal: AbortSignal | undefined,
   paramSignal: AbortSignal | undefined,
-  timeoutMs = 180_000,
+  timeoutMs = 300_000,
 ): AbortSignal {
   const timeoutSig = AbortSignal.timeout(timeoutMs);
   const signals = [requestSignal, paramSignal, timeoutSig].filter(Boolean) as AbortSignal[];
@@ -254,7 +254,7 @@ export function createPoolCoreModel(
       const url = `${target.member.url.replace(/\/$/, "")}/v1/chat/completions`;
       const callSignal = combinedCallSignal(request.signal, params.signal);
       const sem = VllmShimService.semaphoreFor(target.member.name);
-      const releaseSem = sem ? await acquireSemaphoreWithAbort(sem, 60_000, callSignal) : null;
+      const releaseSem = sem ? await acquireSemaphoreWithAbort(sem, 240_000, callSignal) : null;
       try {
         const res = await fetch(url, {
           method: "POST",

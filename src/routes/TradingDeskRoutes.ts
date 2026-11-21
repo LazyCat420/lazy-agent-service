@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
+import logger from "../logger.js";
 import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
 import { runLinearDeskPipeline, type LinearDeskDeps } from "../services/trading/LinearDeskPipeline.ts";
 
@@ -65,15 +66,25 @@ export function createTradingDeskRouter(deps: LinearDeskDeps = {}): Router {
         });
         return;
       }
+      const startedAt = Date.now();
+      req.setTimeout(620_000);
+      res.setTimeout(620_000);
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableEnded) controller.abort();
       });
-      const result = await runLinearDeskPipeline(
-        { ...parsed.data, signal: controller.signal },
-        deps,
-      );
-      res.json(result);
+      try {
+        const result = await runLinearDeskPipeline(
+          { ...parsed.data, signal: controller.signal },
+          deps,
+        );
+        res.json(result);
+      } catch (err) {
+        logger.error(
+          `[TradingDeskRoutes] linear-desk failed ticker=${parsed.data.ticker} cycle=${parsed.data.cycle_id} elapsedMs=${Date.now() - startedAt} error=${err instanceof Error ? err.message : String(err)}`,
+        );
+        throw err;
+      }
     }),
   );
 

@@ -29,7 +29,7 @@
     "max_tokens": 32768,
     "max_tool_calls": 6,
     "max_retries": 1,
-    "max_duration_ms": 180000
+    "max_duration_ms": 600000
   },
   "retention_class": "AUDITED_SESSION",
   "allowed_local_tools": [

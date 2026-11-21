@@ -15,6 +15,7 @@ import {
 import type {
   DataCriticReport,
   ExtractedFact,
+  LedgerEntry,
   LinearDeskRequest,
   LinearDeskResponse,
   ResearchExtractionOutput,
@@ -30,7 +31,7 @@ interface LinearProfilePolicy {
 
 function loadLinearProfilePolicy(): LinearProfilePolicy {
   const fallback: LinearProfilePolicy = {
-    maxDurationMs: 180_000,
+    maxDurationMs: 600_000,
     maxToolCalls: 6,
     maxRetries: 1,
     allowedTools: new Set(["read_ledger_entry", "lazy_web_search", "get_upcoming_events"]),
@@ -145,7 +146,12 @@ export interface LinearStageTarget {
 }
 
 export interface LinearDeskDeps {
-  acquireTarget?: (preferredMember: string | undefined, seed: number, temperature: number) => Promise<LinearStageTarget>;
+  acquireTarget?: (
+    preferredMember: string | undefined,
+    seed: number,
+    temperature: number,
+    maxTokens?: number,
+  ) => Promise<LinearStageTarget>;
   executeTool?: (toolName: string, args: Record<string, unknown>, req: LinearDeskRequest) => Promise<unknown>;
 }
 
@@ -277,26 +283,43 @@ async function defaultAcquireTarget(
   preferredMember: string | undefined,
   seed: number,
   temperature: number,
+  maxTokens = 1536,
 ): Promise<LinearStageTarget> {
   const acquired = await acquireLocalPoolTarget(preferredMember);
   return {
     boxName: acquired.member.name,
     modelId: acquired.modelId,
     sameBoxFallback: acquired.sameBoxFallback,
-    model: createPoolCoreModel(acquired, { preferredMember, seed, temperature, maxTokens: 4096 }),
+    model: createPoolCoreModel(acquired, { preferredMember, seed, temperature, maxTokens }),
     release: () => releasePoolTarget(acquired.member.name),
   };
 }
 
-function renderLedgerPrompt(req: LinearDeskRequest): string {
-  const items = Object.values(req.ledger_entries || {}).map((e) => ({
+function compactPromptRaw(raw: unknown, hasSummary: boolean): unknown {
+  if (raw === undefined || raw === null) return undefined;
+  if (!hasSummary) return raw;
+  try {
+    return JSON.stringify(raw).length <= 600 ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatPromptLedgerEntry(e: LedgerEntry, fallbackTicker: string): Record<string, unknown> {
+  const summary = (e.summary || "").slice(0, 500);
+  const raw = compactPromptRaw(e.raw, Boolean(summary));
+  return {
     fact_id: e.fact_id,
     tool_name: e.tool_name,
-    ticker: e.ticker || req.ticker,
+    ticker: e.ticker || fallbackTicker,
     as_of: e.as_of || "",
-    summary: (e.summary || "").slice(0, 1200),
-    raw: e.raw ?? null,
-  }));
+    summary,
+    ...(raw !== undefined ? { raw } : {}),
+  };
+}
+
+function renderLedgerPrompt(req: LinearDeskRequest): string {
+  const items = Object.values(req.ledger_entries || {}).map((e) => formatPromptLedgerEntry(e, req.ticker));
   return JSON.stringify({ ticker: req.ticker, cycle_id: req.cycle_id, ledger_entries: items });
 }
 
@@ -305,7 +328,7 @@ function extractorMessages(req: LinearDeskRequest): ChatMessage[] {
     {
       role: "system",
       content:
-        "You are Stage 1 (Research Extractor). Organize verified objective facts, numbers, catalysts, risks, and data_gaps strictly from the supplied whiteboard_ledger (and optional read-only follow-up tools). EVERY fact must cite an exact `fact_id` (`fct_...`), exact `ticker`, and exact `raw_number` from that entry. FORBIDDEN: Do NOT recommend BUY, SELL, HOLD, or AVOID, and do NOT invent facts. Return raw JSON matching {summary, facts:[{fact_id,category,metric,value,raw_number,ticker,as_of,summary}], catalysts:[], risks:[], data_gaps:[]}.",
+        "You are Stage 1 (Research Extractor). Select at most 8 of the most decision-relevant verified objective facts, plus at most 4 items each in catalysts, risks, and data_gaps strictly from the supplied whiteboard_ledger (and optional read-only follow-up tools). Keep summary concise (<= 100 chars). EVERY fact must cite an exact `fact_id` (`fct_...`), exact `ticker`, and exact `raw_number` from that entry. FORBIDDEN: Do NOT recommend BUY, SELL, HOLD, or AVOID, and do NOT invent facts. Return compact raw JSON matching {summary, facts:[{fact_id,category,metric,value,raw_number,ticker,as_of,summary}], catalysts:[], risks:[], data_gaps:[]}.",
     },
     { role: "user", content: renderLedgerPrompt(req) },
   ];
@@ -319,6 +342,10 @@ function criticMessages(
   risks: string[],
   dataGaps: string[],
 ): ChatMessage[] {
+  const citedIds = new Set(candidateFacts.map((f) => f.fact_id));
+  const scopedLedger = Object.values(req.ledger_entries || {})
+    .filter((e) => citedIds.has(e.fact_id))
+    .map((e) => formatPromptLedgerEntry(e, req.ticker));
   return [
     {
       role: "system",
@@ -331,7 +358,7 @@ function criticMessages(
         ticker: req.ticker,
         mismatches,
         candidate_dossier: { facts: candidateFacts, catalysts, risks, data_gaps: dataGaps },
-        ledger_entries: Object.values(req.ledger_entries || {}),
+        ledger_entries: scopedLedger,
       }),
     },
   ];
@@ -413,22 +440,27 @@ async function parseStageWithRepair<T>(
   throw new Error(`${label} exhausted retry budget`);
 }
 
+interface ExtractorSeedConfig {
+  preferredMember: string;
+  seed: number;
+  tools: CoreTool[];
+  maxSteps: number;
+}
+
 async function runExtractorSeed(
   req: LinearDeskRequest,
-  preferredMember: string,
-  seed: number,
-  tools: CoreTool[],
+  seedCfg: ExtractorSeedConfig,
   acquire: NonNullable<LinearDeskDeps["acquireTarget"]>,
 ): Promise<{ boxName: string; modelId: string; sameBoxFallback: boolean; output: ResearchExtractionOutput }> {
-  const target = await acquire(preferredMember, seed, 0.2);
+  const target = await acquire(seedCfg.preferredMember, seedCfg.seed, 0.2, 1536);
   try {
     const output = await parseStageWithRepair(
       target,
       extractorMessages(req),
-      tools,
-      4,
+      seedCfg.tools,
+      seedCfg.maxSteps,
       ResearchExtractionSchema,
-      `Stage 1 Extractor (${preferredMember})`,
+      `Stage 1 Extractor (${seedCfg.preferredMember})`,
       req.signal,
     );
     return { boxName: target.boxName, modelId: target.modelId, sameBoxFallback: target.sameBoxFallback, output };
@@ -466,7 +498,7 @@ async function runCriticStage(
     }
   }
 
-  const target = await acquire(undefined, 303, 0.1);
+  const target = await acquire(undefined, 303, 0.1, 1536);
   try {
     const raw = await runCoreStage(
       target,
@@ -527,7 +559,7 @@ async function runTraderStage(
   acquire: NonNullable<LinearDeskDeps["acquireTarget"]>,
 ): Promise<{ decision: TraderDecision; modelId: string }> {
   const schema = buildTraderSchema(req.portfolio_context.held);
-  const target = await acquire(undefined, 404, 0.2);
+  const target = await acquire(undefined, 404, 0.2, 1024);
   try {
     const decision = await parseStageWithRepair(
       target,
@@ -561,13 +593,29 @@ export async function runLinearDeskPipeline(
   const combinedSignal = AbortSignal.any(signals);
   const scopedReq: LinearDeskRequest = { ...req, signal: combinedSignal };
   const tools = buildCoreTools(scopedReq, deps, { calls: 0, maxCalls: LINEAR_PROFILE.maxToolCalls });
+  const distinctTools = new Set(
+    Object.values(req.ledger_entries || {})
+      .map((e) => (e.tool_name || "").trim())
+      .filter(Boolean),
+  );
+  const skipPrefetchedFollowups = distinctTools.size >= 5 && !deps.executeTool;
+  const stage1Tools = skipPrefetchedFollowups ? [] : tools;
+  const stage1MaxSteps = skipPrefetchedFollowups ? 1 : 3;
 
   let seedA: Awaited<ReturnType<typeof runExtractorSeed>>;
   let seedB: Awaited<ReturnType<typeof runExtractorSeed>>;
   try {
     [seedA, seedB] = await Promise.all([
-      runExtractorSeed(scopedReq, "gold-spark", 101, tools, acquire),
-      runExtractorSeed(scopedReq, "dell2", 202, tools, acquire),
+      runExtractorSeed(
+        scopedReq,
+        { preferredMember: "gold-spark", seed: 101, tools: stage1Tools, maxSteps: stage1MaxSteps },
+        acquire,
+      ),
+      runExtractorSeed(
+        scopedReq,
+        { preferredMember: "dell2", seed: 202, tools: stage1Tools, maxSteps: stage1MaxSteps },
+        acquire,
+      ),
     ]);
   } catch (err) {
     pipelineAbort.abort(err);
