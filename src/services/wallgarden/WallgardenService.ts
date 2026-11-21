@@ -197,6 +197,14 @@ export interface BrainstormContext {
   promptVariant?: string;
   // false = skip the FIT rubric in rateTopics (the free-baseline arm).
   rateFit?: boolean;
+  // Optional evidence-gated domain prior (WallgardenDiscovery.md H4/Option C).
+  // The client only sends this when the user's OWN mined/liked topics justify
+  // it; absent means the prompt is byte-identical to the pre-focus version.
+  domainFocus?: string;
+  // The user's own mined/liked topics in that domain, passed as anchors. These
+  // are evidence, never a wish list — the model may not treat them as likes it
+  // was not given.
+  seedDomains?: string[];
   numTopics?: number;
   model?: string;
   provider?: string;
@@ -220,6 +228,88 @@ export interface LikedVideoInput {
 export interface VideoExtraction {
   id: string;
   topics: RatedTopic[];
+}
+
+// ── Domain focus ───────────────────────────────────────────
+// Option C's backend half: a finance-biased topic batch, requested ONLY when
+// the client has evidence from the user's own likes (≥25% finance liked topics).
+// The focus is a lens on topic GENERATION; it never manufactures engagement,
+// ratings, or likes. Unknown values are rejected rather than silently ignored —
+// a typo must not quietly produce the generic prompt and look like it worked.
+export const DOMAIN_FOCUS_VALUES = ["finance"] as const;
+export type DomainFocus = (typeof DOMAIN_FOCUS_VALUES)[number];
+
+/** null = accepted (absent or known); string = rejection reason for a 400. */
+export function validateDomainFocus(focus: unknown): string | null {
+  if (focus === undefined || focus === null) return null;
+  if (typeof focus !== "string") return "domainFocus must be a string";
+  const trimmed = focus.trim();
+  if (!trimmed) return null;
+  const lowered = trimmed.toLowerCase();
+  if (!(DOMAIN_FOCUS_VALUES as readonly string[]).includes(lowered)) {
+    return `unknown domainFocus "${trimmed}" (supported: ${DOMAIN_FOCUS_VALUES.join(", ")})`;
+  }
+  return null;
+}
+
+export function normalizeDomainFocus(focus: unknown): DomainFocus | undefined {
+  if (validateDomainFocus(focus) !== null || typeof focus !== "string") return undefined;
+  const lowered = focus.trim().toLowerCase();
+  return DOMAIN_FOCUS_VALUES.find(v => v === lowered);
+}
+
+/**
+ * Throws a 400-shaped error for an unknown focus so every entry point — the
+ * route and any in-process caller — rejects instead of degrading silently.
+ */
+export function assertDomainFocus(focus: unknown): DomainFocus | undefined {
+  const reason = validateDomainFocus(focus);
+  if (reason) {
+    const err = new Error(reason) as Error & { statusCode: number };
+    err.statusCode = 400;
+    throw err;
+  }
+  return normalizeDomainFocus(focus);
+}
+
+const FINANCE_FOCUS_BLOCK = `DOMAIN FOCUS — FINANCE. This user's OWN mined/liked topics are already finance-heavy, so this batch leans finance: researchable YouTube search queries about equities, macro, commodities, earnings, sector/supply themes and market structure.
+- equities: single-name deep dives, sector rotation, index mechanics ("semiconductor cycle deep dive", "bank earnings walkthrough")
+- macro: rates, inflation prints, central-bank decisions ("fed dot plot explained", "japan carry trade unwind")
+- commodities: energy, metals and agriculture supply ("copper supply deficit", "cocoa futures squeeze")
+- earnings and filings: guidance, margins, capex, 10-K teardowns ("data center capex earnings call")
+- sector and supply themes: shipping rates, fab capacity, grid bottlenecks ("transformer shortage grid")
+- market structure: liquidity, auctions, market makers, ETF flows ("treasury auction mechanics", "etf creation redemption")
+
+HARD PROHIBITIONS — never emit any of these shapes:
+- pump/signal framing: "100x", "signal group", "buy alert", "next moonshot"
+- guaranteed returns or "risk-free", "can't lose", "get rich quick", "financial freedom in X days"
+- airdrops, presales, token launches, memecoin hype
+- prop-firm payouts, funded-account challenges, binary options, recovery agents
+- price predictions with targets or dates, fake urgency
+Topics must be things a real human could plausibly want to watch — explainers, deep dives, case studies, documentaries, process and analysis formats — never synthetic engagement bait.
+You generate TOPICS ONLY: never invent likes, ratings, watch history, or engagement for this user, and never claim they liked anything you were not given.`;
+
+/**
+ * The domain block appended to each batch message. Returns "" when there is no
+ * focus (or the focus is unknown), which is what keeps the no-focus prompt
+ * byte-identical to the version before this feature existed.
+ */
+export function buildDomainFocusBlock(focus: unknown, seedDomains?: unknown): string {
+  const normalized = normalizeDomainFocus(focus);
+  if (!normalized) return "";
+  const seeds = Array.isArray(seedDomains)
+    ? seedDomains
+        .filter((s): s is string => typeof s === "string")
+        .map(s => s.trim())
+        .filter(Boolean)
+        .slice(0, 20)
+    : [];
+  const seedLine = seeds.length
+    ? `\n\nSeed domains from MY OWN mined/liked topics (stay near these — they are evidence of my taste, not a wish list): [${seeds.join(", ")}]`
+    : "";
+  // finance is the only focus value today; the map keeps the next one honest.
+  const body = normalized === "finance" ? FINANCE_FOCUS_BLOCK : "";
+  return body ? `\n${body}${seedLine}` : "";
 }
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -678,9 +768,12 @@ export function planBrainstormBatches(requested: number, clusters: ClusterIn[]):
   return batches;
 }
 
-export async function brainstormTopics(ctx: BrainstormContext): Promise<BrainstormedTopic[]> {
-  const { model, provider } = await resolveProviderAndModel(ctx.model, ctx.provider);
-
+/**
+ * The per-batch user message. Pure so the no-focus rendering can be pinned
+ * byte-for-byte in tests; the domain-focus block is additive and returns ""
+ * when absent, leaving the legacy prompt untouched.
+ */
+export function buildBrainstormMessage(ctx: BrainstormContext, batch: PlannedBatch): string {
   const liked = ctx.interests.slice(0, 15).join(", ");
   const disliked = ctx.disliked.slice(0, 10).join(", ");
   const searches = (ctx.searches || []).slice(-10).join(", ");
@@ -688,10 +781,8 @@ export async function brainstormTopics(ctx: BrainstormContext): Promise<Brainsto
   const watchlist = (ctx.watchlist || []).slice(-15).join("; ");
   const recentUsed = ctx.recentUsed.slice(-20).join(", ");
   const burnedList = ctx.burnedQueries.slice(-30).join(", ");
-  const numTopics = ctx.numTopics || 100;
-
-  const clusters = (ctx.likedClusters || []).filter(c => c && Array.isArray(c.videos) && c.videos.length > 0);
   const failedExamples = (ctx.failedExamples || []).slice(-10).join(", ");
+  const clusters = (ctx.likedClusters || []).filter(c => c && Array.isArray(c.videos) && c.videos.length > 0);
 
   // The CORE batch sees every cluster at once — the blended centre of gravity
   // that no single-cluster batch could ever show the model.
@@ -699,37 +790,45 @@ export async function brainstormTopics(ctx: BrainstormContext): Promise<Brainsto
     ? clusters.map(c => `${c.name ? c.name + ": " : ""}${c.videos.slice(0, 6).join("; ")}`).join(" | ")
     : likedVideos;
 
-  const buildMessage = (batch: PlannedBatch) => {
-    const likedLine = batch.role === "core" ? blendedLikedLine : likedVideos;
-    const profileLine = ctx.tasteProfile
-      ? `WHO I AM AS A VIEWER: ${ctx.tasteProfile}\n\n`
-      : "";
-    const failedLine = failedExamples
-      ? `\nTopics that FAILED for this user — study their SHAPE and avoid producing anything of the same shape, not just the same words: [${failedExamples}]`
-      : "";
-    const outcomesBlock = buildOutcomesBlock(ctx.topicOutcomes);
-    let roleBlock: string;
-    if (batch.role === "core") {
-      roleBlock = `\nTHIS BATCH — CORE. Stay INSIDE the scenes in the liked videos above (all of my clusters are listed). Name what a long-time fan of each scene watches next. No leaps.`;
-    } else if (batch.role === "adjacent" && batch.cluster) {
-      const name = batch.cluster.name ? ` ("${batch.cluster.name}")` : "";
-      roleBlock = `\nTHIS BATCH — ADJACENT, from this cluster of my liked videos${name}: [${batch.cluster.videos.slice(0, 10).join("; ")}]. One step away from THIS scene only; the other clusters are context, not targets.`;
-    } else if (batch.role === "adjacent") {
-      roleBlock = `\nTHIS BATCH — ADJACENT. One step away from the scenes in the liked videos above.`;
-    } else {
-      roleBlock = `\nTHIS BATCH — EXPLORE. Lateral leaps, wildcards, and time/culture shifts that share the deeper taste. Every topic must still pass: "would this person, not a generic viewer, click it?"`;
-    }
+  const likedLine = batch.role === "core" ? blendedLikedLine : likedVideos;
+  const profileLine = ctx.tasteProfile
+    ? `WHO I AM AS A VIEWER: ${ctx.tasteProfile}\n\n`
+    : "";
+  const failedLine = failedExamples
+    ? `\nTopics that FAILED for this user — study their SHAPE and avoid producing anything of the same shape, not just the same words: [${failedExamples}]`
+    : "";
+  const outcomesBlock = buildOutcomesBlock(ctx.topicOutcomes);
+  let roleBlock: string;
+  if (batch.role === "core") {
+    roleBlock = `\nTHIS BATCH — CORE. Stay INSIDE the scenes in the liked videos above (all of my clusters are listed). Name what a long-time fan of each scene watches next. No leaps.`;
+  } else if (batch.role === "adjacent" && batch.cluster) {
+    const name = batch.cluster.name ? ` ("${batch.cluster.name}")` : "";
+    roleBlock = `\nTHIS BATCH — ADJACENT, from this cluster of my liked videos${name}: [${batch.cluster.videos.slice(0, 10).join("; ")}]. One step away from THIS scene only; the other clusters are context, not targets.`;
+  } else if (batch.role === "adjacent") {
+    roleBlock = `\nTHIS BATCH — ADJACENT. One step away from the scenes in the liked videos above.`;
+  } else {
+    roleBlock = `\nTHIS BATCH — EXPLORE. Lateral leaps, wildcards, and time/culture shifts that share the deeper taste. Every topic must still pass: "would this person, not a generic viewer, click it?"`;
+  }
+  const domainBlock = buildDomainFocusBlock(ctx.domainFocus, ctx.seedDomains);
 
-    return `${profileLine}My interest topics: [${liked}]
+  return `${profileLine}My interest topics: [${liked}]
 Videos I actually liked (strongest signal): [${likedLine}]
 Videos I saved to watch later (strong signal): [${watchlist}]
 Recent searches: [${searches}]
 Disliked: [${disliked}]
 Recently used (avoid these): [${recentUsed}]
-Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]${failedLine}${outcomesBlock}${roleBlock}
+Failed queries (don't reuse these exact phrases, they returned bad results): [${burnedList}]${failedLine}${outcomesBlock}${roleBlock}${domainBlock}
 
 Suggest ${batch.size} new topics.`;
-  };
+}
+
+export async function brainstormTopics(ctx: BrainstormContext): Promise<BrainstormedTopic[]> {
+  // Reject an unknown focus before any model call: a typo must not silently
+  // fall back to the generic prompt and look like it worked.
+  assertDomainFocus(ctx.domainFocus);
+  const { model, provider } = await resolveProviderAndModel(ctx.model, ctx.provider);
+  const numTopics = ctx.numTopics || 100;
+  const clusters = (ctx.likedClusters || []).filter(c => c && Array.isArray(c.videos) && c.videos.length > 0);
 
   /** One batch, with its own retry ladder. Resolves to [] rather than throwing. */
   const runBatch = async (batch: PlannedBatch, batchIndex: number): Promise<string[]> => {
@@ -745,7 +844,7 @@ Suggest ${batch.size} new topics.`;
           provider,
           [
             { role: "system", content: BRAINSTORM_SYSTEM_PROMPT },
-            { role: "user", content: buildMessage(batch) },
+            { role: "user", content: buildBrainstormMessage(ctx, batch) },
           ],
           temperature,
         );

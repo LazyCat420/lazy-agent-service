@@ -9,6 +9,7 @@ import {
   generateTasteProfile,
   judgeTopicGrounding,
   recommendChannels,
+  validateDomainFocus,
   type BrainstormContext,
   type SimilarContext,
   type LikedVideoInput,
@@ -81,6 +82,8 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
       topicOutcomes,
       promptVariant,
       rateFit,
+      domainFocus,
+      seedDomains,
       numTopics,
       model,
       provider,
@@ -88,6 +91,13 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
 
     if (!interests || interests.length === 0) {
       return res.status(400).json({ error: "interests array is required and must be non-empty" });
+    }
+
+    // An unknown focus is a client bug, not something to ignore: silently
+    // generating the generic batch would look like the finance bias worked.
+    const focusError = validateDomainFocus(domainFocus);
+    if (focusError) {
+      return res.status(400).json({ error: focusError });
     }
 
     const raw = await brainstormTopics({
@@ -104,6 +114,8 @@ router.post("/brainstorm", async (req: Request, res: Response) => {
       topicOutcomes,
       // Forwarded (it used to die here) so the arm shows in the service log.
       promptVariant,
+      domainFocus,
+      seedDomains,
       numTopics,
       model,
       provider,
