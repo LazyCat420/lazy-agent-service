@@ -532,13 +532,16 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
     };
   }
 
-  // Group by model id; prefer a live member with a known model over a single-strike unknown one.
+  // Group by model id; pick the least-loaded live member first so unpinned
+  // requests distribute across the pool instead of pinning to index 0.
   // When an explicit member pin is given without a specific model, match that member's model.
   const requestedModel = req.body?.model;
   const requested = typeof requestedModel === "string" && requestedModel !== "auto" ? requestedModel : null;
   const preferredLive = preferred ? live.find((m) => m.name === preferred) : undefined;
   const preferredModel = preferredLive ? health[POOL_MEMBERS.indexOf(preferredLive)].model : null;
-  const knownLive = live.find((m) => health[POOL_MEMBERS.indexOf(m)].model !== null);
+  const knownLive = [...live]
+    .filter((m) => health[POOL_MEMBERS.indexOf(m)].model !== null)
+    .sort((a, b) => loads[a.name] - loads[b.name])[0];
   const firstModel = knownLive ? health[POOL_MEMBERS.indexOf(knownLive)].model : null;
   const targetModel =
     requested && live.some((m) => health[POOL_MEMBERS.indexOf(m)].model === requested)

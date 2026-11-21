@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
+import logger from "../../logger.js";
 import { runCoreLoop } from "../../core/loop/CoreLoop.ts";
 import type { ChatMessage, CoreModel, CoreTool } from "../../core/loop/types.ts";
 import { routeLocalTool } from "../LocalToolRouter.ts";
@@ -52,7 +53,10 @@ function loadLinearProfilePolicy(): LinearProfilePolicy {
       maxRetries: parsed.budget_limits?.max_retries ?? fallback.maxRetries,
       allowedTools: allowed.size > 0 ? allowed : fallback.allowedTools,
     };
-  } catch {
+  } catch (err) {
+    logger.warn(
+      `[LinearDesk] Failed to load profiles/trading-linear-v1.json (${err instanceof Error ? err.message : String(err)}); using fallback limits`,
+    );
     return fallback;
   }
 }
@@ -177,6 +181,13 @@ function parseJsonStrict<T>(raw: string, schema: z.ZodType<T>, stage: string): T
   return checked.data;
 }
 
+function reserveToolCallSlot(budget: { calls: number; maxCalls: number }): void {
+  if (budget.calls >= budget.maxCalls) {
+    throw new Error(`Follow-up tool budget exhausted (max ${budget.maxCalls})`);
+  }
+  budget.calls += 1;
+}
+
 function buildCoreTools(
   req: LinearDeskRequest,
   deps: LinearDeskDeps,
@@ -190,10 +201,7 @@ function buildCoreTools(
       description: DEFAULT_FOLLOWUP_TOOLS[name].description,
       parameters: DEFAULT_FOLLOWUP_TOOLS[name].parameters,
       execute: async (args) => {
-        if (budget.calls >= budget.maxCalls) {
-          throw new Error(`Follow-up tool budget exhausted (max ${budget.maxCalls})`);
-        }
-        budget.calls += 1;
+        reserveToolCallSlot(budget);
         if (deps.executeTool) return deps.executeTool(name, args, req);
         return routeLocalTool(name, args, {
           agentName: "v3_linear_extractor",
@@ -468,20 +476,31 @@ export async function runLinearDeskPipeline(
   deps: LinearDeskDeps = {},
 ): Promise<LinearDeskResponse> {
   const acquire = deps.acquireTarget ?? defaultAcquireTarget;
+  const pipelineAbort = new AbortController();
   const deadlineSignal = AbortSignal.timeout(LINEAR_PROFILE.maxDurationMs);
-  const combinedSignal = req.signal ? AbortSignal.any([req.signal, deadlineSignal]) : deadlineSignal;
+  const signals = [pipelineAbort.signal, deadlineSignal, ...(req.signal ? [req.signal] : [])];
+  const combinedSignal = AbortSignal.any(signals);
   const scopedReq: LinearDeskRequest = { ...req, signal: combinedSignal };
   const tools = buildCoreTools(scopedReq, deps, { calls: 0, maxCalls: LINEAR_PROFILE.maxToolCalls });
 
-  const [seedA, seedB] = await Promise.all([
-    runExtractorSeed(scopedReq, "gold-spark", 101, tools, acquire),
-    runExtractorSeed(scopedReq, "dell2", 202, tools, acquire),
-  ]);
+  let seedA: Awaited<ReturnType<typeof runExtractorSeed>>;
+  let seedB: Awaited<ReturnType<typeof runExtractorSeed>>;
+  try {
+    [seedA, seedB] = await Promise.all([
+      runExtractorSeed(scopedReq, "gold-spark", 101, tools, acquire),
+      runExtractorSeed(scopedReq, "dell2", 202, tools, acquire),
+    ]);
+  } catch (err) {
+    pipelineAbort.abort(err);
+    throw err;
+  }
 
   const reconciled = reconcileAaExtractions({
     boxA: seedA.boxName,
     boxB: seedB.boxName,
     modelId: seedA.modelId || seedB.modelId,
+    modelA: seedA.modelId,
+    modelB: seedB.modelId,
     sameBoxFallback: seedA.sameBoxFallback || seedB.sameBoxFallback || seedA.boxName === seedB.boxName,
     outputA: seedA.output,
     outputB: seedB.output,

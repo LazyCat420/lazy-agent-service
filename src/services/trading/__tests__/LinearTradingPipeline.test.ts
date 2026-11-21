@@ -64,15 +64,18 @@ describe("FactLedgerVerifier (0-GPU control + mutation checks)", () => {
     const crossTickerEntry = makeFact({ fact_id: "fct_aapl", metric: "close", value: "$225.00", raw_number: 225.0 });
     const nullRawValid = makeFact({ metric: "close", value: "$185.50", raw_number: null });
     const nullRawBad = makeFact({ metric: "close", value: "$999.00", raw_number: null });
+    const unparseableNumeric = makeFact({ category: "valuation", metric: "pe_ratio", value: "high multiple", raw_number: null });
+    const protoKey = makeFact({ fact_id: "constructor", category: "news", metric: "headline", value: "Proto check", raw_number: null });
 
     const res = verifyFactsAgainstLedger(
-      [good, goodPct, nullRawValid, wrongId, wrongTicker, missingTicker, wrongNumber, crossFieldNumber, dateNumber, crossTickerEntry, nullRawBad],
+      [good, goodPct, nullRawValid, wrongId, protoKey, wrongTicker, missingTicker, wrongNumber, crossFieldNumber, dateNumber, crossTickerEntry, nullRawBad, unparseableNumeric],
       "NVDA",
       otherTickerLedger,
     );
     expect(res.verifiedFacts).toHaveLength(3);
-    expect(res.hallucinationCount).toBe(8);
+    expect(res.hallucinationCount).toBe(10);
     expect(res.mismatches.map((m) => m.reason)).toEqual([
+      "unknown_fact_id",
       "unknown_fact_id",
       "ticker_mismatch",
       "ticker_mismatch",
@@ -80,6 +83,7 @@ describe("FactLedgerVerifier (0-GPU control + mutation checks)", () => {
       "number_mismatch",
       "number_mismatch",
       "ticker_mismatch",
+      "number_mismatch",
       "number_mismatch",
     ]);
   });
@@ -125,6 +129,22 @@ describe("AaNoiseReconciler (parallel gold-spark vs dell2 A/A noise tracking)", 
     expect(rec.metrics.same_box_fallback).toBe(false);
     expect(rec.metrics.numeric_rel_spread_median).toBeGreaterThan(0);
     expect(rec.catalysts).toEqual(["Data center ramp", "Networking demand"]);
+  });
+  it("deduplicates repeated facts within one seed and records model_mismatch", () => {
+    const out = reconcileAaExtractions({
+      boxA: "gold-spark",
+      boxB: "dell2",
+      modelId: "m-a",
+      modelA: "m-a",
+      modelB: "m-b",
+      sameBoxFallback: false,
+      outputA: { summary: "a", facts: [makeFact(), makeFact()], catalysts: [], risks: [], data_gaps: [] },
+      outputB: { summary: "b", facts: [makeFact()], catalysts: [], risks: [], data_gaps: [] },
+    });
+    expect(out.metrics.count_a).toBe(1);
+    expect(out.metrics.count_b).toBe(1);
+    expect(out.metrics.fact_flip_share).toBe(0);
+    expect(out.metrics.model_mismatch).toBe(true);
   });
 });
 
@@ -196,13 +216,51 @@ describe("LinearDeskPipeline end-to-end & schema enforcement", () => {
     expect(out.decision.decision_thesis).toContain("20%");
   });
 
-  it("refuses SELL when held=false even if the model attempts it once, and allows AVOID", async () => {
+  it("refuses SELL when held=false and refuses AVOID when held=true", async () => {
     await expect(
       runLinearDeskPipeline(baseReq, makeDeps({ unheldAction: "SELL" })),
     ).rejects.toThrow(/Stage 3 Final Trader failed schema validation/);
 
     const avoid = await runLinearDeskPipeline(baseReq, makeDeps({ unheldAction: "AVOID" }));
     expect(avoid.decision.action).toBe("AVOID");
+
+    const heldReq: LinearDeskRequest = {
+      ...baseReq,
+      portfolio_context: { held: true, shares_owned: 10, avg_cost: 150, cash_usd: 50000, max_position_pct: 15 },
+    };
+    const sellHeld = await runLinearDeskPipeline(heldReq, makeDeps({ unheldAction: "SELL" }));
+    expect(sellHeld.decision.action).toBe("SELL");
+
+    await expect(
+      runLinearDeskPipeline(heldReq, makeDeps({ unheldAction: "AVOID" })),
+    ).rejects.toThrow(/Stage 3 Final Trader failed schema validation/);
+  });
+
+  it("aborts sibling extractor seed when the other extractor fails", async () => {
+    let siblingAborted = false;
+    const deps: LinearDeskDeps = {
+      acquireTarget: async (preferredMember) => ({
+        boxName: preferredMember || "gold-spark",
+        modelId: "dynamic-model",
+        sameBoxFallback: false,
+        release: () => {},
+        model: (req) => ({
+          async *[Symbol.asyncIterator]() {
+            if (preferredMember === "gold-spark") {
+              yield "not valid json";
+              return;
+            }
+            req.signal?.addEventListener("abort", () => {
+              siblingAborted = true;
+            });
+            await new Promise((r) => setTimeout(r, 40));
+            yield JSON.stringify({ summary: "ok", facts: [makeFact()], catalysts: [], risks: [], data_gaps: [] });
+          },
+        }),
+      }),
+    };
+    await expect(runLinearDeskPipeline(baseReq, deps)).rejects.toThrow(/invalid JSON/i);
+    expect(siblingAborted).toBe(true);
   });
 
   it("drops critic-invented non-candidate facts and preserves uncorroborated provenance", async () => {

@@ -41,6 +41,9 @@ export interface AaNoiseMetrics {
   box_a: string;
   box_b: string;
   model_id: string;
+  model_a?: string;
+  model_b?: string;
+  model_mismatch?: boolean;
   same_box_fallback: boolean;
   fact_flip_share: number;
   citation_jaccard: number;

@@ -8,6 +8,8 @@ export interface ReconcileInput {
   boxA: string;
   boxB: string;
   modelId: string;
+  modelA?: string;
+  modelB?: string;
   sameBoxFallback: boolean;
   outputA: ResearchExtractionOutput;
   outputB: ResearchExtractionOutput;
@@ -73,12 +75,18 @@ function pairSeedFacts(
   corroboratedFacts: ExtractedFact[];
   uncorroboratedFacts: ExtractedFact[];
   spreads: number[];
+  dedupCountA: number;
+  dedupCountB: number;
+  dedupListA: ExtractedFact[];
+  dedupListB: ExtractedFact[];
 } {
   const mapA = new Map<string, ExtractedFact>();
   const mapB = new Map<string, ExtractedFact>();
   for (const f of factsA) mapA.set(factKey(f), f);
   for (const f of factsB) mapB.set(factKey(f), f);
 
+  const dedupListA = [...mapA.values()];
+  const dedupListB = [...mapB.values()];
   const corroboratedFacts: ExtractedFact[] = [];
   const uncorroboratedFacts: ExtractedFact[] = [];
   const spreads: number[] = [];
@@ -99,7 +107,15 @@ function pairSeedFacts(
   for (const fb of mapB.values()) {
     uncorroboratedFacts.push({ ...fb, uncorroborated: true });
   }
-  return { corroboratedFacts, uncorroboratedFacts, spreads };
+  return {
+    corroboratedFacts,
+    uncorroboratedFacts,
+    spreads,
+    dedupCountA: dedupListA.length,
+    dedupCountB: dedupListB.length,
+    dedupListA,
+    dedupListB,
+  };
 }
 
 /**
@@ -110,11 +126,22 @@ function pairSeedFacts(
 export function reconcileAaExtractions(input: ReconcileInput): ReconciledResearch {
   const factsA = input.outputA.facts || [];
   const factsB = input.outputB.facts || [];
-  const { corroboratedFacts, uncorroboratedFacts, spreads } = pairSeedFacts(factsA, factsB);
+  const {
+    corroboratedFacts,
+    uncorroboratedFacts,
+    spreads,
+    dedupCountA,
+    dedupCountB,
+    dedupListA,
+    dedupListB,
+  } = pairSeedFacts(factsA, factsB);
 
-  const totalCount = factsA.length + factsB.length;
+  const totalCount = dedupCountA + dedupCountB;
   const flipShare =
     totalCount === 0 ? 0 : round4(Math.max(0, 1 - (2 * corroboratedFacts.length) / totalCount));
+  const modelA = input.modelA || input.modelId;
+  const modelB = input.modelB || input.modelId;
+  const modelMismatch = Boolean(input.modelA && input.modelB && input.modelA !== input.modelB);
 
   return {
     corroboratedFacts,
@@ -127,12 +154,15 @@ export function reconcileAaExtractions(input: ReconcileInput): ReconciledResearc
       box_a: input.boxA,
       box_b: input.boxB,
       model_id: input.modelId,
+      model_a: modelA,
+      model_b: modelB,
+      model_mismatch: modelMismatch,
       same_box_fallback: input.sameBoxFallback,
       fact_flip_share: flipShare,
-      citation_jaccard: computeJaccard(factsA, factsB),
+      citation_jaccard: computeJaccard(dedupListA, dedupListB),
       numeric_rel_spread_median: median(spreads),
-      count_a: factsA.length,
-      count_b: factsB.length,
+      count_a: dedupCountA,
+      count_b: dedupCountB,
       corroborated_count: corroboratedFacts.length,
       uncorroborated_count: uncorroboratedFacts.length,
     },

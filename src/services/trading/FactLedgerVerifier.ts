@@ -2,6 +2,7 @@ import type { ExtractedFact, FactMismatch, FactVerificationResult, LedgerEntry }
 
 const ISO_DATE_RE = /\b\d{4}-\d{1,2}-\d{1,2}(?:[T ][0-9:.Z+-]+)?\b/g;
 const NUM_RE = /[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?/g;
+const NUMERIC_CATEGORIES = new Set(["price", "valuation", "fundamental", "technical"]);
 
 function normalizeKey(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -83,21 +84,12 @@ function parseScalarValueNumber(value: string): { num: number; isPercent: boolea
   return { num, isPercent: m[2] === "%" };
 }
 
-function verifySingleFact(
+function verifyTickerMatch(
+  factId: string,
   fact: ExtractedFact,
-  deskTicker: string,
-  ledgerById: Record<string, LedgerEntry>,
+  entry: LedgerEntry,
+  wantTicker: string,
 ): FactMismatch | null {
-  const wantTicker = deskTicker.trim().toUpperCase();
-  const factId = (fact.fact_id || "").trim();
-  const entry = ledgerById[factId];
-  if (!entry) {
-    return {
-      fact_id: factId || "(empty)",
-      reason: "unknown_fact_id",
-      detail: `Fact ID '${factId}' does not exist in whiteboard_ledger`,
-    };
-  }
   const entryTicker = (entry.ticker || "").trim().toUpperCase();
   if (entryTicker && entryTicker !== wantTicker) {
     return {
@@ -116,31 +108,65 @@ function verifySingleFact(
         : `Fact '${factId}' omits required ticker '${wantTicker}'`,
     };
   }
+  return null;
+}
 
+function verifyNumericClaim(
+  factId: string,
+  fact: ExtractedFact,
+  entry: LedgerEntry,
+): FactMismatch | null {
   const parsedValue = parseScalarValueNumber(fact.value);
   const candidateNum =
     typeof fact.raw_number === "number" && Number.isFinite(fact.raw_number)
       ? fact.raw_number
       : parsedValue?.num ?? null;
-  if (candidateNum !== null) {
-    const fieldSpecific = extractMatchedFieldNumbers(entry.raw, fact.metric);
-    const ledgerNumbers: number[] = [];
-    if (fieldSpecific) {
-      ledgerNumbers.push(...fieldSpecific);
-    } else {
-      extractNumbersFromUnknown(entry.summary, ledgerNumbers);
-      extractNumbersFromUnknown(entry.raw, ledgerNumbers);
-    }
-    const allowPctScale = Boolean(parsedValue?.isPercent || fact.value.includes("%"));
-    if (!numbersMatchWithinTolerance(candidateNum, ledgerNumbers, allowPctScale)) {
-      return {
-        fact_id: factId,
-        reason: "number_mismatch",
-        detail: `Number ${candidateNum} (${fact.metric}) not found within tolerance in ledger entry ${factId}`,
-      };
-    }
+  const expectsNumeric =
+    NUMERIC_CATEGORIES.has(fact.category) || /\d/.test((fact.value || "").replace(ISO_DATE_RE, " "));
+  if (candidateNum === null) {
+    return expectsNumeric
+      ? {
+          fact_id: factId,
+          reason: "number_mismatch",
+          detail: `Numeric ${fact.category} claim '${fact.metric}' lacks a finite raw_number or parseable scalar value`,
+        }
+      : null;
+  }
+  const fieldSpecific = extractMatchedFieldNumbers(entry.raw, fact.metric);
+  const ledgerNumbers: number[] = [];
+  if (fieldSpecific) {
+    ledgerNumbers.push(...fieldSpecific);
+  } else {
+    extractNumbersFromUnknown(entry.summary, ledgerNumbers);
+    extractNumbersFromUnknown(entry.raw, ledgerNumbers);
+  }
+  const allowPctScale = Boolean(parsedValue?.isPercent || fact.value.includes("%"));
+  if (!numbersMatchWithinTolerance(candidateNum, ledgerNumbers, allowPctScale)) {
+    return {
+      fact_id: factId,
+      reason: "number_mismatch",
+      detail: `Number ${candidateNum} (${fact.metric}) not found within tolerance in ledger entry ${factId}`,
+    };
   }
   return null;
+}
+
+function verifySingleFact(
+  fact: ExtractedFact,
+  deskTicker: string,
+  ledgerById: Record<string, LedgerEntry>,
+): FactMismatch | null {
+  const wantTicker = deskTicker.trim().toUpperCase();
+  const factId = (fact.fact_id || "").trim();
+  const entry = Object.hasOwn(ledgerById, factId) ? ledgerById[factId] : undefined;
+  if (!entry) {
+    return {
+      fact_id: factId || "(empty)",
+      reason: "unknown_fact_id",
+      detail: `Fact ID '${factId}' does not exist in whiteboard_ledger`,
+    };
+  }
+  return verifyTickerMatch(factId, fact, entry, wantTicker) ?? verifyNumericClaim(factId, fact, entry);
 }
 
 /**

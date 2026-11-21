@@ -1409,7 +1409,7 @@ export class VllmShimService {
       return res.status(status.ok ? 200 : 503).json(status);
     }
 
-    // The shared Dell pool is not one upstream: it chooses a member per
+    // The shared local pool is not one upstream: it chooses a member per
     // request, so it is intercepted before resolveUpstream (which would 404
     // an unknown name). See handlePool.
     const poolPath = VllmShimService.poolOriginalPath(req.originalUrl);
@@ -1475,16 +1475,16 @@ export class VllmShimService {
   }
 
   /**
-   * Serve one request from the shared Dell pool.
+   * Serve one request from the shared local pool (`gold-spark` + `dell2`).
    *
    * The member is chosen per request by `selectPoolMember` (lowest
    * running+waiting plus this shim's in-flight count, with session affinity),
    * and only boxes that pass the two-strike liveness probe and serve the same
-   * model id are eligible — so a TP=2 relayout that takes .131 down shrinks
-   * the pool to one member without any config change. When every member is
-   * out of rotation the least recently failed one is still tried. A request is
-   * retried once on the other member only when the first fetch rejected before
-   * a response arrived; anything the upstream accepted is never replayed.
+   * model id are eligible (or the pinned box when `x-pool-prefer-member` is
+   * set). When every member is out of rotation the least recently failed one is
+   * still tried. A request is retried once on the other candidate only when the
+   * first fetch rejected before a response arrived; anything the upstream
+   * accepted is never replayed.
    */
   private static async handlePool(req: Request, res: Response, originalPath: string): Promise<void> {
     const basePath = originalPath.split("?")[0];
