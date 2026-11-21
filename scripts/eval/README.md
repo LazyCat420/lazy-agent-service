@@ -97,7 +97,4 @@ testrun -- npm run eval:scheduled -- --live             # + basic,chaos (LAN onl
 testrun -- npm run eval:scheduled -- --suites harness2  # explicit only
 ```
 
-The nightly GitHub workflow `.github/workflows/evals.yml` runs the offline suites. It carries its
-own history lines from night to night in the Actions cache, merged with this tracked file, so each
-night is compared with the previous good night (or a newer committed run), and uploads the merged
-history as an artifact. Commit lines from local runs to record them in the repo.
+All evals run locally only (`testrun -- npm run eval:scheduled`; GitHub Actions workflows are banned). Commit lines from local runs to record them in the repo.
