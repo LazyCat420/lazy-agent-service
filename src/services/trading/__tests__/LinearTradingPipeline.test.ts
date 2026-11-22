@@ -1136,10 +1136,13 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
           chunks.push(ch);
         }
       }
-      releasePoolTarget(currentBox);
+      acquired.release();
+      acquired.release(); // idempotent second call must not underflow/leak
       expect(vllmCalls).toBe(2);
       expect(fellBack).toBe(true);
       expect(currentBox).toBe("dell2");
+      expect(acquired.member.name).toBe("dell2");
+      expect(poolStats().members.every((m) => m.inFlight === 0)).toBe(true);
       expect(chunks.join("")).toContain("fct_price_nvda");
     } finally {
       globalThis.fetch = origFetch;

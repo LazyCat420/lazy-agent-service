@@ -12,7 +12,6 @@ import {
   createPoolCoreModel,
   PipelineTimeoutError,
   PoolUnavailableError,
-  releasePoolTarget,
 } from "./LocalPoolClient.ts";
 import type {
   DataCriticReport,
@@ -403,7 +402,7 @@ async function defaultAcquireTarget(
     modelId: acquired.modelId,
     sameBoxFallback: acquired.sameBoxFallback,
     model: undefined as unknown as CoreModel,
-    release: () => releasePoolTarget(acquired.member.name),
+    release: () => acquired.release(),
   };
   stateTarget.model = createPoolCoreModel(acquired, {
     preferredMember,

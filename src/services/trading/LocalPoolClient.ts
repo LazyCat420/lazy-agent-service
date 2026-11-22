@@ -38,6 +38,7 @@ export interface AcquiredPoolTarget {
   sameBoxFallback: boolean;
   fallbackCandidates?: PoolMember[];
   modelsByMember?: Record<string, string>;
+  release: () => void;
 }
 
 export interface PoolModelCallParams {
@@ -123,7 +124,8 @@ export async function acquireLocalPoolTarget(preferredMember?: string): Promise<
           heldName = candidate.name;
         }
         const fallbackCandidates = selection.candidates.filter((m) => m.name !== candidate.name);
-        return {
+        let released = false;
+        const acquired: AcquiredPoolTarget = {
           member: candidate,
           modelId,
           sameBoxFallback:
@@ -131,7 +133,13 @@ export async function acquireLocalPoolTarget(preferredMember?: string): Promise<
             (Boolean(preferredMember) && candidate.name !== preferredMember),
           fallbackCandidates,
           modelsByMember: selection.modelsByMember,
+          release: () => {
+            if (released) return;
+            released = true;
+            releasePoolInFlight(acquired.member.name);
+          },
         };
+        return acquired;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn(`[LocalPoolClient] /v1/models discovery failed on ${candidate.name}: ${msg}`);
@@ -355,6 +363,9 @@ export function createPoolCoreModel(
               releasePoolInFlight(prevName);
               target.member = candidate;
               target.modelId = modelId;
+              target.fallbackCandidates = (target.fallbackCandidates ?? []).filter(
+                (m) => m.name !== candidate.name && m.name !== prevName,
+              );
               params.onFailover?.(candidate, modelId);
             }
           }
