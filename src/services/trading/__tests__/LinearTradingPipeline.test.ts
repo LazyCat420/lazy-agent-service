@@ -1333,6 +1333,75 @@ describe("TradingDeskRoutes typed HTTP error mapping & ledger cap", () => {
       expect(Date.now() - startedAt).toBeLessThan(2000);
       expect(caught).toBeInstanceOf(PoolDeadlineErr);
       expect(poolStats().members.every((m) => m.inFlight === 0)).toBe(true);
+
+      // Case 3 (R2-F1): pool selection aborts promptly within deadlineAtMs when /v1/models or /metrics hangs
+      const { resetPoolState } = await import("../../vllm/VllmPool.js");
+      resetPoolState();
+      globalThis.fetch = (async (_input: string | URL | Request) => {
+        return await new Promise<Response>(() => {});
+      }) as typeof fetch;
+      const selStart = Date.now();
+      let selErr: unknown;
+      try {
+        await acquireLocalPoolTarget("gold-spark", undefined, Date.now() + 60);
+      } catch (err) {
+        selErr = err;
+      }
+      expect(Date.now() - selStart).toBeLessThan(1500);
+      expect(selErr).toBeInstanceOf(PoolDeadlineErr);
+      expect(poolStats().members.every((m) => m.inFlight === 0)).toBe(true);
+
+      // Case 4 (R2-F2): release tracks explicit owned slots, isolated from concurrent acquisition & member mutation
+      resetPoolState();
+      let compCall = 0;
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith("/v1/models")) {
+          return new Response(JSON.stringify({ data: [{ id: "Qwen3.8-Linear-Test" }] }), { status: 200 });
+        }
+        if (url.endsWith("/api/status")) {
+          return new Response(JSON.stringify({ engine: { running: 0, waiting: 0 } }), { status: 200 });
+        }
+        if (url.endsWith("/v1/chat/completions")) {
+          compCall += 1;
+          if (compCall === 1) {
+            return new Response("primary overloaded", { status: 503 });
+          }
+          return new Response(
+            JSON.stringify({
+              choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        throw new Error(`Unexpected URL: ${url}`);
+      }) as typeof fetch;
+
+      const targetA = await acquireLocalPoolTarget("gold-spark");
+      const targetB = await acquireLocalPoolTarget("gold-spark");
+      const modelA = createPoolCoreModel(targetA, { temperature: 0.1 });
+      const chunks: string[] = [];
+      for await (const ch of modelA({
+        messages: [{ role: "user", content: "hi" }],
+        tools: [],
+        toolChoice: "none",
+      })) {
+        if (typeof ch === "string") chunks.push(ch);
+      }
+      expect(chunks.join("")).toBe("ok");
+      // targetA promoted from gold-spark -> dell2; targetB still holds gold-spark
+      const statsMid = Object.fromEntries(poolStats().members.map((m) => [m.name, m.inFlight]));
+      expect(statsMid["gold-spark"]).toBe(1);
+      expect(statsMid["dell2"]).toBe(1);
+      // Even if targetA.member were mutated afterward, targetA.release() only frees its owned slot (dell2)
+      targetA.member = { ...targetA.member, name: "gold-spark" };
+      targetA.release();
+      const statsAfterA = Object.fromEntries(poolStats().members.map((m) => [m.name, m.inFlight]));
+      expect(statsAfterA["gold-spark"]).toBe(1);
+      expect(statsAfterA["dell2"]).toBe(0);
+      targetB.release();
+      expect(poolStats().members.every((m) => m.inFlight === 0)).toBe(true);
     } finally {
       globalThis.fetch = origFetch;
     }

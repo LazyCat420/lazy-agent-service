@@ -39,6 +39,9 @@ export interface AcquiredPoolTarget {
   fallbackCandidates?: PoolMember[];
   modelsByMember?: Record<string, string>;
   release: () => void;
+  claimFallbackSlot?: (memberName: string) => void;
+  releaseFallbackSlot?: (memberName: string) => void;
+  promoteMemberSlot?: (prevName: string, nextMember: PoolMember, nextModelId: string) => void;
 }
 
 export interface PoolModelCallParams {
@@ -119,11 +122,18 @@ export async function acquireLocalPoolTarget(
   }
   const budgetMs = resolveCallBudgetMs(deadlineAtMs);
   const discoverySignal = combinedCallSignal(undefined, signal, Math.min(3000, budgetMs));
-  const selection = await selectPoolMember({
-    preferredMember,
-    body: {},
-    headers: preferredMember ? { "x-pool-prefer-member": preferredMember } : undefined,
-  });
+  const selectionSignal = combinedCallSignal(undefined, signal, budgetMs);
+  let selection: Awaited<ReturnType<typeof selectPoolMember>>;
+  try {
+    selection = await selectPoolMember({
+      preferredMember,
+      body: {},
+      headers: preferredMember ? { "x-pool-prefer-member": preferredMember } : undefined,
+      signal: selectionSignal,
+    });
+  } catch (err) {
+    throw normalizePoolFailure(err, undefined, signal, deadlineAtMs);
+  }
   let heldName: string | null = selection.member.name;
   const discoveryErrors: string[] = [];
   try {
@@ -142,6 +152,7 @@ export async function acquireLocalPoolTarget(
         }
         const fallbackCandidates = selection.candidates.filter((m) => m.name !== candidate.name);
         let released = false;
+        const ownedSlots = new Set<string>(heldName ? [heldName] : []);
         const acquired: AcquiredPoolTarget = {
           member: candidate,
           modelId,
@@ -150,10 +161,35 @@ export async function acquireLocalPoolTarget(
             (Boolean(preferredMember) && candidate.name !== preferredMember),
           fallbackCandidates,
           modelsByMember: selection.modelsByMember,
+          claimFallbackSlot: (memberName: string) => {
+            if (!released && !ownedSlots.has(memberName)) {
+              acquirePoolInFlight(memberName);
+              ownedSlots.add(memberName);
+            }
+          },
+          releaseFallbackSlot: (memberName: string) => {
+            if (ownedSlots.delete(memberName)) {
+              releasePoolInFlight(memberName);
+            }
+          },
+          promoteMemberSlot: (prevName: string, nextMember: PoolMember, nextModelId: string) => {
+            if (ownedSlots.delete(prevName)) {
+              releasePoolInFlight(prevName);
+            }
+            if (!released && !ownedSlots.has(nextMember.name)) {
+              acquirePoolInFlight(nextMember.name);
+              ownedSlots.add(nextMember.name);
+            }
+            acquired.member = nextMember;
+            acquired.modelId = nextModelId;
+          },
           release: () => {
             if (released) return;
             released = true;
-            releasePoolInFlight(acquired.member.name);
+            for (const slot of ownedSlots) {
+              releasePoolInFlight(slot);
+            }
+            ownedSlots.clear();
           },
         };
         return acquired;
@@ -171,7 +207,7 @@ export async function acquireLocalPoolTarget(
       releasePoolInFlight(heldName);
       heldName = null;
     }
-    throw err;
+    throw normalizePoolFailure(err, undefined, signal, deadlineAtMs);
   }
 }
 
@@ -398,7 +434,8 @@ export function createPoolCoreModel(
           releaseSem = sem ? await acquireSemaphoreWithAbort(sem, semWaitMs, callSignal) : null;
 
           if (idx > 0 && candidate.name !== prevMember.name) {
-            acquirePoolInFlight(candidate.name);
+            if (target.claimFallbackSlot) target.claimFallbackSlot(candidate.name);
+            else acquirePoolInFlight(candidate.name);
             fallbackCharged = true;
           }
 
@@ -415,9 +452,13 @@ export function createPoolCoreModel(
           const rawJson = (await res.json()) as Record<string, any>;
 
           if (idx > 0 && fallbackCharged && candidate.name !== prevMember.name) {
-            releasePoolInFlight(prevMember.name);
-            target.member = candidate;
-            target.modelId = modelId;
+            if (target.promoteMemberSlot) {
+              target.promoteMemberSlot(prevMember.name, candidate, modelId);
+            } else {
+              releasePoolInFlight(prevMember.name);
+              target.member = candidate;
+              target.modelId = modelId;
+            }
             target.fallbackCandidates = (target.fallbackCandidates ?? []).filter(
               (m) => m.name !== candidate.name && m.name !== prevMember.name,
             );
@@ -435,7 +476,8 @@ export function createPoolCoreModel(
         } catch (err) {
           lastErr = err;
           if (fallbackCharged && !promoted) {
-            releasePoolInFlight(candidate.name);
+            if (target.releaseFallbackSlot) target.releaseFallbackSlot(candidate.name);
+            else releasePoolInFlight(candidate.name);
             fallbackCharged = false;
           }
           const callerAborted = isCallerAborted(request.signal, params.signal);
@@ -459,7 +501,8 @@ export function createPoolCoreModel(
         } finally {
           releaseSem?.();
           if (fallbackCharged && !promoted) {
-            releasePoolInFlight(candidate.name);
+            if (target.releaseFallbackSlot) target.releaseFallbackSlot(candidate.name);
+            else releasePoolInFlight(candidate.name);
             fallbackCharged = false;
           }
         }

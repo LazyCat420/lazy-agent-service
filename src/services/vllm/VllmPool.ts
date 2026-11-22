@@ -383,6 +383,8 @@ export interface PoolRequestShape {
   headers?: Record<string, unknown> | undefined;
   /** Optional explicit member preference for paired A/A calls across physical boxes. */
   preferredMember?: string;
+  /** Optional abort signal bounding pool selection health/gauge waits. */
+  signal?: AbortSignal;
 }
 
 export function extractPreferredMember(req: PoolRequestShape): string | null {
@@ -497,13 +499,42 @@ function choosePoolCandidate(
  * a burst spreads before the gauges catch up; the caller MUST release it via
  * `releasePoolInFlight`.
  */
+async function raceSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await promise;
+  if (signal.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("Aborted during pool selection");
+  }
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(signal.reason instanceof Error ? signal.reason : new Error("Aborted during pool selection"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (val) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(val);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelection> {
   // Health probes and gauge scrapes are independent: run them together so a
   // cold cache costs one round (~1.5 s max under default timeouts), not two sequential ones.
-  const [health, gauges] = await Promise.all([
-    Promise.all(POOL_MEMBERS.map((m) => probeHealth(m))),
-    Promise.all(POOL_MEMBERS.map((m) => readGauges(m))),
-  ]);
+  const [health, gauges] = await raceSignal(
+    Promise.all([
+      Promise.all(POOL_MEMBERS.map((m) => probeHealth(m))),
+      Promise.all(POOL_MEMBERS.map((m) => readGauges(m))),
+    ]),
+    req.signal,
+  );
+  if (req.signal?.aborted) {
+    throw req.signal.reason instanceof Error ? req.signal.reason : new Error("Aborted during pool selection");
+  }
   const loads: Record<string, number> = {};
   POOL_MEMBERS.forEach((m, i) => {
     loads[m.name] = gauges[i].running + gauges[i].waiting + (inFlight.get(m.name) || 0);
