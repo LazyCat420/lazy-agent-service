@@ -805,7 +805,7 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
       portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
     };
 
-    const runScenario = async (mode: "repair" | "fallback") => {
+    const runScenario = async (mode: "repair" | "fallback" | "transport") => {
       let criticAttempts = 0;
       let traderSawPrompt = "";
       const deps: LinearDeskDeps = {
@@ -832,6 +832,9 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
                 });
               } else if (sys.includes("Stage 2")) {
                 criticAttempts += 1;
+                if (mode === "transport") {
+                  throw new Error("vLLM dell2 HTTP 503");
+                }
                 if (mode === "repair" && criticAttempts === 2) {
                   yield JSON.stringify({
                     summary: "Stage 1 verified summary",
@@ -882,5 +885,8 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
     expect(fallback.res.dossier.facts.map((f) => f.fact_id)).toEqual(["fct_price_nvda"]);
     expect(fallback.traderSawPrompt).toContain("fct_price_nvda");
     expect(fallback.res.decision.action).toBe("HOLD");
+
+    // (c) Non-parse provider/transport errors must propagate instead of falling back (codex:R1-F1)
+    await expect(runScenario("transport")).rejects.toThrow(/HTTP 503/);
   });
 });

@@ -199,17 +199,19 @@ function stripFenceAndThink(raw: string): string {
   return candidate;
 }
 
+class StageParseError extends Error {}
+
 function parseJsonStrict<T>(raw: string, schema: z.ZodType<T>, stage: string): T {
   const jsonText = stripFenceAndThink(raw);
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonText);
   } catch (err) {
-    throw new Error(`${stage} returned invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    throw new StageParseError(`${stage} returned invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
   }
   const checked = schema.safeParse(parsed);
   if (!checked.success) {
-    throw new Error(`${stage} failed schema validation: ${checked.error.issues.map((i) => `${i.path.join(".")}:${i.message}`).join("; ")}`);
+    throw new StageParseError(`${stage} failed schema validation: ${checked.error.issues.map((i) => `${i.path.join(".")}:${i.message}`).join("; ")}`);
   }
   return checked.data;
 }
@@ -433,13 +435,13 @@ async function parseStageWithRepair<T>(
     try {
       return parseJsonStrict(raw, schema, label);
     } catch (err) {
-      if (attempt + 1 >= maxAttempts) throw err;
+      if (!(err instanceof StageParseError) || attempt + 1 >= maxAttempts) throw err;
       messages = [
         ...messages,
         { role: "assistant", content: raw },
         {
           role: "user",
-          content: `Schema repair required: ${err instanceof Error ? err.message : String(err)}. Return valid raw JSON only.`,
+          content: `Schema repair required: ${err.message}. Return valid raw JSON only.`,
         },
       ];
     }
@@ -519,8 +521,8 @@ async function runCriticStage(
         req.signal,
       );
     } catch (err) {
-      if (req.signal?.aborted) throw err;
-      const errMsg = err instanceof Error ? err.message : String(err);
+      if (req.signal?.aborted || !(err instanceof StageParseError)) throw err;
+      const errMsg = err.message;
       logger.warn(`[LinearDesk] Stage 2 Data Critic LLM fallback for ${req.ticker} (${req.cycle_id}): ${errMsg}`);
       const fallbackDropped = preCheck.mismatches.map((m) => ({ fact_id: m.fact_id, reason: m.detail }));
       return {
