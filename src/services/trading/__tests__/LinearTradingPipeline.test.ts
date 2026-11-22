@@ -1417,8 +1417,12 @@ describe("TradingDeskRoutes typed HTTP error mapping & ledger cap", () => {
           if (probePhase <= 2) {
             return new Response(JSON.stringify({}), { status: 200 });
           }
-          ctl.abort(new Error("caller aborted during discovery"));
+          setTimeout(() => ctl.abort(new Error("caller aborted during discovery")), 10);
           return await new Promise<Response>((_, reject) => {
+            if (init?.signal?.aborted) {
+              reject(init.signal.reason ?? new Error("aborted"));
+              return;
+            }
             init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")), { once: true });
           });
         }
