@@ -207,6 +207,7 @@ export interface LinearDeskDeps {
     temperature: number,
     maxTokens?: number,
     deadlineAtMs?: number,
+    signal?: AbortSignal,
   ) => Promise<LinearStageTarget>;
   executeTool?: (toolName: string, args: Record<string, unknown>, req: LinearDeskRequest) => Promise<unknown>;
 }
@@ -395,8 +396,9 @@ async function defaultAcquireTarget(
   temperature: number,
   maxTokens = 2560,
   deadlineAtMs?: number,
+  signal?: AbortSignal,
 ): Promise<LinearStageTarget> {
-  const acquired = await acquireLocalPoolTarget(preferredMember);
+  const acquired = await acquireLocalPoolTarget(preferredMember, signal, deadlineAtMs);
   const stateTarget: LinearStageTarget = {
     boxName: acquired.member.name,
     modelId: acquired.modelId,
@@ -409,6 +411,7 @@ async function defaultAcquireTarget(
     seed,
     temperature,
     maxTokens,
+    signal,
     deadlineAtMs,
     onFailover: (nextMember, nextModelId) => {
       stateTarget.boxName = nextMember.name;
@@ -600,7 +603,7 @@ async function runExtractorSeed(
   elapsedMs: number;
 }> {
   const t0 = Date.now();
-  const target = await acquire(seedCfg.preferredMember, seedCfg.seed, 0.2, 2560, deadlineAtMs);
+  const target = await acquire(seedCfg.preferredMember, seedCfg.seed, 0.2, 2560, deadlineAtMs, req.signal);
   try {
     const { data, usage } = await parseStageWithRepair(
       target,
@@ -664,7 +667,7 @@ async function runCriticStage(
   }
 
   const t0 = Date.now();
-  const target = await acquire(undefined, 303, 0.1, 3584, deadlineAtMs);
+  const target = await acquire(undefined, 303, 0.1, 3584, deadlineAtMs, effectiveSignal);
   try {
     let cleaned: z.infer<typeof CriticCleanupSchema>;
     let stageUsage = emptyUsage();
@@ -759,7 +762,7 @@ async function runTraderStage(
 ): Promise<{ decision: TraderDecision; modelId: string; usage: LinearDeskUsage; elapsedMs: number }> {
   const t0 = Date.now();
   const schema = buildTraderSchema(req.portfolio_context.held);
-  const target = await acquire(undefined, 404, 0.2, 1536, deadlineAtMs);
+  const target = await acquire(undefined, 404, 0.2, 1536, deadlineAtMs, req.signal);
   try {
     const { data, usage } = await parseStageWithRepair(
       target,

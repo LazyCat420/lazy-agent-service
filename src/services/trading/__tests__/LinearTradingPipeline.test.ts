@@ -1242,4 +1242,99 @@ describe("TradingDeskRoutes typed HTTP error mapping & ledger cap", () => {
       else process.env.RUNTIME_API_TOKEN = prevToken;
     }
   });
+
+  it("rolls back fallback inFlight slot on failed failover and aborts active requests at deadlineAtMs", async () => {
+    const {
+      acquireLocalPoolTarget,
+      createPoolCoreModel,
+      PipelineTimeoutError: PoolDeadlineErr,
+    } = await import("../LocalPoolClient.js");
+    const { poolStats } = await import("../../vllm/VllmPool.js");
+    const origFetch = globalThis.fetch;
+
+    let stage = 0;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/models")) {
+        return new Response(
+          JSON.stringify({ data: [{ id: "Qwen3.8-Linear-Test" }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/api/status")) {
+        return new Response(
+          JSON.stringify({ engine: { running: 0, waiting: 0 } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/v1/chat/completions")) {
+        stage += 1;
+        if (stage <= 2) {
+          return new Response("upstream failure", { status: 503 });
+        }
+        return await new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason ?? new DOMException("Timed out", "TimeoutError")),
+            { once: true },
+          );
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      // Case 1 (R1-F1): primary fails (503) and fallback also fails (503) — both inFlight counts return to 0.
+      const target1 = await acquireLocalPoolTarget("gold-spark");
+      const origBox = target1.member.name;
+      const model1 = createPoolCoreModel(target1, {
+        temperature: 0.1,
+        deadlineAtMs: Date.now() + 180_000,
+      });
+      let failedBoth = false;
+      try {
+        for await (const _chunk of model1({
+          messages: [{ role: "user", content: "hi" }],
+          tools: [],
+          toolChoice: "none",
+        })) {
+          // unreachable
+        }
+      } catch {
+        failedBoth = true;
+      } finally {
+        target1.release();
+      }
+      expect(failedBoth).toBe(true);
+      expect(target1.member.name).toBe(origBox);
+      expect(poolStats().members.every((m) => m.inFlight === 0)).toBe(true);
+
+      // Case 2 (R1-F2): hung completion is bounded by remaining deadlineAtMs (< 300s) and throws PipelineTimeoutError.
+      const target2 = await acquireLocalPoolTarget("gold-spark");
+      const model2 = createPoolCoreModel(target2, {
+        temperature: 0.1,
+        deadlineAtMs: Date.now() + 60,
+      });
+      const startedAt = Date.now();
+      let caught: unknown;
+      try {
+        for await (const _chunk of model2({
+          messages: [{ role: "user", content: "hi" }],
+          tools: [],
+          toolChoice: "none",
+        })) {
+          // unreachable
+        }
+      } catch (err) {
+        caught = err;
+      } finally {
+        target2.release();
+      }
+      expect(Date.now() - startedAt).toBeLessThan(2000);
+      expect(caught).toBeInstanceOf(PoolDeadlineErr);
+      expect(poolStats().members.every((m) => m.inFlight === 0)).toBe(true);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
 });

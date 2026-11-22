@@ -91,9 +91,13 @@ function safeParseArgs(raw: unknown): { args: Record<string, unknown>; parseErro
   }
 }
 
-export async function discoverPoolModel(member: PoolMember): Promise<string> {
+export async function discoverPoolModel(member: PoolMember, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("Aborted before /v1/models lookup");
+  }
+  const combined = signal ? AbortSignal.any([AbortSignal.timeout(3000), signal]) : AbortSignal.timeout(3000);
   const resp = await fetch(`${member.url.replace(/\/$/, "")}/v1/models`, {
-    signal: AbortSignal.timeout(3000),
+    signal: combined,
   });
   if (!resp.ok) {
     throw new Error(`GET ${member.url}/v1/models returned HTTP ${resp.status}`);
@@ -105,7 +109,16 @@ export async function discoverPoolModel(member: PoolMember): Promise<string> {
   return id;
 }
 
-export async function acquireLocalPoolTarget(preferredMember?: string): Promise<AcquiredPoolTarget> {
+export async function acquireLocalPoolTarget(
+  preferredMember?: string,
+  signal?: AbortSignal,
+  deadlineAtMs?: number,
+): Promise<AcquiredPoolTarget> {
+  if (signal?.aborted) {
+    throw normalizePoolFailure(signal.reason, undefined, signal, deadlineAtMs);
+  }
+  const budgetMs = resolveCallBudgetMs(deadlineAtMs);
+  const discoverySignal = combinedCallSignal(undefined, signal, Math.min(3000, budgetMs));
   const selection = await selectPoolMember({
     preferredMember,
     body: {},
@@ -114,10 +127,14 @@ export async function acquireLocalPoolTarget(preferredMember?: string): Promise<
   let heldName: string | null = selection.member.name;
   const discoveryErrors: string[] = [];
   try {
+    if (signal?.aborted) {
+      throw normalizePoolFailure(signal.reason, undefined, signal, deadlineAtMs);
+    }
+    resolveCallBudgetMs(deadlineAtMs);
     for (const candidate of selection.candidates) {
       try {
         const cachedModel = selection.modelsByMember?.[candidate.name];
-        const modelId = cachedModel || (await discoverPoolModel(candidate));
+        const modelId = cachedModel || (await discoverPoolModel(candidate, discoverySignal));
         if (candidate.name !== heldName) {
           acquirePoolInFlight(candidate.name);
           if (heldName) releasePoolInFlight(heldName);
@@ -219,12 +236,21 @@ function completionChunks(parsed: Record<string, any>, allowTools: boolean): Str
   return out;
 }
 
+function resolveCallBudgetMs(deadlineAtMs?: number): number {
+  if (deadlineAtMs === undefined) return 300_000;
+  const remaining = deadlineAtMs - Date.now();
+  if (remaining <= 0) {
+    throw new PipelineTimeoutError("Linear pipeline deadline exceeded");
+  }
+  return Math.min(300_000, remaining);
+}
+
 function combinedCallSignal(
   requestSignal: AbortSignal | undefined,
   paramSignal: AbortSignal | undefined,
-  timeoutMs = 300_000,
+  budgetMs = 300_000,
 ): AbortSignal {
-  const timeoutSig = AbortSignal.timeout(timeoutMs);
+  const timeoutSig = AbortSignal.timeout(Math.max(1, budgetMs));
   const signals = [requestSignal, paramSignal, timeoutSig].filter(Boolean) as AbortSignal[];
   return AbortSignal.any(signals);
 }
@@ -300,6 +326,7 @@ function normalizePoolFailure(
   err: unknown,
   requestSignal?: AbortSignal,
   paramSignal?: AbortSignal,
+  deadlineAtMs?: number,
 ): Error {
   if (requestSignal?.aborted || paramSignal?.aborted) {
     const reason = paramSignal?.reason ?? requestSignal?.reason;
@@ -308,6 +335,9 @@ function normalizePoolFailure(
     }
     if (reason instanceof Error) return reason;
     return new Error(String(reason || "Aborted"));
+  }
+  if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
+    return new PipelineTimeoutError(err instanceof Error && err.message ? err.message : "Linear pipeline deadline exceeded");
   }
   if (err instanceof PoolUnavailableError || err instanceof PipelineTimeoutError) return err;
   if (err instanceof QueueTimeoutError) return new PoolUnavailableError(err.message);
@@ -326,10 +356,11 @@ function normalizePoolFailure(
 async function resolveCandidateModel(
   candidate: PoolMember,
   modelsByMember?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<string> {
   const cached = modelsByMember?.[candidate.name];
   if (cached) return cached;
-  return await discoverPoolModel(candidate);
+  return await discoverPoolModel(candidate, signal);
 }
 
 /**
@@ -351,28 +382,26 @@ export function createPoolCoreModel(
 
       for (let idx = 0; idx < candidates.length; idx++) {
         const candidate = candidates[idx]!;
-        const callSignal = combinedCallSignal(request.signal, params.signal);
         let releaseSem: (() => void) | null = null;
+        let fallbackCharged = false;
+        let promoted = false;
         try {
-          let modelId = target.modelId;
-          if (idx > 0) {
-            modelId = await resolveCandidateModel(candidate, target.modelsByMember);
-            const prevName = target.member.name;
-            if (candidate.name !== prevName) {
-              acquirePoolInFlight(candidate.name);
-              releasePoolInFlight(prevName);
-              target.member = candidate;
-              target.modelId = modelId;
-              target.fallbackCandidates = (target.fallbackCandidates ?? []).filter(
-                (m) => m.name !== candidate.name && m.name !== prevName,
-              );
-              params.onFailover?.(candidate, modelId);
-            }
-          }
+          const budgetMs = resolveCallBudgetMs(params.deadlineAtMs);
+          const callSignal = combinedCallSignal(request.signal, params.signal, budgetMs);
+          const semWaitMs = Math.min(SHIM_QUEUE_TIMEOUT_MS, budgetMs);
+          const prevMember = target.member;
+          const modelId =
+            idx > 0 ? await resolveCandidateModel(candidate, target.modelsByMember, callSignal) : target.modelId;
 
           const url = `${candidate.url.replace(/\/$/, "")}/v1/chat/completions`;
           const sem = VllmShimService.semaphoreFor(candidate.name);
-          releaseSem = sem ? await acquireSemaphoreWithAbort(sem, SHIM_QUEUE_TIMEOUT_MS, callSignal) : null;
+          releaseSem = sem ? await acquireSemaphoreWithAbort(sem, semWaitMs, callSignal) : null;
+
+          if (idx > 0 && candidate.name !== prevMember.name) {
+            acquirePoolInFlight(candidate.name);
+            fallbackCharged = true;
+          }
+
           const res = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -384,6 +413,18 @@ export function createPoolCoreModel(
             throw new HttpStatusError(res.status, `vLLM ${candidate.name} HTTP ${res.status}: ${text.slice(0, 300)}`);
           }
           const rawJson = (await res.json()) as Record<string, any>;
+
+          if (idx > 0 && fallbackCharged && candidate.name !== prevMember.name) {
+            releasePoolInFlight(prevMember.name);
+            target.member = candidate;
+            target.modelId = modelId;
+            target.fallbackCandidates = (target.fallbackCandidates ?? []).filter(
+              (m) => m.name !== candidate.name && m.name !== prevMember.name,
+            );
+            promoted = true;
+            params.onFailover?.(candidate, modelId);
+          }
+
           const allowTools = request.tools.length > 0 && request.toolChoice !== "none";
           const parsed = allowTools ? VllmShimService.normalizeToolCalls(rawJson) : rawJson;
           for (const chunk of completionChunks(parsed, allowTools)) {
@@ -393,23 +434,37 @@ export function createPoolCoreModel(
           return;
         } catch (err) {
           lastErr = err;
+          if (fallbackCharged && !promoted) {
+            releasePoolInFlight(candidate.name);
+            fallbackCharged = false;
+          }
           const callerAborted = isCallerAborted(request.signal, params.signal);
-          const retryable = isRetryablePoolFailure(err, callerAborted);
-          if (retryable) {
+          const deadlineHit = params.deadlineAtMs !== undefined && Date.now() >= params.deadlineAtMs;
+          const retryable = isRetryablePoolFailure(err, callerAborted || deadlineHit);
+          if (retryable && !deadlineHit) {
             markPoolMemberDown(candidate.name);
           }
-          const canFailover = idx === 0 && candidates.length > 1 && retryable && hasFailoverBudget(params.deadlineAtMs);
+          const canFailover =
+            idx === 0 &&
+            candidates.length > 1 &&
+            retryable &&
+            !deadlineHit &&
+            hasFailoverBudget(params.deadlineAtMs);
           if (!canFailover) {
-            throw normalizePoolFailure(err, request.signal, params.signal);
+            throw normalizePoolFailure(err, request.signal, params.signal, params.deadlineAtMs);
           }
           logger.warn(
             `[LocalPoolClient] ${candidate.name} failed (${err instanceof Error ? err.message : String(err)}); failing over to ${candidates[idx + 1]!.name}`,
           );
         } finally {
           releaseSem?.();
+          if (fallbackCharged && !promoted) {
+            releasePoolInFlight(candidate.name);
+            fallbackCharged = false;
+          }
         }
       }
-      throw normalizePoolFailure(lastErr, request.signal, params.signal);
+      throw normalizePoolFailure(lastErr, request.signal, params.signal, params.deadlineAtMs);
     },
   });
 }
