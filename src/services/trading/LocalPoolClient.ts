@@ -145,6 +145,10 @@ export async function acquireLocalPoolTarget(
       try {
         const cachedModel = selection.modelsByMember?.[candidate.name];
         const modelId = cachedModel || (await discoverPoolModel(candidate, discoverySignal));
+        if (signal?.aborted) {
+          throw normalizePoolFailure(signal.reason, undefined, signal, deadlineAtMs);
+        }
+        resolveCallBudgetMs(deadlineAtMs);
         if (candidate.name !== heldName) {
           acquirePoolInFlight(candidate.name);
           if (heldName) releasePoolInFlight(heldName);
@@ -192,8 +196,15 @@ export async function acquireLocalPoolTarget(
             ownedSlots.clear();
           },
         };
+        if (signal?.aborted) {
+          throw normalizePoolFailure(signal.reason, undefined, signal, deadlineAtMs);
+        }
+        resolveCallBudgetMs(deadlineAtMs);
         return acquired;
       } catch (err) {
+        if (signal?.aborted || (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs)) {
+          throw err;
+        }
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn(`[LocalPoolClient] /v1/models discovery failed on ${candidate.name}: ${msg}`);
         discoveryErrors.push(`${candidate.name}: ${msg}`);

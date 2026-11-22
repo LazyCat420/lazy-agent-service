@@ -1402,6 +1402,31 @@ describe("TradingDeskRoutes typed HTTP error mapping & ledger cap", () => {
       expect(statsAfterA["dell2"]).toBe(0);
       targetB.release();
       expect(poolStats().members.every((m) => m.inFlight === 0)).toBe(true);
+
+      // Case 5 (R3-F1): caller cancellation / deadline during candidate #1 discovery rethrows without trying sibling
+      resetPoolState();
+      const ctl = new AbortController();
+      let probePhase = 0;
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/status")) {
+          return new Response(JSON.stringify({ engine: { running: 0, waiting: 0 } }), { status: 200 });
+        }
+        if (url.endsWith("/v1/models")) {
+          probePhase += 1;
+          if (probePhase <= 2) {
+            return new Response(JSON.stringify({}), { status: 200 });
+          }
+          ctl.abort(new Error("caller aborted during discovery"));
+          return await new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")), { once: true });
+          });
+        }
+        throw new Error(`Unexpected URL: ${url}`);
+      }) as typeof fetch;
+      await expect(acquireLocalPoolTarget("gold-spark", ctl.signal)).rejects.toThrow("caller aborted during discovery");
+      expect(probePhase).toBe(3);
+      expect(poolStats().members.every((m) => m.inFlight === 0)).toBe(true);
     } finally {
       globalThis.fetch = origFetch;
     }
