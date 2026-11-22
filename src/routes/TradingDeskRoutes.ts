@@ -3,7 +3,18 @@ import { z } from "zod";
 import { asyncHandler } from "@rodrigo-barraza/utilities-library/express";
 import logger from "../logger.js";
 import { runtimeAuth } from "../middleware/RuntimeAuth.ts";
-import { runLinearDeskPipeline, type LinearDeskDeps } from "../services/trading/LinearDeskPipeline.ts";
+import {
+  PipelineTimeoutError,
+  PoolUnavailableError,
+} from "../services/trading/LocalPoolClient.ts";
+import {
+  runLinearDeskPipeline,
+  StageParseError,
+  type LinearDeskDeps,
+} from "../services/trading/LinearDeskPipeline.ts";
+import { QueueTimeoutError } from "../services/vllm/VllmShimService.ts";
+
+const MAX_LEDGER_ENTRIES = 128;
 
 const LedgerEntrySchema = z.object({
   fact_id: z.string().min(1),
@@ -38,7 +49,16 @@ const LinearDeskRequestSchema = z
     followup_tools: z.array(z.string()).optional(),
   })
   .superRefine((data, ctx) => {
-    for (const [key, entry] of Object.entries(data.ledger_entries)) {
+    const entryList = Object.entries(data.ledger_entries);
+    if (entryList.length > MAX_LEDGER_ENTRIES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ledger_entries"],
+        message: `ledger_entries must have at most ${MAX_LEDGER_ENTRIES} entries`,
+      });
+      return;
+    }
+    for (const [key, entry] of entryList) {
       if (entry.fact_id !== key) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -80,10 +100,28 @@ export function createTradingDeskRouter(deps: LinearDeskDeps = {}): Router {
         );
         res.json(result);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         logger.error(
-          `[TradingDeskRoutes] linear-desk failed ticker=${parsed.data.ticker} cycle=${parsed.data.cycle_id} elapsedMs=${Date.now() - startedAt} error=${err instanceof Error ? err.message : String(err)}`,
+          `[TradingDeskRoutes] linear-desk failed ticker=${parsed.data.ticker} cycle=${parsed.data.cycle_id} elapsedMs=${Date.now() - startedAt} error=${message}`,
         );
-        throw err;
+        if (res.headersSent) return;
+        if (controller.signal.aborted) {
+          res.status(499).json({ error: { code: "CLIENT_ABORTED", message: "Client closed connection" } });
+          return;
+        }
+        if (err instanceof StageParseError) {
+          res.status(422).json({ error: { code: err.code, message } });
+          return;
+        }
+        if (err instanceof PoolUnavailableError || err instanceof QueueTimeoutError) {
+          res.status(503).json({ error: { code: "POOL_UNAVAILABLE", message } });
+          return;
+        }
+        if (err instanceof PipelineTimeoutError || (err instanceof DOMException && err.name === "TimeoutError")) {
+          res.status(504).json({ error: { code: "PIPELINE_TIMEOUT", message } });
+          return;
+        }
+        res.status(500).json({ error: { code: "LINEAR_DESK_ERROR", message } });
       }
     }),
   );

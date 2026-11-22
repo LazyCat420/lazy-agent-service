@@ -330,13 +330,18 @@ import {
   poolStats,
   resetPoolState,
 } from "../../vllm/VllmPool.ts";
-import { acquireLocalPoolTarget, releasePoolTarget } from "../LocalPoolClient.ts";
+import {
+  acquireLocalPoolTarget,
+  createPoolCoreModel,
+  PipelineTimeoutError,
+  PoolUnavailableError,
+  releasePoolTarget,
+} from "../LocalPoolClient.ts";
 
 describe("LocalPoolClient discovery-fallback in-flight accounting", () => {
   it("transfers in-flight slot to the surviving candidate when preferred discovery fails", async () => {
     resetPoolState();
     clearPoolCaches();
-    let callIdx = 0;
     const origFetch = globalThis.fetch;
     globalThis.fetch = (async (input: string | URL) => {
       const url = String(input);
@@ -344,9 +349,8 @@ describe("LocalPoolClient discovery-fallback in-flight accounting", () => {
         return new Response("vllm:num_requests_running 0\nvllm:num_requests_waiting 0\n", { status: 200 });
       }
       if (url.includes("10.0.0.141") && url.endsWith("/v1/models")) {
-        callIdx += 1;
-        // Succeed during selectPoolMember probe, then fail in discoverPoolModel so it falls back to dell2
-        if (callIdx >= 2) return new Response("err", { status: 502 });
+        // Strike 1 in selectPoolMember leaves gold-spark eligible with model=null, then discoverPoolModel fails -> dell2
+        return new Response("err", { status: 502 });
       }
       return new Response(JSON.stringify({ data: [{ id: "dynamic-model" }] }), {
         status: 200,
@@ -364,6 +368,37 @@ describe("LocalPoolClient discovery-fallback in-flight accounting", () => {
       releasePoolTarget(acquired.member.name);
       const statsAfterRelease = poolStats().members;
       expect(statsAfterRelease.find((m) => m.name === "dell2")?.inFlight).toBe(0);
+    } finally {
+      globalThis.fetch = origFetch;
+      resetPoolState();
+    }
+  });
+
+  it("reuses cached /v1/models from VllmPool probe instead of issuing duplicate /v1/models requests", async () => {
+    resetPoolState();
+    clearPoolCaches();
+    let goldModelsCalls = 0;
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/metrics")) {
+        return new Response("vllm:num_requests_running 0\nvllm:num_requests_waiting 0\n", { status: 200 });
+      }
+      if (url.includes("10.0.0.141") && url.endsWith("/v1/models")) {
+        goldModelsCalls += 1;
+      }
+      return new Response(JSON.stringify({ data: [{ id: "dynamic-model" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const acquired = await acquireLocalPoolTarget("gold-spark");
+      expect(acquired.member.name).toBe("gold-spark");
+      expect(acquired.modelId).toBe("dynamic-model");
+      expect(goldModelsCalls).toBe(1);
+      releasePoolTarget(acquired.member.name);
     } finally {
       globalThis.fetch = origFetch;
       resetPoolState();
@@ -983,5 +1018,225 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
 
     const withoutGap = await runWithLedger(completeSlots);
     expect(withoutGap[0]).toEqual([]);
+  });
+
+  it("normalizes entry_mode + dynamic_trigger and populates stage_timings_ms + usage", async () => {
+    const req: LinearDeskRequest = {
+      ticker: "NVDA",
+      cycle_id: "cycle-v3-trigger-norm",
+      ledger_entries: LEDGER,
+      portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+    };
+
+    const runWithDecision = async (decisionPayload: Record<string, unknown>) => {
+      const deps: LinearDeskDeps = {
+        acquireTarget: async (preferredMember) => ({
+          boxName: preferredMember || "gold-spark",
+          modelId: "dyn-model",
+          sameBoxFallback: false,
+          release: () => {},
+          model: (mReq) => ({
+            async *[Symbol.asyncIterator]() {
+              const sys = String(mReq.messages[0]?.content || "");
+              if (sys.includes("Stage 1")) {
+                yield JSON.stringify({ summary: "s1", facts: [makeFact()], catalysts: [], risks: [], data_gaps: [] });
+              } else {
+                yield JSON.stringify(decisionPayload);
+              }
+              yield { type: "usage", usage: { inputTokens: 100, outputTokens: 25, totalTokens: 125 } };
+            },
+          }),
+        }),
+      };
+      return runLinearDeskPipeline(req, deps);
+    };
+
+    const conditionalBuy = await runWithDecision({
+      action: "BUY",
+      entry_mode: "enter_on_condition",
+      entry_condition: "Wait for dip below 180",
+      dynamic_trigger: { type: "price_below", value: 180 },
+      position_size_pct: 10,
+      stop_loss: 170,
+      take_profit: 210,
+      cited_fact_ids: ["fct_price_nvda"],
+      decision_thesis: "Buy pullback to $180 from $185.50.",
+    });
+    expect(conditionalBuy.decision.entry_mode).toBe("enter_on_condition");
+    expect(conditionalBuy.decision.dynamic_trigger).toEqual({ type: "price_below", value: 180 });
+    expect(conditionalBuy.stage_timings_ms).toBeDefined();
+    expect(conditionalBuy.stage_timings_ms!.stage2_ms).toBe(0);
+    expect(conditionalBuy.usage).toEqual({ prompt_tokens: 300, completion_tokens: 75, total_tokens: 375 });
+
+    const missingTriggerBuy = await runWithDecision({
+      action: "BUY",
+      entry_mode: "enter_on_condition",
+      entry_condition: "Wait for pullback",
+      dynamic_trigger: null,
+      position_size_pct: 10,
+      stop_loss: 170,
+      take_profit: 210,
+      cited_fact_ids: ["fct_price_nvda"],
+      decision_thesis: "Buy pullback without structured trigger.",
+    });
+    expect(missingTriggerBuy.decision.entry_mode).toBe("watch_only");
+    expect(missingTriggerBuy.decision.dynamic_trigger).toBeNull();
+  });
+
+  it("performs 1-shot cross-box failover in createPoolCoreModel without CoreLoop 5x retry storm", async () => {
+    resetPoolState();
+    clearPoolCaches();
+    let vllmCalls = 0;
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/metrics")) {
+        return new Response("vllm:num_requests_running 0\nvllm:num_requests_waiting 0\n", { status: 200 });
+      }
+      if (url.endsWith("/v1/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "dyn-model" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      vllmCalls += 1;
+      if (url.includes("10.0.0.141")) {
+        return new Response("overload", { status: 503 });
+      }
+      const payload = {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ summary: "s1", facts: [makeFact()], catalysts: [], risks: [], data_gaps: [] }),
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 50, completion_tokens: 20, total_tokens: 70 },
+      };
+      return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    try {
+      const acquired = await acquireLocalPoolTarget("gold-spark");
+      let currentBox = acquired.member.name;
+      let fellBack = false;
+      const model = createPoolCoreModel(acquired, {
+        preferredMember: "gold-spark",
+        seed: 101,
+        temperature: 0.2,
+        onFailover: (nextMember) => {
+          currentBox = nextMember.name;
+          fellBack = true;
+        },
+      });
+      const chunks: string[] = [];
+      for await (const ch of model({ messages: [{ role: "user", content: "hi" }], tools: [], toolChoice: "auto", signal: new AbortController().signal, finalPass: false })) {
+        if (typeof ch === "string") {
+          chunks.push(ch);
+        }
+      }
+      releasePoolTarget(currentBox);
+      expect(vllmCalls).toBe(2);
+      expect(fellBack).toBe(true);
+      expect(currentBox).toBe("dell2");
+      expect(chunks.join("")).toContain("fct_price_nvda");
+    } finally {
+      globalThis.fetch = origFetch;
+      resetPoolState();
+    }
+  });
+});
+
+describe("TradingDeskRoutes typed HTTP error mapping & ledger cap", () => {
+  it("maps >128 ledger_entries -> 400, StageParseError -> 422, PoolUnavailableError -> 503, PipelineTimeoutError -> 504", async () => {
+    const prevToken = process.env.RUNTIME_API_TOKEN;
+    const TOKEN = "linear-error-map-token";
+    process.env.RUNTIME_API_TOKEN = TOKEN;
+
+    let mode: "parse" | "pool" | "timeout" = "parse";
+    const app = express();
+    app.use(express.json({ limit: "2mb" }));
+    app.use(
+      "/v1/trading",
+      createTradingDeskRouter({
+        acquireTarget: async () => {
+          if (mode === "pool") throw new PoolUnavailableError("All local vLLM boxes down");
+          if (mode === "timeout") throw new PipelineTimeoutError("Pipeline budget exceeded");
+          return {
+            boxName: "gold-spark",
+            modelId: "dyn",
+            sameBoxFallback: false,
+            release: () => {},
+            model: () => ({
+              async *[Symbol.asyncIterator]() {
+                if (mode === "parse") {
+                  yield "not-json";
+                }
+              },
+            }),
+          };
+        },
+      }),
+    );
+
+    const server = await new Promise<http.Server>((resolve) => {
+      const s = app.listen(0, "127.0.0.1", () => resolve(s));
+    });
+    const baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/trading`;
+
+    try {
+      const tooMany: Record<string, LedgerEntry> = {};
+      for (let i = 0; i < 129; i += 1) {
+        const fid = `fct_n_${i}`;
+        tooMany[fid] = { fact_id: fid, tool_name: "get_market_data", ticker: "NVDA", summary: "ok" };
+      }
+      const res400 = await fetch(`${baseUrl}/linear-desk`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-runtime-token": TOKEN },
+        body: JSON.stringify({
+          ticker: "NVDA",
+          cycle_id: "cycle-v3-400",
+          ledger_entries: tooMany,
+          portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+        }),
+      });
+      expect(res400.status).toBe(400);
+
+      const basePayload = {
+        ticker: "NVDA",
+        cycle_id: "cycle-v3-err",
+        ledger_entries: LEDGER,
+        portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+      };
+
+      mode = "parse";
+      const res422 = await fetch(`${baseUrl}/linear-desk`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-runtime-token": TOKEN },
+        body: JSON.stringify(basePayload),
+      });
+      expect(res422.status).toBe(422);
+
+      mode = "pool";
+      const res503 = await fetch(`${baseUrl}/linear-desk`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-runtime-token": TOKEN },
+        body: JSON.stringify(basePayload),
+      });
+      expect(res503.status).toBe(503);
+
+      mode = "timeout";
+      const res504 = await fetch(`${baseUrl}/linear-desk`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-runtime-token": TOKEN },
+        body: JSON.stringify(basePayload),
+      });
+      expect(res504.status).toBe(504);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (prevToken === undefined) delete process.env.RUNTIME_API_TOKEN;
+      else process.env.RUNTIME_API_TOKEN = prevToken;
+    }
   });
 });

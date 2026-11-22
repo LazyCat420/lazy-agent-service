@@ -166,6 +166,7 @@ const UPSTREAM_HEADERS_TIMEOUT_MS = 900_000;
  */
 const DEFAULT_MAX_CONCURRENT: Record<string, number> = {
   "gold-spark": 4,
+  dell2: 4,
 };
 
 /**

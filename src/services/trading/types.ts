@@ -93,15 +93,49 @@ export interface MacroSnapshot {
 
 export type TraderAction = "BUY" | "HOLD" | "AVOID" | "SELL";
 
+export type DynamicTriggerType =
+  | "price_below"
+  | "price_above"
+  | "rsi_14_oversold"
+  | "rsi_14_overbought"
+  | "sma_20_drop"
+  | "sma_20_rise"
+  | "sma_50_drop"
+  | "sma_50_rise"
+  | "sma_200_drop"
+  | "sma_200_rise"
+  | "trailing_drop";
+
+export interface DynamicTriggerSpec {
+  type: DynamicTriggerType;
+  value: number;
+}
+
 export interface TraderDecision {
   action: TraderAction;
-  entry_mode: "enter_now" | "enter_on_condition" | "none";
+  entry_mode: "enter_now" | "enter_on_condition" | "watch_only";
   entry_condition: string | null;
+  dynamic_trigger?: DynamicTriggerSpec | null;
   position_size_pct: number;
   stop_loss: number | null;
   take_profit: number | null;
   cited_fact_ids: string[];
   decision_thesis: string;
+}
+
+export interface LinearDeskStageTimings {
+  stage1_a_ms: number;
+  stage1_b_ms: number;
+  stage1_wall_ms: number;
+  stage2_ms: number;
+  stage3_ms: number;
+  total_ms: number;
+}
+
+export interface LinearDeskUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
 }
 
 export interface LinearDeskRequest {
@@ -122,4 +156,6 @@ export interface LinearDeskResponse {
   aa_noise_metrics: AaNoiseMetrics;
   critic_report: DataCriticReport;
   decision: TraderDecision;
+  stage_timings_ms?: LinearDeskStageTimings;
+  usage?: LinearDeskUsage;
 }

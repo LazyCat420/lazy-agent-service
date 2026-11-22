@@ -103,8 +103,9 @@ describe("VllmShimService.limitFor", () => {
     VllmShimService.resetSemaphores();
   });
 
-  it("defaults gold-spark to 4 — the box runs 6 and is shared with prism", () => {
+  it("defaults gold-spark and dell2 to 4", () => {
     expect(VllmShimService.limitFor("gold-spark")).toBe(4);
+    expect(VllmShimService.limitFor("dell2")).toBe(4);
   });
 
   it("leaves other upstreams ungated by default", () => {

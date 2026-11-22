@@ -207,6 +207,7 @@ async function* runModelTurnWithRetries(
     finalizeReason?: CoreFinalizeReason;
     cutText?: string;
     cancelled?: boolean;
+    providerError?: { code: string; message: string };
   }
 > {
   let modelCallsDelta = 0;
@@ -270,7 +271,13 @@ async function* runModelTurnWithRetries(
       }
       if (attempt === providerRetries) {
         yield { type: "warning", code: failure.code, message: failure.message };
-        return { turn, modelCallsDelta, providerRetriesDelta: Math.max(0, modelCallsDelta - 1), finalizeReason: "PROVIDER_ERROR" };
+        return {
+          turn,
+          modelCallsDelta,
+          providerRetriesDelta: Math.max(0, modelCallsDelta - 1),
+          finalizeReason: "PROVIDER_ERROR",
+          providerError: failure,
+        };
       }
       yield { type: "warning", code: "PROVIDER_RETRY", message: failure.message };
     }
@@ -826,6 +833,7 @@ export async function* runCoreLoop(
   let finalizeReason: CoreFinalizeReason | undefined;
   let cutText = "";
   let lastAssistantText = "";
+  let lastProviderError: { code: string; message: string } | undefined;
   const usableToolResults: Array<{ name: string; content: string }> = [];
 
   try {
@@ -858,6 +866,7 @@ export async function* runCoreLoop(
         return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls, providerRetryCalls);
       }
       if (turnOutcome.cutText !== undefined) cutText = turnOutcome.cutText;
+      if (turnOutcome.providerError !== undefined) lastProviderError = turnOutcome.providerError;
       if (turnOutcome.finalizeReason !== undefined) {
         finalizeReason = turnOutcome.finalizeReason;
         continue;
@@ -945,6 +954,20 @@ export async function* runCoreLoop(
       if (callHistory.finalizeNow && callHistory.finalizeReason) {
         finalizeReason = callHistory.finalizeReason;
       }
+    }
+
+    if (options.disableFinalPassOnProviderError && finalizeReason === "PROVIDER_ERROR") {
+      return {
+        status: "failed",
+        text: lastAssistantText,
+        messages,
+        modelCalls,
+        toolCalls,
+        providerRetries: providerRetryCalls,
+        finalizeReason,
+        answerSource: "model",
+        error: lastProviderError ?? { code: "PROVIDER_ERROR", message: "Provider call failed" },
+      };
     }
 
     return yield* runFinalAnswerPass(

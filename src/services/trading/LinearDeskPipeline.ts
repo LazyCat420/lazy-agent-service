@@ -10,6 +10,8 @@ import { verifyFactsAgainstLedger } from "./FactLedgerVerifier.ts";
 import {
   acquireLocalPoolTarget,
   createPoolCoreModel,
+  PipelineTimeoutError,
+  PoolUnavailableError,
   releasePoolTarget,
 } from "./LocalPoolClient.ts";
 import type {
@@ -18,6 +20,7 @@ import type {
   LedgerEntry,
   LinearDeskRequest,
   LinearDeskResponse,
+  LinearDeskUsage,
   ResearchExtractionOutput,
   TraderDecision,
 } from "./types.ts";
@@ -124,17 +127,70 @@ const CriticCleanupSchema = z.object({
   notes: z.array(z.string()).default([]),
 });
 
+const DynamicTriggerSchema = z.object({
+  type: z.enum([
+    "price_below",
+    "price_above",
+    "rsi_14_oversold",
+    "rsi_14_overbought",
+    "sma_20_drop",
+    "sma_20_rise",
+    "sma_50_drop",
+    "sma_50_rise",
+    "sma_200_drop",
+    "sma_200_rise",
+    "trailing_drop",
+  ]),
+  value: z.number().finite().positive(),
+});
+
+function normalizeTraderDecision(raw: {
+  action: TraderDecision["action"];
+  entry_mode?: "enter_now" | "enter_on_condition" | "watch_only";
+  entry_condition: string | null;
+  dynamic_trigger: TraderDecision["dynamic_trigger"];
+  position_size_pct: number;
+  stop_loss: number | null;
+  take_profit: number | null;
+  cited_fact_ids: string[];
+  decision_thesis: string;
+}): TraderDecision {
+  if (raw.action === "SELL") {
+    return { ...raw, entry_mode: "enter_now", dynamic_trigger: null };
+  }
+  if (raw.action === "HOLD" || raw.action === "AVOID") {
+    return { ...raw, entry_mode: "watch_only", dynamic_trigger: null };
+  }
+  if (raw.entry_mode === "enter_on_condition" && raw.dynamic_trigger) {
+    return { ...raw, entry_mode: "enter_on_condition", dynamic_trigger: raw.dynamic_trigger };
+  }
+  if (raw.entry_mode === "watch_only" || raw.entry_mode === "enter_on_condition") {
+    return { ...raw, entry_mode: "watch_only", dynamic_trigger: null };
+  }
+  return {
+    ...raw,
+    entry_mode: raw.position_size_pct > 0 ? "enter_now" : "watch_only",
+    dynamic_trigger: null,
+  };
+}
+
 function buildTraderSchema(held: boolean) {
-  return z.object({
-    action: held ? z.enum(["BUY", "HOLD", "SELL"]) : z.enum(["BUY", "HOLD", "AVOID"]),
-    entry_mode: z.enum(["enter_now", "enter_on_condition", "none"]).default("none"),
-    entry_condition: z.string().nullable().default(null),
-    position_size_pct: z.number().min(0).max(100).default(0),
-    stop_loss: z.number().finite().nullable().default(null),
-    take_profit: z.number().finite().nullable().default(null),
-    cited_fact_ids: z.array(z.string()).default([]),
-    decision_thesis: z.string().min(1),
-  });
+  return z
+    .object({
+      action: held ? z.enum(["BUY", "HOLD", "SELL"]) : z.enum(["BUY", "HOLD", "AVOID"]),
+      entry_mode: z.preprocess(
+        (v) => (v === "none" || v === "" || v == null ? undefined : String(v).trim()),
+        z.enum(["enter_now", "enter_on_condition", "watch_only"]).optional(),
+      ),
+      entry_condition: z.string().nullable().default(null),
+      dynamic_trigger: DynamicTriggerSchema.nullable().default(null),
+      position_size_pct: z.number().min(0).max(100).default(0),
+      stop_loss: z.number().finite().nullable().default(null),
+      take_profit: z.number().finite().nullable().default(null),
+      cited_fact_ids: z.array(z.string()).default([]),
+      decision_thesis: z.string().min(1),
+    })
+    .transform((raw) => normalizeTraderDecision(raw));
 }
 
 export interface LinearStageTarget {
@@ -151,6 +207,7 @@ export interface LinearDeskDeps {
     seed: number,
     temperature: number,
     maxTokens?: number,
+    deadlineAtMs?: number,
   ) => Promise<LinearStageTarget>;
   executeTool?: (toolName: string, args: Record<string, unknown>, req: LinearDeskRequest) => Promise<unknown>;
 }
@@ -199,7 +256,10 @@ function stripFenceAndThink(raw: string): string {
   return candidate;
 }
 
-class StageParseError extends Error {}
+export class StageParseError extends Error {
+  readonly statusCode = 422;
+  readonly code = "STAGE_PARSE_ERROR";
+}
 
 function parseJsonStrict<T>(raw: string, schema: z.ZodType<T>, stage: string): T {
   const jsonText = stripFenceAndThink(raw);
@@ -228,7 +288,7 @@ function buildCoreTools(
   deps: LinearDeskDeps,
   budget: { calls: number; maxCalls: number },
 ): CoreTool[] {
-  const names = req.followup_tools?.length ? req.followup_tools : ["read_ledger_entry", "lazy_web_search"];
+  const names = Array.isArray(req.followup_tools) ? req.followup_tools : ["read_ledger_entry", "lazy_web_search"];
   return names
     .filter((name) => Boolean(DEFAULT_FOLLOWUP_TOOLS[name]) && LINEAR_PROFILE.allowedTools.has(name))
     .map((name) => ({
@@ -248,17 +308,42 @@ function buildCoreTools(
     }));
 }
 
+interface CoreStageRunResult {
+  text: string;
+  usage: LinearDeskUsage;
+  elapsedMs: number;
+}
+
+function emptyUsage(): LinearDeskUsage {
+  return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+}
+
+function addUsage(acc: LinearDeskUsage, delta: LinearDeskUsage): LinearDeskUsage {
+  return {
+    prompt_tokens: acc.prompt_tokens + delta.prompt_tokens,
+    completion_tokens: acc.completion_tokens + delta.completion_tokens,
+    total_tokens: acc.total_tokens + delta.total_tokens,
+  };
+}
+
+function mapStageFailure(error?: { code: string; message: string }): Error {
+  if (error?.code === "POOL_UNAVAILABLE") return new PoolUnavailableError(error.message);
+  if (error?.code === "PIPELINE_TIMEOUT") return new PipelineTimeoutError(error.message);
+  return new Error(error?.message || "CoreLoop stage failed");
+}
+
 async function runCoreStage(
   target: LinearStageTarget,
   messages: ChatMessage[],
   tools: CoreTool[],
   maxSteps: number,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<CoreStageRunResult> {
+  const t0 = Date.now();
   const controller = new AbortController();
   if (signal) {
-    if (signal.aborted) controller.abort();
-    else signal.addEventListener("abort", () => controller.abort(), { once: true });
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
   }
   const gen = runCoreLoop({
     model: target.model,
@@ -267,21 +352,41 @@ async function runCoreStage(
     signal: controller.signal,
     maxSteps,
     tradingRun: true,
+    providerRetries: 0,
+    disableFinalPassOnProviderError: true,
   });
-  let finalText = "";
+  let promptTokens = 0;
+  let completionTokens = 0;
   for (;;) {
     const step = await gen.next();
-    if (step.done) {
-      finalText = step.value.text || "";
-      if (signal?.aborted || controller.signal.aborted || step.value.status === "cancelled") {
-        const reason = signal?.reason ?? controller.signal.reason;
-        throw reason instanceof Error ? reason : new Error(step.value.error?.message || "Stage aborted");
+    if (!step.done) {
+      const ev = step.value;
+      if (ev && "type" in ev && ev.type === "usage") {
+        promptTokens += Number(ev.usage.inputTokens ?? ev.usage.prompt_tokens ?? 0);
+        completionTokens += Number(ev.usage.outputTokens ?? ev.usage.completion_tokens ?? 0);
       }
-      if (step.value.status !== "completed" && !finalText) {
-        throw new Error(step.value.error?.message || `CoreLoop ended with status ${step.value.status}`);
-      }
-      return finalText;
+      continue;
     }
+    const finalText = step.value.text || "";
+    if (signal?.aborted || controller.signal.aborted || step.value.status === "cancelled") {
+      const reason = signal?.reason ?? controller.signal.reason;
+      if (reason instanceof DOMException && reason.name === "TimeoutError") {
+        throw new PipelineTimeoutError(reason.message || "Linear stage timed out");
+      }
+      throw reason instanceof Error ? reason : new Error(step.value.error?.message || "Stage aborted");
+    }
+    if (step.value.status !== "completed" && !finalText) {
+      throw mapStageFailure(step.value.error);
+    }
+    return {
+      text: finalText,
+      usage: {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: promptTokens + completionTokens,
+      },
+      elapsedMs: Math.max(0, Date.now() - t0),
+    };
   }
 }
 
@@ -290,15 +395,29 @@ async function defaultAcquireTarget(
   seed: number,
   temperature: number,
   maxTokens = 2560,
+  deadlineAtMs?: number,
 ): Promise<LinearStageTarget> {
   const acquired = await acquireLocalPoolTarget(preferredMember);
-  return {
+  const stateTarget: LinearStageTarget = {
     boxName: acquired.member.name,
     modelId: acquired.modelId,
     sameBoxFallback: acquired.sameBoxFallback,
-    model: createPoolCoreModel(acquired, { preferredMember, seed, temperature, maxTokens }),
+    model: undefined as unknown as CoreModel,
     release: () => releasePoolTarget(acquired.member.name),
   };
+  stateTarget.model = createPoolCoreModel(acquired, {
+    preferredMember,
+    seed,
+    temperature,
+    maxTokens,
+    deadlineAtMs,
+    onFailover: (nextMember, nextModelId) => {
+      stateTarget.boxName = nextMember.name;
+      stateTarget.modelId = nextModelId;
+      stateTarget.sameBoxFallback = Boolean(preferredMember) && nextMember.name !== preferredMember;
+    },
+  });
+  return stateTarget;
 }
 
 function compactPromptRaw(raw: unknown, hasSummary: boolean): unknown {
@@ -363,7 +482,7 @@ function criticMessages(
     {
       role: "system",
       content:
-        "You are Stage 2 (Data Critic Auditor). Your ONLY job is to verify and clean data before decision-making — NEVER emit a trade decision or opinion. Inspect every fact (especially `uncorroborated: true` claims and deterministic `mismatches`) against `ledger_entries`. Fix wrong numbers/tickers when grounded in `ledger_entries` or drop ungrounded claims into `dropped_facts`. Only include repaired or audited facts in `facts` (already-verified corroborated facts are preserved automatically unless listed in `dropped_facts`). Keep `summary`, each fact `summary`, `dropped_facts[].reason`, and `notes` concise (<= 80 chars, no unescaped double-quotes), with at most 3 `notes`. Return raw JSON matching {summary, facts:[...], catalysts:[], risks:[], data_gaps:[], dropped_facts:[{fact_id,reason}], notes:[]}.",
+        "You are Stage 2 (Data Critic Auditor). Your ONLY job is to verify and clean data before decision-making — NEVER emit a trade decision or opinion. Inspect every fact (especially `uncorroborated: true` claims and deterministic `mismatches`) against `ledger_entries`. Fix wrong numbers/tickers when grounded in `ledger_entries` or drop ungrounded claims into `dropped_facts`. Only include repaired or audited facts in `facts` (already-verified corroborated facts are preserved automatically unless listed in `dropped_facts`). Keep each fact `summary`, `dropped_facts[].reason`, and `notes` concise (<= 80 chars, no unescaped double-quotes), with at most 3 `notes`. Return raw JSON matching {facts:[...], catalysts:[], risks:[], data_gaps:[], dropped_facts:[{fact_id,reason}], notes:[]}.",
     },
     {
       role: "user",
@@ -390,7 +509,7 @@ function traderMessages(
     {
       role: "system",
       content:
-        `You are Stage 3 (Final Trader Agent) — the sole decision maker. Analyze the verified dossier alongside portfolio_context and macro_snapshot. ${actionRule} Normal digits and percentages (e.g. '20%', '1.5x', '$185') ARE encouraged in decision_thesis. Cite supporting fct_... IDs in cited_fact_ids. Return raw JSON: {action:"${allowedActions}", entry_mode:"enter_now|enter_on_condition|none", entry_condition:string|null, position_size_pct:number, stop_loss:number|null, take_profit:number|null, cited_fact_ids:string[], decision_thesis:string}.`,
+        `You are Stage 3 (Final Trader Agent) — the sole decision maker. Analyze the verified dossier alongside portfolio_context and macro_snapshot. ${actionRule} Normal digits and percentages (e.g. '20%', '1.5x', '$185') ARE encouraged in decision_thesis. Cite supporting fct_... IDs in cited_fact_ids. Use entry_mode="enter_now" to act immediately, "watch_only" for HOLD/AVOID or passive monitoring, or "enter_on_condition" ONLY on BUY accompanied by a structured dynamic_trigger ({type:"price_below|price_above|rsi_14_oversold|rsi_14_overbought|sma_20_drop|sma_20_rise|sma_50_drop|sma_50_rise|sma_200_drop|sma_200_rise|trailing_drop", value:number}). Return raw JSON: {action:"${allowedActions}", entry_mode:"enter_now|enter_on_condition|watch_only", entry_condition:string|null, dynamic_trigger:{type:string,value:number}|null, position_size_pct:number, stop_loss:number|null, take_profit:number|null, cited_fact_ids:string[], decision_thesis:string}.`,
     },
     {
       role: "user",
@@ -431,18 +550,26 @@ async function parseStageWithRepair<T>(
   schema: z.ZodType<T>,
   label: string,
   signal?: AbortSignal,
-): Promise<T> {
+): Promise<{ data: T; usage: LinearDeskUsage; elapsedMs: number }> {
   let messages = initialMessages;
+  let totalUsage = emptyUsage();
+  let totalElapsedMs = 0;
   const maxAttempts = Math.max(1, 1 + LINEAR_PROFILE.maxRetries);
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const raw = await runCoreStage(target, messages, tools, maxSteps, signal);
+    const res = await runCoreStage(target, messages, tools, maxSteps, signal);
+    totalUsage = addUsage(totalUsage, res.usage);
+    totalElapsedMs += res.elapsedMs;
     try {
-      return parseJsonStrict(raw, schema, label);
+      return {
+        data: parseJsonStrict(res.text, schema, label),
+        usage: totalUsage,
+        elapsedMs: totalElapsedMs,
+      };
     } catch (err) {
       if (signal?.aborted || !(err instanceof StageParseError) || attempt + 1 >= maxAttempts) throw err;
       messages = [
         ...messages,
-        { role: "assistant", content: raw },
+        { role: "assistant", content: res.text },
         {
           role: "user",
           content: `Schema repair required: ${err.message}. Return valid raw JSON only.`,
@@ -464,10 +591,19 @@ async function runExtractorSeed(
   req: LinearDeskRequest,
   seedCfg: ExtractorSeedConfig,
   acquire: NonNullable<LinearDeskDeps["acquireTarget"]>,
-): Promise<{ boxName: string; modelId: string; sameBoxFallback: boolean; output: ResearchExtractionOutput }> {
-  const target = await acquire(seedCfg.preferredMember, seedCfg.seed, 0.2, 2560);
+  deadlineAtMs?: number,
+): Promise<{
+  boxName: string;
+  modelId: string;
+  sameBoxFallback: boolean;
+  output: ResearchExtractionOutput;
+  usage: LinearDeskUsage;
+  elapsedMs: number;
+}> {
+  const t0 = Date.now();
+  const target = await acquire(seedCfg.preferredMember, seedCfg.seed, 0.2, 2560, deadlineAtMs);
   try {
-    const output = await parseStageWithRepair(
+    const { data, usage } = await parseStageWithRepair(
       target,
       extractorMessages(req),
       seedCfg.tools,
@@ -476,7 +612,14 @@ async function runExtractorSeed(
       `Stage 1 Extractor (${seedCfg.preferredMember})`,
       req.signal,
     );
-    return { boxName: target.boxName, modelId: target.modelId, sameBoxFallback: target.sameBoxFallback, output };
+    return {
+      boxName: target.boxName,
+      modelId: target.modelId,
+      sameBoxFallback: target.sameBoxFallback,
+      output: data,
+      usage,
+      elapsedMs: Math.max(0, Date.now() - t0),
+    };
   } finally {
     target.release();
   }
@@ -487,7 +630,13 @@ async function runCriticStage(
   reconciled: ReturnType<typeof reconcileAaExtractions>,
   acquire: NonNullable<LinearDeskDeps["acquireTarget"]>,
   combinedSignal?: AbortSignal,
-): Promise<{ dossier: ResearchExtractionOutput; report: DataCriticReport }> {
+  deadlineAtMs?: number,
+): Promise<{
+  dossier: ResearchExtractionOutput;
+  report: DataCriticReport;
+  usage: LinearDeskUsage;
+  elapsedMs: number;
+}> {
   const effectiveSignal = combinedSignal ?? scopedReq.signal;
   const allCandidates = [...reconciled.corroboratedFacts, ...reconciled.uncorroboratedFacts];
   const preCheck = verifyFactsAgainstLedger(allCandidates, scopedReq.ticker, scopedReq.ledger_entries);
@@ -503,6 +652,8 @@ async function runCriticStage(
         data_gaps: reconciled.dataGaps,
       },
       report: { passed: true, llm_repaired: false, mismatches: [], dropped_facts: [], notes: [] },
+      usage: emptyUsage(),
+      elapsedMs: 0,
     };
   }
 
@@ -513,11 +664,13 @@ async function runCriticStage(
     }
   }
 
-  const target = await acquire(undefined, 303, 0.1, 3584);
+  const t0 = Date.now();
+  const target = await acquire(undefined, 303, 0.1, 3584, deadlineAtMs);
   try {
     let cleaned: z.infer<typeof CriticCleanupSchema>;
+    let stageUsage = emptyUsage();
     try {
-      cleaned = await parseStageWithRepair(
+      const parsed = await parseStageWithRepair(
         target,
         criticMessages(scopedReq, allCandidates, preCheck.mismatches, reconciled.catalysts, reconciled.risks, reconciled.dataGaps),
         [],
@@ -526,6 +679,8 @@ async function runCriticStage(
         "Stage 2 Data Critic",
         effectiveSignal,
       );
+      cleaned = parsed.data;
+      stageUsage = parsed.usage;
     } catch (err) {
       if (effectiveSignal?.aborted || scopedReq.signal?.aborted || !(err instanceof StageParseError)) throw err;
       const errMsg = err.message;
@@ -546,6 +701,8 @@ async function runCriticStage(
           dropped_facts: fallbackDropped,
           notes: [`critic_llm_fallback: ${errMsg.slice(0, 160)}`],
         },
+        usage: stageUsage,
+        elapsedMs: Math.max(0, Date.now() - t0),
       };
     }
     const dropped = [...cleaned.dropped_facts];
@@ -587,6 +744,8 @@ async function runCriticStage(
         dropped_facts: dropped,
         notes: cleaned.notes,
       },
+      usage: stageUsage,
+      elapsedMs: Math.max(0, Date.now() - t0),
     };
   } finally {
     target.release();
@@ -597,11 +756,13 @@ async function runTraderStage(
   req: LinearDeskRequest,
   dossier: ResearchExtractionOutput,
   acquire: NonNullable<LinearDeskDeps["acquireTarget"]>,
-): Promise<{ decision: TraderDecision; modelId: string }> {
+  deadlineAtMs?: number,
+): Promise<{ decision: TraderDecision; modelId: string; usage: LinearDeskUsage; elapsedMs: number }> {
+  const t0 = Date.now();
   const schema = buildTraderSchema(req.portfolio_context.held);
-  const target = await acquire(undefined, 404, 0.2, 1536);
+  const target = await acquire(undefined, 404, 0.2, 1536, deadlineAtMs);
   try {
-    const decision = await parseStageWithRepair(
+    const { data, usage } = await parseStageWithRepair(
       target,
       traderMessages(req, dossier),
       [],
@@ -610,7 +771,12 @@ async function runTraderStage(
       "Stage 3 Final Trader",
       req.signal,
     );
-    return { decision, modelId: target.modelId };
+    return {
+      decision: data,
+      modelId: target.modelId,
+      usage,
+      elapsedMs: Math.max(0, Date.now() - t0),
+    };
   } finally {
     target.release();
   }
@@ -640,6 +806,8 @@ export async function runLinearDeskPipeline(
   req: LinearDeskRequest,
   deps: LinearDeskDeps = {},
 ): Promise<LinearDeskResponse> {
+  const pipelineStart = Date.now();
+  const deadlineAtMs = pipelineStart + LINEAR_PROFILE.maxDurationMs;
   const acquire = deps.acquireTarget ?? defaultAcquireTarget;
   const pipelineAbort = new AbortController();
   const deadlineSignal = AbortSignal.timeout(LINEAR_PROFILE.maxDurationMs);
@@ -652,6 +820,7 @@ export async function runLinearDeskPipeline(
   const stage1Tools = skipPrefetchedFollowups ? [] : tools;
   const stage1MaxSteps = skipPrefetchedFollowups ? 1 : 3;
 
+  const stage1Start = Date.now();
   let seedA: Awaited<ReturnType<typeof runExtractorSeed>>;
   let seedB: Awaited<ReturnType<typeof runExtractorSeed>>;
   try {
@@ -660,17 +829,20 @@ export async function runLinearDeskPipeline(
         scopedReq,
         { preferredMember: "gold-spark", seed: 101, tools: stage1Tools, maxSteps: stage1MaxSteps },
         acquire,
+        deadlineAtMs,
       ),
       runExtractorSeed(
         scopedReq,
         { preferredMember: "dell2", seed: 202, tools: stage1Tools, maxSteps: stage1MaxSteps },
         acquire,
+        deadlineAtMs,
       ),
     ]);
   } catch (err) {
     pipelineAbort.abort(err);
     throw err;
   }
+  const stage1WallMs = Math.max(0, Date.now() - stage1Start);
 
   const reconciled = reconcileAaExtractions({
     boxA: seedA.boxName,
@@ -683,16 +855,29 @@ export async function runLinearDeskPipeline(
     outputB: seedB.output,
   });
 
-  const { dossier, report } = await runCriticStage(scopedReq, reconciled, acquire, combinedSignal);
-  const { decision, modelId } = await runTraderStage(scopedReq, dossier, acquire);
+  const criticRes = await runCriticStage(scopedReq, reconciled, acquire, combinedSignal, deadlineAtMs);
+  const traderRes = await runTraderStage(scopedReq, criticRes.dossier, acquire, deadlineAtMs);
+  const totalUsage = addUsage(
+    addUsage(seedA.usage, seedB.usage),
+    addUsage(criticRes.usage, traderRes.usage),
+  );
 
   return {
     ticker: req.ticker.toUpperCase(),
     cycle_id: req.cycle_id,
-    model_id: modelId || seedA.modelId || seedB.modelId,
-    dossier,
+    model_id: traderRes.modelId || seedA.modelId || seedB.modelId,
+    dossier: criticRes.dossier,
     aa_noise_metrics: reconciled.metrics,
-    critic_report: report,
-    decision,
+    critic_report: criticRes.report,
+    decision: traderRes.decision,
+    stage_timings_ms: {
+      stage1_a_ms: seedA.elapsedMs,
+      stage1_b_ms: seedB.elapsedMs,
+      stage1_wall_ms: stage1WallMs,
+      stage2_ms: criticRes.elapsedMs,
+      stage3_ms: traderRes.elapsedMs,
+      total_ms: Math.max(0, Date.now() - pipelineStart),
+    },
+    usage: totalUsage,
   };
 }

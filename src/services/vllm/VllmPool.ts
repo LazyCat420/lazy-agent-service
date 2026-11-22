@@ -456,6 +456,8 @@ export interface PoolSelection {
   preferred?: string | null;
   /** True when a requested preferredMember was unavailable and fell back to another box. */
   sameBoxFallback?: boolean;
+  /** Cached `/v1/models` generation model IDs keyed by pool member name. */
+  modelsByMember?: Record<string, string>;
 }
 
 function choosePoolCandidate(
@@ -509,6 +511,12 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
   const sessionKey = poolSessionKey(req);
   const preferred = extractPreferredMember(req);
 
+  const modelsByMember: Record<string, string> = {};
+  POOL_MEMBERS.forEach((m, i) => {
+    const model = health[i].model;
+    if (model) modelsByMember[m.name] = model;
+  });
+
   const live = POOL_MEMBERS.filter((_, i) => health[i].up);
   if (live.length === 0) {
     // Every member is out of rotation. Still try the least recently failed
@@ -529,6 +537,7 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
       sessionKey,
       preferred,
       sameBoxFallback: Boolean(preferred && fallback.name !== preferred),
+      modelsByMember,
     };
   }
 
@@ -572,7 +581,7 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
   if (sessionKey) rememberAffinity(sessionKey, chosen.name);
 
   const ordered = [chosen, ...candidates.filter((m) => m.name !== chosen.name)];
-  return { member: chosen, candidates: ordered, loads, sessionKey, preferred, sameBoxFallback };
+  return { member: chosen, candidates: ordered, loads, sessionKey, preferred, sameBoxFallback, modelsByMember };
 }
 
 export interface PoolMemberStats {

@@ -10,13 +10,13 @@ Replaces split-brain Python harness loops (`platform/lazycat-sdk`, `CrossModelCr
 
 ## Endpoint
 
-- `POST /v1/trading/linear-desk` (`runtimeAuth` `x-runtime-token`, loading `profiles/trading-linear-v1.json`: enforces `max_duration_ms=180000`, `max_tool_calls=6` shared across Stage 1 seeds via synchronous slot reservation, `allowed_local_tools`, per-turn `maxTokens=4096`, and Stage 3 schema `max_retries=1`).
+- `POST /v1/trading/linear-desk` (`runtimeAuth` `x-runtime-token`, loading `profiles/trading-linear-v1.json`: enforces `max_duration_ms=600000`, `max_tool_calls=6` shared across Stage 1 seeds via synchronous slot reservation, `allowed_local_tools`, per-turn `maxTokens=2560/3584/1536` per stage, `ledger_entries <= 128`, and Stage 3 schema `max_retries=1`).
 
 ### Request Body (`LinearDeskRequest`)
 
 - `ticker`: string (`1..16`)
 - `cycle_id`: string (`1..160`)
-- `ledger_entries`: `Record<string, LedgerEntry>` (`fact_id`, `tool_name`, `ticker?`, `as_of?`, `summary?`, `raw?`) from `trading-service` deterministic Stage 0 prefetch (`whiteboard_ledger`)
+- `ledger_entries`: `Record<string, LedgerEntry>` (max `128` entries; `fact_id`, `tool_name`, `ticker?`, `as_of?`, `summary?`, `raw?`) from `trading-service` deterministic Stage 0 prefetch (`whiteboard_ledger`)
 - `portfolio_context`: `{ held, shares_owned, avg_cost, cash_usd, max_position_pct, equity_usd? }`
 - `macro_snapshot?`: `{ vix?, spy_20d_return?, yield_10y_2y?, regime_note? }`
 - `followup_tools?`: `string[]` (filtered by `profiles/trading-linear-v1.json` `allowed_local_tools`, bounded by `budget_limits.max_tool_calls=6`, dispatched via `LocalToolRouter`)
@@ -24,7 +24,8 @@ Replaces split-brain Python harness loops (`platform/lazycat-sdk`, `CrossModelCr
 ## 3-Stage Linear Pipeline (`runLinearDeskPipeline`)
 
 1. **Stage 1 — `research_extractor` (Parallel A/A on `gold-spark` + `dell2`)**
-   - Default `VllmPool` members: `gold-spark,dell2` (`10.0.0.141:8000` and `10.0.0.37:8888`), discovered dynamically via `GET /v1/models`, respecting `VllmShimService.semaphoreFor(member)` concurrency limits and `budget_limits.max_duration_ms=180000`.
+   - Default `VllmPool` members: `gold-spark,dell2` (`10.0.0.141:8000` and `10.0.0.37:8888`), reuses cached `/v1/models` from `VllmPool` health probes before fallback `GET /v1/models`, respects `VllmShimService.semaphoreFor(member)` concurrency limits (`4` concurrent on `gold-spark` and `dell2`), queue timeout `120000ms`, and `budget_limits.max_duration_ms=600000`.
+   - Performed 1-shot cross-box failover on retryable 5xx / network / `QueueTimeoutError` when >= `60000ms` budget remains (`sameBoxFallback` recorded).
    - `x-pool-prefer-member` pins a box per seed (`101` on `gold-spark`, `202` on `dell2`); sibling seed abort cancels the paired call if either seed rejects. `VllmShimService` emits `x-pool-fallback: "1"` whenever delivery falls back to a non-preferred box.
    - Outputs objective facts/catalysts/risks/data_gaps grounded in `fct_...` IDs (no `BUY`/`SELL`/`HOLD`/`AVOID` recommendations).
    - `AaNoiseReconciler` compares deduplicated A vs. B facts and computes `aa_noise_metrics`: `model_a`, `model_b`, `model_mismatch`, `fact_flip_share`, `citation_jaccard`, `numeric_rel_spread_median`, `corroborated_count`, `uncorroborated_count`, `same_box_fallback`.
@@ -36,5 +37,7 @@ Replaces split-brain Python harness loops (`platform/lazycat-sdk`, `CrossModelCr
 3. **Stage 3 — `final_trader` (1 tool-less pass, unchecked decision)**
    - Sole decision maker over verified `dossier`, `portfolio_context`, and `macro_snapshot`, bounded by `budget_limits.max_retries=1` for schema repair.
    - `held=false` permits `"BUY" | "HOLD" | "AVOID"`; `held=true` permits `"BUY" | "HOLD" | "SELL"`.
+   - `entry_mode` (`"enter_now" | "enter_on_condition" | "watch_only"`) + optional structured `dynamic_trigger` (`{ type, value }`); `enter_on_condition` without a valid evaluable `dynamic_trigger` is normalized to `"watch_only"`.
    - Normal digits and percentages are permitted in `decision_thesis` alongside `cited_fact_ids`.
-   - Returns `{ ticker, cycle_id, model_id, dossier, aa_noise_metrics, critic_report, decision }`.
+   - Returns `{ ticker, cycle_id, model_id, dossier, aa_noise_metrics, critic_report, decision, stage_timings_ms?, usage? }`.
+   - Typed HTTP error mapping on `/v1/trading/linear-desk`: `StageParseError` -> `422`, `QueueTimeoutError` / `PoolUnavailableError` -> `503`, `PipelineTimeoutError` -> `504`, client abort -> `499`.

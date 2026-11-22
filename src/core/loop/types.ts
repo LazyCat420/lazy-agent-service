@@ -144,6 +144,8 @@ export interface CoreLoopOptions {
   toolErrorCap?: number;
   /** Retries of a failed model call before finalizing. Default 2. */
   providerRetries?: number;
+  /** Skip the final toolless recovery pass when main turn hits PROVIDER_ERROR. */
+  disableFinalPassOnProviderError?: boolean;
   /** Same tool failing this many times in a row gets TOOL_REPEATED_FAILURE instead of running. Default 3. */
   maxConsecutiveToolErrors?: number;
   /** H10: Maximum concurrent parallel non-exclusive tool calls (default 8). */
