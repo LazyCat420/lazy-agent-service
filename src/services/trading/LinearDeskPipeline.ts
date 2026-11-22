@@ -148,19 +148,28 @@ const DynamicTriggerSchema = z.object({
   value: z.number().finite().positive(),
 });
 
-function normalizeTraderDecision(raw: {
-  action: TraderDecision["action"];
-  entry_mode?: "enter_now" | "enter_on_condition" | "watch_only";
-  entry_condition: string | null;
-  dynamic_trigger: TraderDecision["dynamic_trigger"];
-  position_size_pct: number;
-  stop_loss: number | null;
-  take_profit: number | null;
-  cited_fact_ids: string[];
-  cited_playbook_ids: string[];
-  decision_thesis: string;
-}): TraderDecision {
-  const citedPlaybooks = Array.from(new Set(raw.cited_playbook_ids.map((id) => id.trim()).filter(Boolean)));
+function normalizeTraderDecision(
+  raw: {
+    action: TraderDecision["action"];
+    entry_mode?: "enter_now" | "enter_on_condition" | "watch_only";
+    entry_condition: string | null;
+    dynamic_trigger: TraderDecision["dynamic_trigger"];
+    position_size_pct: number;
+    stop_loss: number | null;
+    take_profit: number | null;
+    cited_fact_ids: string[];
+    cited_playbook_ids: string[];
+    decision_thesis: string;
+  },
+  allowedPlaybookIds?: ReadonlySet<string>,
+): TraderDecision {
+  const citedPlaybooks = Array.from(
+    new Set(
+      raw.cited_playbook_ids
+        .map((id) => id.trim())
+        .filter((id) => Boolean(id) && (allowedPlaybookIds?.has(id) ?? false)),
+    ),
+  );
   const base = { ...raw, cited_playbook_ids: citedPlaybooks };
   if (raw.action === "SELL") {
     return { ...base, entry_mode: "enter_now", dynamic_trigger: null };
@@ -181,7 +190,7 @@ function normalizeTraderDecision(raw: {
   };
 }
 
-function buildTraderSchema(held: boolean) {
+function buildTraderSchema(held: boolean, allowedPlaybookIds?: ReadonlySet<string>) {
   return z
     .object({
       action: held ? z.enum(["BUY", "HOLD", "SELL"]) : z.enum(["BUY", "HOLD", "AVOID"]),
@@ -198,7 +207,7 @@ function buildTraderSchema(held: boolean) {
       cited_playbook_ids: z.array(z.string()).default([]),
       decision_thesis: z.string().min(1),
     })
-    .transform((raw) => normalizeTraderDecision(raw));
+    .transform((raw) => normalizeTraderDecision(raw, allowedPlaybookIds));
 }
 
 export interface LinearStageTarget {
@@ -918,7 +927,10 @@ async function runTraderStage(
   echo: LinearStagePromptEcho;
 }> {
   const t0 = Date.now();
-  const schema = buildTraderSchema(req.portfolio_context.held);
+  const allowedPlaybookIds = new Set(
+    (req.playbook_bullets ?? []).map((bullet) => bullet.id.trim()).filter(Boolean),
+  );
+  const schema = buildTraderSchema(req.portfolio_context.held, allowedPlaybookIds);
   const target = await acquire(undefined, 404, 0.2, 1536, deadlineAtMs, req.signal);
   try {
     const msgs = traderMessages(req, dossier);

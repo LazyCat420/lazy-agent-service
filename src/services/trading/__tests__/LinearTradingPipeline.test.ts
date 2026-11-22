@@ -1482,7 +1482,7 @@ describe("TradingDeskRoutes typed HTTP error mapping & ledger cap", () => {
                   stop_loss: 175.0,
                   take_profit: 210.0,
                   cited_fact_ids: ["fct_price_nvda"],
-                  cited_playbook_ids: ["pb_001", " pb_001 "],
+                  cited_playbook_ids: ["pb_001", " pb_001 ", "pb_hallucinated", ""],
                   decision_thesis: "Entry supported by pb_001 and verified close $185.50.",
                 });
               }
