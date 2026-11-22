@@ -263,4 +263,42 @@ describe("openingStack", () => {
     expect(hint).toContain("get_market_data -> get_finnhub_news");
     expect(openingBundleHint("user_chat", ["get_market_data"])).toBe("");
   });
+
+  it("includes catalog read_only tools outside static READ_ONLY_TOOLS and preserves learned stacks on query failure", async () => {
+    const baseTime = 1_760_000_000_000;
+    const eqRuns = runs("quant_researcher", 6);
+    const seqUses: ToolUseRecord[] = eqRuns.flatMap((r, idx) => [
+      { ...r, tool: "search_equations", argsHash: "e1", timestamp: baseTime + idx * 10_000 },
+      { ...r, tool: "run_equation", argsHash: "e2", timestamp: baseTime + idx * 10_000 + 600 },
+      { ...r, tool: "save_equation", argsHash: "e3", timestamp: baseTime + idx * 10_000 + 1200 },
+    ]);
+    const learnedSeqMap = learnSequences(eqRuns, seqUses);
+    expect(learnedSeqMap.get("quant_researcher")?.[0]?.tools).toEqual([
+      "search_equations",
+      "run_equation",
+    ]);
+
+    const mutations: string[] = [];
+    vi.spyOn(MongoWrapper, "getDb").mockReturnValue({
+      collection: (name: string) => ({
+        find: () => ({
+          toArray: async () => {
+            if (name === "tool_usage_stats") throw new Error("mongo read timeout");
+            return [];
+          },
+        }),
+        updateOne: async () => {
+          mutations.push("updateOne");
+          return { acknowledged: true };
+        },
+        deleteMany: async () => {
+          mutations.push("deleteMany");
+          return { deletedCount: 0 };
+        },
+      }),
+    } as never);
+
+    await expect(refreshLearnedStacks()).rejects.toThrow("mongo read timeout");
+    expect(mutations).toEqual([]);
+  });
 });

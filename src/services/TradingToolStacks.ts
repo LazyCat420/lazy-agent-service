@@ -92,7 +92,8 @@ function loadReadOnlyCatalogTools(): Set<string> {
       }>;
       if (Array.isArray(parsed)) {
         for (const item of parsed) {
-          if (item?.name && item.permission === "read") {
+          const perm = typeof item?.permission === "string" ? item.permission.toLowerCase() : "";
+          if (item?.name && (perm === "read_only" || perm === "read" || perm === "readonly")) {
             allowed.add(stripMcpPrefix(item.name));
           }
         }
@@ -466,31 +467,21 @@ export async function refreshLearnedStacks(): Promise<void> {
   const telemetryColl = db.collection("v3_agent_telemetry");
   const toolTelColl = db.collection("agent_tool_telemetry");
   const usageStatsColl = db.collection("tool_usage_stats");
-  const safeArray = async (promise: Promise<unknown>): Promise<Record<string, unknown>[]> => {
-    try {
-      const res = await promise;
-      return Array.isArray(res) ? (res as Record<string, unknown>[]) : [];
-    } catch {
-      return [];
-    }
-  };
-  const [rawRunDocs, rawTelUseDocs, rawUsageUseDocs] = await Promise.all([
-    safeArray(
+  const asDocs = (res: unknown): Record<string, unknown>[] =>
+    Array.isArray(res) ? (res as Record<string, unknown>[]) : [];
+  const [rawRunDocs, rawTelUseDocs, rawUsageUseDocs] = (
+    await Promise.all([
       telemetryColl
         .find({ ...telemetryFilter, outcome: "SUCCESS" }, { projection: { agent_name: 1, cycle_id: 1, ticker: 1, model_used: 1, service_source: 1 } })
         .toArray(),
-    ),
-    safeArray(
       toolTelColl
         .find(telemetryFilter, { projection: { agent_name: 1, cycle_id: 1, ticker: 1, tool_name: 1, args_hash: 1, timestamp: 1, created_at: 1, success: 1, service_source: 1, model_used: 1 } })
         .toArray(),
-    ),
-    safeArray(
       usageStatsColl
         .find(usageFilter, { projection: { agent_name: 1, cycle_id: 1, ticker: 1, tool_name: 1, args_hash: 1, called_at: 1, timestamp: 1, created_at: 1, success: 1, service_source: 1, model_used: 1 } })
         .toArray(),
-    ),
-  ]);
+    ])
+  ).map(asDocs);
 
   const v3Runs = rawRunDocs.filter((d) => !isProbeRecord(d)).map(normalizeDocRun);
   const v3AgentsSeen = new Set(v3Runs.map((r) => r.agent));
