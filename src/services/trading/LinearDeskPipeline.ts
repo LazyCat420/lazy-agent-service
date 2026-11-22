@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import logger from "../../logger.js";
 import { runCoreLoop } from "../../core/loop/CoreLoop.ts";
-import type { ChatMessage, CoreModel, CoreTool } from "../../core/loop/types.ts";
+import type { ChatMessage, CoreLoopEvent, CoreLoopResult, CoreModel, CoreTool } from "../../core/loop/types.ts";
 import { routeLocalTool } from "../LocalToolRouter.ts";
 import { reconcileAaExtractions } from "./AaNoiseReconciler.ts";
 import { verifyFactsAgainstLedger } from "./FactLedgerVerifier.ts";
@@ -332,6 +332,48 @@ function mapStageFailure(error?: { code: string; message: string }): Error {
   return new Error(error?.message || "CoreLoop stage failed");
 }
 
+function linkAbortSignal(signal?: AbortSignal): AbortController {
+  const controller = new AbortController();
+  if (signal?.aborted) {
+    controller.abort(signal.reason);
+  } else if (signal) {
+    signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+  }
+  return controller;
+}
+
+function accumulateStageUsage(ev: unknown, totals: { prompt: number; completion: number }): void {
+  if (typeof ev !== "object" || ev === null || !("type" in ev) || ev.type !== "usage") return;
+  const typed = ev as Extract<CoreLoopEvent, { type: "usage" }>;
+  const usage = typed.usage as {
+    inputTokens?: number;
+    prompt_tokens?: number;
+    outputTokens?: number;
+    completion_tokens?: number;
+  };
+  totals.prompt += Number(usage.inputTokens ?? usage.prompt_tokens ?? 0);
+  totals.completion += Number(usage.outputTokens ?? usage.completion_tokens ?? 0);
+}
+
+function resolveStageFinalText(
+  stepValue: CoreLoopResult,
+  signal: AbortSignal | undefined,
+  controllerSignal: AbortSignal,
+): string {
+  const finalText = stepValue.text || "";
+  if (signal?.aborted || controllerSignal.aborted || stepValue.status === "cancelled") {
+    const reason = signal?.reason ?? controllerSignal.reason;
+    if (reason instanceof DOMException && reason.name === "TimeoutError") {
+      throw new PipelineTimeoutError(reason.message || "Linear stage timed out");
+    }
+    throw reason instanceof Error ? reason : new Error(stepValue.error?.message || "Stage aborted");
+  }
+  if (stepValue.status !== "completed" && !finalText) {
+    throw mapStageFailure(stepValue.error);
+  }
+  return finalText;
+}
+
 async function runCoreStage(
   target: LinearStageTarget,
   messages: ChatMessage[],
@@ -340,11 +382,7 @@ async function runCoreStage(
   signal?: AbortSignal,
 ): Promise<CoreStageRunResult> {
   const t0 = Date.now();
-  const controller = new AbortController();
-  if (signal) {
-    if (signal.aborted) controller.abort(signal.reason);
-    else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
-  }
+  const controller = linkAbortSignal(signal);
   const gen = runCoreLoop({
     model: target.model,
     tools,
@@ -355,35 +393,20 @@ async function runCoreStage(
     providerRetries: 0,
     disableFinalPassOnProviderError: true,
   });
-  let promptTokens = 0;
-  let completionTokens = 0;
+  const totals = { prompt: 0, completion: 0 };
   for (;;) {
     const step = await gen.next();
     if (!step.done) {
-      const ev = step.value;
-      if (ev && "type" in ev && ev.type === "usage") {
-        promptTokens += Number(ev.usage.inputTokens ?? ev.usage.prompt_tokens ?? 0);
-        completionTokens += Number(ev.usage.outputTokens ?? ev.usage.completion_tokens ?? 0);
-      }
+      if (step.value) accumulateStageUsage(step.value, totals);
       continue;
     }
-    const finalText = step.value.text || "";
-    if (signal?.aborted || controller.signal.aborted || step.value.status === "cancelled") {
-      const reason = signal?.reason ?? controller.signal.reason;
-      if (reason instanceof DOMException && reason.name === "TimeoutError") {
-        throw new PipelineTimeoutError(reason.message || "Linear stage timed out");
-      }
-      throw reason instanceof Error ? reason : new Error(step.value.error?.message || "Stage aborted");
-    }
-    if (step.value.status !== "completed" && !finalText) {
-      throw mapStageFailure(step.value.error);
-    }
+    const text = resolveStageFinalText(step.value, signal, controller.signal);
     return {
-      text: finalText,
+      text,
       usage: {
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        total_tokens: promptTokens + completionTokens,
+        prompt_tokens: totals.prompt,
+        completion_tokens: totals.completion,
+        total_tokens: totals.prompt + totals.completion,
       },
       elapsedMs: Math.max(0, Date.now() - t0),
     };

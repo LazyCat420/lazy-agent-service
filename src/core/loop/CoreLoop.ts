@@ -796,6 +796,97 @@ function isNoToolsOffered<T extends { name: string }>(
   return tradingRun === true && schemas.length > 0 && filterOfferedTools(failureStreak, schemas).length === 0;
 }
 
+interface LoopMutableState {
+  modelCalls: number;
+  providerRetryCalls: number;
+  toolCalls: number;
+  runawayNudged: boolean;
+  cutOffs: number;
+  finalizeReason: CoreFinalizeReason | undefined;
+  cutText: string;
+  lastAssistantText: string;
+  lastProviderError: { code: string; message: string } | undefined;
+}
+
+function checkPreTurnExit<T extends { name: string }>(params: {
+  options: CoreLoopOptions;
+  state: LoopMutableState;
+  finalizeCut: unknown;
+  failureStreak: object;
+  schemas: T[];
+}): "cancel" | "break" | "continue" {
+  const { options, state, finalizeCut, failureStreak, schemas } = params;
+  if (options.signal.aborted) return "cancel";
+  const nextReason = checkLoopFinalizeCondition(state.finalizeReason, finalizeCut as never, options, state.modelCalls);
+  if (nextReason !== undefined) {
+    state.finalizeReason = nextReason;
+    return "break";
+  }
+  if (isNoToolsOffered(options.tradingRun, failureStreak, schemas)) {
+    state.finalizeReason = "NO_TOOLS_OFFERED";
+    return "break";
+  }
+  return "continue";
+}
+
+function applyTurnOutcomeState(
+  state: LoopMutableState,
+  turnOutcome: {
+    modelCallsDelta: number;
+    providerRetriesDelta: number;
+    cancelled?: boolean;
+    cutText?: string;
+    providerError?: { code: string; message: string };
+    finalizeReason?: CoreFinalizeReason;
+  },
+): "cancel" | "continue_loop" | "process_turn" {
+  state.modelCalls += turnOutcome.modelCallsDelta;
+  state.providerRetryCalls += turnOutcome.providerRetriesDelta;
+  if (turnOutcome.cancelled) return "cancel";
+  if (turnOutcome.cutText !== undefined) state.cutText = turnOutcome.cutText;
+  if (turnOutcome.providerError !== undefined) state.lastProviderError = turnOutcome.providerError;
+  if (turnOutcome.finalizeReason !== undefined) {
+    state.finalizeReason = turnOutcome.finalizeReason;
+    return "continue_loop";
+  }
+  return "process_turn";
+}
+
+async function* finalizeCoreLoopOutcome(params: {
+  options: CoreLoopOptions;
+  messages: ChatMessage[];
+  schemas: CoreToolSchema[];
+  usableToolResults: Array<{ name: string; content: string }>;
+  state: LoopMutableState;
+}): AsyncGenerator<CoreLoopEvent, CoreLoopResult> {
+  const { options, messages, schemas, usableToolResults, state } = params;
+  if (options.disableFinalPassOnProviderError && state.finalizeReason === "PROVIDER_ERROR") {
+    return {
+      status: "failed",
+      text: state.lastAssistantText,
+      messages,
+      modelCalls: state.modelCalls,
+      toolCalls: state.toolCalls,
+      providerRetries: state.providerRetryCalls,
+      finalizeReason: state.finalizeReason,
+      answerSource: "model",
+      error: state.lastProviderError ?? { code: "PROVIDER_ERROR", message: "Provider call failed" },
+    };
+  }
+  return yield* runFinalAnswerPass(
+    options,
+    messages,
+    schemas,
+    state.cutText,
+    state.lastAssistantText,
+    usableToolResults,
+    state.modelCalls,
+    state.toolCalls,
+    state.providerRetryCalls,
+    state.finalizeReason,
+  );
+}
+
 export async function* runCoreLoop(
   options: CoreLoopOptions,
 ): AsyncGenerator<CoreLoopEvent, CoreLoopResult> {
@@ -815,41 +906,34 @@ export async function* runCoreLoop(
   } = resolveCoreLoopConfig(options);
 
   const messages: ChatMessage[] = [...options.messages];
-
   const failureStreak = new Map<string, number>();
   const callHistory = createToolCallHistory();
   const spillBuffer = new SpillBuffer(options.spillMaxTotalBytes);
   const completedToolOutputs = new Map<string, string>();
   const toolsCalled = new Set<string>();
   const stopGateState = { attempts: 0, maxRetries: maxStopGateRetries, nudged: false };
-
-  let modelCalls = 0;
-  // LF-07: provider calls that were retries (main-turn retry loop). The
-  // final-pass retry is added in runFinalAnswerPass.
-  let providerRetryCalls = 0;
-  let toolCalls = 0;
-  let runawayNudged = false;
-  let cutOffs = 0;
-  let finalizeReason: CoreFinalizeReason | undefined;
-  let cutText = "";
-  let lastAssistantText = "";
-  let lastProviderError: { code: string; message: string } | undefined;
   const usableToolResults: Array<{ name: string; content: string }> = [];
+  const state: LoopMutableState = {
+    modelCalls: 0,
+    providerRetryCalls: 0,
+    toolCalls: 0,
+    runawayNudged: false,
+    cutOffs: 0,
+    finalizeReason: undefined,
+    cutText: "",
+    lastAssistantText: "",
+    lastProviderError: undefined,
+  };
 
   try {
     while (true) {
-      if (options.signal.aborted) {
-        return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls, providerRetryCalls);
+      const exitCheck = checkPreTurnExit({ options, state, finalizeCut, failureStreak, schemas });
+      if (exitCheck === "cancel") {
+        return makeCancelledLoopResult(messages, state.lastAssistantText, state.modelCalls, state.toolCalls, state.providerRetryCalls);
       }
+      if (exitCheck === "break") break;
 
-      finalizeReason = checkLoopFinalizeCondition(finalizeReason, finalizeCut, options, modelCalls);
-      if (finalizeReason !== undefined) break;
-      if (isNoToolsOffered(options.tradingRun, failureStreak, schemas)) {
-        finalizeReason = "NO_TOOLS_OFFERED";
-        break;
-      }
-
-      const hooked = yield* runBeforeModelCallHooks(messages, options.hooks, modelCalls);
+      const hooked = yield* runBeforeModelCallHooks(messages, options.hooks, state.modelCalls);
       const turnOutcome = yield* runModelTurnWithRetries(
         options,
         hooked,
@@ -858,53 +942,40 @@ export async function* runCoreLoop(
         workSignal,
         finalizeCut,
         providerRetries,
-        modelCalls,
+        state.modelCalls,
       );
-      modelCalls += turnOutcome.modelCallsDelta;
-      providerRetryCalls += turnOutcome.providerRetriesDelta;
-      if (turnOutcome.cancelled) {
-        return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls, providerRetryCalls);
+      const turnStatus = applyTurnOutcomeState(state, turnOutcome);
+      if (turnStatus === "cancel") {
+        return makeCancelledLoopResult(messages, state.lastAssistantText, state.modelCalls, state.toolCalls, state.providerRetryCalls);
       }
-      if (turnOutcome.cutText !== undefined) cutText = turnOutcome.cutText;
-      if (turnOutcome.providerError !== undefined) lastProviderError = turnOutcome.providerError;
-      if (turnOutcome.finalizeReason !== undefined) {
-        finalizeReason = turnOutcome.finalizeReason;
-        continue;
-      }
+      if (turnStatus === "continue_loop" || !turnOutcome.turn) continue;
 
       const { text, thinking, cutOff, runawayTripped, runawayReason, calls } = turnOutcome.turn;
-
       if (runawayTripped) {
         const runaway = yield* _handleRunawayTurn({
           text,
           thinking,
           runawayReason,
           messages,
-          runawayNudged,
-          lastAssistantText,
-          cutText,
+          runawayNudged: state.runawayNudged,
+          lastAssistantText: state.lastAssistantText,
+          cutText: state.cutText,
         });
-        runawayNudged = runaway.nudged;
-        lastAssistantText = runaway.lastAssistantText;
-        cutText = runaway.cutText;
-        if (runaway.recovered) continue;
-        finalizeReason = "RUNAWAY_GENERATION";
+        state.runawayNudged = runaway.nudged;
+        state.lastAssistantText = runaway.lastAssistantText;
+        state.cutText = runaway.cutText;
+        if (!runaway.recovered) state.finalizeReason = "RUNAWAY_GENERATION";
         continue;
       }
 
       const assistant = buildTurnAssistantMessage(text, thinking, calls, completedToolOutputs);
       messages.push(assistant);
-      if (text.trim() !== "") lastAssistantText = text;
+      if (text.trim() !== "") state.lastAssistantText = text;
 
       if (cutOff && calls.length > 0) {
-        const cutOffOutcome = yield* _handleCutOffTurn(
-          calls,
-          messages,
-          cutOffs,
-          finalizeReason,
-        );
-        cutOffs = cutOffOutcome.cutOffs;
-        finalizeReason = cutOffOutcome.finalizeReason;
+        const cutOffOutcome = yield* _handleCutOffTurn(calls, messages, state.cutOffs, state.finalizeReason);
+        state.cutOffs = cutOffOutcome.cutOffs;
+        state.finalizeReason = cutOffOutcome.finalizeReason;
         continue;
       }
 
@@ -916,14 +987,14 @@ export async function* runCoreLoop(
           toolsCalled,
           options,
           stopGateState,
-          modelCalls,
-          toolCalls,
-          providerRetryCalls,
+          state.modelCalls,
+          state.toolCalls,
+          state.providerRetryCalls,
           cutOff,
-          finalizeReason,
+          state.finalizeReason,
         );
         if (noToolOutcome.action === "return") return noToolOutcome.result;
-        if (noToolOutcome.action === "finalize") finalizeReason = noToolOutcome.reason;
+        if (noToolOutcome.action === "finalize") state.finalizeReason = noToolOutcome.reason;
         continue;
       }
 
@@ -946,42 +1017,16 @@ export async function* runCoreLoop(
         usableToolResults,
         completedToolOutputs,
       );
-      toolCalls += calls.length;
+      state.toolCalls += calls.length;
       if (options.signal.aborted) {
-        return makeCancelledLoopResult(messages, lastAssistantText, modelCalls, toolCalls, providerRetryCalls);
+        return makeCancelledLoopResult(messages, state.lastAssistantText, state.modelCalls, state.toolCalls, state.providerRetryCalls);
       }
-
       if (callHistory.finalizeNow && callHistory.finalizeReason) {
-        finalizeReason = callHistory.finalizeReason;
+        state.finalizeReason = callHistory.finalizeReason;
       }
     }
 
-    if (options.disableFinalPassOnProviderError && finalizeReason === "PROVIDER_ERROR") {
-      return {
-        status: "failed",
-        text: lastAssistantText,
-        messages,
-        modelCalls,
-        toolCalls,
-        providerRetries: providerRetryCalls,
-        finalizeReason,
-        answerSource: "model",
-        error: lastProviderError ?? { code: "PROVIDER_ERROR", message: "Provider call failed" },
-      };
-    }
-
-    return yield* runFinalAnswerPass(
-      options,
-      messages,
-      schemas,
-      cutText,
-      lastAssistantText,
-      usableToolResults,
-      modelCalls,
-      toolCalls,
-      providerRetryCalls,
-      finalizeReason,
-    );
+    return yield* finalizeCoreLoopOutcome({ options, messages, schemas, usableToolResults, state });
   } finally {
     spillBuffer.clear();
   }

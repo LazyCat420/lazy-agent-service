@@ -522,6 +522,80 @@ async function raceSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise
   });
 }
 
+type MemberHealth = Awaited<ReturnType<typeof probeHealth>>;
+
+function buildFallbackPoolSelection(params: {
+  loads: Record<string, number>;
+  sessionKey: string | null;
+  preferred: string | undefined;
+  modelsByMember: Record<string, string>;
+}): PoolSelection {
+  const fallback = POOL_MEMBERS.reduce((a, b) =>
+    (lastFailureAt.get(a.name) ?? 0) <= (lastFailureAt.get(b.name) ?? 0) ? a : b,
+  );
+  logger.warn(
+    `[VllmPool] every member is out of rotation; trying the least recently ` +
+      `failed one (${fallback.name} / ${fallback.ip}) instead of shedding the request`,
+  );
+  acquirePoolInFlight(fallback.name);
+  return {
+    member: fallback,
+    candidates: [fallback],
+    loads: params.loads,
+    sessionKey: params.sessionKey,
+    preferred: params.preferred,
+    sameBoxFallback: Boolean(params.preferred && fallback.name !== params.preferred),
+    modelsByMember: params.modelsByMember,
+  };
+}
+
+function resolveAffinityPoolModel(
+  live: PoolMember[],
+  healthByName: Map<string, MemberHealth>,
+  sessionKey: string | null,
+): string | null {
+  if (!sessionKey) return null;
+  pruneAffinity();
+  const prevName = affinity.get(sessionKey)?.member;
+  const prevLive = prevName ? live.find((m) => m.name === prevName) : undefined;
+  return prevLive ? healthByName.get(prevLive.name)?.model ?? null : null;
+}
+
+function resolveFirstLivePoolModel(
+  live: PoolMember[],
+  healthByName: Map<string, MemberHealth>,
+  loads: Record<string, number>,
+): string | null {
+  const knownLive = [...live]
+    .filter((m) => (healthByName.get(m.name)?.model ?? null) !== null)
+    .sort((a, b) => loads[a.name] - loads[b.name])[0];
+  return knownLive ? healthByName.get(knownLive.name)?.model ?? null : null;
+}
+
+function resolveTargetPoolModel(params: {
+  live: PoolMember[];
+  healthByName: Map<string, MemberHealth>;
+  loads: Record<string, number>;
+  req: PoolRequestShape;
+  sessionKey: string | null;
+  preferred: string | undefined;
+}): string | null {
+  const { live, healthByName, loads, req, sessionKey, preferred } = params;
+  const requestedModel = req.body?.model;
+  const requested = typeof requestedModel === "string" && requestedModel !== "auto" ? requestedModel : null;
+  if (requested && live.some((m) => healthByName.get(m.name)?.model === requested)) {
+    return requested;
+  }
+  const preferredModel = preferred && live.some((m) => m.name === preferred)
+    ? healthByName.get(preferred)?.model ?? null
+    : null;
+  return (
+    preferredModel ??
+    resolveAffinityPoolModel(live, healthByName, sessionKey) ??
+    resolveFirstLivePoolModel(live, healthByName, loads)
+  );
+}
+
 export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelection> {
   // Health probes and gauge scrapes are independent: run them together so a
   // cold cache costs one round (~1.5 s max under default timeouts), not two sequential ones.
@@ -536,81 +610,30 @@ export async function selectPoolMember(req: PoolRequestShape): Promise<PoolSelec
     throw req.signal.reason instanceof Error ? req.signal.reason : new Error("Aborted during pool selection");
   }
   const loads: Record<string, number> = {};
+  const healthByName = new Map<string, MemberHealth>();
+  const modelsByMember: Record<string, string> = {};
   POOL_MEMBERS.forEach((m, i) => {
     loads[m.name] = gauges[i].running + gauges[i].waiting + (inFlight.get(m.name) || 0);
+    healthByName.set(m.name, health[i]);
+    if (health[i].model) modelsByMember[m.name] = health[i].model;
   });
   const sessionKey = poolSessionKey(req);
   const preferred = extractPreferredMember(req);
-
-  const modelsByMember: Record<string, string> = {};
-  POOL_MEMBERS.forEach((m, i) => {
-    const model = health[i].model;
-    if (model) modelsByMember[m.name] = model;
-  });
-
-  const live = POOL_MEMBERS.filter((_, i) => health[i].up);
+  const live = POOL_MEMBERS.filter((m) => healthByName.get(m.name)?.up);
   if (live.length === 0) {
-    // Every member is out of rotation. Still try the least recently failed
-    // one: both engines can be serving while both probes blipped, and a 503
-    // storm would be worse than one attempt against a possibly-live box.
-    const fallback = POOL_MEMBERS.reduce((a, b) =>
-      (lastFailureAt.get(a.name) ?? 0) <= (lastFailureAt.get(b.name) ?? 0) ? a : b,
-    );
-    logger.warn(
-      `[VllmPool] every member is out of rotation; trying the least recently ` +
-        `failed one (${fallback.name} / ${fallback.ip}) instead of shedding the request`,
-    );
-    acquirePoolInFlight(fallback.name);
-    return {
-      member: fallback,
-      candidates: [fallback],
-      loads,
-      sessionKey,
-      preferred,
-      sameBoxFallback: Boolean(preferred && fallback.name !== preferred),
-      modelsByMember,
-    };
+    return buildFallbackPoolSelection({ loads, sessionKey, preferred, modelsByMember });
   }
 
-  // Group by model id; respect requested model, preferred member pin, or
-  // existing session-affinity member's model first (for mixed-model pools), and
-  // use load to choose among live members serving the target model.
-  const requestedModel = req.body?.model;
-  const requested = typeof requestedModel === "string" && requestedModel !== "auto" ? requestedModel : null;
-  const preferredLive = preferred ? live.find((m) => m.name === preferred) : undefined;
-  const preferredModel = preferredLive ? health[POOL_MEMBERS.indexOf(preferredLive)].model : null;
-  let affinityModel: string | null = null;
-  if (sessionKey) {
-    pruneAffinity();
-    const prevName = affinity.get(sessionKey)?.member;
-    const prevLive = prevName ? live.find((m) => m.name === prevName) : undefined;
-    affinityModel = prevLive ? health[POOL_MEMBERS.indexOf(prevLive)].model : null;
-  }
-  const knownLive = [...live]
-    .filter((m) => health[POOL_MEMBERS.indexOf(m)].model !== null)
-    .sort((a, b) => loads[a.name] - loads[b.name])[0];
-  const firstModel = knownLive ? health[POOL_MEMBERS.indexOf(knownLive)].model : null;
-  const targetModel =
-    requested && live.some((m) => health[POOL_MEMBERS.indexOf(m)].model === requested)
-      ? requested
-      : preferredModel ?? affinityModel ?? firstModel;
-
+  const targetModel = resolveTargetPoolModel({ live, healthByName, loads, req, sessionKey, preferred });
   let candidates =
     targetModel === null
       ? [...live]
-      : live.filter((m) => health[POOL_MEMBERS.indexOf(m)].model === targetModel);
+      : live.filter((m) => healthByName.get(m.name)?.model === targetModel);
   if (candidates.length === 0) candidates = [...live];
 
-  const { chosen, sameBoxFallback } = choosePoolCandidate(
-    candidates,
-    loads,
-    sessionKey,
-    preferred,
-  );
-
+  const { chosen, sameBoxFallback } = choosePoolCandidate(candidates, loads, sessionKey, preferred);
   acquirePoolInFlight(chosen.name);
   if (sessionKey) rememberAffinity(sessionKey, chosen.name);
-
   const ordered = [chosen, ...candidates.filter((m) => m.name !== chosen.name)];
   return { member: chosen, candidates: ordered, loads, sessionKey, preferred, sameBoxFallback, modelsByMember };
 }

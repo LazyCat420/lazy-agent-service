@@ -112,6 +112,65 @@ export async function discoverPoolModel(member: PoolMember, signal?: AbortSignal
   return id;
 }
 
+function assertTargetActive(signal?: AbortSignal, deadlineAtMs?: number): void {
+  if (signal?.aborted) {
+    throw normalizePoolFailure(signal.reason, undefined, signal, deadlineAtMs);
+  }
+  resolveCallBudgetMs(deadlineAtMs);
+}
+
+function buildAcquiredPoolTarget(params: {
+  candidate: PoolMember;
+  modelId: string;
+  selection: Awaited<ReturnType<typeof selectPoolMember>>;
+  preferredMember?: string;
+  heldNameRef: { current: string | null };
+}): AcquiredPoolTarget {
+  const { candidate, modelId, selection, preferredMember, heldNameRef } = params;
+  if (candidate.name !== heldNameRef.current) {
+    acquirePoolInFlight(candidate.name);
+    if (heldNameRef.current) releasePoolInFlight(heldNameRef.current);
+    heldNameRef.current = candidate.name;
+  }
+  const fallbackCandidates = selection.candidates.filter((m) => m.name !== candidate.name);
+  let released = false;
+  const ownedSlots = new Set<string>(heldNameRef.current ? [heldNameRef.current] : []);
+  const acquired: AcquiredPoolTarget = {
+    member: candidate,
+    modelId,
+    sameBoxFallback:
+      Boolean(selection.sameBoxFallback) ||
+      (Boolean(preferredMember) && candidate.name !== preferredMember),
+    fallbackCandidates,
+    modelsByMember: selection.modelsByMember,
+    claimFallbackSlot: (memberName: string) => {
+      if (!released && !ownedSlots.has(memberName)) {
+        acquirePoolInFlight(memberName);
+        ownedSlots.add(memberName);
+      }
+    },
+    releaseFallbackSlot: (memberName: string) => {
+      if (ownedSlots.delete(memberName)) releasePoolInFlight(memberName);
+    },
+    promoteMemberSlot: (prevName: string, nextMember: PoolMember, nextModelId: string) => {
+      if (ownedSlots.delete(prevName)) releasePoolInFlight(prevName);
+      if (!released && !ownedSlots.has(nextMember.name)) {
+        acquirePoolInFlight(nextMember.name);
+        ownedSlots.add(nextMember.name);
+      }
+      acquired.member = nextMember;
+      acquired.modelId = nextModelId;
+    },
+    release: () => {
+      if (released) return;
+      released = true;
+      for (const slot of ownedSlots) releasePoolInFlight(slot);
+      ownedSlots.clear();
+    },
+  };
+  return acquired;
+}
+
 export async function acquireLocalPoolTarget(
   preferredMember?: string,
   signal?: AbortSignal,
@@ -134,77 +193,26 @@ export async function acquireLocalPoolTarget(
   } catch (err) {
     throw normalizePoolFailure(err, undefined, signal, deadlineAtMs);
   }
-  let heldName: string | null = selection.member.name;
+  const heldNameRef: { current: string | null } = { current: selection.member.name };
   const discoveryErrors: string[] = [];
   try {
-    if (signal?.aborted) {
-      throw normalizePoolFailure(signal.reason, undefined, signal, deadlineAtMs);
-    }
-    resolveCallBudgetMs(deadlineAtMs);
+    assertTargetActive(signal, deadlineAtMs);
     for (const candidate of selection.candidates) {
       try {
         const cachedModel = selection.modelsByMember?.[candidate.name];
         const modelId = cachedModel || (await discoverPoolModel(candidate, discoverySignal));
-        if (signal?.aborted) {
-          throw normalizePoolFailure(signal.reason, undefined, signal, deadlineAtMs);
-        }
-        resolveCallBudgetMs(deadlineAtMs);
-        if (candidate.name !== heldName) {
-          acquirePoolInFlight(candidate.name);
-          if (heldName) releasePoolInFlight(heldName);
-          heldName = candidate.name;
-        }
-        const fallbackCandidates = selection.candidates.filter((m) => m.name !== candidate.name);
-        let released = false;
-        const ownedSlots = new Set<string>(heldName ? [heldName] : []);
-        const acquired: AcquiredPoolTarget = {
-          member: candidate,
+        assertTargetActive(signal, deadlineAtMs);
+        const acquired = buildAcquiredPoolTarget({
+          candidate,
           modelId,
-          sameBoxFallback:
-            Boolean(selection.sameBoxFallback) ||
-            (Boolean(preferredMember) && candidate.name !== preferredMember),
-          fallbackCandidates,
-          modelsByMember: selection.modelsByMember,
-          claimFallbackSlot: (memberName: string) => {
-            if (!released && !ownedSlots.has(memberName)) {
-              acquirePoolInFlight(memberName);
-              ownedSlots.add(memberName);
-            }
-          },
-          releaseFallbackSlot: (memberName: string) => {
-            if (ownedSlots.delete(memberName)) {
-              releasePoolInFlight(memberName);
-            }
-          },
-          promoteMemberSlot: (prevName: string, nextMember: PoolMember, nextModelId: string) => {
-            if (ownedSlots.delete(prevName)) {
-              releasePoolInFlight(prevName);
-            }
-            if (!released && !ownedSlots.has(nextMember.name)) {
-              acquirePoolInFlight(nextMember.name);
-              ownedSlots.add(nextMember.name);
-            }
-            acquired.member = nextMember;
-            acquired.modelId = nextModelId;
-          },
-          release: () => {
-            if (released) return;
-            released = true;
-            for (const slot of ownedSlots) {
-              releasePoolInFlight(slot);
-            }
-            ownedSlots.clear();
-          },
-        };
-        if (signal?.aborted) {
-          throw normalizePoolFailure(signal.reason, undefined, signal, deadlineAtMs);
-        }
-        resolveCallBudgetMs(deadlineAtMs);
+          selection,
+          preferredMember,
+          heldNameRef,
+        });
+        assertTargetActive(signal, deadlineAtMs);
         return acquired;
       } catch (err) {
-        if (signal?.aborted || (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs)) {
-          throw err;
-        }
+        if (signal?.aborted || (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn(`[LocalPoolClient] /v1/models discovery failed on ${candidate.name}: ${msg}`);
         discoveryErrors.push(`${candidate.name}: ${msg}`);
@@ -214,9 +222,9 @@ export async function acquireLocalPoolTarget(
       `No healthy local DeepSeek pool box available from /v1/models (${discoveryErrors.join("; ") || "no candidates"})`,
     );
   } catch (err) {
-    if (heldName) {
-      releasePoolInFlight(heldName);
-      heldName = null;
+    if (heldNameRef.current) {
+      releasePoolInFlight(heldNameRef.current);
+      heldNameRef.current = null;
     }
     throw normalizePoolFailure(err, undefined, signal, deadlineAtMs);
   }
@@ -369,28 +377,29 @@ function isRetryablePoolFailure(err: unknown, callerAborted: boolean): boolean {
   return err instanceof TypeError || (err instanceof Error && /fetch|network|timeout|ECONN|EHOST|socket/i.test(err.message));
 }
 
+function resolveAbortedPoolError(requestSignal?: AbortSignal, paramSignal?: AbortSignal): Error | null {
+  if (!requestSignal?.aborted && !paramSignal?.aborted) return null;
+  const reason = paramSignal?.reason ?? requestSignal?.reason;
+  if (reason instanceof DOMException && reason.name === "TimeoutError") {
+    return new PipelineTimeoutError(reason.message || "Linear pipeline deadline exceeded");
+  }
+  return reason instanceof Error ? reason : new Error(String(reason || "Aborted"));
+}
+
 function normalizePoolFailure(
   err: unknown,
   requestSignal?: AbortSignal,
   paramSignal?: AbortSignal,
   deadlineAtMs?: number,
 ): Error {
-  if (requestSignal?.aborted || paramSignal?.aborted) {
-    const reason = paramSignal?.reason ?? requestSignal?.reason;
-    if (reason instanceof DOMException && reason.name === "TimeoutError") {
-      return new PipelineTimeoutError(reason.message || "Linear pipeline deadline exceeded");
-    }
-    if (reason instanceof Error) return reason;
-    return new Error(String(reason || "Aborted"));
-  }
+  const abortedErr = resolveAbortedPoolError(requestSignal, paramSignal);
+  if (abortedErr) return abortedErr;
   if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
     return new PipelineTimeoutError(err instanceof Error && err.message ? err.message : "Linear pipeline deadline exceeded");
   }
   if (err instanceof PoolUnavailableError || err instanceof PipelineTimeoutError) return err;
   if (err instanceof QueueTimeoutError) return new PoolUnavailableError(err.message);
-  if (err instanceof HttpStatusError) {
-    return err.status >= 500 ? new PoolUnavailableError(err.message) : err;
-  }
+  if (err instanceof HttpStatusError) return err.status >= 500 ? new PoolUnavailableError(err.message) : err;
   if (err instanceof DOMException && err.name === "TimeoutError") {
     return new PipelineTimeoutError(err.message || "vLLM request timed out");
   }
@@ -408,6 +417,99 @@ async function resolveCandidateModel(
   const cached = modelsByMember?.[candidate.name];
   if (cached) return cached;
   return await discoverPoolModel(candidate, signal);
+}
+
+function promoteCandidateTarget(opts: {
+  target: AcquiredPoolTarget;
+  prevMember: PoolMember;
+  candidate: PoolMember;
+  modelId: string;
+  onFailover?: (nextMember: PoolMember, nextModelId: string) => void;
+}): void {
+  const { target, prevMember, candidate, modelId, onFailover } = opts;
+  if (target.promoteMemberSlot) {
+    target.promoteMemberSlot(prevMember.name, candidate, modelId);
+  } else {
+    releasePoolInFlight(prevMember.name);
+    target.member = candidate;
+    target.modelId = modelId;
+  }
+  target.fallbackCandidates = (target.fallbackCandidates ?? []).filter(
+    (m) => m.name !== candidate.name && m.name !== prevMember.name,
+  );
+  onFailover?.(candidate, modelId);
+}
+
+function releaseUnusedFallbackSlot(target: AcquiredPoolTarget, candidateName: string): void {
+  if (target.releaseFallbackSlot) target.releaseFallbackSlot(candidateName);
+  else releasePoolInFlight(candidateName);
+}
+
+async function executeCandidateCompletion(opts: {
+  idx: number;
+  candidate: PoolMember;
+  target: AcquiredPoolTarget;
+  request: CoreModelRequest;
+  params: PoolModelCallParams;
+  state: { releaseSem: (() => void) | null; fallbackCharged: boolean; promoted: boolean };
+}): Promise<Record<string, unknown>> {
+  const { idx, candidate, target, request, params, state } = opts;
+  const budgetMs = resolveCallBudgetMs(params.deadlineAtMs);
+  const callSignal = combinedCallSignal(request.signal, params.signal, budgetMs);
+  const semWaitMs = Math.min(SHIM_QUEUE_TIMEOUT_MS, budgetMs);
+  const prevMember = target.member;
+  const modelId =
+    idx > 0 ? await resolveCandidateModel(candidate, target.modelsByMember, callSignal) : target.modelId;
+
+  const url = `${candidate.url.replace(/\/$/, "")}/v1/chat/completions`;
+  const sem = VllmShimService.semaphoreFor(candidate.name);
+  state.releaseSem = sem ? await acquireSemaphoreWithAbort(sem, semWaitMs, callSignal) : null;
+
+  if (idx > 0 && candidate.name !== prevMember.name) {
+    if (target.claimFallbackSlot) target.claimFallbackSlot(candidate.name);
+    else acquirePoolInFlight(candidate.name);
+    state.fallbackCharged = true;
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildCompletionPayload(modelId, request, params)),
+    signal: callSignal,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new HttpStatusError(res.status, `vLLM ${candidate.name} HTTP ${res.status}: ${text.slice(0, 300)}`);
+  }
+  const rawJson = (await res.json()) as Record<string, unknown>;
+  if (idx > 0 && state.fallbackCharged && candidate.name !== prevMember.name) {
+    promoteCandidateTarget({ target, prevMember, candidate, modelId, onFailover: params.onFailover });
+    state.promoted = true;
+  }
+  return rawJson;
+}
+
+function handleCandidateAttemptError(opts: {
+  err: unknown;
+  idx: number;
+  candidates: PoolMember[];
+  candidate: PoolMember;
+  request: CoreModelRequest;
+  params: PoolModelCallParams;
+}): void {
+  const { err, idx, candidates, candidate, request, params } = opts;
+  const callerAborted = isCallerAborted(request.signal, params.signal);
+  const deadlineHit = params.deadlineAtMs !== undefined && Date.now() >= params.deadlineAtMs;
+  const retryable = isRetryablePoolFailure(err, callerAborted || deadlineHit);
+  if (retryable && !deadlineHit) markPoolMemberDown(candidate.name);
+  const canFailover =
+    idx === 0 && candidates.length > 1 && retryable && !deadlineHit && hasFailoverBudget(params.deadlineAtMs);
+  if (!canFailover) {
+    throw normalizePoolFailure(err, request.signal, params.signal, params.deadlineAtMs);
+  }
+  logger.warn(
+    `[LocalPoolClient] ${candidate.name} failed (${err instanceof Error ? err.message : String(err)}); failing over to ${candidates[idx + 1]!.name}`,
+  );
 }
 
 /**
@@ -429,54 +531,16 @@ export function createPoolCoreModel(
 
       for (let idx = 0; idx < candidates.length; idx++) {
         const candidate = candidates[idx]!;
-        let releaseSem: (() => void) | null = null;
-        let fallbackCharged = false;
-        let promoted = false;
+        const attemptState = { releaseSem: null as (() => void) | null, fallbackCharged: false, promoted: false };
         try {
-          const budgetMs = resolveCallBudgetMs(params.deadlineAtMs);
-          const callSignal = combinedCallSignal(request.signal, params.signal, budgetMs);
-          const semWaitMs = Math.min(SHIM_QUEUE_TIMEOUT_MS, budgetMs);
-          const prevMember = target.member;
-          const modelId =
-            idx > 0 ? await resolveCandidateModel(candidate, target.modelsByMember, callSignal) : target.modelId;
-
-          const url = `${candidate.url.replace(/\/$/, "")}/v1/chat/completions`;
-          const sem = VllmShimService.semaphoreFor(candidate.name);
-          releaseSem = sem ? await acquireSemaphoreWithAbort(sem, semWaitMs, callSignal) : null;
-
-          if (idx > 0 && candidate.name !== prevMember.name) {
-            if (target.claimFallbackSlot) target.claimFallbackSlot(candidate.name);
-            else acquirePoolInFlight(candidate.name);
-            fallbackCharged = true;
-          }
-
-          const res = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(buildCompletionPayload(modelId, request, params)),
-            signal: callSignal,
+          const rawJson = await executeCandidateCompletion({
+            idx,
+            candidate,
+            target,
+            request,
+            params,
+            state: attemptState,
           });
-          if (!res.ok) {
-            const text = await res.text();
-            throw new HttpStatusError(res.status, `vLLM ${candidate.name} HTTP ${res.status}: ${text.slice(0, 300)}`);
-          }
-          const rawJson = (await res.json()) as Record<string, any>;
-
-          if (idx > 0 && fallbackCharged && candidate.name !== prevMember.name) {
-            if (target.promoteMemberSlot) {
-              target.promoteMemberSlot(prevMember.name, candidate, modelId);
-            } else {
-              releasePoolInFlight(prevMember.name);
-              target.member = candidate;
-              target.modelId = modelId;
-            }
-            target.fallbackCandidates = (target.fallbackCandidates ?? []).filter(
-              (m) => m.name !== candidate.name && m.name !== prevMember.name,
-            );
-            promoted = true;
-            params.onFailover?.(candidate, modelId);
-          }
-
           const allowTools = request.tools.length > 0 && request.toolChoice !== "none";
           const parsed = allowTools ? VllmShimService.normalizeToolCalls(rawJson) : rawJson;
           for (const chunk of completionChunks(parsed, allowTools)) {
@@ -486,35 +550,15 @@ export function createPoolCoreModel(
           return;
         } catch (err) {
           lastErr = err;
-          if (fallbackCharged && !promoted) {
-            if (target.releaseFallbackSlot) target.releaseFallbackSlot(candidate.name);
-            else releasePoolInFlight(candidate.name);
-            fallbackCharged = false;
+          if (attemptState.fallbackCharged && !attemptState.promoted) {
+            releaseUnusedFallbackSlot(target, candidate.name);
+            attemptState.fallbackCharged = false;
           }
-          const callerAborted = isCallerAborted(request.signal, params.signal);
-          const deadlineHit = params.deadlineAtMs !== undefined && Date.now() >= params.deadlineAtMs;
-          const retryable = isRetryablePoolFailure(err, callerAborted || deadlineHit);
-          if (retryable && !deadlineHit) {
-            markPoolMemberDown(candidate.name);
-          }
-          const canFailover =
-            idx === 0 &&
-            candidates.length > 1 &&
-            retryable &&
-            !deadlineHit &&
-            hasFailoverBudget(params.deadlineAtMs);
-          if (!canFailover) {
-            throw normalizePoolFailure(err, request.signal, params.signal, params.deadlineAtMs);
-          }
-          logger.warn(
-            `[LocalPoolClient] ${candidate.name} failed (${err instanceof Error ? err.message : String(err)}); failing over to ${candidates[idx + 1]!.name}`,
-          );
+          handleCandidateAttemptError({ err, idx, candidates, candidate, request, params });
         } finally {
-          releaseSem?.();
-          if (fallbackCharged && !promoted) {
-            if (target.releaseFallbackSlot) target.releaseFallbackSlot(candidate.name);
-            else releasePoolInFlight(candidate.name);
-            fallbackCharged = false;
+          attemptState.releaseSem?.();
+          if (attemptState.fallbackCharged && !attemptState.promoted) {
+            releaseUnusedFallbackSlot(target, candidate.name);
           }
         }
       }
