@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import http from "node:http";
 import express from "express";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -1433,6 +1434,174 @@ describe("TradingDeskRoutes typed HTTP error mapping & ledger cap", () => {
       expect(poolStats().members.every((m) => m.inFlight === 0)).toBe(true);
     } finally {
       globalThis.fetch = origFetch;
+    }
+  });
+
+  it("emits prompt_echo with exact SHA-256, learning_identity, preserves stage_timings_ms/usage, injects directives/playbook/card, and serves /replay-trader", async () => {
+    const prevToken = process.env.RUNTIME_API_TOKEN;
+    const TOKEN = "linear-w0a-replay-token";
+    process.env.RUNTIME_API_TOKEN = TOKEN;
+
+    const acquireCalls: Array<{ preferredMember: string | undefined; seed: number }> = [];
+    const executeToolSpy = vi.fn(async () => ({ ok: true }));
+    const deps: LinearDeskDeps = {
+      executeTool: executeToolSpy,
+      acquireTarget: async (preferredMember, seed) => {
+        acquireCalls.push({ preferredMember, seed });
+        const boxName = preferredMember || (seed === 303 ? "gold-spark" : "dell2");
+        return {
+          boxName,
+          modelId: `model-${boxName}`,
+          sameBoxFallback: false,
+          release: () => {},
+          model: (req) => ({
+            async *[Symbol.asyncIterator]() {
+              const sys = String(req.messages[0]?.content || "");
+              if (sys.includes("Stage 1")) {
+                const facts = [makeFact()];
+                if (preferredMember === "dell2") {
+                  facts.push(makeFact({ fact_id: "fct_fund_nvda", metric: "forward_pe", value: "99.9", raw_number: 99.9 }));
+                }
+                yield JSON.stringify({ summary: "s1", facts, catalysts: [], risks: [], data_gaps: [] });
+              } else if (sys.includes("Stage 2")) {
+                yield JSON.stringify({
+                  summary: "s2",
+                  facts: [makeFact()],
+                  catalysts: [],
+                  risks: [],
+                  data_gaps: [],
+                  dropped_facts: [{ fact_id: "fct_fund_nvda", reason: "mismatch" }],
+                  notes: ["cleaned"],
+                });
+              } else {
+                yield JSON.stringify({
+                  action: "BUY",
+                  entry_mode: "enter_now",
+                  entry_condition: null,
+                  position_size_pct: 8,
+                  stop_loss: 175.0,
+                  take_profit: 210.0,
+                  cited_fact_ids: ["fct_price_nvda"],
+                  cited_playbook_ids: ["pb_001", " pb_001 "],
+                  decision_thesis: "Entry supported by pb_001 and verified close $185.50.",
+                });
+              }
+            },
+          }),
+        };
+      },
+    };
+
+    const app = express();
+    app.use(express.json({ limit: "2mb" }));
+    app.use("/v1/trading", createTradingDeskRouter(deps));
+    app.use(errorHandler);
+    const server = await new Promise<http.Server>((resolve) => {
+      const s = app.listen(0, "127.0.0.1", () => resolve(s));
+    });
+    const baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/trading`;
+
+    try {
+      const res = await fetch(`${baseUrl}/linear-desk`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-runtime-token": TOKEN },
+        body: JSON.stringify({
+          ticker: "NVDA",
+          cycle_id: "cycle-v3-w0a-1",
+          ledger_entries: LEDGER,
+          portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+          macro_snapshot: { vix: 18.2, regime_note: "LOW_VOL" },
+          directives: ["Verify NVDA fundamentals data gap from prior cycle."],
+          playbook_bullets: [{ id: "pb_001", section: "risk_discipline", text: "Require 2x reward-to-risk before sizing." }],
+          ticker_history_card: [{ date: "2026-11-10", action: "HOLD", outcome: "HOLD_CORRECT", pnl_pct: 1.2, regime: "LOW_VOL" }],
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+
+      // Existing stage_timings_ms + usage contract preserved
+      expect(body.stage_timings_ms).toEqual(
+        expect.objectContaining({
+          stage1_a_ms: expect.any(Number),
+          stage1_b_ms: expect.any(Number),
+          stage1_wall_ms: expect.any(Number),
+          stage2_ms: expect.any(Number),
+          stage3_ms: expect.any(Number),
+          total_ms: expect.any(Number),
+        }),
+      );
+      expect(body.usage).toEqual({ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
+      expect(body.decision.cited_playbook_ids).toEqual(["pb_001"]);
+
+      // Prompt echo covers all 4 executed stages with exact SHA-256 digests
+      expect(body.prompt_echo.map((e: { stage: string }) => e.stage)).toEqual([
+        "research_extractor_a",
+        "research_extractor_b",
+        "data_critic",
+        "final_trader",
+      ]);
+      for (const echo of body.prompt_echo) {
+        const expectedSysSha = createHash("sha256").update(echo.system, "utf8").digest("hex");
+        const expectedUserSha = createHash("sha256").update(echo.user, "utf8").digest("hex");
+        expect(echo.system_sha256).toBe(expectedSysSha);
+        expect(echo.user_sha256).toBe(expectedUserSha);
+        expect(echo.model_id).toBeTruthy();
+        expect(echo.box).toBeTruthy();
+      }
+      const traderEcho = body.prompt_echo.find((e: { stage: string }) => e.stage === "final_trader");
+      expect(traderEcho.system).toContain("cited_playbook_ids");
+      expect(traderEcho.user).toContain("pb_001");
+      expect(traderEcho.user).toContain("Verify NVDA fundamentals data gap");
+      expect(traderEcho.user).toContain("HOLD_CORRECT");
+
+      const extractorEcho = body.prompt_echo.find((e: { stage: string }) => e.stage === "research_extractor_a");
+      expect(extractorEcho.user).toContain("Verify NVDA fundamentals data gap");
+
+      // Learning identity matches serialized trader decision
+      expect(body.learning_identity.conversation_id).toContain("cycle-v3-w0a-1:NVDA:");
+      expect(body.learning_identity.output_hash).toBe(
+        createHash("sha256").update(JSON.stringify(body.decision), "utf8").digest("hex"),
+      );
+
+      // /replay-trader runs ONLY Stage 3 (1 acquire call, 0 Stage 1/2, 0 tool calls)
+      acquireCalls.length = 0;
+      executeToolSpy.mockClear();
+      const replayRes = await fetch(`${baseUrl}/linear-desk/replay-trader`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-runtime-token": TOKEN },
+        body: JSON.stringify({
+          ticker: "NVDA",
+          cycle_id: "cycle-v3-w0a-1",
+          portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+          macro_snapshot: { vix: 18.2, regime_note: "LOW_VOL" },
+          dossier: body.dossier,
+          playbook_bullets: [{ id: "pb_001", text: "Require 2x reward-to-risk before sizing." }],
+          ticker_history_card: [{ date: "2026-11-10", action: "HOLD", outcome: "HOLD_CORRECT", pnl_pct: 1.2 }],
+        }),
+      });
+      expect(replayRes.status).toBe(200);
+      const replayBody = await replayRes.json();
+      expect(acquireCalls).toHaveLength(1);
+      expect(acquireCalls[0].seed).toBe(404);
+      expect(executeToolSpy).not.toHaveBeenCalled();
+      expect(replayBody.decision.action).toBe("BUY");
+      expect(replayBody.decision.cited_playbook_ids).toEqual(["pb_001"]);
+      expect(replayBody.prompt_echo.stage).toBe("final_trader");
+      expect(replayBody.prompt_echo.user_sha256).toBe(
+        createHash("sha256").update(replayBody.prompt_echo.user, "utf8").digest("hex"),
+      );
+
+      // Invalid /replay-trader body returns 400
+      const badReplay = await fetch(`${baseUrl}/linear-desk/replay-trader`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-runtime-token": TOKEN },
+        body: JSON.stringify({ ticker: "", cycle_id: "c1" }),
+      });
+      expect(badReplay.status).toBe(400);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (prevToken === undefined) delete process.env.RUNTIME_API_TOKEN;
+      else process.env.RUNTIME_API_TOKEN = prevToken;
     }
   });
 });

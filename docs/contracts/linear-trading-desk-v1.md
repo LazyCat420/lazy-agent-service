@@ -21,6 +21,13 @@ Replaces split-brain Python harness loops (`platform/lazycat-sdk`, `CrossModelCr
 - `portfolio_context`: `{ held, shares_owned, avg_cost, cash_usd, max_position_pct, equity_usd? }`
 - `macro_snapshot?`: `{ vix?, spy_20d_return?, yield_10y_2y?, regime_note? }`
 - `followup_tools?`: `string[]` (filtered by `profiles/trading-linear-v1.json` `allowed_local_tools`, bounded by `budget_limits.max_tool_calls=6`, dispatched via `LocalToolRouter`)
+- `directives?`: `string[]` (max 6 short active cycle/ticker directives passed into Stage 1 & Stage 3 prompts)
+- `playbook_bullets?`: `{ id, text, section? }[]` (max 15 itemized Stage 3 rules; cited back in `decision.cited_playbook_ids`)
+- `ticker_history_card?`: `{ date, action, outcome, pnl_pct, regime? }[]` (max 5 factual-only prior outcomes injected into Stage 3)
+
+### Offline Stage 3 Replay Endpoint
+
+- `POST /v1/trading/linear-desk/replay-trader` (`runtimeAuth` protected): accepts `{ ticker, cycle_id, portfolio_context, macro_snapshot?, dossier, directives?, playbook_bullets?, ticker_history_card? }` and runs **Stage 3 (`final_trader`) only** (zero Stage 1/2 calls, zero external tools), returning `{ ticker, cycle_id, model_id, box, decision, prompt_echo, usage, elapsed_ms }`.
 
 ## 3-Stage Linear Pipeline (`runLinearDeskPipeline`)
 
@@ -39,6 +46,6 @@ Replaces split-brain Python harness loops (`platform/lazycat-sdk`, `CrossModelCr
    - Sole decision maker over verified `dossier`, `portfolio_context`, and `macro_snapshot`, bounded by `budget_limits.max_retries=1` for schema repair.
    - `held=false` permits `"BUY" | "HOLD" | "AVOID"`; `held=true` permits `"BUY" | "HOLD" | "SELL"`.
    - `entry_mode` (`"enter_now" | "enter_on_condition" | "watch_only"`) + optional structured `dynamic_trigger` (`{ type, value }`); `enter_on_condition` without a valid evaluable `dynamic_trigger` is normalized to `"watch_only"`.
-   - Normal digits and percentages are permitted in `decision_thesis` alongside `cited_fact_ids`.
-   - Returns `{ ticker, cycle_id, model_id, dossier, aa_noise_metrics, critic_report, decision, stage_timings_ms?, usage? }`.
+   - Normal digits and percentages are permitted in `decision_thesis` alongside `cited_fact_ids` and optional `cited_playbook_ids`.
+   - Returns `{ ticker, cycle_id, model_id, dossier, aa_noise_metrics, critic_report, decision, stage_timings_ms?, usage?, prompt_echo?, learning_identity? }`.
    - Typed HTTP error mapping on `/v1/trading/linear-desk`: `StageParseError` -> `422`, `QueueTimeoutError` / `PoolUnavailableError` -> `503`, `PipelineTimeoutError` -> `504`, client abort -> `499`.

@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
@@ -20,6 +21,9 @@ import type {
   LinearDeskRequest,
   LinearDeskResponse,
   LinearDeskUsage,
+  LinearStagePromptEcho,
+  ReplayTraderRequest,
+  ReplayTraderResponse,
   ResearchExtractionOutput,
   TraderDecision,
 } from "./types.ts";
@@ -152,22 +156,25 @@ function normalizeTraderDecision(raw: {
   stop_loss: number | null;
   take_profit: number | null;
   cited_fact_ids: string[];
+  cited_playbook_ids: string[];
   decision_thesis: string;
 }): TraderDecision {
+  const citedPlaybooks = Array.from(new Set(raw.cited_playbook_ids.map((id) => id.trim()).filter(Boolean)));
+  const base = { ...raw, cited_playbook_ids: citedPlaybooks };
   if (raw.action === "SELL") {
-    return { ...raw, entry_mode: "enter_now", dynamic_trigger: null };
+    return { ...base, entry_mode: "enter_now", dynamic_trigger: null };
   }
   if (raw.action === "HOLD" || raw.action === "AVOID") {
-    return { ...raw, entry_mode: "watch_only", dynamic_trigger: null };
+    return { ...base, entry_mode: "watch_only", dynamic_trigger: null };
   }
   if (raw.entry_mode === "enter_on_condition" && raw.dynamic_trigger) {
-    return { ...raw, entry_mode: "enter_on_condition", dynamic_trigger: raw.dynamic_trigger };
+    return { ...base, entry_mode: "enter_on_condition", dynamic_trigger: raw.dynamic_trigger };
   }
   if (raw.entry_mode === "watch_only" || raw.entry_mode === "enter_on_condition") {
-    return { ...raw, entry_mode: "watch_only", dynamic_trigger: null };
+    return { ...base, entry_mode: "watch_only", dynamic_trigger: null };
   }
   return {
-    ...raw,
+    ...base,
     entry_mode: raw.position_size_pct > 0 ? "enter_now" : "watch_only",
     dynamic_trigger: null,
   };
@@ -187,6 +194,7 @@ function buildTraderSchema(held: boolean) {
       stop_loss: z.number().finite().nullable().default(null),
       take_profit: z.number().finite().nullable().default(null),
       cited_fact_ids: z.array(z.string()).default([]),
+      cited_playbook_ids: z.array(z.string()).default([]),
       decision_thesis: z.string().min(1),
     })
     .transform((raw) => normalizeTraderDecision(raw));
@@ -473,11 +481,53 @@ function formatPromptLedgerEntry(
   };
 }
 
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function messageText(msg?: ChatMessage): string {
+  if (!msg) return "";
+  return typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+}
+
+function buildPromptEcho(params: {
+  stage: LinearStagePromptEcho["stage"];
+  role: LinearStagePromptEcho["role"];
+  artifactType: LinearStagePromptEcho["artifact_type"];
+  messages: ChatMessage[];
+  modelId: string | null;
+  box: string;
+  elapsedMs: number;
+}): LinearStagePromptEcho {
+  const system = messageText(params.messages[0]);
+  const user = messageText(params.messages[1]);
+  return {
+    stage: params.stage,
+    role: params.role,
+    artifact_type: params.artifactType,
+    system,
+    user,
+    system_sha256: sha256Hex(system),
+    user_sha256: sha256Hex(user),
+    model_id: params.modelId || null,
+    box: params.box,
+    elapsed_ms: params.elapsedMs,
+  };
+}
+
 function renderLedgerPrompt(req: LinearDeskRequest): string {
   const items = Object.entries(req.ledger_entries || {}).map(([key, e]) =>
     formatPromptLedgerEntry(e, req.ticker, key),
   );
-  return JSON.stringify({ ticker: req.ticker, cycle_id: req.cycle_id, ledger_entries: items });
+  const payload: Record<string, unknown> = {
+    ticker: req.ticker,
+    cycle_id: req.cycle_id,
+    ledger_entries: items,
+  };
+  if (req.directives && req.directives.length > 0) {
+    payload.active_directives = req.directives;
+  }
+  return JSON.stringify(payload);
 }
 
 function extractorMessages(req: LinearDeskRequest): ChatMessage[] {
@@ -530,20 +580,39 @@ function traderMessages(
   const actionRule = held
     ? "The portfolio currently holds this ticker; valid actions are BUY, HOLD, SELL."
     : "The portfolio does NOT hold this ticker; SELL is forbidden — valid actions are BUY, HOLD, AVOID.";
+  const hasPlaybook = Boolean(req.playbook_bullets && req.playbook_bullets.length > 0);
+  const playbookRule = hasPlaybook
+    ? " If playbook_rules are supplied, follow applicable rules and list their pb_... IDs in cited_playbook_ids (or [] if none applied)."
+    : "";
+  const playbookField = hasPlaybook ? ", cited_playbook_ids:string[]" : "";
+  const userPayload: Record<string, unknown> = {
+    ticker: req.ticker,
+    portfolio_context: req.portfolio_context,
+    macro_snapshot: req.macro_snapshot || {},
+    verified_dossier: dossier,
+  };
+  if (req.directives && req.directives.length > 0) {
+    userPayload.active_directives = req.directives;
+  }
+  if (req.playbook_bullets && req.playbook_bullets.length > 0) {
+    userPayload.playbook_rules = req.playbook_bullets.map((b) => ({
+      id: b.id,
+      ...(b.section ? { section: b.section } : {}),
+      text: b.text,
+    }));
+  }
+  if (req.ticker_history_card && req.ticker_history_card.length > 0) {
+    userPayload.prior_ticker_outcomes = req.ticker_history_card;
+  }
   return [
     {
       role: "system",
       content:
-        `You are Stage 3 (Final Trader Agent) — the sole decision maker. Analyze the verified dossier alongside portfolio_context and macro_snapshot. ${actionRule} Normal digits and percentages (e.g. '20%', '1.5x', '$185') ARE encouraged in decision_thesis. Cite supporting fct_... IDs in cited_fact_ids. Use entry_mode="enter_now" to act immediately, "watch_only" for HOLD/AVOID or passive monitoring, or "enter_on_condition" ONLY on BUY accompanied by a structured dynamic_trigger ({type:"price_below|price_above|rsi_14_oversold|rsi_14_overbought|sma_20_drop|sma_20_rise|sma_50_drop|sma_50_rise|sma_200_drop|sma_200_rise|trailing_drop", value:number}). Return raw JSON: {action:"${allowedActions}", entry_mode:"enter_now|enter_on_condition|watch_only", entry_condition:string|null, dynamic_trigger:{type:string,value:number}|null, position_size_pct:number, stop_loss:number|null, take_profit:number|null, cited_fact_ids:string[], decision_thesis:string}.`,
+        `You are Stage 3 (Final Trader Agent) — the sole decision maker. Analyze the verified dossier alongside portfolio_context and macro_snapshot. ${actionRule}${playbookRule} Normal digits and percentages (e.g. '20%', '1.5x', '$185') ARE encouraged in decision_thesis. Cite supporting fct_... IDs in cited_fact_ids. Use entry_mode="enter_now" to act immediately, "watch_only" for HOLD/AVOID or passive monitoring, or "enter_on_condition" ONLY on BUY accompanied by a structured dynamic_trigger ({type:"price_below|price_above|rsi_14_oversold|rsi_14_overbought|sma_20_drop|sma_20_rise|sma_50_drop|sma_50_rise|sma_200_drop|sma_200_rise|trailing_drop", value:number}). Return raw JSON: {action:"${allowedActions}", entry_mode:"enter_now|enter_on_condition|watch_only", entry_condition:string|null, dynamic_trigger:{type:string,value:number}|null, position_size_pct:number, stop_loss:number|null, take_profit:number|null, cited_fact_ids:string[]${playbookField}, decision_thesis:string}.`,
     },
     {
       role: "user",
-      content: JSON.stringify({
-        ticker: req.ticker,
-        portfolio_context: req.portfolio_context,
-        macro_snapshot: req.macro_snapshot || {},
-        verified_dossier: dossier,
-      }),
+      content: JSON.stringify(userPayload),
     },
   ];
 }
@@ -606,6 +675,7 @@ async function parseStageWithRepair<T>(
 }
 
 interface ExtractorSeedConfig {
+  stageName: "research_extractor_a" | "research_extractor_b";
   preferredMember: string;
   seed: number;
   tools: CoreTool[];
@@ -624,30 +694,98 @@ async function runExtractorSeed(
   output: ResearchExtractionOutput;
   usage: LinearDeskUsage;
   elapsedMs: number;
+  echo: LinearStagePromptEcho;
 }> {
   const t0 = Date.now();
   const target = await acquire(seedCfg.preferredMember, seedCfg.seed, 0.2, 2560, deadlineAtMs, req.signal);
   try {
+    const msgs = extractorMessages(req);
     const { data, usage } = await parseStageWithRepair(
       target,
-      extractorMessages(req),
+      msgs,
       seedCfg.tools,
       seedCfg.maxSteps,
       ResearchExtractionSchema,
       `Stage 1 Extractor (${seedCfg.preferredMember})`,
       req.signal,
     );
+    const elapsedMs = Math.max(0, Date.now() - t0);
     return {
       boxName: target.boxName,
       modelId: target.modelId,
       sameBoxFallback: target.sameBoxFallback,
       output: data,
       usage,
-      elapsedMs: Math.max(0, Date.now() - t0),
+      elapsedMs,
+      echo: buildPromptEcho({
+        stage: seedCfg.stageName,
+        role: "linear_research_extractor",
+        artifactType: "desk_note",
+        messages: msgs,
+        modelId: target.modelId,
+        box: target.boxName,
+        elapsedMs,
+      }),
     };
   } finally {
     target.release();
   }
+}
+
+function finalizeCriticCleanup(params: {
+  scopedReq: LinearDeskRequest;
+  reconciled: ReturnType<typeof reconcileAaExtractions>;
+  preCheck: ReturnType<typeof verifyFactsAgainstLedger>;
+  candidateById: Map<string, ExtractedFact>;
+  cleaned: z.infer<typeof CriticCleanupSchema>;
+  stageUsage: LinearDeskUsage;
+  elapsedMs: number;
+  echo: LinearStagePromptEcho;
+}) {
+  const { scopedReq, reconciled, preCheck, candidateById, cleaned, stageUsage, elapsedMs, echo } = params;
+  const dropped = [...cleaned.dropped_facts];
+  const explicitDropIds = new Set(cleaned.dropped_facts.map((d) => d.fact_id));
+  const admittedById = new Map<string, ExtractedFact>();
+  for (const f of cleaned.facts) {
+    const origin = candidateById.get(f.fact_id);
+    if (!origin) {
+      dropped.push({ fact_id: f.fact_id, reason: "not_in_stage1_candidates" });
+      continue;
+    }
+    admittedById.set(f.fact_id, {
+      ...f,
+      uncorroborated: origin.uncorroborated ?? false,
+    });
+  }
+  // Preserve pre-verified Stage 1 facts unless explicitly dropped by the critic (claude:R3-F1)
+  for (const verifiedPre of preCheck.verifiedFacts) {
+    if (!admittedById.has(verifiedPre.fact_id) && !explicitDropIds.has(verifiedPre.fact_id)) {
+      admittedById.set(verifiedPre.fact_id, verifiedPre);
+    }
+  }
+  const postCheck = verifyFactsAgainstLedger(Array.from(admittedById.values()), scopedReq.ticker, scopedReq.ledger_entries);
+  for (const m of postCheck.mismatches) {
+    dropped.push({ fact_id: m.fact_id, reason: m.detail });
+  }
+  return {
+    dossier: {
+      summary: reconciled.summary,
+      facts: postCheck.verifiedFacts,
+      catalysts: filterToStage1List(cleaned.catalysts, reconciled.catalysts),
+      risks: filterToStage1List(cleaned.risks, reconciled.risks),
+      data_gaps: filterToStage1List(cleaned.data_gaps, reconciled.dataGaps),
+    },
+    report: {
+      passed: postCheck.mismatches.length === 0,
+      llm_repaired: true,
+      mismatches: preCheck.mismatches,
+      dropped_facts: dropped,
+      notes: cleaned.notes,
+    },
+    usage: stageUsage,
+    elapsedMs,
+    echo,
+  };
 }
 
 async function runCriticStage(
@@ -661,13 +799,12 @@ async function runCriticStage(
   report: DataCriticReport;
   usage: LinearDeskUsage;
   elapsedMs: number;
+  echo?: LinearStagePromptEcho;
 }> {
   const effectiveSignal = combinedSignal ?? scopedReq.signal;
   const allCandidates = [...reconciled.corroboratedFacts, ...reconciled.uncorroboratedFacts];
   const preCheck = verifyFactsAgainstLedger(allCandidates, scopedReq.ticker, scopedReq.ledger_entries);
-  const needsLlmCritic = preCheck.mismatches.length > 0 || reconciled.uncorroboratedFacts.length > 0;
-
-  if (!needsLlmCritic) {
+  if (preCheck.mismatches.length === 0 && reconciled.uncorroboratedFacts.length === 0) {
     return {
       dossier: {
         summary: reconciled.summary,
@@ -692,25 +829,48 @@ async function runCriticStage(
   const t0 = Date.now();
   const target = await acquire(undefined, 303, 0.1, 3584, deadlineAtMs, effectiveSignal);
   try {
-    let cleaned: z.infer<typeof CriticCleanupSchema>;
-    let stageUsage = emptyUsage();
+    const msgs = criticMessages(
+      scopedReq,
+      allCandidates,
+      preCheck.mismatches,
+      reconciled.catalysts,
+      reconciled.risks,
+      reconciled.dataGaps,
+    );
     try {
       const parsed = await parseStageWithRepair(
         target,
-        criticMessages(scopedReq, allCandidates, preCheck.mismatches, reconciled.catalysts, reconciled.risks, reconciled.dataGaps),
+        msgs,
         [],
         1,
         CriticCleanupSchema,
         "Stage 2 Data Critic",
         effectiveSignal,
       );
-      cleaned = parsed.data;
-      stageUsage = parsed.usage;
+      const elapsedMs = Math.max(0, Date.now() - t0);
+      return finalizeCriticCleanup({
+        scopedReq,
+        reconciled,
+        preCheck,
+        candidateById,
+        cleaned: parsed.data,
+        stageUsage: parsed.usage,
+        elapsedMs,
+        echo: buildPromptEcho({
+          stage: "data_critic",
+          role: "linear_data_critic",
+          artifactType: "critic_report",
+          messages: msgs,
+          modelId: target.modelId,
+          box: target.boxName,
+          elapsedMs,
+        }),
+      });
     } catch (err) {
       if (effectiveSignal?.aborted || scopedReq.signal?.aborted || !(err instanceof StageParseError)) throw err;
       const errMsg = err.message;
+      const elapsedMs = Math.max(0, Date.now() - t0);
       logger.warn(`[LinearDesk] Stage 2 Data Critic LLM fallback for ${scopedReq.ticker} (${scopedReq.cycle_id}): ${errMsg}`);
-      const fallbackDropped = preCheck.mismatches.map((m) => ({ fact_id: m.fact_id, reason: m.detail }));
       return {
         dossier: {
           summary: reconciled.summary,
@@ -723,55 +883,22 @@ async function runCriticStage(
           passed: preCheck.mismatches.length === 0,
           llm_repaired: false,
           mismatches: preCheck.mismatches,
-          dropped_facts: fallbackDropped,
+          dropped_facts: preCheck.mismatches.map((m) => ({ fact_id: m.fact_id, reason: m.detail })),
           notes: [`critic_llm_fallback: ${errMsg.slice(0, 160)}`],
         },
-        usage: stageUsage,
-        elapsedMs: Math.max(0, Date.now() - t0),
+        usage: emptyUsage(),
+        elapsedMs,
+        echo: buildPromptEcho({
+          stage: "data_critic",
+          role: "linear_data_critic",
+          artifactType: "critic_report",
+          messages: msgs,
+          modelId: target.modelId,
+          box: target.boxName,
+          elapsedMs,
+        }),
       };
     }
-    const dropped = [...cleaned.dropped_facts];
-    const explicitDropIds = new Set(cleaned.dropped_facts.map((d) => d.fact_id));
-    const admittedById = new Map<string, ExtractedFact>();
-    for (const f of cleaned.facts) {
-      const origin = candidateById.get(f.fact_id);
-      if (!origin) {
-        dropped.push({ fact_id: f.fact_id, reason: "not_in_stage1_candidates" });
-        continue;
-      }
-      admittedById.set(f.fact_id, {
-        ...f,
-        uncorroborated: origin.uncorroborated ?? false,
-      });
-    }
-    // Preserve pre-verified Stage 1 facts unless explicitly dropped by the critic (claude:R3-F1)
-    for (const verifiedPre of preCheck.verifiedFacts) {
-      if (!admittedById.has(verifiedPre.fact_id) && !explicitDropIds.has(verifiedPre.fact_id)) {
-        admittedById.set(verifiedPre.fact_id, verifiedPre);
-      }
-    }
-    const postCheck = verifyFactsAgainstLedger(Array.from(admittedById.values()), scopedReq.ticker, scopedReq.ledger_entries);
-    for (const m of postCheck.mismatches) {
-      dropped.push({ fact_id: m.fact_id, reason: m.detail });
-    }
-    return {
-      dossier: {
-        summary: reconciled.summary,
-        facts: postCheck.verifiedFacts,
-        catalysts: filterToStage1List(cleaned.catalysts, reconciled.catalysts),
-        risks: filterToStage1List(cleaned.risks, reconciled.risks),
-        data_gaps: filterToStage1List(cleaned.data_gaps, reconciled.dataGaps),
-      },
-      report: {
-        passed: postCheck.mismatches.length === 0,
-        llm_repaired: true,
-        mismatches: preCheck.mismatches,
-        dropped_facts: dropped,
-        notes: cleaned.notes,
-      },
-      usage: stageUsage,
-      elapsedMs: Math.max(0, Date.now() - t0),
-    };
   } finally {
     target.release();
   }
@@ -782,25 +909,42 @@ async function runTraderStage(
   dossier: ResearchExtractionOutput,
   acquire: NonNullable<LinearDeskDeps["acquireTarget"]>,
   deadlineAtMs?: number,
-): Promise<{ decision: TraderDecision; modelId: string; usage: LinearDeskUsage; elapsedMs: number }> {
+): Promise<{
+  decision: TraderDecision;
+  modelId: string;
+  usage: LinearDeskUsage;
+  elapsedMs: number;
+  echo: LinearStagePromptEcho;
+}> {
   const t0 = Date.now();
   const schema = buildTraderSchema(req.portfolio_context.held);
   const target = await acquire(undefined, 404, 0.2, 1536, deadlineAtMs, req.signal);
   try {
+    const msgs = traderMessages(req, dossier);
     const { data, usage } = await parseStageWithRepair(
       target,
-      traderMessages(req, dossier),
+      msgs,
       [],
       1,
       schema,
       "Stage 3 Final Trader",
       req.signal,
     );
+    const elapsedMs = Math.max(0, Date.now() - t0);
     return {
       decision: data,
       modelId: target.modelId,
       usage,
-      elapsedMs: Math.max(0, Date.now() - t0),
+      elapsedMs,
+      echo: buildPromptEcho({
+        stage: "final_trader",
+        role: "linear_final_trader",
+        artifactType: "final_decision",
+        messages: msgs,
+        modelId: target.modelId,
+        box: target.boxName,
+        elapsedMs,
+      }),
     };
   } finally {
     target.release();
@@ -852,13 +996,25 @@ export async function runLinearDeskPipeline(
     [seedA, seedB] = await Promise.all([
       runExtractorSeed(
         scopedReq,
-        { preferredMember: "gold-spark", seed: 101, tools: stage1Tools, maxSteps: stage1MaxSteps },
+        {
+          stageName: "research_extractor_a",
+          preferredMember: "gold-spark",
+          seed: 101,
+          tools: stage1Tools,
+          maxSteps: stage1MaxSteps,
+        },
         acquire,
         deadlineAtMs,
       ),
       runExtractorSeed(
         scopedReq,
-        { preferredMember: "dell2", seed: 202, tools: stage1Tools, maxSteps: stage1MaxSteps },
+        {
+          stageName: "research_extractor_b",
+          preferredMember: "dell2",
+          seed: 202,
+          tools: stage1Tools,
+          maxSteps: stage1MaxSteps,
+        },
         acquire,
         deadlineAtMs,
       ),
@@ -886,9 +1042,16 @@ export async function runLinearDeskPipeline(
     addUsage(seedA.usage, seedB.usage),
     addUsage(criticRes.usage, traderRes.usage),
   );
+  const promptEcho: LinearStagePromptEcho[] = [
+    seedA.echo,
+    seedB.echo,
+    ...(criticRes.echo ? [criticRes.echo] : []),
+    traderRes.echo,
+  ];
+  const upperTicker = req.ticker.toUpperCase();
 
   return {
-    ticker: req.ticker.toUpperCase(),
+    ticker: upperTicker,
     cycle_id: req.cycle_id,
     model_id: traderRes.modelId || seedA.modelId || seedB.modelId,
     dossier: criticRes.dossier,
@@ -904,5 +1067,50 @@ export async function runLinearDeskPipeline(
       total_ms: Math.max(0, Date.now() - pipelineStart),
     },
     usage: totalUsage,
+    prompt_echo: promptEcho,
+    learning_identity: {
+      conversation_id: `${req.cycle_id}:${upperTicker}:${randomUUID()}`,
+      output_hash: sha256Hex(JSON.stringify(traderRes.decision)),
+    },
+  };
+}
+
+/**
+ * Offline Stage 3 replay entrypoint: evaluates `runTraderStage` over a saved
+ * Stage 2 verified dossier with zero Stage 1/2 calls and zero external tools.
+ */
+export async function runLinearTraderReplay(
+  req: ReplayTraderRequest,
+  deps: LinearDeskDeps = {},
+): Promise<ReplayTraderResponse> {
+  const deadlineAtMs = Date.now() + LINEAR_PROFILE.maxDurationMs;
+  const acquire = deps.acquireTarget ?? defaultAcquireTarget;
+  const deadlineSignal = AbortSignal.timeout(LINEAR_PROFILE.maxDurationMs);
+  const combinedSignal = AbortSignal.any([
+    deadlineSignal,
+    ...(req.signal ? [req.signal] : []),
+  ]);
+  const upperTicker = req.ticker.toUpperCase();
+  const stageReq: LinearDeskRequest = {
+    ticker: upperTicker,
+    cycle_id: req.cycle_id,
+    ledger_entries: {},
+    portfolio_context: req.portfolio_context,
+    macro_snapshot: req.macro_snapshot,
+    directives: req.directives,
+    playbook_bullets: req.playbook_bullets,
+    ticker_history_card: req.ticker_history_card,
+    signal: combinedSignal,
+  };
+  const traderRes = await runTraderStage(stageReq, req.dossier, acquire, deadlineAtMs);
+  return {
+    ticker: upperTicker,
+    cycle_id: req.cycle_id,
+    model_id: traderRes.modelId,
+    box: traderRes.echo.box,
+    decision: traderRes.decision,
+    prompt_echo: traderRes.echo,
+    usage: traderRes.usage,
+    elapsed_ms: traderRes.elapsedMs,
   };
 }

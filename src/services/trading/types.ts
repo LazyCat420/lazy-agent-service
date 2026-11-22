@@ -120,6 +120,7 @@ export interface TraderDecision {
   stop_loss: number | null;
   take_profit: number | null;
   cited_fact_ids: string[];
+  cited_playbook_ids?: string[];
   decision_thesis: string;
 }
 
@@ -138,6 +139,38 @@ export interface LinearDeskUsage {
   total_tokens: number;
 }
 
+export interface LinearPlaybookBullet {
+  id: string;
+  text: string;
+  section?: string;
+}
+
+export interface LinearTickerHistoryEntry {
+  date: string;
+  action: TraderAction;
+  outcome: string;
+  pnl_pct?: number | null;
+  regime?: string;
+}
+
+export interface LinearStagePromptEcho {
+  stage: "research_extractor_a" | "research_extractor_b" | "data_critic" | "final_trader";
+  role: "linear_research_extractor" | "linear_data_critic" | "linear_final_trader";
+  artifact_type: "desk_note" | "critic_report" | "final_decision";
+  system: string;
+  user: string;
+  system_sha256: string;
+  user_sha256: string;
+  model_id: string | null;
+  box: string;
+  elapsed_ms: number;
+}
+
+export interface LinearLearningIdentity {
+  conversation_id: string;
+  output_hash: string;
+}
+
 export interface LinearDeskRequest {
   ticker: string;
   cycle_id: string;
@@ -145,6 +178,9 @@ export interface LinearDeskRequest {
   portfolio_context: PortfolioContext;
   macro_snapshot?: MacroSnapshot;
   followup_tools?: string[];
+  directives?: string[];
+  playbook_bullets?: LinearPlaybookBullet[];
+  ticker_history_card?: LinearTickerHistoryEntry[];
   signal?: AbortSignal;
 }
 
@@ -158,4 +194,29 @@ export interface LinearDeskResponse {
   decision: TraderDecision;
   stage_timings_ms?: LinearDeskStageTimings;
   usage?: LinearDeskUsage;
+  prompt_echo?: LinearStagePromptEcho[];
+  learning_identity?: LinearLearningIdentity;
+}
+
+export interface ReplayTraderRequest {
+  ticker: string;
+  cycle_id: string;
+  portfolio_context: PortfolioContext;
+  macro_snapshot?: MacroSnapshot;
+  dossier: ResearchExtractionOutput;
+  directives?: string[];
+  playbook_bullets?: LinearPlaybookBullet[];
+  ticker_history_card?: LinearTickerHistoryEntry[];
+  signal?: AbortSignal;
+}
+
+export interface ReplayTraderResponse {
+  ticker: string;
+  cycle_id: string;
+  model_id: string;
+  box: string;
+  decision: TraderDecision;
+  prompt_echo: LinearStagePromptEcho;
+  usage: LinearDeskUsage;
+  elapsed_ms: number;
 }
