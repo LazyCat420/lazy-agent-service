@@ -88,6 +88,91 @@ describe("FactLedgerVerifier (0-GPU control + mutation checks)", () => {
       "number_mismatch",
     ]);
   });
+
+  it("scales T/B/M/K unit suffixes in structured fields and ledger summaries while rejecting wrong magnitudes (F5)", () => {
+    const ledgerWithUnits: Record<string, LedgerEntry> = {
+      fct_inst: {
+        fact_id: "fct_inst",
+        tool_name: "get_institutional_holders",
+        ticker: "AAPL",
+        summary: "Institutional holdings total_value 88167567656",
+        raw: { total_value: 88167567656 },
+      },
+      fct_rev: {
+        fact_id: "fct_rev",
+        tool_name: "get_fundamentals",
+        ticker: "AAPL",
+        summary: "Revenue $1.5M, backlog $250K, market cap $3.60T",
+        raw: {},
+      },
+      fct_summary_b: {
+        fact_id: "fct_summary_b",
+        tool_name: "get_institutional_holders",
+        ticker: "AAPL",
+        summary: "Vanguard holdings total $88.17B in AAPL.",
+        raw: { note: "unstructured text only" },
+      },
+    };
+    const billionFact = makeFact({
+      fact_id: "fct_inst",
+      ticker: "AAPL",
+      category: "fundamental",
+      metric: "total_value",
+      value: "$88.17B",
+      raw_number: 88167567656,
+    });
+    const millionFact = makeFact({
+      fact_id: "fct_rev",
+      ticker: "AAPL",
+      category: "fundamental",
+      metric: "revenue",
+      value: "$1.5M",
+      raw_number: 1_500_000,
+    });
+    const thousandFact = makeFact({
+      fact_id: "fct_rev",
+      ticker: "AAPL",
+      category: "fundamental",
+      metric: "backlog",
+      value: "$250K",
+      raw_number: 250_000,
+    });
+    const trillionFact = makeFact({
+      fact_id: "fct_rev",
+      ticker: "AAPL",
+      category: "valuation",
+      metric: "market_cap",
+      value: "$3.60T",
+      raw_number: 3_598_139_523_072,
+    });
+    const summaryOnlyBillionFact = makeFact({
+      fact_id: "fct_summary_b",
+      ticker: "AAPL",
+      category: "fundamental",
+      metric: "holdings",
+      value: "$88.17B",
+      raw_number: 88167567656,
+    });
+    const wrongScaleMillionFact = makeFact({
+      fact_id: "fct_inst",
+      ticker: "AAPL",
+      category: "fundamental",
+      metric: "total_value",
+      value: "$88.17M",
+      raw_number: 88167567656,
+    });
+
+    const res = verifyFactsAgainstLedger(
+      [billionFact, millionFact, thousandFact, trillionFact, summaryOnlyBillionFact, wrongScaleMillionFact],
+      "AAPL",
+      ledgerWithUnits,
+    );
+    expect(res.verifiedFacts.map((f) => f.value)).toEqual(["$88.17B", "$1.5M", "$250K", "$3.60T", "$88.17B"]);
+    expect(res.hallucinationCount).toBe(1);
+    expect(res.mismatches).toHaveLength(1);
+    expect(res.mismatches[0].fact_id).toBe("fct_inst");
+    expect(res.mismatches[0].reason).toBe("number_mismatch");
+  });
 });
 
 describe("AaNoiseReconciler (parallel gold-spark vs dell2 A/A noise tracking)", () => {
@@ -1603,5 +1688,200 @@ describe("TradingDeskRoutes typed HTTP error mapping & ledger cap", () => {
       if (prevToken === undefined) delete process.env.RUNTIME_API_TOKEN;
       else process.env.RUNTIME_API_TOKEN = prevToken;
     }
+  });
+
+  it("excludes kept/repaired facts from dropped_facts, deduplicates dropped IDs, and injects market_technicals into Stage 3 (F4, F5)", async () => {
+    const msftLedger: Record<string, LedgerEntry> = {
+      fct_fund_msft: {
+        fact_id: "fct_fund_msft",
+        tool_name: "get_market_data",
+        ticker: "MSFT",
+        as_of: "2026-11-22T09:00:00Z",
+        summary: "Forward P/E 20.02, revenue growth 18.8%",
+        raw: { forward_pe: 20.02, rev_growth_pct: 18.8 },
+      },
+      fct_repaired_msft: {
+        fact_id: "fct_repaired_msft",
+        tool_name: "get_institutional_holders",
+        ticker: "MSFT",
+        as_of: "2026-11-22T09:00:00Z",
+        summary: "Vanguard holds $120B",
+        raw: { total_value: 120_000_000_000 },
+      },
+      fct_bad_drop: {
+        fact_id: "fct_bad_drop",
+        tool_name: "get_earnings_data",
+        ticker: "MSFT",
+        as_of: "2026-11-22T09:00:00Z",
+        summary: "EPS 3.10",
+        raw: { eps: 3.1 },
+      },
+      wbl_6df2f63be5a0041b88e3: {
+        fact_id: "wbl_6df2f63be5a0041b88e3",
+        tool_name: "get_technical_indicators",
+        ticker: "MSFT",
+        as_of: "2026-11-20",
+        summary: "=== TECHNICAL ANALYSIS: MSFT (as of 2026-11-20 00:00:00) === RSI-14: 34.8",
+        raw:
+          "=== TECHNICAL ANALYSIS: MSFT (as of 2026-11-20 00:00:00) ===\n" +
+          "RSI-14: 34.8 (NEUTRAL)\n" +
+          "MACD histogram: -5.2704 (BEARISH)\n" +
+          "Price: $484.52 (as of 2026-11-20, price_history:yfinance)\n" +
+          "  SMA_20: $522.96 (price BELOW)\n" +
+          "  SMA_50: $519.84 (price BELOW)\n" +
+          "  SMA_200: $443.63 (price ABOVE)\n" +
+          "ATR-14: $16.41 (daily volatility)\n" +
+          "ADX-14: 18.3 (WEAK/NO TREND)\n" +
+          "Support: $481.03 | Resistance: $559.15",
+      },
+      fct_quant_msft: {
+        fact_id: "fct_quant_msft",
+        tool_name: "quant_math_precompute",
+        ticker: "MSFT",
+        as_of: "2026-11-22T09:00:00Z",
+        summary: "garch_vol=HIGH, stop_2x_atr=451.7",
+        raw: {
+          garch: { vol_signal: "HIGH" },
+          atr_stop_2x: { stop_loss_price: 451.7 },
+        },
+      },
+    };
+
+    const deps: LinearDeskDeps = {
+      executeTool: async () => ({ ok: true }),
+      acquireTarget: async (preferredMember, seed) => {
+        const boxName = preferredMember || (seed === 303 ? "gold-spark" : "dell2");
+        return {
+          boxName,
+          modelId: `model-${boxName}`,
+          sameBoxFallback: false,
+          release: () => {},
+          model: (modelReq) => ({
+            async *[Symbol.asyncIterator]() {
+              const sys = String(modelReq.messages[0]?.content || "");
+              if (sys.includes("Stage 1")) {
+                // Intentionally omit technicals in Stage 1 facts (simulates 8-fact cap omission)
+                const facts: ExtractedFact[] = [
+                  makeFact({
+                    fact_id: "fct_fund_msft",
+                    ticker: "MSFT",
+                    category: "valuation",
+                    metric: "forward_pe",
+                    value: "20.02",
+                    raw_number: 20.02,
+                  }),
+                ];
+                if (preferredMember === "dell2") {
+                  facts.push(
+                    makeFact({
+                      fact_id: "fct_repaired_msft",
+                      ticker: "MSFT",
+                      category: "fundamental",
+                      metric: "total_value",
+                      value: "$120B",
+                      raw_number: 120_000_000_000,
+                    }),
+                    makeFact({
+                      fact_id: "fct_bad_drop",
+                      ticker: "MSFT",
+                      category: "earnings",
+                      metric: "eps",
+                      value: "9.99",
+                      raw_number: 9.99,
+                    }),
+                  );
+                }
+                yield JSON.stringify({ summary: "MSFT above SMA200", facts, catalysts: [], risks: [], data_gaps: [] });
+              } else if (sys.includes("Stage 2")) {
+                // Critic repairs/keeps fct_repaired_msft AND mistakenly lists it in dropped_facts,
+                // plus includes fct_bad_drop in dropped_facts alongside an ungrounded entry failing postCheck.
+                yield JSON.stringify({
+                  summary: "cleaned",
+                  facts: [
+                    makeFact({
+                      fact_id: "fct_repaired_msft",
+                      ticker: "MSFT",
+                      category: "fundamental",
+                      metric: "total_value",
+                      value: "$120B",
+                      raw_number: 120_000_000_000,
+                    }),
+                    makeFact({
+                      fact_id: "fct_invented_by_critic",
+                      ticker: "MSFT",
+                      category: "earnings",
+                      metric: "eps",
+                      value: "99",
+                      raw_number: 99,
+                    }),
+                  ],
+                  catalysts: [],
+                  risks: [],
+                  data_gaps: [],
+                  dropped_facts: [
+                    { fact_id: "fct_repaired_msft", reason: "uncorroborated flag cleared; value matches ledger" },
+                    { fact_id: "fct_bad_drop", reason: "wrong eps in seed" },
+                    { fact_id: "fct_bad_drop", reason: "duplicate entry from critic" },
+                  ],
+                  notes: ["kept fct_repaired_msft"],
+                });
+              } else {
+                yield JSON.stringify({
+                  action: "HOLD",
+                  entry_mode: "watch_only",
+                  entry_condition: null,
+                  position_size_pct: 0,
+                  stop_loss: null,
+                  take_profit: null,
+                  cited_fact_ids: ["fct_fund_msft", "wbl_6df2f63be5a0041b88e3"],
+                  decision_thesis: "Spot $484.52 sits above SMA200 $443.63.",
+                });
+              }
+            },
+          }),
+        };
+      },
+    };
+
+    const res = await runLinearDeskPipeline(
+      {
+        ticker: "MSFT",
+        cycle_id: "cycle-v3-f4-f5-test",
+        ledger_entries: msftLedger,
+        portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+        macro_snapshot: { vix: 22.1, regime_note: "ELEVATED_VOL" },
+      },
+      deps,
+    );
+
+    // Kept/repaired fact stays in dossier.facts and MUST NOT appear in dropped_facts;
+    // dropped IDs appear at most once.
+    expect(res.dossier.facts.map((f) => f.fact_id).sort()).toEqual(["fct_fund_msft", "fct_repaired_msft"]);
+    expect(res.critic_report.dropped_facts).toEqual([
+      { fact_id: "fct_bad_drop", reason: "wrong eps in seed" },
+      { fact_id: "fct_invented_by_critic", reason: "not_in_stage1_candidates" },
+    ]);
+
+    // Stage 3 prompt user payload receives deterministic market_technicals from whiteboard_ledger
+    const traderEcho = res.prompt_echo?.find((e) => e.stage === "final_trader");
+    expect(traderEcho).toBeDefined();
+    const traderPayload = JSON.parse(traderEcho!.user) as { market_technicals?: Record<string, unknown> };
+    expect(traderPayload.market_technicals).toEqual({
+      fact_id: "wbl_6df2f63be5a0041b88e3",
+      as_of: "2026-11-20",
+      price: 484.52,
+      sma_20: 522.96,
+      sma_50: 519.84,
+      sma_200: 443.63,
+      rsi_14: 34.8,
+      atr_14: 16.41,
+      macd_histogram: -5.2704,
+      adx_14: 18.3,
+      support: 481.03,
+      resistance: 559.15,
+      quant_fact_id: "fct_quant_msft",
+      stop_2x_atr: 451.7,
+      garch_vol: "HIGH",
+    });
   });
 });

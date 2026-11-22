@@ -1,7 +1,13 @@
 import type { ExtractedFact, FactMismatch, FactVerificationResult, LedgerEntry } from "./types.ts";
 
 const ISO_DATE_RE = /\b\d{4}-\d{1,2}-\d{1,2}(?:[T ][0-9:.Z+-]+)?\b/g;
-const NUM_RE = /[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?/g;
+const UNIT_MULTIPLIERS: Record<string, number> = {
+  k: 1e3,
+  m: 1e6,
+  b: 1e9,
+  t: 1e12,
+};
+const NUM_WITH_UNIT_RE = /([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*([TBMK])?(?![a-zA-Z])/gi;
 const NUMERIC_CATEGORIES = new Set(["price", "valuation", "fundamental", "technical"]);
 
 function normalizeKey(name: string): string {
@@ -16,11 +22,13 @@ function extractNumbersFromUnknown(value: unknown, out: number[], depth = 0): vo
   }
   if (typeof value === "string") {
     const cleaned = value.replace(ISO_DATE_RE, " ");
-    const matches = cleaned.match(NUM_RE);
-    if (matches) {
-      for (const token of matches) {
-        const parsed = Number(token.replace(/,/g, ""));
-        if (Number.isFinite(parsed)) out.push(parsed);
+    for (const match of cleaned.matchAll(NUM_WITH_UNIT_RE)) {
+      const parsed = Number(match[1].replace(/,/g, ""));
+      if (!Number.isFinite(parsed)) continue;
+      out.push(parsed);
+      const mult = match[2] ? UNIT_MULTIPLIERS[match[2].toLowerCase()] : undefined;
+      if (mult && Number.isFinite(parsed * mult)) {
+        out.push(parsed * mult);
       }
     }
     return;
@@ -135,11 +143,15 @@ function collectCandidateLedgerNumbers(
 function parseScalarValueNumber(value: string): { num: number; isPercent: boolean } | null {
   const trimmed = (value || "").trim().replace(ISO_DATE_RE, " ");
   if (!trimmed) return null;
-  const m = trimmed.match(/^[$€£]?\s*([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(%|x|B|M|K)?$/i);
+  const m = trimmed.match(/^[$€£]?\s*([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(%|x|T|B|M|K)?$/i);
   if (!m) return null;
-  const num = Number(m[1].replace(/,/g, ""));
+  const base = Number(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(base)) return null;
+  const suffix = (m[2] || "").toLowerCase();
+  const mult = suffix ? UNIT_MULTIPLIERS[suffix] : undefined;
+  const num = typeof mult === "number" ? base * mult : base;
   if (!Number.isFinite(num)) return null;
-  return { num, isPercent: m[2] === "%" };
+  return { num, isPercent: suffix === "%" };
 }
 
 function verifyTickerMatch(

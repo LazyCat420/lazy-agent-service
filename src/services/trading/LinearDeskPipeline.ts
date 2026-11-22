@@ -567,7 +567,7 @@ function criticMessages(
     {
       role: "system",
       content:
-        "You are Stage 2 (Data Critic Auditor). Your ONLY job is to verify and clean data before decision-making — NEVER emit a trade decision or opinion. Inspect every fact (especially `uncorroborated: true` claims and deterministic `mismatches`) against `ledger_entries`. Fix wrong numbers/tickers when grounded in `ledger_entries` or drop ungrounded claims into `dropped_facts`. Only include repaired or audited facts in `facts` (already-verified corroborated facts are preserved automatically unless listed in `dropped_facts`). Keep each fact `summary`, `dropped_facts[].reason`, and `notes` concise (<= 80 chars, no unescaped double-quotes), with at most 3 `notes`. Return raw JSON matching {facts:[...], catalysts:[], risks:[], data_gaps:[], dropped_facts:[{fact_id,reason}], notes:[]}.",
+        "You are Stage 2 (Data Critic Auditor). Your ONLY job is to verify and clean data before decision-making — NEVER emit a trade decision or opinion. Inspect every fact (especially `uncorroborated: true` claims and deterministic `mismatches`) against `ledger_entries`. Fix wrong numbers/tickers when grounded in `ledger_entries` or drop ungrounded claims into `dropped_facts`. Only include repaired or audited facts in `facts` (already-verified corroborated facts are preserved automatically unless listed in `dropped_facts`). Never list kept or repaired facts in `dropped_facts`; record audit remarks for kept facts in `notes` instead. Keep each fact `summary`, `dropped_facts[].reason`, and `notes` concise (<= 80 chars, no unescaped double-quotes), with at most 3 `notes`. Return raw JSON matching {facts:[...], catalysts:[], risks:[], data_gaps:[], dropped_facts:[{fact_id,reason}], notes:[]}.",
     },
     {
       role: "user",
@@ -579,6 +579,130 @@ function criticMessages(
       }),
     },
   ];
+}
+
+const TECH_REGEX_FIELDS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["price", /Price:\s*\$?([-+]?\d+(?:,\d{3})*(?:\.\d+)?)/i],
+  ["sma_20", /SMA_?20:\s*\$?([-+]?\d+(?:,\d{3})*(?:\.\d+)?)/i],
+  ["sma_50", /SMA_?50:\s*\$?([-+]?\d+(?:,\d{3})*(?:\.\d+)?)/i],
+  ["sma_200", /SMA_?200:\s*\$?([-+]?\d+(?:,\d{3})*(?:\.\d+)?)/i],
+  ["rsi_14", /RSI[-_]?14:\s*([-+]?\d+(?:\.\d+)?)/i],
+  ["atr_14", /ATR[-_]?14:\s*\$?([-+]?\d+(?:,\d{3})*(?:\.\d+)?)/i],
+  ["macd_histogram", /MACD\s+histogram:\s*([-+]?\d+(?:\.\d+)?)/i],
+  ["adx_14", /ADX[-_]?14:\s*([-+]?\d+(?:\.\d+)?)/i],
+  ["support", /Support:\s*\$?([-+]?\d+(?:,\d{3})*(?:\.\d+)?)/i],
+  ["resistance", /Resistance:\s*\$?([-+]?\d+(?:,\d{3})*(?:\.\d+)?)/i],
+];
+
+const TECH_OBJECT_KEYS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ["price", ["price", "close", "last_close"]],
+  ["sma_20", ["sma_20"]],
+  ["sma_50", ["sma_50"]],
+  ["sma_200", ["sma_200"]],
+  ["rsi_14", ["rsi_14"]],
+  ["atr_14", ["atr_14"]],
+  ["macd_histogram", ["macd_histogram"]],
+  ["adx_14", ["adx_14"]],
+  ["support", ["support"]],
+  ["resistance", ["resistance"]],
+];
+
+function asPlainObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function parseTechnicalObject(rawObj: Record<string, unknown>, out: Record<string, unknown>): number {
+  let count = 0;
+  for (const [targetKey, aliases] of TECH_OBJECT_KEYS) {
+    for (const alias of aliases) {
+      const val = rawObj[alias];
+      if (typeof val === "number" && Number.isFinite(val)) {
+        out[targetKey] = val;
+        count++;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
+function parseTechnicalText(text: string, out: Record<string, unknown>): number {
+  let count = 0;
+  for (const [field, re] of TECH_REGEX_FIELDS) {
+    if (out[field] !== undefined) continue;
+    const m = text.match(re);
+    if (!m) continue;
+    const num = Number(m[1].replace(/,/g, ""));
+    if (Number.isFinite(num)) {
+      out[field] = num;
+      count++;
+    }
+  }
+  return count;
+}
+
+function applyTechnicalIndicatorEntry(
+  entry: LedgerEntry,
+  key: string,
+  out: Record<string, unknown>,
+): void {
+  if (out.fact_id === undefined) {
+    out.fact_id = (entry.fact_id || key).trim();
+  }
+  if (out.as_of === undefined && entry.as_of) {
+    out.as_of = entry.as_of;
+  }
+  const rawObj = asPlainObject(entry.raw);
+  let matchedCount = rawObj ? parseTechnicalObject(rawObj, out) : 0;
+  const text = typeof entry.raw === "string" && entry.raw.trim() ? entry.raw : (entry.summary || "");
+  if (text) {
+    matchedCount += parseTechnicalText(text, out);
+  }
+  if (matchedCount === 0 && text && out.excerpt === undefined) {
+    out.excerpt = text.slice(0, 400);
+  }
+}
+
+function applyQuantPrecomputeFields(
+  entry: LedgerEntry,
+  key: string,
+  out: Record<string, unknown>,
+): void {
+  const fid = (entry.fact_id || key).trim();
+  if (fid && out.quant_fact_id === undefined) {
+    out.quant_fact_id = fid;
+  }
+  const raw = asPlainObject(entry.raw);
+  if (!raw) return;
+  const atrStop = asPlainObject(raw.atr_stop_2x);
+  if (atrStop && typeof atrStop.stop_loss_price === "number" && Number.isFinite(atrStop.stop_loss_price)) {
+    out.stop_2x_atr = atrStop.stop_loss_price;
+  }
+  const garch = asPlainObject(raw.garch);
+  if (garch && typeof garch.vol_signal === "string" && garch.vol_signal) {
+    out.garch_vol = garch.vol_signal;
+  }
+}
+
+function extractMarketTechnicals(req: LinearDeskRequest): Record<string, unknown> | undefined {
+  const wantTicker = req.ticker.trim().toUpperCase();
+  const out: Record<string, unknown> = {};
+  let found = false;
+  for (const [key, entry] of Object.entries(req.ledger_entries || {})) {
+    if (!entry) continue;
+    const entryTicker = (entry.ticker || "").trim().toUpperCase();
+    if (entryTicker && entryTicker !== wantTicker) continue;
+    if (entry.tool_name === "get_technical_indicators") {
+      found = true;
+      applyTechnicalIndicatorEntry(entry, key, out);
+    } else if (entry.tool_name === "quant_math_precompute") {
+      found = true;
+      applyQuantPrecomputeFields(entry, key, out);
+    }
+  }
+  return found && Object.keys(out).length > 0 ? out : undefined;
 }
 
 function traderMessages(
@@ -595,9 +719,11 @@ function traderMessages(
     ? " If playbook_rules are supplied, follow applicable rules and list their pb_... IDs in cited_playbook_ids (or [] if none applied)."
     : "";
   const playbookField = hasPlaybook ? ", cited_playbook_ids:string[]" : "";
+  const marketTechnicals = extractMarketTechnicals(req);
   const userPayload: Record<string, unknown> = {
     ticker: req.ticker,
     portfolio_context: req.portfolio_context,
+    ...(marketTechnicals ? { market_technicals: marketTechnicals } : {}),
     macro_snapshot: req.macro_snapshot || {},
     verified_dossier: dossier,
   };
@@ -618,7 +744,7 @@ function traderMessages(
     {
       role: "system",
       content:
-        `You are Stage 3 (Final Trader Agent) — the sole decision maker. Analyze the verified dossier alongside portfolio_context and macro_snapshot. ${actionRule}${playbookRule} Normal digits and percentages (e.g. '20%', '1.5x', '$185') ARE encouraged in decision_thesis. Cite supporting fct_... IDs in cited_fact_ids. Use entry_mode="enter_now" to act immediately, "watch_only" for HOLD/AVOID or passive monitoring, or "enter_on_condition" ONLY on BUY accompanied by a structured dynamic_trigger ({type:"price_below|price_above|rsi_14_oversold|rsi_14_overbought|sma_20_drop|sma_20_rise|sma_50_drop|sma_50_rise|sma_200_drop|sma_200_rise|trailing_drop", value:number}). Return raw JSON: {action:"${allowedActions}", entry_mode:"enter_now|enter_on_condition|watch_only", entry_condition:string|null, dynamic_trigger:{type:string,value:number}|null, position_size_pct:number, stop_loss:number|null, take_profit:number|null, cited_fact_ids:string[]${playbookField}, decision_thesis:string}.`,
+        `You are Stage 3 (Final Trader Agent) — the sole decision maker. Analyze the verified dossier alongside portfolio_context, market_technicals (when supplied), and macro_snapshot. ${actionRule}${playbookRule} Normal digits and percentages (e.g. '20%', '1.5x', '$185') ARE encouraged in decision_thesis. Cite supporting fct_.../wbl_... IDs in cited_fact_ids. Use entry_mode="enter_now" to act immediately, "watch_only" for HOLD/AVOID or passive monitoring, or "enter_on_condition" ONLY on BUY accompanied by a structured dynamic_trigger ({type:"price_below|price_above|rsi_14_oversold|rsi_14_overbought|sma_20_drop|sma_20_rise|sma_50_drop|sma_50_rise|sma_200_drop|sma_200_rise|trailing_drop", value:number}). Return raw JSON: {action:"${allowedActions}", entry_mode:"enter_now|enter_on_condition|watch_only", entry_condition:string|null, dynamic_trigger:{type:string,value:number}|null, position_size_pct:number, stop_loss:number|null, take_profit:number|null, cited_fact_ids:string[]${playbookField}, decision_thesis:string}.`,
     },
     {
       role: "user",
@@ -742,6 +868,21 @@ async function runExtractorSeed(
   }
 }
 
+function deduplicateDroppedFacts(
+  candidates: Array<{ fact_id: string; reason: string }>,
+  keptIds: Set<string>,
+): Array<{ fact_id: string; reason: string }> {
+  const deduped: Array<{ fact_id: string; reason: string }> = [];
+  const seen = new Set<string>();
+  for (const item of candidates) {
+    const fid = (item.fact_id || "").trim();
+    if (!fid || keptIds.has(fid) || seen.has(fid)) continue;
+    seen.add(fid);
+    deduped.push({ fact_id: fid, reason: item.reason });
+  }
+  return deduped;
+}
+
 function finalizeCriticCleanup(params: {
   scopedReq: LinearDeskRequest;
   reconciled: ReturnType<typeof reconcileAaExtractions>;
@@ -753,13 +894,13 @@ function finalizeCriticCleanup(params: {
   echo: LinearStagePromptEcho;
 }) {
   const { scopedReq, reconciled, preCheck, candidateById, cleaned, stageUsage, elapsedMs, echo } = params;
-  const dropped = [...cleaned.dropped_facts];
+  const rawDropped = [...cleaned.dropped_facts];
   const explicitDropIds = new Set(cleaned.dropped_facts.map((d) => d.fact_id));
   const admittedById = new Map<string, ExtractedFact>();
   for (const f of cleaned.facts) {
     const origin = candidateById.get(f.fact_id);
     if (!origin) {
-      dropped.push({ fact_id: f.fact_id, reason: "not_in_stage1_candidates" });
+      rawDropped.push({ fact_id: f.fact_id, reason: "not_in_stage1_candidates" });
       continue;
     }
     admittedById.set(f.fact_id, {
@@ -775,8 +916,9 @@ function finalizeCriticCleanup(params: {
   }
   const postCheck = verifyFactsAgainstLedger(Array.from(admittedById.values()), scopedReq.ticker, scopedReq.ledger_entries);
   for (const m of postCheck.mismatches) {
-    dropped.push({ fact_id: m.fact_id, reason: m.detail });
+    rawDropped.push({ fact_id: m.fact_id, reason: m.detail });
   }
+  const keptIds = new Set(postCheck.verifiedFacts.map((f) => f.fact_id));
   return {
     dossier: {
       summary: reconciled.summary,
@@ -789,7 +931,7 @@ function finalizeCriticCleanup(params: {
       passed: postCheck.mismatches.length === 0,
       llm_repaired: true,
       mismatches: preCheck.mismatches,
-      dropped_facts: dropped,
+      dropped_facts: deduplicateDroppedFacts(rawDropped, keptIds),
       notes: cleaned.notes,
     },
     usage: stageUsage,
