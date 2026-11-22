@@ -69,6 +69,7 @@ function loadLinearProfilePolicy(): LinearProfilePolicy {
 }
 
 const LINEAR_PROFILE = loadLinearProfilePolicy();
+export const LINEAR_DESK_MAX_DURATION_MS = LINEAR_PROFILE.maxDurationMs;
 
 const VALID_CATEGORIES = [
   "price",

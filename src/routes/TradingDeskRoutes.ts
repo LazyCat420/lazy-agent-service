@@ -8,6 +8,7 @@ import {
   PoolUnavailableError,
 } from "../services/trading/LocalPoolClient.ts";
 import {
+  LINEAR_DESK_MAX_DURATION_MS,
   runLinearDeskPipeline,
   runLinearTraderReplay,
   StageParseError,
@@ -199,8 +200,9 @@ export function createTradingDeskRouter(deps: LinearDeskDeps = {}): Router {
         return;
       }
       const startedAt = Date.now();
-      req.setTimeout(620_000);
-      res.setTimeout(620_000);
+      const socketTimeoutMs = Math.max(620_000, LINEAR_DESK_MAX_DURATION_MS + 20_000);
+      req.setTimeout(socketTimeoutMs);
+      res.setTimeout(socketTimeoutMs);
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableEnded) controller.abort();
@@ -239,8 +241,9 @@ export function createTradingDeskRouter(deps: LinearDeskDeps = {}): Router {
         return;
       }
       const startedAt = Date.now();
-      req.setTimeout(300_000);
-      res.setTimeout(300_000);
+      const socketTimeoutMs = Math.max(300_000, LINEAR_DESK_MAX_DURATION_MS + 20_000);
+      req.setTimeout(socketTimeoutMs);
+      res.setTimeout(socketTimeoutMs);
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableEnded) controller.abort();
