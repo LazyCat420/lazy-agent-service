@@ -888,5 +888,34 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
 
     // (c) Non-parse provider/transport errors must propagate instead of falling back (codex:R1-F1)
     await expect(runScenario("transport")).rejects.toThrow(/HTTP 503/);
+
+    // (d) Abort/deadline during Stage 2 malformed output must propagate instead of entering fallback (codex:R2-F1)
+    const abortCtl = new AbortController();
+    const abortDeps: LinearDeskDeps = {
+      acquireTarget: async (preferredMember) => ({
+        boxName: preferredMember || "gold-spark",
+        modelId: "dyn",
+        sameBoxFallback: false,
+        release: () => {},
+        model: (mReq) => ({
+          async *[Symbol.asyncIterator]() {
+            const sys = String(mReq.messages[0]?.content || "");
+            if (sys.includes("Stage 1")) {
+              const facts = [makeFact()];
+              if (preferredMember === "dell2") {
+                facts.push(makeFact({ fact_id: "fct_fund_nvda", metric: "forward_pe", value: "999.0", raw_number: 999.0 }));
+              }
+              yield JSON.stringify({ summary: "s1", facts, catalysts: [], risks: [], data_gaps: [] });
+            } else if (sys.includes("Stage 2")) {
+              abortCtl.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+              yield '{"summary":"NVDA","facts":[{"broken"';
+            } else {
+              throw new Error("Stage 3 must not run after Stage 2 abort");
+            }
+          },
+        }),
+      }),
+    };
+    await expect(runLinearDeskPipeline({ ...req, signal: abortCtl.signal }, abortDeps)).rejects.toThrow(/abort|timeout/i);
   });
 });

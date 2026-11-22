@@ -273,6 +273,10 @@ async function runCoreStage(
     const step = await gen.next();
     if (step.done) {
       finalText = step.value.text || "";
+      if (signal?.aborted || controller.signal.aborted || step.value.status === "cancelled") {
+        const reason = signal?.reason ?? controller.signal.reason;
+        throw reason instanceof Error ? reason : new Error(step.value.error?.message || "Stage aborted");
+      }
       if (step.value.status !== "completed" && !finalText) {
         throw new Error(step.value.error?.message || `CoreLoop ended with status ${step.value.status}`);
       }
@@ -435,7 +439,7 @@ async function parseStageWithRepair<T>(
     try {
       return parseJsonStrict(raw, schema, label);
     } catch (err) {
-      if (!(err instanceof StageParseError) || attempt + 1 >= maxAttempts) throw err;
+      if (signal?.aborted || !(err instanceof StageParseError) || attempt + 1 >= maxAttempts) throw err;
       messages = [
         ...messages,
         { role: "assistant", content: raw },
@@ -479,12 +483,14 @@ async function runExtractorSeed(
 }
 
 async function runCriticStage(
-  req: LinearDeskRequest,
+  scopedReq: LinearDeskRequest,
   reconciled: ReturnType<typeof reconcileAaExtractions>,
   acquire: NonNullable<LinearDeskDeps["acquireTarget"]>,
+  combinedSignal?: AbortSignal,
 ): Promise<{ dossier: ResearchExtractionOutput; report: DataCriticReport }> {
+  const effectiveSignal = combinedSignal ?? scopedReq.signal;
   const allCandidates = [...reconciled.corroboratedFacts, ...reconciled.uncorroboratedFacts];
-  const preCheck = verifyFactsAgainstLedger(allCandidates, req.ticker, req.ledger_entries);
+  const preCheck = verifyFactsAgainstLedger(allCandidates, scopedReq.ticker, scopedReq.ledger_entries);
   const needsLlmCritic = preCheck.mismatches.length > 0 || reconciled.uncorroboratedFacts.length > 0;
 
   if (!needsLlmCritic) {
@@ -513,17 +519,17 @@ async function runCriticStage(
     try {
       cleaned = await parseStageWithRepair(
         target,
-        criticMessages(req, allCandidates, preCheck.mismatches, reconciled.catalysts, reconciled.risks, reconciled.dataGaps),
+        criticMessages(scopedReq, allCandidates, preCheck.mismatches, reconciled.catalysts, reconciled.risks, reconciled.dataGaps),
         [],
         1,
         CriticCleanupSchema,
         "Stage 2 Data Critic",
-        req.signal,
+        effectiveSignal,
       );
     } catch (err) {
-      if (req.signal?.aborted || !(err instanceof StageParseError)) throw err;
+      if (effectiveSignal?.aborted || scopedReq.signal?.aborted || !(err instanceof StageParseError)) throw err;
       const errMsg = err.message;
-      logger.warn(`[LinearDesk] Stage 2 Data Critic LLM fallback for ${req.ticker} (${req.cycle_id}): ${errMsg}`);
+      logger.warn(`[LinearDesk] Stage 2 Data Critic LLM fallback for ${scopedReq.ticker} (${scopedReq.cycle_id}): ${errMsg}`);
       const fallbackDropped = preCheck.mismatches.map((m) => ({ fact_id: m.fact_id, reason: m.detail }));
       return {
         dossier: {
@@ -562,7 +568,7 @@ async function runCriticStage(
         admittedById.set(verifiedPre.fact_id, verifiedPre);
       }
     }
-    const postCheck = verifyFactsAgainstLedger(Array.from(admittedById.values()), req.ticker, req.ledger_entries);
+    const postCheck = verifyFactsAgainstLedger(Array.from(admittedById.values()), scopedReq.ticker, scopedReq.ledger_entries);
     for (const m of postCheck.mismatches) {
       dropped.push({ fact_id: m.fact_id, reason: m.detail });
     }
@@ -667,7 +673,7 @@ export async function runLinearDeskPipeline(
     outputB: seedB.output,
   });
 
-  const { dossier, report } = await runCriticStage(scopedReq, reconciled, acquire);
+  const { dossier, report } = await runCriticStage(scopedReq, reconciled, acquire, combinedSignal);
   const { decision, modelId } = await runTraderStage(scopedReq, dossier, acquire);
 
   return {
