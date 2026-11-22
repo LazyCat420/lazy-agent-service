@@ -7,6 +7,7 @@ Replaces split-brain Python harness loops (`platform/lazycat-sdk`, `CrossModelCr
 
 - **Added:** `POST /v1/trading/linear-desk` (`runtimeAuth` protected).
 - **Removed:** `POST /harness2/crsi/selftest` (cross-repo grep across `apps/`, `agents/`, `finance/` confirmed zero callers outside the retired `CrossModelCrsi` module).
+- **Maintainability:** `CoreLoop.ts`, `LinearDeskPipeline.ts`, `LocalPoolClient.ts`, and `VllmPool.ts` enforce ESLint McCabe `complexity <= 20` via extracted stage, failover, and pool-selection helpers without changing runtime behavior or wire contracts.
 
 ## Endpoint
 
