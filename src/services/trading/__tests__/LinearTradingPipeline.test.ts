@@ -700,15 +700,15 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
     expect(stage1Calls).toHaveLength(2);
     for (const s1 of stage1Calls) {
       expect(s1.toolCount).toBe(0);
-      expect(s1.maxTokens).toBe(1536);
+      expect(s1.maxTokens).toBe(2560);
       expect(s1.user).not.toContain(bulkyPayload);
       expect(s1.user).toContain("NVDA sentiment positive at 185.50.");
     }
     expect(stage2Call).toBeDefined();
-    expect(stage2Call!.maxTokens).toBe(1536);
+    expect(stage2Call!.maxTokens).toBe(3584);
     expect(stage2Call!.user).not.toContain(bulkyPayload);
     expect(stage2Call!.user).not.toContain("fct_unused_extra");
-    expect(stage3Call?.maxTokens).toBe(1024);
+    expect(stage3Call?.maxTokens).toBe(1536);
 
     // Entry omitting fact_id falls back to its record key in Stage 1/2 prompts & scoping (codex:R1-F1)
     recordedPrompts.length = 0;
@@ -795,5 +795,92 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
       expect(s1.user).not.toContain("B".repeat(610));
       expect(s1.user).toContain("B".repeat(200));
     }
+  });
+
+  it("repairs Stage 2 critic JSON via parseStageWithRepair and falls back to FactLedgerVerifier when retries exhaust", async () => {
+    const req: LinearDeskRequest = {
+      ticker: "NVDA",
+      cycle_id: "cycle-critic-repair-fallback",
+      ledger_entries: LEDGER,
+      portfolio_context: { held: false, shares_owned: 0, avg_cost: null, cash_usd: 50000, max_position_pct: 15 },
+    };
+
+    const runScenario = async (mode: "repair" | "fallback") => {
+      let criticAttempts = 0;
+      let traderSawPrompt = "";
+      const deps: LinearDeskDeps = {
+        acquireTarget: async (preferredMember) => ({
+          boxName: preferredMember || "gold-spark",
+          modelId: "dyn",
+          sameBoxFallback: false,
+          release: () => {},
+          model: (mReq) => ({
+            async *[Symbol.asyncIterator]() {
+              const sys = String(mReq.messages[0]?.content || "");
+              if (sys.includes("Stage 1")) {
+                const facts = [makeFact()];
+                if (preferredMember === "dell2") {
+                  // Uncorroborated bad numeric fact triggers Stage 2 Critic + deterministic verifier drop
+                  facts.push(makeFact({ fact_id: "fct_fund_nvda", metric: "forward_pe", value: "999.0", raw_number: 999.0 }));
+                }
+                yield JSON.stringify({
+                  summary: "Stage 1 verified summary",
+                  facts,
+                  catalysts: ["Blackwell ramp"],
+                  risks: [],
+                  data_gaps: [],
+                });
+              } else if (sys.includes("Stage 2")) {
+                criticAttempts += 1;
+                if (mode === "repair" && criticAttempts === 2) {
+                  yield JSON.stringify({
+                    summary: "Stage 1 verified summary",
+                    facts: [makeFact()],
+                    catalysts: ["Blackwell ramp"],
+                    risks: [],
+                    data_gaps: [],
+                    dropped_facts: [{ fact_id: "fct_fund_nvda", reason: "mismatch_repaired" }],
+                    notes: ["repaired on attempt 2"],
+                  });
+                } else {
+                  // Truncated / malformed JSON simulating array syntax failure
+                  yield '{"summary":"NVDA","facts":[{"fact_id":"fct_price_nvda","metric":"close","value":"185.50" "broken"';
+                }
+              } else {
+                traderSawPrompt = String(mReq.messages[1]?.content || "");
+                yield JSON.stringify({
+                  action: "HOLD",
+                  entry_mode: "none",
+                  entry_condition: null,
+                  position_size_pct: 0,
+                  stop_loss: null,
+                  take_profit: null,
+                  cited_fact_ids: ["fct_price_nvda"],
+                  decision_thesis: "Hold on verified close 185.50.",
+                });
+              }
+            },
+          }),
+        }),
+      };
+      const res = await runLinearDeskPipeline(req, deps);
+      return { res, criticAttempts, traderSawPrompt };
+    };
+
+    // (a) Attempt 1 malformed JSON repaired on attempt 2 via parseStageWithRepair
+    const repaired = await runScenario("repair");
+    expect(repaired.criticAttempts).toBe(2);
+    expect(repaired.res.critic_report.llm_repaired).toBe(true);
+    expect(repaired.res.dossier.facts.map((f) => f.fact_id)).toEqual(["fct_price_nvda"]);
+
+    // (b) Both critic attempts malformed -> deterministic FactLedgerVerifier fallback feeds Stage 3
+    const fallback = await runScenario("fallback");
+    expect(fallback.criticAttempts).toBe(2);
+    expect(fallback.res.critic_report.llm_repaired).toBe(false);
+    expect(fallback.res.critic_report.dropped_facts.some((d) => d.fact_id === "fct_fund_nvda")).toBe(true);
+    expect(fallback.res.critic_report.notes.some((n) => n.startsWith("critic_llm_fallback:"))).toBe(true);
+    expect(fallback.res.dossier.facts.map((f) => f.fact_id)).toEqual(["fct_price_nvda"]);
+    expect(fallback.traderSawPrompt).toContain("fct_price_nvda");
+    expect(fallback.res.decision.action).toBe("HOLD");
   });
 });

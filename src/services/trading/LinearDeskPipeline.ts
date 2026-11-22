@@ -283,7 +283,7 @@ async function defaultAcquireTarget(
   preferredMember: string | undefined,
   seed: number,
   temperature: number,
-  maxTokens = 1536,
+  maxTokens = 2560,
 ): Promise<LinearStageTarget> {
   const acquired = await acquireLocalPoolTarget(preferredMember);
   return {
@@ -357,7 +357,7 @@ function criticMessages(
     {
       role: "system",
       content:
-        "You are Stage 2 (Data Critic Auditor). Your ONLY job is to verify and clean data before decision-making — NEVER emit a trade decision or opinion. Inspect every fact (especially `uncorroborated: true` claims and deterministic `mismatches`) against `ledger_entries`. Fix wrong numbers/tickers when grounded in `ledger_entries` or drop ungrounded claims into `dropped_facts`. Return raw JSON matching {summary, facts:[...], catalysts:[], risks:[], data_gaps:[], dropped_facts:[{fact_id,reason}], notes:[]}.",
+        "You are Stage 2 (Data Critic Auditor). Your ONLY job is to verify and clean data before decision-making — NEVER emit a trade decision or opinion. Inspect every fact (especially `uncorroborated: true` claims and deterministic `mismatches`) against `ledger_entries`. Fix wrong numbers/tickers when grounded in `ledger_entries` or drop ungrounded claims into `dropped_facts`. Only include repaired or audited facts in `facts` (already-verified corroborated facts are preserved automatically unless listed in `dropped_facts`). Keep `summary`, each fact `summary`, `dropped_facts[].reason`, and `notes` concise (<= 80 chars, no unescaped double-quotes), with at most 3 `notes`. Return raw JSON matching {summary, facts:[...], catalysts:[], risks:[], data_gaps:[], dropped_facts:[{fact_id,reason}], notes:[]}.",
     },
     {
       role: "user",
@@ -459,7 +459,7 @@ async function runExtractorSeed(
   seedCfg: ExtractorSeedConfig,
   acquire: NonNullable<LinearDeskDeps["acquireTarget"]>,
 ): Promise<{ boxName: string; modelId: string; sameBoxFallback: boolean; output: ResearchExtractionOutput }> {
-  const target = await acquire(seedCfg.preferredMember, seedCfg.seed, 0.2, 1536);
+  const target = await acquire(seedCfg.preferredMember, seedCfg.seed, 0.2, 2560);
   try {
     const output = await parseStageWithRepair(
       target,
@@ -505,16 +505,41 @@ async function runCriticStage(
     }
   }
 
-  const target = await acquire(undefined, 303, 0.1, 1536);
+  const target = await acquire(undefined, 303, 0.1, 3584);
   try {
-    const raw = await runCoreStage(
-      target,
-      criticMessages(req, allCandidates, preCheck.mismatches, reconciled.catalysts, reconciled.risks, reconciled.dataGaps),
-      [],
-      1,
-      req.signal,
-    );
-    const cleaned = parseJsonStrict(raw, CriticCleanupSchema, "Stage 2 Data Critic");
+    let cleaned: z.infer<typeof CriticCleanupSchema>;
+    try {
+      cleaned = await parseStageWithRepair(
+        target,
+        criticMessages(req, allCandidates, preCheck.mismatches, reconciled.catalysts, reconciled.risks, reconciled.dataGaps),
+        [],
+        1,
+        CriticCleanupSchema,
+        "Stage 2 Data Critic",
+        req.signal,
+      );
+    } catch (err) {
+      if (req.signal?.aborted) throw err;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.warn(`[LinearDesk] Stage 2 Data Critic LLM fallback for ${req.ticker} (${req.cycle_id}): ${errMsg}`);
+      const fallbackDropped = preCheck.mismatches.map((m) => ({ fact_id: m.fact_id, reason: m.detail }));
+      return {
+        dossier: {
+          summary: reconciled.summary,
+          facts: preCheck.verifiedFacts,
+          catalysts: reconciled.catalysts,
+          risks: reconciled.risks,
+          data_gaps: reconciled.dataGaps,
+        },
+        report: {
+          passed: preCheck.mismatches.length === 0,
+          llm_repaired: false,
+          mismatches: preCheck.mismatches,
+          dropped_facts: fallbackDropped,
+          notes: [`critic_llm_fallback: ${errMsg.slice(0, 160)}`],
+        },
+      };
+    }
     const dropped = [...cleaned.dropped_facts];
     const explicitDropIds = new Set(cleaned.dropped_facts.map((d) => d.fact_id));
     const admittedById = new Map<string, ExtractedFact>();
@@ -566,7 +591,7 @@ async function runTraderStage(
   acquire: NonNullable<LinearDeskDeps["acquireTarget"]>,
 ): Promise<{ decision: TraderDecision; modelId: string }> {
   const schema = buildTraderSchema(req.portfolio_context.held);
-  const target = await acquire(undefined, 404, 0.2, 1024);
+  const target = await acquire(undefined, 404, 0.2, 1536);
   try {
     const decision = await parseStageWithRepair(
       target,
