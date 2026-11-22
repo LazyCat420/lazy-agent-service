@@ -34,6 +34,8 @@ import { normalizeEmptyToolContent } from "./ToolResult.ts";
 import { captureWriteSyntaxGuard, enforceWriteSyntaxGuard } from "./WriteSyntaxGuard.ts";
 import { applyObservation, createSessionState, sessionStateHash } from "./SessionState.ts";
 import type { ToolCall } from "./harnesses/types.ts";
+import { PARALLEL_TOOL_HINT } from "./TradingToolProtocol.ts";
+import { openingBundleHint } from "./TradingToolStacks.ts";
 
 /** The reason a beforeToolCall decide hook gave for its denial. */
 function hookDenialReason(verdict: Record<string, unknown>): string {
@@ -890,10 +892,18 @@ function buildRunExecutionOptions(
   const enabledTools = rawTools.map((tool: any) =>
     (typeof tool === "string" ? tool : tool.name).split("@")[0],
   );
+  const hintDisabled = (process.env.TRADING_PARALLEL_TOOL_HINT || "true").toLowerCase() === "false";
+  const batchHint =
+    !hintDisabled && maxToolCalls > 0 && enabledTools.length > 1
+      ? [PARALLEL_TOOL_HINT, openingBundleHint(profile.role, enabledTools, selectedModel)]
+          .filter(Boolean)
+          .join("\n")
+      : "";
   const systemPrompt = [
     assembled.layerTexts.prefix,
     assembled.layerTexts.projectScope,
     assembled.layerTexts.retrievedEvidence,
+    batchHint,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -1493,6 +1503,7 @@ async function executeAdmittedRunBody(params: {
 
   const context: any = {
     options,
+    agentName: profile.role,
     runtimeSteering: steering,
     messages,
     providerName: preferredProvider,

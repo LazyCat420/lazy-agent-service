@@ -110,7 +110,7 @@ export function authorizeTradingTool(toolName: string, args: Record<string, unkn
   const context = verifyToolContext(args[TOOL_CONTEXT_ARG]);
   if (!context.allowedTools.includes(stripMcpPrefix(toolName))) throw new Error(`Tool '${stripMcpPrefix(toolName)}' is not allowed for ${context.agentName}`);
   // Never let stateful cycle tools fall back to the global active cycle.
-  if (/^(whiteboard_|request_peer_analysis)/.test(stripMcpPrefix(toolName)) && !context.cycleId) throw new Error("Cycle-scoped tool requires an explicit cycle identity");
+  if (/^(whiteboard_|request_peer_analysis|read_ledger_entry)/.test(stripMcpPrefix(toolName)) && !context.cycleId) throw new Error("Cycle-scoped tool requires an explicit cycle identity");
   const clean = { ...args };
   delete clean[TOOL_CONTEXT_ARG];
   return { context, arguments: clean };

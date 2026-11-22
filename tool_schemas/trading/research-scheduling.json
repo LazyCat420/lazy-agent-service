@@ -93,56 +93,6 @@
     ]
   },
   {
-    "name": "request_research_now",
-    "description": "Queue an immediate research-only cycle (collect + analyze, NEVER trades) on up to 5 tickers. Use ONLY when a catalyst already hit and the current data is insufficient. Governor enforces: max 2 queued at once, 4h per-ticker cooldown, dedupe against scheduled research. Be picky \u2014 routine curiosity will be rejected; check list_scheduled_research first.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "tickers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "1-5 ticker symbols, highest conviction only."
-        },
-        "reason": {
-          "type": "string",
-          "description": "The specific catalyst/question this research must answer."
-        },
-        "urgency": {
-          "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high",
-            "critical"
-          ],
-          "description": "critical bypasses the recency cooldown \u2014 reserve for genuine breaking catalysts."
-        }
-      },
-      "required": [
-        "tickers",
-        "reason"
-      ]
-    },
-    "tier": 1,
-    "source": "research_scheduling",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "v3_fundamental_analyst",
-      "v3_portfolio_manager"
-    ]
-  },
-  {
     "name": "schedule_research",
     "description": "Schedule a ONE-SHOT research cycle (collect + analyze, NEVER trades) sniped to a specific DATED event. Use this ONLY for a known calendar catalyst (earnings, a Fed decision). For ongoing 'keep an eye on this ticker' monitoring, DO NOT schedule \u2014 use watch_ticker instead (it watches price/news/etc. in cheap background code and wakes a cycle only when a condition trips). `when`: OMIT it to auto-snipe the ticker's next earnings (single ticker; the governor resolves the real date/time for you), OR pass an exact ISO-8601 UTC datetime (e.g. '2026-07-21T21:30:00Z') for a non-earnings event. Fires ONCE then auto-deactivates. Coarse market windows and 'monitor' are rejected \u2014 use watch_ticker. Governor enforces max 5 active, 10/day, per-ticker dedupe, 4h cooldown; a vague reason is rejected.",
     "parameters": {

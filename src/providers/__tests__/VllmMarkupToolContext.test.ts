@@ -7,7 +7,7 @@ const token = () => {
   vi.stubEnv("TRADING_TOOL_CONTEXT_KEY", "offline-context-test-key");
   return signToolContext({
     project: "vllm-trading-bot", agentName: "junior", cycleId: "c1", ticker: "JPM",
-    conversationId: "conv", allowedTools: ["whiteboard_write"], expiresAt: Date.now() + 60_000,
+    conversationId: "conv", allowedTools: ["read_ledger_entry"], expiresAt: Date.now() + 60_000,
   });
 };
 const markup = (name: string) => `<tool_call>\n<function=${name}>\n<parameter=note>\nhello\n</parameter>\n</function>\n</tool_call>`;
@@ -33,7 +33,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe("vLLM markup tool call trading context", () => {
   it("binds an allowlisted markup call", async () => {
     const t = token();
-    const calls = await run({ content: markup("whiteboard_write") }, "stop", marker(t));
+    const calls = await run({ content: markup("read_ledger_entry") }, "stop", marker(t));
     expect(calls).toHaveLength(1);
     expect(calls[0].args[TOOL_CONTEXT_ARG]).toBe(t);
     expect(() => authorizeTradingTool(calls[0].name, calls[0].args)).not.toThrow();
@@ -47,20 +47,20 @@ describe("vLLM markup tool call trading context", () => {
   it("yields an expired-context markup call unbound instead of failing the turn", async () => {
     const expired = signToolContext({
       project: "vllm-trading-bot", agentName: "junior", cycleId: "c1", ticker: "JPM",
-      conversationId: "conv", allowedTools: ["whiteboard_write"], expiresAt: Date.now() - 1,
+      conversationId: "conv", allowedTools: ["read_ledger_entry"], expiresAt: Date.now() - 1,
     });
-    const calls = await run({ content: markup("whiteboard_write") }, "stop", marker(expired));
+    const calls = await run({ content: markup("read_ledger_entry") }, "stop", marker(expired));
     expect(calls).toHaveLength(1);
     expect(calls[0].args).toEqual({ note: "hello" });
   });
   it("does nothing without a marker", async () => {
-    const calls = await run({ content: markup("whiteboard_write") }, "stop");
+    const calls = await run({ content: markup("read_ledger_entry") }, "stop");
     expect(calls).toHaveLength(1);
     expect(calls[0].args).toEqual({ note: "hello" });
   });
   it("does not touch native tool calls", async () => {
     const calls = await run({ tool_calls: [{ index: 0, id: "call_n", type: "function",
-      function: { name: "whiteboard_write", arguments: '{"note":"n"}' } }] }, "tool_calls", marker(token()));
+      function: { name: "read_ledger_entry", arguments: '{"note":"n"}' } }] }, "tool_calls", marker(token()));
     expect(calls).toHaveLength(1);
     expect(calls[0].args).toEqual({ note: "n" });
   });

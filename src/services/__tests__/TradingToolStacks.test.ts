@@ -2,7 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import MongoWrapper from "../../wrappers/MongoWrapper.ts";
 import { PromotionController } from "../PromotionController.ts";
 import { tradingShimProfileId } from "../TradingToolProtocol.ts";
-import { learnStacks, openingStack, type RunRecord, type ToolUseRecord } from "../TradingToolStacks.ts";
+import {
+  learnedStacksSnapshot,
+  learnSequences,
+  learnStacks,
+  openingBundleHint,
+  openingStack,
+  refreshLearnedStacks,
+  type RunRecord,
+  type ToolUseRecord,
+} from "../TradingToolStacks.ts";
 
 const runs = (agent: string, n: number): RunRecord[] =>
   Array.from({ length: n }, (_, i) => ({ agent, cycleId: `cycle-${i}`, ticker: "AMD" }));
@@ -83,7 +92,7 @@ describe("openingStack", () => {
 
     const catalog = ["get_upcoming_events", "get_finnhub_news", "whiteboard_write"];
     expect(openingStack("v3_junior_analyst", catalog)).toEqual([]); // the refresh never blocks a request
-    await vi.waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(find).toHaveBeenCalledTimes(3));
     await vi.waitFor(() => expect(openingStack("v3_junior_analyst", catalog)).toEqual(["get_finnhub_news", "get_upcoming_events"]));
     expect(openingStack("v3_junior_analyst", ["get_upcoming_events"])).toEqual([]);
     process.env.TRADING_TOOL_STACKS = "false";
@@ -123,7 +132,7 @@ describe("openingStack", () => {
 
     const catalog = ["get_polygon_price_history", "get_market_data", "get_technical_indicators"];
     openingStack("v3_quant_analyst", catalog, "DeepSeek-V4.1-Flash-1017");
-    await vi.waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(find).toHaveBeenCalledTimes(3));
 
     // Unpromoted: DeepSeek still receives the role-wide baseline stack (zero unpromoted payload drift).
     await vi.waitFor(() =>
@@ -146,5 +155,112 @@ describe("openingStack", () => {
       "get_polygon_price_history",
       "get_technical_indicators",
     ]);
+  });
+
+  it("mines universal sequences across tool_usage_stats, excludes probes, persists learned_tool_stacks, and renders openingBundleHint", async () => {
+    const seqUses: ToolUseRecord[] = [];
+    const baseTime = 1_760_000_000_000;
+    const rwRuns = runs("research_worker", 6);
+    rwRuns.forEach((r, idx) => {
+      seqUses.push(
+        { ...r, tool: "get_market_data", argsHash: "a1", timestamp: baseTime + idx * 10_000 },
+        { ...r, tool: "get_finviz_fundamentals", argsHash: "a2", timestamp: baseTime + idx * 10_000 + 500 },
+        { ...r, tool: "get_earnings_data", argsHash: "a3", timestamp: baseTime + idx * 10_000 + 1500 },
+        // Write tool and failed call must never enter read-only sequences
+        { ...r, tool: "save_equation", argsHash: "w1", timestamp: baseTime + idx * 10_000 + 2500 },
+      );
+    });
+    const learnedSeqMap = learnSequences(rwRuns, seqUses);
+    expect(learnedSeqMap.get("research_worker")?.[0]?.tools).toEqual([
+      "get_market_data",
+      "get_finviz_fundamentals",
+      "get_earnings_data",
+    ]);
+
+    const upserts: Array<{ filter: unknown; update: unknown }> = [];
+    const deletes: unknown[] = [];
+    const usageDocs = Array.from({ length: 6 }, (_, idx) => [
+      {
+        agent_name: "user_chat",
+        cycle_id: `chat-${idx}`,
+        ticker: "AAPL",
+        tool_name: "get_market_data",
+        args_hash: "u1",
+        called_at: new Date(baseTime + idx * 10_000),
+        success: true,
+        service_source: "trading-client",
+      },
+      {
+        agent_name: "user_chat",
+        cycle_id: `chat-${idx}`,
+        ticker: "AAPL",
+        tool_name: "get_finnhub_news",
+        args_hash: "u2",
+        called_at: new Date(baseTime + idx * 10_000 + 800),
+        success: true,
+        service_source: "trading-client",
+      },
+    ]).flat();
+    // Duplicate of first doc inside agent_tool_telemetry + probe rows that must be excluded
+    const telDocs = [
+      { ...usageDocs[0], timestamp: usageDocs[0].called_at },
+      {
+        agent_name: "probe_agent",
+        cycle_id: "cycle-audit-2026-11-21",
+        ticker: "SPY",
+        tool_name: "get_market_data",
+        args_hash: "p1",
+        service_source: "audit-probe",
+      },
+      {
+        agent_name: "contract_probe_agent",
+        cycle_id: "cycle-99",
+        ticker: "SPY",
+        tool_name: "get_market_data",
+        args_hash: "p2",
+        service_source: "contract-test",
+      },
+      {
+        agent_name: "boundary_probe_agent",
+        cycle_id: "probe-boundary-2026-11-21",
+        ticker: "SPY",
+        tool_name: "get_market_data",
+        args_hash: "p3",
+        service_source: "lazy-agent-service",
+      },
+    ];
+    const docs: Record<string, Record<string, unknown>[]> = {
+      v3_agent_telemetry: [],
+      agent_tool_telemetry: telDocs,
+      tool_usage_stats: usageDocs,
+    };
+    vi.spyOn(MongoWrapper, "getDb").mockReturnValue({
+      collection: (name: string) => ({
+        find: () => ({ toArray: async () => docs[name] ?? [] }),
+        updateOne: async (filter: unknown, update: unknown) => {
+          upserts.push({ filter, update });
+          return { acknowledged: true };
+        },
+        deleteMany: async (filter: unknown) => {
+          deletes.push(filter);
+          return { deletedCount: 0 };
+        },
+      }),
+    } as never);
+
+    await refreshLearnedStacks();
+    expect(upserts.some((u) => (u.filter as Record<string, unknown>).agent_name === "user_chat")).toBe(true);
+    expect(upserts.some((u) => (u.filter as Record<string, unknown>).agent_name === "probe_agent")).toBe(false);
+    expect(upserts.some((u) => (u.filter as Record<string, unknown>).agent_name === "contract_probe_agent")).toBe(false);
+    expect(upserts.some((u) => (u.filter as Record<string, unknown>).agent_name === "boundary_probe_agent")).toBe(false);
+    expect(deletes).toHaveLength(1);
+    const snapshot = learnedStacksSnapshot();
+    const chatEntry = snapshot.find((e) => e.agent_name === "user_chat");
+    expect(chatEntry?.sequences[0]?.tools).toEqual(["get_market_data", "get_finnhub_news"]);
+    expect(chatEntry?.sequences[0]?.avg_gap_ms).toBe(800);
+
+    const hint = openingBundleHint("user_chat", ["get_market_data", "get_finnhub_news"]);
+    expect(hint).toContain("get_market_data -> get_finnhub_news");
+    expect(openingBundleHint("user_chat", ["get_market_data"])).toBe("");
   });
 });

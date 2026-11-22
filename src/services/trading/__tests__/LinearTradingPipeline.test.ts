@@ -6,7 +6,7 @@ import { ProfileRegistry } from "../../ProfileRegistry.ts";
 import { errorHandler } from "../../../utils/errors.ts";
 import { reconcileAaExtractions } from "../AaNoiseReconciler.ts";
 import { verifyFactsAgainstLedger } from "../FactLedgerVerifier.ts";
-import { runLinearDeskPipeline, type LinearDeskDeps } from "../LinearDeskPipeline.ts";
+import { findMissingLedgerFollowupSlots, runLinearDeskPipeline, type LinearDeskDeps } from "../LinearDeskPipeline.ts";
 import type { ExtractedFact, LedgerEntry, LinearDeskRequest } from "../types.ts";
 
 const LEDGER: Record<string, LedgerEntry> = {
@@ -636,6 +636,7 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
       },
       fct_fund_nvda: LEDGER.fct_fund_nvda,
       fct_earn_nvda: { fact_id: "fct_earn_nvda", tool_name: "get_earnings_data", ticker: "NVDA", summary: "EPS beat 0.89", raw: { eps: 0.89 } },
+      fct_events_nvda: { fact_id: "fct_events_nvda", tool_name: "get_upcoming_events", ticker: "NVDA", summary: "No imminent binary events", raw: { events: [] } },
       fct_tech_nvda: { fact_id: "fct_tech_nvda", tool_name: "get_technical_indicators", ticker: "NVDA", summary: "RSI 54.2", raw: { rsi_14: 54.2 } },
       fct_unused_extra: { fact_id: "fct_unused_extra", tool_name: "get_institutional_holdings", ticker: "NVDA", summary: "Institutional ownership 65%", raw: { inst_pct: 65 } },
     };
@@ -917,5 +918,70 @@ describe("Round 3 hardening invariants (numeric consistency, critic scoping, Sta
       }),
     };
     await expect(runLinearDeskPipeline({ ...req, signal: abortCtl.signal }, abortDeps)).rejects.toThrow(/abort|timeout/i);
+  });
+
+  it("uses gap-aware Stage 1 follow-up gating rather than a blunt 5-tool cutoff", async () => {
+    const fiveToolsMissingEvents: Record<string, LedgerEntry> = {
+      f1: { fact_id: "f1", tool_name: "get_market_data", ticker: "NVDA", summary: "price" },
+      f2: { fact_id: "f2", tool_name: "get_technical_indicators", ticker: "NVDA", summary: "rsi" },
+      f3: { fact_id: "f3", tool_name: "get_finviz_fundamentals", ticker: "NVDA", summary: "pe" },
+      f4: { fact_id: "f4", tool_name: "get_finnhub_news", ticker: "NVDA", summary: "news" },
+      f5: { fact_id: "f5", tool_name: "get_earnings_data", ticker: "NVDA", summary: "eps" },
+    };
+    expect(findMissingLedgerFollowupSlots(fiveToolsMissingEvents)).toEqual(["events"]);
+
+    const completeSlots: Record<string, LedgerEntry> = {
+      ...fiveToolsMissingEvents,
+      f6: { fact_id: "f6", tool_name: "get_upcoming_events", ticker: "NVDA", summary: "earnings next week" },
+    };
+    expect(findMissingLedgerFollowupSlots(completeSlots)).toEqual([]);
+
+    const runWithLedger = async (ledger_entries: Record<string, LedgerEntry>) => {
+      const stage1ToolsSeen: string[][] = [];
+      const req: LinearDeskRequest = {
+        ticker: "NVDA",
+        cycle_id: "cycle-gap-gate",
+        ledger_entries,
+        portfolio_context: { held: false, shares_owned: 0, cash_usd: 10000, max_position_pct: 15, equity_usd: 10000, quote_price: 185.5, quote_age_seconds: 10 },
+        macro_snapshot: { vix: 18 },
+        followup_tools: ["read_ledger_entry", "get_upcoming_events"],
+      };
+      const deps: LinearDeskDeps = {
+        acquireTarget: async (preferredMember) => ({
+          boxName: preferredMember || "gold-spark",
+          modelId: "dyn",
+          sameBoxFallback: false,
+          release: () => {},
+          model: (mReq) => ({
+            async *[Symbol.asyncIterator]() {
+              const sys = String(mReq.messages[0]?.content || "");
+              if (sys.includes("Stage 1")) {
+                stage1ToolsSeen.push((mReq.tools || []).map((t) => t.name));
+                yield JSON.stringify({
+                  summary: "s1",
+                  facts: [{ fact_id: "f1", metric: "close", value: "185.5", raw_number: 185.5, source_tool: "get_market_data", ticker: "NVDA", verbatim_quote: "price" }],
+                  catalysts: [],
+                  risks: [],
+                  data_gaps: [],
+                });
+              } else {
+                yield JSON.stringify({
+                  action: "HOLD", entry_mode: "none", entry_condition: null, position_size_pct: 0,
+                  stop_loss: null, take_profit: null, cited_fact_ids: ["f1"], decision_thesis: "Hold.",
+                });
+              }
+            },
+          }),
+        }),
+      };
+      await runLinearDeskPipeline(req, deps);
+      return stage1ToolsSeen;
+    };
+
+    const withGap = await runWithLedger(fiveToolsMissingEvents);
+    expect(withGap[0]).toContain("get_upcoming_events");
+
+    const withoutGap = await runWithLedger(completeSlots);
+    expect(withoutGap[0]).toEqual([]);
   });
 });

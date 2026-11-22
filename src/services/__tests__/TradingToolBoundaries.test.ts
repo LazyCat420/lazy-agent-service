@@ -37,7 +37,7 @@ const context = () => ({
   cycleId: "cycle-v3-test-a",
   ticker: "TEST",
   conversationId: "session-test",
-  allowedTools: ["whiteboard_read", "whiteboard_write"],
+  allowedTools: ["read_ledger_entry", "get_market_data"],
   expiresAt: Date.now() + 60_000,
 });
 const marker = (token: string) => `<${TAG}>${token}</${TAG}>`;
@@ -92,7 +92,7 @@ describe("signed trading tool context", () => {
     ["another project", { ...context(), project: "html-notes-client" }],
     ["an empty agent name", { ...context(), agentName: "" }],
     ["an empty conversation id", { ...context(), conversationId: "" }],
-    ["allowedTools as a string", { ...context(), allowedTools: "whiteboard_read" }],
+    ["allowedTools as a string", { ...context(), allowedTools: "read_ledger_entry" }],
     ["allowedTools holding a number", { ...context(), allowedTools: [1] }],
     ["expiresAt as text", { ...context(), expiresAt: "soon" }],
     ["expiresAt of Infinity", { ...context(), expiresAt: Number.POSITIVE_INFINITY }],
@@ -103,13 +103,13 @@ describe("signed trading tool context", () => {
   });
 
   it("T7a authorizeTradingTool rejects a call that carries no context", () => {
-    expect(() => authorizeTradingTool("whiteboard_read", { ticker: "TEST" })).toThrow("Missing trading tool authorization");
+    expect(() => authorizeTradingTool("read_ledger_entry", { ticker: "TEST" })).toThrow("Missing trading tool authorization");
   });
 
   it("T7b authorizeTradingTool returns the arguments without the context and leaves the caller's object alone", () => {
     const token = signToolContext(context());
     const args = { ticker: "TEST", [ARG]: token };
-    const result = authorizeTradingTool("whiteboard_read", args);
+    const result = authorizeTradingTool("read_ledger_entry", args);
     expect(result.arguments).toEqual({ ticker: "TEST" });
     expect(args[ARG]).toBe(token);
   });
@@ -121,8 +121,8 @@ describe("signed trading tool context", () => {
   });
 
   it("T7d a tool whose name only starts with an allowed name is not allowed", () => {
-    const token = signToolContext({ ...context(), allowedTools: ["whiteboard_read"] });
-    expect(() => authorizeTradingTool("whiteboard_read_extra", { [ARG]: token })).toThrow("not allowed");
+    const token = signToolContext({ ...context(), allowedTools: ["read_ledger_entry"] });
+    expect(() => authorizeTradingTool("read_ledger_entry_extra", { [ARG]: token })).toThrow("not allowed");
   });
 
   it("T8a attachToolContext treats empty arguments as an empty object", () => {
@@ -170,7 +170,7 @@ describe("signed trading tool context", () => {
     const body = {
       messages: [
         { role: "system", content: `${marker(token)}\nrole` },
-        { role: "assistant", tool_calls: [{ function: { name: "whiteboard_read", arguments: attachToolContext("{}", token) } }] },
+        { role: "assistant", tool_calls: [{ function: { name: "read_ledger_entry", arguments: attachToolContext("{}", token) } }] },
       ],
     };
     const before = JSON.stringify(body);
@@ -179,7 +179,7 @@ describe("signed trading tool context", () => {
   });
 
   it("T9f an echoed tool call with unparseable arguments is passed through as the same object", () => {
-    const call = { function: { name: "whiteboard_read", arguments: "{bad" } };
+    const call = { function: { name: "read_ledger_entry", arguments: "{bad" } };
     const extracted = extractToolContext({ messages: [{ role: "assistant", tool_calls: [call] }] });
     expect(extracted.body.messages[0].tool_calls[0]).toBe(call);
   });
@@ -188,7 +188,7 @@ describe("signed trading tool context", () => {
     project: "vllm-trading-bot",
     agent: "CUSTOM_V3_JUNIOR_ANALYST",
     conversationId: "session-test",
-    enabledTools: ["whiteboard_read"],
+    enabledTools: ["read_ledger_entry"],
     messages: [{ role: "user", content: "## Ticker: TEST" }],
     ...extra,
   });
@@ -211,8 +211,8 @@ describe("signed trading tool context", () => {
   });
 
   it("T10c the allowed tools are the string entries, without the MCP prefix, each once", () => {
-    const allowed = preparedContext(tradingRequest({ enabledTools: [1, null, "whiteboard_read", `${MCP}whiteboard_read`] })).allowedTools;
-    expect(allowed).toEqual(["whiteboard_read"]);
+    const allowed = preparedContext(tradingRequest({ enabledTools: [1, null, "read_ledger_entry", `${MCP}read_ledger_entry`] })).allowedTools;
+    expect(allowed).toEqual(["read_ledger_entry"]);
   });
 
   it("T10d the ticker is read only from an upper-case heading", () => {
@@ -271,14 +271,14 @@ describe("TradingToolStream and tool-call binding", () => {
 
   it("S2 [DONE] while a tool call is still waiting for its finish event is an error", () => {
     const stream = new TradingToolStream(signToolContext(context()));
-    stream.push(sse(callChunk("whiteboard_read", "{}")));
+    stream.push(sse(callChunk("read_ledger_entry", "{}")));
     expect(() => stream.push(Buffer.from("data: [DONE]\n\n"))).toThrow("Tool stream ended without a finish event");
   });
 
   it("S3 a call finished with stop is released with the context; one finished with content_filter is refused", () => {
     const token = signToolContext(context());
-    expect(JSON.parse(releasedArguments(runCall(token, "whiteboard_read", "{}", "stop")))).toEqual({ [ARG]: token });
-    expect(() => runCall(token, "whiteboard_read", "{}", "content_filter")).toThrow("Incomplete trading tool arguments");
+    expect(JSON.parse(releasedArguments(runCall(token, "read_ledger_entry", "{}", "stop")))).toEqual({ [ARG]: token });
+    expect(() => runCall(token, "read_ledger_entry", "{}", "content_filter")).toThrow("Incomplete trading tool arguments");
   });
 
   it("S4 a call to a tool outside the allowed list, or to think even when listed, is refused at the finish event", () => {
@@ -298,7 +298,7 @@ describe("TradingToolStream and tool-call binding", () => {
   it("S6 an event over 2,000,000 characters and arguments over 1,000,000 characters are refused", () => {
     const token = signToolContext(context());
     expect(() => new TradingToolStream(token).push(Buffer.from(`data: ${"x".repeat(2_000_001)}`))).toThrow("Trading SSE event exceeds bound");
-    expect(() => new TradingToolStream(token).push(sse(callChunk("whiteboard_write", "x".repeat(1_000_001))))).toThrow("Trading tool arguments exceed bound");
+    expect(() => new TradingToolStream(token).push(sse(callChunk("get_market_data", "x".repeat(1_000_001))))).toThrow("Trading tool arguments exceed bound");
   });
 
   it("S7 content, keep-alive comments and [DONE] pass through byte for byte", () => {
@@ -317,14 +317,14 @@ describe("TradingToolStream and tool-call binding", () => {
     const token = signToolContext(context());
     const stream = new TradingToolStream(token);
     const output =
-      stream.push(sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "whiteboard_read" } }] } }] })) +
+      stream.push(sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "read_ledger_entry" } }] } }] })) +
       stream.push(sse(finishChunk("tool_calls")));
     expect(JSON.parse(releasedArguments(output))).toEqual({ [ARG]: token });
   });
 
   it("S10 a context the model wrote into its own arguments is replaced and never forwarded", () => {
     const token = signToolContext(context());
-    const output = runCall(token, "whiteboard_read", `{"${ARG}":"forged"}`);
+    const output = runCall(token, "read_ledger_entry", `{"${ARG}":"forged"}`);
     expect(JSON.parse(releasedArguments(output))).toEqual({ [ARG]: token });
     expect(output).not.toContain("forged");
   });
@@ -340,17 +340,17 @@ describe("TradingToolStream and tool-call binding", () => {
 
   it("S11b bindToolResponse attaches the context to a local tool call", () => {
     const token = signToolContext(context());
-    const bound = bindToolResponse({ choices: [{ message: { tool_calls: [{ id: "c1", function: { name: "whiteboard_read", arguments: "{}" } }] } }] }, token);
+    const bound = bindToolResponse({ choices: [{ message: { tool_calls: [{ id: "c1", function: { name: "read_ledger_entry", arguments: "{}" } }] } }] }, token);
     expect(JSON.parse(bound.choices[0].message.tool_calls[0].function.arguments)).toEqual({ [ARG]: token });
   });
 
   it("S12 bindRecoveredToolArgs binds only an allowed local tool, and rejects a tampered token", () => {
-    const token = signToolContext({ ...context(), allowedTools: ["whiteboard_read", "think"] });
+    const token = signToolContext({ ...context(), allowedTools: ["read_ledger_entry", "think"] });
     const args = { ticker: "T" };
     expect(bindRecoveredToolArgs("buy_stock", args, token)).toBe(args);
     expect(bindRecoveredToolArgs("think", args, token)).toBe(args);
-    expect(bindRecoveredToolArgs("whiteboard_read", args, token)).toEqual({ ticker: "T", [ARG]: token });
-    expect(() => bindRecoveredToolArgs("whiteboard_read", args, tampered(token))).toThrow();
+    expect(bindRecoveredToolArgs("read_ledger_entry", args, token)).toEqual({ ticker: "T", [ARG]: token });
+    expect(() => bindRecoveredToolArgs("read_ledger_entry", args, tampered(token))).toThrow();
   });
 });
 
@@ -400,15 +400,15 @@ describe("applyTradingToolProtocol", () => {
 
   it("P6 a tool_choice naming a denied tool falls back to auto, or is dropped with the catalog when nothing is left", () => {
     const forced = (name: string) => ({ type: "function", function: { name } });
-    const kept = applyTradingToolProtocol({ tools: [tool("execute_python"), tool("whiteboard_read")], tool_choice: forced("execute_python") }, ["whiteboard_read"]);
+    const kept = applyTradingToolProtocol({ tools: [tool("execute_python"), tool("read_ledger_entry")], tool_choice: forced("execute_python") }, ["read_ledger_entry"]);
     expect(kept.body.tool_choice).toBe("auto");
 
-    const emptied = applyTradingToolProtocol({ tools: [tool("execute_python")], tool_choice: forced("execute_python") }, ["whiteboard_read"]);
+    const emptied = applyTradingToolProtocol({ tools: [tool("execute_python")], tool_choice: forced("execute_python") }, ["read_ledger_entry"]);
     expect(emptied.body).not.toHaveProperty("tools");
     expect(emptied.body).not.toHaveProperty("tool_choice");
 
-    const allowed = applyTradingToolProtocol({ tools: [tool("execute_python"), tool("whiteboard_read")], tool_choice: forced("whiteboard_read") }, ["whiteboard_read"]);
-    expect(allowed.body.tool_choice).toEqual(forced("whiteboard_read"));
+    const allowed = applyTradingToolProtocol({ tools: [tool("execute_python"), tool("read_ledger_entry")], tool_choice: forced("read_ledger_entry") }, ["read_ledger_entry"]);
+    expect(allowed.body.tool_choice).toEqual(forced("read_ledger_entry"));
   });
 
   it("P7a every think result in one turn is marked as an acknowledgement", () => {

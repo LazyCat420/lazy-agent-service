@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "../../../types/ProviderTypes.ts";
 import type { StreamChunk } from "../../../types/provider.ts";
+import { PARALLEL_TOOL_HINT } from "../../../services/TradingToolProtocol.ts";
 import { runCoreLoopForRun, type RunsAdapterContext } from "../RunsAdapter.ts";
 
 type ProviderTurn = { throw: Error } | { chunks: StreamChunk[] };
@@ -258,5 +259,28 @@ describe("runCoreLoopForRun", () => {
     }
     const final = context.calls.find((c) => c.options.toolChoice === "none")!;
     expect(final.options.systemPrompt).toBe("SYS-RULES");
+  });
+
+  it("9: appends PARALLEL_TOOL_HINT when 2+ runtime tools are offered, without duplicating", async () => {
+    const tool2 = { ...TOOL, name: "get_market_data", description: "Fetch market data" };
+    const context = makeContext([{ chunks: ["Done."] }], {
+      options: { maxIterations: 10, maxTokens: 2048, temperature: 0.4, systemPrompt: "SYS-RULES" },
+      runtimeTools: { finalTools: [TOOL, tool2] },
+    });
+    await collect(context);
+    expect(context.calls[0].options.systemPrompt).toContain(PARALLEL_TOOL_HINT);
+
+    const preInjected = makeContext([{ chunks: ["Done."] }], {
+      options: {
+        maxIterations: 10,
+        maxTokens: 2048,
+        temperature: 0.4,
+        systemPrompt: `SYS-RULES\n\n${PARALLEL_TOOL_HINT}`,
+      },
+      runtimeTools: { finalTools: [TOOL, tool2] },
+    });
+    await collect(preInjected);
+    const sysPrompt = String(preInjected.calls[0].options.systemPrompt);
+    expect(sysPrompt.split(PARALLEL_TOOL_HINT).length - 1).toBe(1);
   });
 });

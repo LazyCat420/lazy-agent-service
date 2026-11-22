@@ -616,6 +616,20 @@ async function runTraderStage(
   }
 }
 
+export function findMissingLedgerFollowupSlots(entries: Record<string, LedgerEntry>): string[] {
+  const present = new Set(
+    Object.values(entries || {})
+      .map((e) => (e?.tool_name || "").trim())
+      .filter(Boolean),
+  );
+  const missing: string[] = [];
+  if (!present.has("get_market_data")) missing.push("market");
+  if (!present.has("get_finviz_fundamentals") && !present.has("get_earnings_data")) missing.push("fundamentals");
+  if (!present.has("get_finnhub_news") && !present.has("lazy_web_search")) missing.push("news");
+  if (!present.has("get_upcoming_events")) missing.push("events");
+  return missing;
+}
+
 /**
  * Unified 3-stage Linear Trading Pipeline inside `lazy-agent-service`:
  *   1. Research Extractor (Parallel A/A across `gold-spark` and `dell2`)
@@ -633,12 +647,8 @@ export async function runLinearDeskPipeline(
   const combinedSignal = AbortSignal.any(signals);
   const scopedReq: LinearDeskRequest = { ...req, signal: combinedSignal };
   const tools = buildCoreTools(scopedReq, deps, { calls: 0, maxCalls: LINEAR_PROFILE.maxToolCalls });
-  const distinctTools = new Set(
-    Object.values(req.ledger_entries || {})
-      .map((e) => (e.tool_name || "").trim())
-      .filter(Boolean),
-  );
-  const skipPrefetchedFollowups = distinctTools.size >= 5 && !deps.executeTool;
+  const missingSlots = findMissingLedgerFollowupSlots(req.ledger_entries || {});
+  const skipPrefetchedFollowups = missingSlots.length === 0 && !deps.executeTool;
   const stage1Tools = skipPrefetchedFollowups ? [] : tools;
   const stage1MaxSteps = skipPrefetchedFollowups ? 1 : 3;
 

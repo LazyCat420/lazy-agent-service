@@ -100,7 +100,7 @@
       "web-search",
       "trading"
     ],
-    "owner_app": "trading",
+    "owner_app": "shared",
     "agents": []
   }
 ]

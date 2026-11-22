@@ -20,8 +20,8 @@ function response() {
 }
 for (const cycleId of ["cycle-v3-fullpath", "cycle-observe-1788843390", "bench-FIXT-123"])
 for (const streaming of [false, true]) it(`binds real shim -> dispatch -> bridge identity ${cycleId} (${streaming ? "SSE" : "JSON"})`, async () => {
-  const prepared = prepareToolContext(prepareTradingRequest({ project: "vllm-trading-bot", provider:"vllm-2", agent: "CUSTOM_V3_JUNIOR_ANALYST", conversationId: "offline-fullpath", enabledTools: ["whiteboard_write"], systemPrompt: "role", messages: [{ role: "user", content: `## Ticker: TEST\n\n## Cycle: ${cycleId}\nFull task: make a trading decision from this verified evidence. ${"Long evidence block. ".repeat(1000)}` }] }));
-  const call = { id: "call-a", type: "function", function: { name: "whiteboard_write", arguments: '{"ticker":"TEST","section":"market_context","content":"offline"}' } };
+  const prepared = prepareToolContext(prepareTradingRequest({ project: "vllm-trading-bot", provider:"vllm-2", agent: "CUSTOM_V3_JUNIOR_ANALYST", conversationId: "offline-fullpath", enabledTools: ["save_equation"], systemPrompt: "role", messages: [{ role: "user", content: `## Ticker: TEST\n\n## Cycle: ${cycleId}\nFull task: make a trading decision from this verified evidence. ${"Long evidence block. ".repeat(1000)}` }] }));
+  const call = { id: "call-a", type: "function", function: { name: "save_equation", arguments: '{"ticker":"TEST","section":"market_context","content":"offline"}' } };
   const modelResponse = { choices: [{ index: 0, message: { role: "assistant", tool_calls: [call] }, finish_reason: "tool_calls" }], usage: { prompt_tokens: 20, completion_tokens: 8 } };
   const wire = streaming ? [
     { choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, ...call }] }, finish_reason: null }] },
@@ -31,11 +31,11 @@ for (const streaming of [false, true]) it(`binds real shim -> dispatch -> bridge
   const fetchMock = vi.fn().mockResolvedValueOnce(new Response(wire, { headers: { "content-type": streaming ? "text/event-stream" : "application/json" } })).mockResolvedValueOnce(new Response('{"ok":true}'));
   vi.stubGlobal("fetch", fetchMock);
   const res = response();
-  await VllmShimService.handle({ originalUrl: "/vllm-shim/gold-spark/v1/chat/completions", method: "POST", headers: {}, body: { model: "offline", stream: streaming, tools: [{ type: "function", function: { name: "think" } }, { type: "function", function: { name: "whiteboard_write" } }], messages: [{ role: "system", content: prepared.systemPrompt }, ...prepared.messages] } } as any, res as any);
+  await VllmShimService.handle({ originalUrl: "/vllm-shim/gold-spark/v1/chat/completions", method: "POST", headers: {}, body: { model: "offline", stream: streaming, tools: [{ type: "function", function: { name: "think" } }, { type: "function", function: { name: "save_equation" } }], messages: [{ role: "system", content: prepared.systemPrompt }, ...prepared.messages] } } as any, res as any);
   expect(res.statusCode).toBe(200);
   const upstream = JSON.parse(fetchMock.mock.calls[0][1].body);
   expect(JSON.stringify(upstream)).not.toContain("TRADING_TOOL_CONTEXT");
-  expect(upstream.tools.map((t: any) => t.function.name)).toEqual(["whiteboard_write"]);
+  expect(upstream.tools.map((t: any) => t.function.name)).toEqual(["save_equation"]);
   expect(upstream.messages.some((m:any) => m.role === "user" && m.content === prepared.messages.at(-1).content)).toBe(true);
   expect(JSON.stringify(upstream)).not.toContain("Retrieval index:");
   expect(upstream.messages[0].content).toContain("TRADING TOOL EXECUTION CONTRACT v1");
@@ -47,7 +47,7 @@ for (const streaming of [false, true]) it(`binds real shim -> dispatch -> bridge
     for (const choice of parsed.choices) for (const chunk of choice.delta?.tool_calls || []) argumentsText += chunk.function?.arguments || "";
   }
   expect(JSON.parse(argumentsText)[TOOL_CONTEXT_ARG]).toBeTruthy();
-  expect(await dispatchTool("whiteboard_write", JSON.parse(argumentsText), { transport: "mcp" })).toEqual({ ok: true });
+  expect(await dispatchTool("save_equation", JSON.parse(argumentsText), { transport: "mcp" })).toEqual({ ok: true });
   const bridge = JSON.parse(fetchMock.mock.calls[1][1].body);
   expect(bridge).toMatchObject({ cycle_id: cycleId, agent_name: "v3_junior_analyst", ticker: "TEST" });
   expect(bridge.arguments).not.toHaveProperty(TOOL_CONTEXT_ARG);
@@ -74,7 +74,7 @@ it("leaves the tool catalog and acknowledgements of non-trading callers untouche
 
 it("rejects unauthorized model calls in JSON and SSE before releasing arguments", async () => {
   const {bindToolResponse, TradingToolStream} = await import("../TradingToolStream.ts");
-  const token = signToolContext({project:"vllm-trading-bot",agentName:"v3_board_of_directors",cycleId:"test",ticker:"TEST",conversationId:"test",allowedTools:["whiteboard_read"],expiresAt:Date.now()+60000});
+  const token = signToolContext({project:"vllm-trading-bot",agentName:"v3_board_of_directors",cycleId:"test",ticker:"TEST",conversationId:"test",allowedTools:["read_ledger_entry"],expiresAt:Date.now()+60000});
   const call = {index:0,id:"bad",type:"function",function:{name:"execute_python",arguments:'{"code":"unauthorized"}'}};
   expect(() => bindToolResponse({choices:[{message:{tool_calls:[call]}}]},token)).toThrow("unauthorized");
   const stream = new TradingToolStream(token);

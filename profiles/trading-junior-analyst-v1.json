@@ -15,8 +15,7 @@
     "trading.market.get_institutional_holdings@1.0",
     "trading.market.get_reddit_trending_stocks@1.0",
     "trading.research.run_tool_chain@1.0",
-    "trading.desk.whiteboard_write@1.0",
-    "trading.desk.whiteboard_read@1.0",
+    "trading.whiteboard.read_ledger_entry@1.0",
     "trading.research.get_upcoming_events@1.0",
     "trading.research.list_scheduled_research@1.0",
     "trading.research.schedule_research@1.0",
@@ -64,10 +63,7 @@
     "trading.research.run_tool_chain": {
       "effect": "read"
     },
-    "trading.desk.whiteboard_write": {
-      "effect": "write"
-    },
-    "trading.desk.whiteboard_read": {
+    "trading.whiteboard.read_ledger_entry": {
       "effect": "read"
     },
     "trading.research.get_upcoming_events": {

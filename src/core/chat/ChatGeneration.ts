@@ -322,7 +322,7 @@ async function resolveDynamicVllmModelIfNeeded(
   providerName: string,
   resolvedModel: string | undefined,
 ): Promise<{ providerName: string; resolvedModel: string | undefined }> {
-  if (resolvedModel || !providerName.startsWith("vllm")) {
+  if ((resolvedModel && resolvedModel !== "auto") || !providerName.startsWith("vllm")) {
     return { providerName, resolvedModel };
   }
   const siblings = getInstancesByType(providerName);

@@ -9,11 +9,11 @@ import { signToolContext } from "../TradingToolContext.ts";
 import { bindRecoveredToolArgs } from "../TradingToolStream.ts";
 import { VllmShimService } from "../vllm/VllmShimService.ts";
 
-const ALLOWED = ["get_upcoming_events", "lazy_web_search", "list_watches", "screener_query", "whiteboard_write"];
+const ALLOWED = ["get_upcoming_events", "lazy_web_search", "list_watches", "screener_query", "save_equation"];
 const caller = { project: "vllm-trading-bot", agentName: "v3_junior_analyst" };
 const token = () => signToolContext({ project: "vllm-trading-bot", agentName: "v3_junior_analyst",
   cycleId: "cycle-v3-1793702165", ticker: "MSFT", conversationId: "conv", allowedTools: ALLOWED, expiresAt: Date.now() + 60_000 });
-/** The trading-service bridge: it rejects a non-string whiteboard content, as the real endpoint does. */
+/** The trading-service bridge: it rejects non-string content, as the real endpoint does. */
 const bridge = vi.fn(async (_url: unknown, init: { body: string }) => {
   const { arguments: args } = JSON.parse(init.body);
   return new Response(typeof args.content === "string" ? '{"ok":true}' : '{"error":"\\"content\\" must be string"}');
@@ -39,7 +39,7 @@ beforeEach(() => { vi.stubEnv("TRADING_TOOL_CONTEXT_KEY", "offline-perm-key"); b
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 it("(a) an allowlisted call recovered from markup executes instead of PERMISSION_DENIED", async () => {
-  const call = await markupCall("whiteboard_write", token());
+  const call = await markupCall("save_equation", token());
   expect(await dispatchTool(call.name, call.args, caller)).toEqual({ ok: true });
   expect(JSON.parse(bridge.mock.calls[0][1].body)).toMatchObject({ cycle_id: "cycle-v3-1793702165", agent_name: "v3_junior_analyst", ticker: "MSFT" });
 });
@@ -47,11 +47,11 @@ it("(a) an allowlisted call recovered from markup executes instead of PERMISSION
 it("(b) an invalid-argument call fails on its arguments and consumes nothing; the next valid call succeeds", async () => {
   const t = token();
   vi.stubGlobal("fetch", bridge);
-  const bad = bindRecoveredToolArgs("whiteboard_write", { ticker: "MSFT", section: "market_context", content: { text: 123 } }, t);
-  const rejected = await dispatchTool("whiteboard_write", bad, caller);
+  const bad = bindRecoveredToolArgs("save_equation", { ticker: "MSFT", section: "market_context", content: { text: 123 } }, t);
+  const rejected = await dispatchTool("save_equation", bad, caller);
   expect(rejected).toEqual({ error: '"content" must be string' });
-  const good = bindRecoveredToolArgs("whiteboard_write", { ticker: "MSFT", section: "market_context", content: "recon" }, t);
-  expect(await dispatchTool("whiteboard_write", good, caller)).toEqual({ ok: true });
+  const good = bindRecoveredToolArgs("save_equation", { ticker: "MSFT", section: "market_context", content: "recon" }, t);
+  expect(await dispatchTool("save_equation", good, caller)).toEqual({ ok: true });
 });
 
 it("(c) a tool outside the signed allowlist is still PERMISSION_DENIED", async () => {
@@ -69,7 +69,7 @@ function shimResponse() {
     json(value: unknown) { this.output = JSON.stringify(value); return this; },
   });
 }
-const dsml = '<｜tool calls｜><｜tool_call｜>{"name": "whiteboard_write", "arguments": {"ticker": "MSFT", "content": "x"}}<｜end of tool call｜>';
+const dsml = '<｜tool calls｜><｜tool_call｜>{"name": "save_equation", "arguments": {"ticker": "MSFT", "content": "x"}}<｜end of tool call｜>';
 async function shimJson(toolChoice: string) {
   const upstream = { choices: [{ index: 0, message: { role: "assistant", content: dsml }, finish_reason: "stop" }] };
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(upstream), { headers: { "content-type": "application/json" } })));
@@ -83,5 +83,5 @@ it("a tool_choice none turn returns its markup as text, never as a callable tool
   const off = await shimJson("none");
   expect(off.tool_calls).toBeUndefined();
   expect(off.content).toBe(dsml);
-  expect((await shimJson("auto")).tool_calls[0].function.name).toBe("whiteboard_write");
+  expect((await shimJson("auto")).tool_calls[0].function.name).toBe("save_equation");
 });

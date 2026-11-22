@@ -24,6 +24,8 @@ import {
   MINIMUM_CLAMPED_OUTPUT_TOKENS,
 } from "../../constants/TokenBudgetDefaults.ts";
 import { runCoreLoop } from "./CoreLoop.ts";
+import { PARALLEL_TOOL_HINT } from "../../services/TradingToolProtocol.ts";
+import { openingBundleHint } from "../../services/TradingToolStacks.ts";
 import {
   compactMessages,
   DEFAULT_COMPACT_TOKEN_BUDGET,
@@ -184,13 +186,42 @@ const shouldFinalizeOf =
         : "TOKEN_BUDGET"
       : null;
 
+function withParallelBatchHint(
+  systemPrompt: string | undefined,
+  context: RunsAdapterContext,
+): string | undefined {
+  const toolNames = context.runtimeTools.finalTools.map((t) => t.name);
+  const hintDisabled =
+    (process.env.TRADING_PARALLEL_TOOL_HINT || "true").toLowerCase() === "false";
+  if (hintDisabled || toolNames.length <= 1) {
+    return systemPrompt;
+  }
+  if (systemPrompt && systemPrompt.includes(PARALLEL_TOOL_HINT)) {
+    return systemPrompt;
+  }
+  const roleName =
+    typeof (context as unknown as Record<string, unknown>).agentName === "string"
+      ? String((context as unknown as Record<string, unknown>).agentName)
+      : "agent";
+  const hintBlock = [
+    PARALLEL_TOOL_HINT,
+    openingBundleHint(roleName, toolNames, context.resolvedModel),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return systemPrompt ? `${systemPrompt}\n\n${hintBlock}` : hintBlock;
+}
+
 /** The CoreModel adapter: one provider stream per CoreModelRequest. */
 const coreModelFor = (context: RunsAdapterContext): CoreModel => {
+  const resolvedSystemPrompt = withParallelBatchHint(
+    typeof context.options.systemPrompt === "string" && context.options.systemPrompt
+      ? context.options.systemPrompt
+      : undefined,
+    context,
+  );
   const baseOptions = {
-    ...(typeof context.options.systemPrompt === "string" &&
-    context.options.systemPrompt
-      ? { systemPrompt: context.options.systemPrompt }
-      : {}),
+    ...(resolvedSystemPrompt ? { systemPrompt: resolvedSystemPrompt } : {}),
     ...(typeof context.options.temperature === "number"
       ? { temperature: context.options.temperature }
       : {}),

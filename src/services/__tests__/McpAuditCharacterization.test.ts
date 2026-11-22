@@ -13,10 +13,10 @@ import { dispatchTool } from "../ToolDispatch.ts";
 import { signToolContext, TOOL_CONTEXT_ARG } from "../TradingToolContext.ts";
 beforeEach(() => { mocks.handlers.clear(); mocks.route.mockReset(); vi.stubEnv("TRADING_TOOL_CONTEXT_KEY", "offline-test-key"); });
 afterEach(() => vi.unstubAllEnvs());
-const context = () => ({ project: "vllm-trading-bot" as const, agentName: "v3_junior_analyst", cycleId: "cycle-v3-offline", ticker: "TEST", conversationId: "offline-session", allowedTools: ["whiteboard_read"], expiresAt: Date.now() + 60000 });
+const context = () => ({ project: "vllm-trading-bot" as const, agentName: "v3_junior_analyst", cycleId: "cycle-v3-offline", ticker: "TEST", conversationId: "offline-session", allowedTools: ["read_ledger_entry"], expiresAt: Date.now() + 60000 });
 const handler = () => { (new McpAdapter() as any).createMcpServer(); return mocks.handlers.get("tools/call")!; };
 it("refuses an unbound trading MCP call before routing", async () => {
-  const result = await handler()({ params: { name: "whiteboard_write", arguments: { ticker: "TEST" } } });
+  const result = await handler()({ params: { name: "get_market_data", arguments: { ticker: "TEST" } } });
   expect(result.isError).toBe(true);
   expect(JSON.parse(result.content[0].text).error).toBe("PERMISSION_DENIED");
   expect(mocks.route).not.toHaveBeenCalled();
@@ -24,16 +24,16 @@ it("refuses an unbound trading MCP call before routing", async () => {
 it("forwards verified per-call identity and clean arguments, without session registration", async () => {
   mocks.route.mockResolvedValue({ entries: [] });
   const ctx = context();
-  const result = await handler()({ params: { name: "whiteboard_read", arguments: { ticker: "TEST", [TOOL_CONTEXT_ARG]: signToolContext(ctx) } } });
+  const result = await handler()({ params: { name: "read_ledger_entry", arguments: { ticker: "TEST", [TOOL_CONTEXT_ARG]: signToolContext(ctx) } } });
   expect(result.isError).toBe(false);
-  expect(mocks.route).toHaveBeenCalledExactlyOnceWith("whiteboard_read", { ticker: "TEST" }, ctx);
+  expect(mocks.route).toHaveBeenCalledExactlyOnceWith("read_ledger_entry", { ticker: "TEST" }, ctx);
 });
 it("enforces the same role whitelist on REST and MCP", async () => {
   const args = { [TOOL_CONTEXT_ARG]: signToolContext(context()) };
   const result = await handler()({ params: { name: "buy_stock", arguments: args } });
   expect(result.isError).toBe(true);
   expect(await dispatchTool("buy_stock", args, { transport: "rest" })).toMatchObject({ error: "PERMISSION_DENIED" });
-  expect(await dispatchTool("whiteboard_read", {}, { transport: "rest", project: "vllm-trading-bot" })).toMatchObject({ error: "PERMISSION_DENIED" });
+  expect(await dispatchTool("read_ledger_entry", {}, { transport: "rest", project: "vllm-trading-bot" })).toMatchObject({ error: "PERMISSION_DENIED" });
   expect(mocks.route).not.toHaveBeenCalled();
 });
 it("preserves explicit non-trading MCP compatibility but never overrides a bad per-call token", async () => {
@@ -49,8 +49,8 @@ it("propagates returned failures as MCP errors and preserves empty successes", a
   const args = { [TOOL_CONTEXT_ARG]: signToolContext(context()) };
   for (const failure of [{ error: "offline failure", is_error: true }, '{"success":false,"message":"unavailable"}']) {
     mocks.route.mockResolvedValueOnce(failure);
-    expect((await h({ params: { name: "whiteboard_read", arguments: args } })).isError).toBe(true);
+    expect((await h({ params: { name: "read_ledger_entry", arguments: args } })).isError).toBe(true);
   }
   mocks.route.mockResolvedValueOnce({ entries: [] });
-  expect((await h({ params: { name: "whiteboard_read", arguments: args } })).isError).toBe(false);
+  expect((await h({ params: { name: "read_ledger_entry", arguments: args } })).isError).toBe(false);
 });

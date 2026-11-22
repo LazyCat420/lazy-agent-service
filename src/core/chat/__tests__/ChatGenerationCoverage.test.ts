@@ -898,6 +898,20 @@ describe("dynamic vllm model resolution", () => {
     });
   });
 
+  it("treats model 'auto' as dynamic discovery for vllm providers", async () => {
+    stub.instances["vllm-1"] = [{ id: "vllm-a", concurrency: 1 }];
+    stub.providers["vllm-a"] = mappedTextProvider({ listModels: async () => ({ models: [{ id: "qwen-auto" }] }) });
+    stub.generateResult = { text: "ok" };
+    const { emit } = collect();
+    await handleConversation(baseChat({ provider: "vllm-1", model: "auto" }), emit);
+
+    expect(stub.modelLookups).toContain("qwen-auto");
+    expect((stub.finalized.at(-1) as { context: Record<string, unknown> }).context).toMatchObject({
+      providerName: "vllm-a",
+      resolvedModel: "qwen-auto",
+    });
+  });
+
   it("accepts key/name model shapes and skips siblings without discovery", async () => {
     stub.instances["vllm-1"] = [
       { id: "vllm-skip", concurrency: 1 },

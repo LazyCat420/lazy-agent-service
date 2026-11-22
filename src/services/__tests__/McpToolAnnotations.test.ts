@@ -53,7 +53,6 @@ const MUST_STAY_GATED = [
   "run_backtest",
   "run_tool_chain",
   "schedule_research",
-  "request_research_now",
   "cancel_scheduled_research",
   "propose_parameter_change",
   "watch_ticker",
@@ -66,8 +65,6 @@ const MUST_STAY_GATED = [
 // nothing else failing, so the membership is pinned here.
 const MUST_BE_ANNOTATED = [
   "scrape_url",
-  "whiteboard_write",
-  "whiteboard_annotate",
   "lazy_web_search",
   "search_equations",
   "screener_query",

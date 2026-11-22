@@ -1,15 +1,12 @@
 /**
- * `whiteboard_find` must be offered by the catalog and routed as a read.
- *
- * It reads trading-service's per-(cycle, ticker) data ledger and never fetches,
- * so a repeat is reused or retried instead of blocked by the repeat guard. The
- * catalog entry is what the model is offered; `READ_ONLY_TOOLS` is what the
- * router treats as safe to repeat.
+ * `read_ledger_entry` must be offered by the catalog and routed as a read,
+ * while retired `whiteboard_read` / `whiteboard_find` are absent from the
+ * catalog and routing sets.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { READ_ONLY_TOOLS, isReadOnlyTool } from "../LocalToolRouter.ts";
+import { READ_ONLY_TOOLS, REPEAT_GUARDED_TOOLS, isReadOnlyTool } from "../LocalToolRouter.ts";
 
 type CatalogTool = {
   name: string;
@@ -27,37 +24,30 @@ const catalog: CatalogTool[] = JSON.parse(
 );
 const byName: Record<string, CatalogTool> = Object.fromEntries(catalog.map((t) => [t.name, t]));
 
-describe("whiteboard_find catalog entry", () => {
-  it("is offered with a required key and an optional ticker", () => {
-    const tool = byName["whiteboard_find"];
+describe("read_ledger_entry catalog entry and routing", () => {
+  it("is offered with lookup keys and optional ticker", () => {
+    const tool = byName["read_ledger_entry"];
     expect(tool).toBeDefined();
     expect(tool?.permission).toBe("read_only");
-    expect(tool?.parameters?.required).toEqual(["key"]);
-    expect(tool?.parameters?.properties?.key?.type).toBe("string");
+    expect(tool?.parameters?.properties?.tool_name?.type).toBe("string");
+    expect(tool?.parameters?.properties?.entry_id?.type).toBe("string");
+    expect(tool?.parameters?.properties?.args_hash?.type).toBe("string");
     expect(tool?.parameters?.properties?.ticker?.type).toBe("string");
     expect(tool?.parameters?.properties?.ticker?.description).toContain("current desk ticker");
   });
 
   it("is routed as read-only under its bare and MCP-prefixed spellings", () => {
-    expect(READ_ONLY_TOOLS.has("whiteboard_find")).toBe(true);
-    expect(isReadOnlyTool("whiteboard_find")).toBe(true);
-    expect(isReadOnlyTool("mcp__lazy-agent-service__whiteboard_find")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("read_ledger_entry")).toBe(true);
+    expect(isReadOnlyTool("read_ledger_entry")).toBe(true);
+    expect(isReadOnlyTool("mcp__lazy-agent-service__read_ledger_entry")).toBe(true);
   });
-});
 
-describe("whiteboard_write facts parameter", () => {
-  it("accepts an array of key/value/unit/source/as_of claims", () => {
-    const facts = byName["whiteboard_write"]?.parameters?.properties?.facts;
-    expect(facts?.type).toBe("array");
-    const items = facts?.items as {
-      properties?: Record<string, { type?: string }>;
-      required?: string[];
-    };
-    expect(items?.required).toEqual(["key", "value"]);
-    expect(Object.keys(items?.properties ?? {}).sort()).toEqual(
-      ["as_of", "key", "source", "unit", "value"].sort(),
-    );
-    expect(items?.properties?.value?.type).toBe("number");
+  it("excludes retired whiteboard tools from catalog and router sets", () => {
+    for (const retired of ["whiteboard_find", "whiteboard_read", "whiteboard_write", "whiteboard_annotate"]) {
+      expect(byName[retired]).toBeUndefined();
+      expect(READ_ONLY_TOOLS.has(retired)).toBe(false);
+      expect(REPEAT_GUARDED_TOOLS.has(retired)).toBe(false);
+    }
   });
 });
 

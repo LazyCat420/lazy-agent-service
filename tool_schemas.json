@@ -1071,6 +1071,63 @@
     "owner_app": "shared"
   },
   {
+    "name": "web_search",
+    "description": "Search the web (Exa with SearXNG fallback, cached and rate-limited network-wide). Returns ranked results with title, url, snippet and — when known — published date. Use allowed_domains/blocked_domains to pin or exclude sites (parent-domain suffix matching). Follow up with scrape_url to read a page.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max results, 1-10 (default 5)."
+        },
+        "siteSearch": {
+          "type": "string",
+          "description": "Restrict to one site; becomes a site: prefix."
+        },
+        "allowed_domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Only return results from these domains (suffix match)."
+        },
+        "blocked_domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Exclude results from these domains (suffix match)."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "tier": 0,
+    "source": "",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 20000,
+    "tags": [
+      "research",
+      "web-search",
+      "trading"
+    ],
+    "domain": "Research & Intelligence",
+    "labels": [
+      "research",
+      "web-search",
+      "trading"
+    ],
+    "owner_app": "shared",
+    "agents": []
+  },
+  {
     "name": "add_to_watchlist",
     "description": "Add a stock ticker (e.g., from the Discovery list) to the user's active watchlist. Do NOT use this tool to add items TO discovery; discovery is automatic. Requires user confirmation.",
     "parameters": {
@@ -1143,33 +1200,6 @@
     ],
     "owner_app": "trading",
     "agents": []
-  },
-  {
-    "name": "calculate_hrp_allocation",
-    "description": "Compute Hierarchical Risk Parity target weights over the current holdings (optionally plus a BUY candidate) using a Ledoit-Wolf shrunk covariance — covariance-aware position sizing. Optional views (simplified Black-Litterman tilt) scale weights by direction and confidence. Returns target weights, dollar allocations, diversification ratio, current-vs-target drift, and >5% drift breaches. Use as the sizing baseline instead of flat cash-percent sizing.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "tickers": {
-          "type": "string",
-          "description": "Comma-separated universe. Empty = current holdings."
-        },
-        "candidate_ticker": {
-          "type": "string",
-          "description": "Ticker being considered for a new BUY — unioned into the universe."
-        },
-        "views": {
-          "type": "string",
-          "description": "JSON list of directional views, e.g. [{\"ticker\":\"NVDA\",\"direction\":\"BULLISH\",\"confidence\":70}]."
-        },
-        "lookback_days": {
-          "type": "integer",
-          "description": "Trading days of history (default 252)."
-        }
-      },
-      "required": []
-    },
-    "owner_app": "trading"
   },
   {
     "name": "calculate_stop_loss",
@@ -1282,27 +1312,6 @@
       "user_chat",
       "v3_portfolio_manager"
     ]
-  },
-  {
-    "name": "forecast_volatility_garch",
-    "description": "Fit GARCH(1,1) on the ticker's daily returns and forecast NEXT-DAY volatility — a forward-looking volatility estimate, unlike ATR which only describes the past. Returns predicted vs realized (20d) annualized vol, the prediction premium, and vol_signal: EXPANSION (widen stops, shrink size), CONTRACTION, or NEUTRAL.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "Stock ticker (e.g. AAPL)."
-        },
-        "lookback_days": {
-          "type": "integer",
-          "description": "Trading days of history to fit on (default 500)."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "owner_app": "trading"
   },
   {
     "name": "get_earnings_data",
@@ -1571,36 +1580,6 @@
     "agents": [
       "user_chat",
       "v3_board_of_directors",
-      "v3_quant_analyst"
-    ]
-  },
-  {
-    "name": "get_position_pnl",
-    "description": "Check the P&L and health of a specific held position. Returns entry price, current price, unrealized P&L, holding duration, and stop-loss proximity. Use this during debates to evaluate whether to hold or sell.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker to check."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [],
-    "owner_app": "trading",
-    "agents": [
-      "user_chat",
       "v3_quant_analyst"
     ]
   },
@@ -1881,6 +1860,55 @@
     ]
   },
   {
+    "name": "read_ledger_entry",
+    "description": "Read one stored entry of this cycle's data ledger in full: digest, verified facts and the raw payload (clipped to max_chars). An entry is identified by at least one lookup key: tool_name, entry_id or args_hash — a call with none of them is rejected (status 'error', code 'missing_lookup_key'), so take the tool name from the '## DATA LEDGER' index in your prompt, or the entry_id / args_hash from the FOLDED_TOOL_RESULT header of the folded tool turn. A miss with a valid key returns status 'not_found', not an error.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "description": "Optional stock ticker (defaults to the current desk ticker)."
+        },
+        "tool_name": {
+          "type": "string",
+          "description": "Lookup key: tool name from the FOLDED_TOOL_RESULT header or the '## DATA LEDGER' prompt index (e.g. 'get_earnings_data'). Returns that tool's newest entry for the current cycle unless entry_id or args_hash narrows it."
+        },
+        "entry_id": {
+          "type": "string",
+          "description": "Lookup key: exact ledger entry id (from the FOLDED_TOOL_RESULT header or the '## DATA LEDGER' prompt index)."
+        },
+        "args_hash": {
+          "type": "string",
+          "description": "Lookup key: args hash to disambiguate repeat calls of the same tool."
+        },
+        "max_chars": {
+          "type": "integer",
+          "description": "Max characters of raw payload to return (default 8000)."
+        }
+      },
+      "required": []
+    },
+    "tier": 1,
+    "source": "whiteboard",
+    "permission": "read_only",
+    "fallback_only": false,
+    "concurrency_safe": true,
+    "max_result_chars": 16000,
+    "tags": [],
+    "domain": "General",
+    "labels": [
+      "tool"
+    ],
+    "owner_app": "trading",
+    "agents": [
+      "v3_board_of_directors",
+      "v3_debate_judge",
+      "v3_fundamental_analyst",
+      "v3_junior_analyst",
+      "v3_quant_analyst"
+    ]
+  },
+  {
     "name": "remove_from_watchlist",
     "description": "Remove a stock ticker from the user's active watchlist. Requires user confirmation.",
     "parameters": {
@@ -1910,56 +1938,6 @@
     ],
     "owner_app": "trading",
     "agents": []
-  },
-  {
-    "name": "request_research_now",
-    "description": "Queue an immediate research-only cycle (collect + analyze, NEVER trades) on up to 5 tickers. Use ONLY when a catalyst already hit and the current data is insufficient. Governor enforces: max 2 queued at once, 4h per-ticker cooldown, dedupe against scheduled research. Be picky — routine curiosity will be rejected; check list_scheduled_research first.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "tickers": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "1-5 ticker symbols, highest conviction only."
-        },
-        "reason": {
-          "type": "string",
-          "description": "The specific catalyst/question this research must answer."
-        },
-        "urgency": {
-          "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high",
-            "critical"
-          ],
-          "description": "critical bypasses the recency cooldown — reserve for genuine breaking catalysts."
-        }
-      },
-      "required": [
-        "tickers",
-        "reason"
-      ]
-    },
-    "tier": 1,
-    "source": "research_scheduling",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "v3_fundamental_analyst",
-      "v3_portfolio_manager"
-    ]
   },
   {
     "name": "run_backtest",
@@ -2046,7 +2024,7 @@
   },
   {
     "name": "run_tool_chain",
-    "description": "Run a named, pre-defined sequence of tools in ONE call instead of calling each tool separately (saves turns/tokens). Pass 'chain' (the chain name) and 'params' (its inputs, e.g. {\"ticker\": \"NVDA\"}). Omit 'chain' or pass an unknown name to get the catalog of available chains and their params. Available: ticker_deep_dive (market data + indicators + news + fundamentals for a ticker), news_and_fundamentals (news + fundamentals for a ticker). Each underlying tool is also callable on its own.",
+    "description": "Run a named, pre-defined sequence of tools in ONE call instead of calling each tool separately (saves turns/tokens). Pass 'chain' (the chain name) and 'params' (its inputs, e.g. {\"ticker\": \"NVDA\"}). Omit 'chain' or pass an unknown name to get the catalog of available chains and their params. Available: ticker_deep_dive (market data + indicators + news + fundamentals for a ticker), news_and_fundamentals (news + fundamentals for a ticker), research_snapshot (market data + news + fundamentals + upcoming events + institutional holdings for a ticker). Independent chain steps run concurrently. Each underlying tool is also callable on its own.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2054,7 +2032,8 @@
           "type": "string",
           "enum": [
             "ticker_deep_dive",
-            "news_and_fundamentals"
+            "news_and_fundamentals",
+            "research_snapshot"
           ],
           "description": "Name of the chain to run. Omit to list available chains."
         },
@@ -2120,7 +2099,7 @@
     },
     "tier": 0,
     "source": "equation_library",
-    "permission": "read_only",
+    "permission": "write",
     "fallback_only": false,
     "concurrency_safe": true,
     "max_result_chars": 50000,
@@ -2497,256 +2476,6 @@
     "agents": [
       "user_chat",
       "v3_portfolio_manager"
-    ]
-  },
-  {
-    "name": "web_search",
-    "description": "Search the web (Exa with SearXNG fallback, cached and rate-limited network-wide). Returns ranked results with title, url, snippet and — when known — published date. Use allowed_domains/blocked_domains to pin or exclude sites (parent-domain suffix matching). Follow up with scrape_url to read a page.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "The search query."
-        },
-        "limit": {
-          "type": "number",
-          "description": "Max results, 1-10 (default 5)."
-        },
-        "siteSearch": {
-          "type": "string",
-          "description": "Restrict to one site; becomes a site: prefix."
-        },
-        "allowed_domains": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Only return results from these domains (suffix match)."
-        },
-        "blocked_domains": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Exclude results from these domains (suffix match)."
-        }
-      },
-      "required": [
-        "query"
-      ]
-    },
-    "tier": 0,
-    "source": "",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 20000,
-    "tags": [
-      "research",
-      "web-search",
-      "trading"
-    ],
-    "domain": "Research & Intelligence",
-    "labels": [
-      "research",
-      "web-search",
-      "trading"
-    ],
-    "owner_app": "trading",
-    "agents": []
-  },
-  {
-    "name": "whiteboard_annotate",
-    "description": "Add a note or comment to an existing whiteboard entry without overwriting it. Use this to highlight risks, disagree with a consensus, or add context.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "entry_id": {
-          "type": "string",
-          "description": "The exact entry_id from whiteboard_read (a string like 'wb_1a2b3c4d5e')."
-        },
-        "note": {
-          "type": "string",
-          "description": "Your annotation/comment."
-        },
-        "author": {
-          "type": "string",
-          "description": "YOUR agent name (e.g. v3_quant_analyst) so teammates know who wrote this. Always provide it."
-        }
-      },
-      "required": [
-        "entry_id",
-        "note"
-      ]
-    },
-    "tier": 1,
-    "source": "whiteboard",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "v3_board_of_directors",
-      "v3_debate_judge"
-    ]
-  },
-  {
-    "name": "whiteboard_find",
-    "description": "Look up this cycle's shared data ledger for the current ticker: a fact key (e.g. 'pe_ratio', 'fcf_ttm', 'rsi_14'), a tool name (e.g. 'get_earnings_data') to see what it already returned, a keyword, or '*' to list everything. A repeat of a lookup another agent already paid for costs nothing; use it instead of re-fetching data that is already in the ledger. A miss returns status 'not_found', not an error.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "key": {
-          "type": "string",
-          "description": "Tool name (e.g. 'get_earnings_data', 'screener_query'), fact key from the shared fact vocabulary (e.g. 'pe_ratio', 'fcf_ttm', 'rsi_14', 'hrp_target_weight_pct'), or '*' to list all ledger entries for the current ticker and cycle."
-        },
-        "ticker": {
-          "type": "string",
-          "description": "Optional stock ticker (defaults to the current desk ticker)."
-        }
-      },
-      "required": [
-        "key"
-      ]
-    },
-    "tier": 1,
-    "source": "whiteboard",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 16000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "v3_board_of_directors",
-      "v3_debate_judge"
-    ]
-  },
-  {
-    "name": "whiteboard_read",
-    "description": "Read a section of the team's shared whiteboard for a given ticker. Pipeline artifact sections (written by the desk as it works): 'desk_note', 'fundamental_report', 'quant_report', 'valuation_report', 'bull_argument', 'bear_rebuttal', 'debate_judge', 'tournament_result', 'regime_classification', 'final_decision'. Collaboration sections written during research: 'market_context', 'risk_flags', 'signals'. Board-written only late in the cycle (empty before the decision): 'consensus', 'trade_plan'. Omit section to get the full whiteboard summary.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker to read from."
-        },
-        "section": {
-          "type": "string",
-          "description": "The exact section name to read, e.g. 'bull_argument' or 'quant_report' (NOT 'bull'/'bear' — those do not exist). Omit for the full whiteboard summary."
-        }
-      },
-      "required": [
-        "ticker"
-      ]
-    },
-    "tier": 1,
-    "source": "whiteboard",
-    "permission": "read_only",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "v3_board_of_directors",
-      "v3_debate_judge"
-    ]
-  },
-  {
-    "name": "whiteboard_write",
-    "description": "Post shared evidence or notes for the current ticker and cycle. This replaces a collaboration section with a new version; use whiteboard_annotate to comment without replacing it. Pipeline analysis and debate artifacts are published automatically and cannot be overwritten here. This posts a note, not an assigned task or a request to rerun an agent.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "ticker": {
-          "type": "string",
-          "description": "The stock ticker this relates to."
-        },
-        "section": {
-          "type": "string",
-          "description": "The collaboration section name owned by your role ('market_context' for v3_junior_analyst, 'risk_flags' for v3_fundamental_analyst). Optional: if omitted, mismatched or reserved, your role's own section is used automatically."
-        },
-        "content": {
-          "type": "string",
-          "description": "The content to write (preferably a JSON string or clear text)."
-        },
-        "author": {
-          "type": "string",
-          "description": "YOUR agent name (e.g. v3_quant_analyst) so teammates know who wrote this. Always provide it."
-        },
-        "facts": {
-          "type": "array",
-          "description": "Optional numeric claims the post rests on, each checked against this cycle's data ledger. One disagreement rejects the whole write; an unbacked key rejects too. Omit for prose-only posts.",
-          "items": {
-            "type": "object",
-            "properties": {
-              "key": {
-                "type": "string",
-                "description": "Fact key (e.g. 'pe_ratio', 'rsi_14') or an alias ('rsi', 'atr')."
-              },
-              "value": {
-                "type": "number",
-                "description": "The stated number or enum value."
-              },
-              "unit": {
-                "type": "string",
-                "description": "Unit of the stated value (e.g. 'ratio', 'percent', 'USD')."
-              },
-              "source": {
-                "type": "string",
-                "description": "Where the number came from."
-              },
-              "as_of": {
-                "type": "string",
-                "description": "Date the number is from (YYYY-MM-DD)."
-              }
-            },
-            "required": [
-              "key",
-              "value"
-            ]
-          }
-        }
-      },
-      "required": [
-        "ticker",
-        "content"
-      ]
-    },
-    "tier": 1,
-    "source": "whiteboard",
-    "permission": "write",
-    "fallback_only": false,
-    "concurrency_safe": true,
-    "max_result_chars": 50000,
-    "tags": [],
-    "domain": "General",
-    "labels": [
-      "tool"
-    ],
-    "owner_app": "trading",
-    "agents": [
-      "v3_board_of_directors",
-      "v3_debate_judge",
-      "v3_junior_analyst",
-      "v3_quant_analyst"
     ]
   },
   {
