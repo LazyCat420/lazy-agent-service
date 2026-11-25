@@ -255,6 +255,20 @@ describe("Dynamic Model Resolution & Role Tiering", () => {
       DynamicModelResolver.isModelAllowedForProfile("auto", ["vllm-3"], "bull").allowed,
     ).toBe(false);
 
+    // Explicit model absent from all allowed online hosts fails closed (deepseek:R2-F1)
+    DynamicModelResolver.setMockStatuses([
+      {
+        instanceId: "vllm-2",
+        baseUrl: "http://10.0.0.141:8000",
+        nickname: "Gold Spark",
+        models: ["live-served-gold-model"],
+        online: true,
+      },
+    ]);
+    expect(() =>
+      resolveRunModelAndProvider({ model: "absent-model-xyz" } as any, profile as any),
+    ).toThrow(/MODEL_UNAVAILABLE/);
+
     // Offline/empty cache path (deepseek:R1-F1, R1-F3, R1-F5):
     // Dynamic "auto" profiles (and explicit model="auto") fail closed offline;
     // concrete non-auto fixture profiles retain their concrete default offline.

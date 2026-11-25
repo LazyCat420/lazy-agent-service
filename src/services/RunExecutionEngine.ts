@@ -877,6 +877,20 @@ export function resolveRunModelAndProvider(request: CreateRunRequest, profile: L
       `MODEL_UNAVAILABLE: No live model available on allowed providers (${allowedProviders.join(", ")}) for profile '${profile.profile_id}'`,
     );
   }
+  if (
+    requestedModel &&
+    hasLiveAllowedHosts &&
+    typeof DynamicModelResolver.isModelAllowedForProfile === "function" &&
+    !DynamicModelResolver.isModelAllowedForProfile(
+      requestedModel,
+      allowedProviders,
+      profile.role,
+    ).allowed
+  ) {
+    throw new Error(
+      `MODEL_UNAVAILABLE: Requested model '${requestedModel}' is not served on allowed providers (${allowedProviders.join(", ")}) for profile '${profile.profile_id}'`,
+    );
+  }
   const selectedModel =
     (!isSentinel ? resolvedModel : undefined) ||
     requestedModel ||
