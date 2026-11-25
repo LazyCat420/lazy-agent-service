@@ -169,52 +169,29 @@ export class DynamicModelResolver {
     _role: string,
   ): { allowed: boolean; hostInstance?: string; reason?: string } {
     const statuses = this.getCachedLiveHosts();
-    const onlineHosts = statuses.filter((h) => h.online);
-    const normalizedModelName = normalizeLocalModelId(
-      modelName,
-      onlineHosts.flatMap((h) => h.models),
-    );
+    const onlineHosts = statuses.filter((h) => h.online && h.models.length > 0);
+    const allowedOnlineHosts =
+      allowedProviders.length > 0
+        ? onlineHosts.filter((h) => allowedProviders.includes(h.instanceId))
+        : onlineHosts;
 
-    if (onlineHosts.length === 0) {
-      return { allowed: false, reason: "No local model instances are online" };
+    if (allowedOnlineHosts.length === 0) {
+      return {
+        allowed: false,
+        reason: `No allowed online host (${allowedProviders.join(", ")}) currently serves a model`,
+      };
     }
 
     if (modelName.trim().toLowerCase() === "auto") {
-      const allowedOnline =
-        allowedProviders.length > 0
-          ? onlineHosts.filter((h) => allowedProviders.includes(h.instanceId))
-          : onlineHosts;
-      const autoHost = allowedOnline.find((h) => h.models.length > 0);
-      if (autoHost) {
-        return { allowed: true, hostInstance: autoHost.instanceId };
-      }
-      return {
-        allowed: false,
-        reason: `No allowed online host (${allowedProviders.join(", ")}) currently serves a model for 'auto'`,
-      };
+      return { allowed: true, hostInstance: allowedOnlineHosts[0].instanceId };
     }
 
-    // Single-box fallback: If only one box is online, it does all jobs
-    if (onlineHosts.length === 1) {
-      const singleHost = onlineHosts[0];
-      if (singleHost.models.includes(normalizedModelName)) {
-        return { allowed: true, hostInstance: singleHost.instanceId };
-      }
-      return {
-        allowed: false,
-        reason: `Model '${normalizedModelName}' not found on single online host (${singleHost.instanceId})`,
-      };
-    }
-
-    // Both (or multiple) boxes online:
-    // Check if the model is on any host matching allowedProviders. Resolved
-    // against each host's own served ids, so a host serving a suffixed build
-    // still matches when another box serves the id as requested.
-    for (const host of onlineHosts) {
-      if (
-        allowedProviders.includes(host.instanceId) &&
-        host.models.includes(normalizeLocalModelId(modelName, host.models))
-      ) {
+    const normalizedModelName = normalizeLocalModelId(
+      modelName,
+      allowedOnlineHosts.flatMap((h) => h.models),
+    );
+    for (const host of allowedOnlineHosts) {
+      if (host.models.includes(normalizeLocalModelId(modelName, host.models))) {
         return { allowed: true, hostInstance: host.instanceId };
       }
     }
@@ -322,14 +299,13 @@ export class DynamicModelResolver {
     const normalizedRequestedModel = effectiveRequested
       ? normalizeLocalModelId(effectiveRequested, hostModels)
       : undefined;
-    if (normalizedRequestedModel && hostModels.includes(normalizedRequestedModel)) {
-      return { provider: requestedProvider, model: normalizedRequestedModel };
+    if (normalizedRequestedModel) {
+      return hostModels.includes(normalizedRequestedModel)
+        ? { provider: requestedProvider, model: normalizedRequestedModel }
+        : null;
     }
     if (hostModels.length > 0) {
-      return {
-        provider: requestedProvider,
-        model: normalizedRequestedModel || hostModels[0],
-      };
+      return { provider: requestedProvider, model: hostModels[0] };
     }
     return null;
   }

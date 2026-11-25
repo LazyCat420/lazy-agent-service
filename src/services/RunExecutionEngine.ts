@@ -837,14 +837,12 @@ export function resolveRunModelAndProvider(request: CreateRunRequest, profile: L
   const allowedProviders = profile.model_constraints.allowed_providers || [];
   const defaultServed =
     !defaultIsAuto &&
-    typeof DynamicModelResolver.isModelAllowedForProfile === "function" &&
     DynamicModelResolver.isModelAllowedForProfile(
       defaultModel,
       allowedProviders,
       profile.role,
     ).allowed;
   const hasLiveAllowedHosts =
-    typeof DynamicModelResolver.getCachedLiveHosts === "function" &&
     DynamicModelResolver.getCachedLiveHosts().some(
       (h) =>
         h.online &&
@@ -879,7 +877,6 @@ export function resolveRunModelAndProvider(request: CreateRunRequest, profile: L
   }
   const requestedAllowed =
     !!requestedModel &&
-    typeof DynamicModelResolver.isModelAllowedForProfile === "function" &&
     DynamicModelResolver.isModelAllowedForProfile(
       requestedModel,
       allowedProviders,

@@ -21,6 +21,16 @@ vi.mock("../../wrappers/MongoWrapper.ts", () => {
 vi.mock("../DynamicModelResolver.ts", () => ({
   DynamicModelResolver: {
     queryLiveHosts: async () => [],
+    getCachedLiveHosts: () => [
+      {
+        instanceId: "vllm-2",
+        baseUrl: "http://10.0.0.141:8000",
+        nickname: "Gold Spark",
+        models: ["mock-live-model"],
+        online: true,
+      },
+    ],
+    isModelAllowedForProfile: () => ({ allowed: true, hostInstance: "vllm-2" }),
     resolveProviderAndModel: () => ({ provider: "vllm-2", model: "mock-live-model" }),
   },
 }));

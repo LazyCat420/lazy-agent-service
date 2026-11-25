@@ -296,6 +296,55 @@ describe("Dynamic Model Resolution & Role Tiering", () => {
     expect(() =>
       resolveRunModelAndProvider({ model: "absent-model-xyz" } as any, profile as any),
     ).toThrow(/MODEL_UNAVAILABLE/);
+    expect(() =>
+      resolveRunModelAndProvider(
+        { model: "absent-model-xyz", runtime_overrides: { provider: "vllm-2" } } as any,
+        profile as any,
+      ),
+    ).toThrow(/MODEL_UNAVAILABLE/);
+    DynamicModelResolver.setMockStatuses([
+      {
+        instanceId: "vllm-2",
+        baseUrl: "http://10.0.0.141:8000",
+        nickname: "Gold Spark",
+        models: ["live-served-gold-model"],
+        online: true,
+      },
+      {
+        instanceId: "vllm",
+        baseUrl: "http://10.0.0.30:8000",
+        nickname: "Jetson",
+        models: ["live-served-jetson-model"],
+        online: true,
+      },
+    ]);
+    expect(
+      DynamicModelResolver.resolveProviderAndModel("trading-strategy-chat", ["vllm-2", "vllm"], "live-served-jetson-model", "vllm-2"),
+    ).toEqual({ provider: "vllm", model: "live-served-jetson-model" });
+
+    // Disallowed-host-only online still rejects models outside allowed_providers (codex:R1-F1 round 2)
+    DynamicModelResolver.setMockStatuses([
+      {
+        instanceId: "vllm",
+        baseUrl: "http://10.0.0.30:8000",
+        nickname: "Jetson",
+        models: ["live-served-jetson-model"],
+        online: true,
+      },
+    ]);
+    const goldOnlyProfile = {
+      ...profile,
+      model_constraints: {
+        ...profile!.model_constraints,
+        allowed_providers: ["vllm-2"],
+      },
+    };
+    expect(
+      DynamicModelResolver.isModelAllowedForProfile("live-served-jetson-model", ["vllm-2"], profile!.role).allowed,
+    ).toBe(false);
+    expect(() =>
+      resolveRunModelAndProvider({ model: "live-served-jetson-model" } as any, goldOnlyProfile as any),
+    ).toThrow(/MODEL_UNAVAILABLE/);
   });
 
   it("fails closed offline for dynamic auto and explicit requests while preserving concrete fixture defaults", async () => {
