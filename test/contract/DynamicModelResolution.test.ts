@@ -242,9 +242,35 @@ describe("Dynamic Model Resolution & Role Tiering", () => {
     const fallbackRes = resolveRunModelAndProvider({} as any, staleProfile as any);
     expect(fallbackRes.selectedModel).toBe("live-served-gold-model");
     expect(fallbackRes.preferredProvider).toBe("vllm-2");
+    expect(
+      resolveRunModelAndProvider({ model: "auto" } as any, staleProfile as any).selectedModel,
+    ).toBe("live-served-gold-model");
+  });
 
-    // Provider-policy enforcement (codex:R1-F1, deepseek:R1-F2):
-    // When a light role's allowedProviders excludes vllm, auto must stay within allowedProviders
+  it("enforces allowed_providers policy for overrides and rejects unserved explicit models", async () => {
+    const { resolveRunModelAndProvider } = await import(
+      "../../src/services/RunExecutionEngine.ts"
+    );
+    const profile = await ProfileRegistry.loadProfile("trading-strategy-chat-v1");
+    expect(profile).not.toBeNull();
+
+    DynamicModelResolver.setMockStatuses([
+      {
+        instanceId: "vllm-2",
+        baseUrl: "http://10.0.0.141:8000",
+        nickname: "Gold Spark",
+        models: ["live-served-gold-model"],
+        online: true,
+      },
+      {
+        instanceId: "vllm",
+        baseUrl: "http://10.0.0.30:8000",
+        nickname: "Jetson",
+        models: ["live-served-jetson-model"],
+        online: true,
+      },
+    ]);
+
     expect(
       DynamicModelResolver.resolveProviderAndModel("bull", ["vllm-2"], "auto"),
     ).toEqual({
@@ -254,8 +280,10 @@ describe("Dynamic Model Resolution & Role Tiering", () => {
     expect(
       DynamicModelResolver.isModelAllowedForProfile("auto", ["vllm-3"], "bull").allowed,
     ).toBe(false);
+    expect(
+      DynamicModelResolver.resolveProviderAndModel("trading-strategy-chat", ["vllm-2"], "live-served-gold-model", "vllm"),
+    ).not.toMatchObject({ provider: "vllm" });
 
-    // Explicit model absent from all allowed online hosts fails closed (deepseek:R2-F1)
     DynamicModelResolver.setMockStatuses([
       {
         instanceId: "vllm-2",
@@ -268,10 +296,22 @@ describe("Dynamic Model Resolution & Role Tiering", () => {
     expect(() =>
       resolveRunModelAndProvider({ model: "absent-model-xyz" } as any, profile as any),
     ).toThrow(/MODEL_UNAVAILABLE/);
+  });
 
-    // Offline/empty cache path (deepseek:R1-F1, R1-F3, R1-F5):
-    // Dynamic "auto" profiles (and explicit model="auto") fail closed offline;
-    // concrete non-auto fixture profiles retain their concrete default offline.
+  it("fails closed offline for dynamic auto and explicit requests while preserving concrete fixture defaults", async () => {
+    const { resolveRunModelAndProvider } = await import(
+      "../../src/services/RunExecutionEngine.ts"
+    );
+    const profile = await ProfileRegistry.loadProfile("trading-strategy-chat-v1");
+    expect(profile).not.toBeNull();
+    const staleProfile = {
+      ...profile,
+      model_constraints: {
+        ...profile!.model_constraints,
+        default_model: "stale-unhosted-model-v0",
+      },
+    };
+
     DynamicModelResolver.setMockStatuses([]);
     expect(() => resolveRunModelAndProvider({} as any, profile as any)).toThrow(
       /MODEL_UNAVAILABLE/,
@@ -279,6 +319,9 @@ describe("Dynamic Model Resolution & Role Tiering", () => {
     expect(() => resolveRunModelAndProvider({ model: "auto" } as any, staleProfile as any)).toThrow(
       /MODEL_UNAVAILABLE/,
     );
+    expect(() =>
+      resolveRunModelAndProvider({ model: "absent-model-xyz" } as any, profile as any),
+    ).toThrow(/MODEL_UNAVAILABLE/);
     expect(resolveRunModelAndProvider({} as any, staleProfile as any).selectedModel).toBe(
       "stale-unhosted-model-v0",
     );

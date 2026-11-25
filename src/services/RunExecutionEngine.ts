@@ -877,16 +877,15 @@ export function resolveRunModelAndProvider(request: CreateRunRequest, profile: L
       `MODEL_UNAVAILABLE: No live model available on allowed providers (${allowedProviders.join(", ")}) for profile '${profile.profile_id}'`,
     );
   }
-  if (
-    requestedModel &&
-    hasLiveAllowedHosts &&
+  const requestedAllowed =
+    !!requestedModel &&
     typeof DynamicModelResolver.isModelAllowedForProfile === "function" &&
-    !DynamicModelResolver.isModelAllowedForProfile(
+    DynamicModelResolver.isModelAllowedForProfile(
       requestedModel,
       allowedProviders,
       profile.role,
-    ).allowed
-  ) {
+    ).allowed;
+  if (requestedModel && !requestedAllowed) {
     throw new Error(
       `MODEL_UNAVAILABLE: Requested model '${requestedModel}' is not served on allowed providers (${allowedProviders.join(", ")}) for profile '${profile.profile_id}'`,
     );

@@ -238,17 +238,17 @@ export class DynamicModelResolver {
     requestedProvider?: string,
   ): { provider: string; model: string } {
     const statuses = this.getCachedLiveHosts();
-    const onlineHosts = statuses.filter((h) => h.online);
+    const onlineHosts = statuses.filter((h) => h.online && h.models.length > 0);
     const allowedOnlineHosts =
       allowedProviders.length > 0
         ? onlineHosts.filter((h) => allowedProviders.includes(h.instanceId))
         : onlineHosts;
 
-    // If requestedProvider is explicitly supplied and online, use it
+    // If requestedProvider is explicitly supplied and online within allowedProviders, use it
     if (requestedProvider) {
       const resolved = this.resolveRequestedProvider(
         requestedProvider,
-        onlineHosts,
+        allowedOnlineHosts,
         requestedModel,
       );
       if (resolved) return resolved;
