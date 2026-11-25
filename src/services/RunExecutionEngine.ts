@@ -823,40 +823,114 @@ function assembleRunSystemContext(
   });
 }
 
+function hasLiveAllowedHost(allowedProviders: string[]): boolean {
+  return DynamicModelResolver.getCachedLiveHosts().some(
+    (h) =>
+      h.online &&
+      h.models.length > 0 &&
+      (allowedProviders.length === 0 || allowedProviders.includes(h.instanceId)),
+  );
+}
+
+function computeRunModelHint(opts: {
+  requestedModel?: string;
+  defaultModel?: string;
+  defaultIsAuto: boolean;
+  autoRequested: boolean;
+  allowedProviders: string[];
+  role: string;
+}): string | undefined {
+  if (opts.requestedModel) {
+    return opts.requestedModel;
+  }
+  if (opts.autoRequested) {
+    return undefined;
+  }
+  const defaultServed =
+    !opts.defaultIsAuto &&
+    Boolean(opts.defaultModel) &&
+    DynamicModelResolver.isModelAllowedForProfile(
+      opts.defaultModel,
+      opts.allowedProviders,
+      opts.role,
+    ).allowed;
+  return defaultServed || !hasLiveAllowedHost(opts.allowedProviders)
+    ? opts.defaultModel
+    : undefined;
+}
+
+function isSentinelModelName(modelName?: string): boolean {
+  return !modelName || modelName === "default-model" || modelName.trim().toLowerCase() === "auto";
+}
+
+function validateAndSelectRunModel(opts: {
+  resolvedModel?: string;
+  requestedModel?: string;
+  defaultModel?: string;
+  defaultIsAuto: boolean;
+  autoRequested: boolean;
+  allowedProviders: string[];
+  profile: LoadedProfile;
+}): string {
+  const isSentinel = isSentinelModelName(opts.resolvedModel);
+  if (isSentinel && opts.autoRequested && !opts.requestedModel) {
+    throw new Error(
+      `MODEL_UNAVAILABLE: No live model available on allowed providers (${opts.allowedProviders.join(", ")}) for profile '${opts.profile.profile_id}'`,
+    );
+  }
+  if (opts.requestedModel) {
+    const requestedAllowed = DynamicModelResolver.isModelAllowedForProfile(
+      opts.requestedModel,
+      opts.allowedProviders,
+      opts.profile.role,
+    ).allowed;
+    if (!requestedAllowed) {
+      throw new Error(
+        `MODEL_UNAVAILABLE: Requested model '${opts.requestedModel}' is not served on allowed providers (${opts.allowedProviders.join(", ")}) for profile '${opts.profile.profile_id}'`,
+      );
+    }
+  }
+  if (!isSentinel && opts.resolvedModel) {
+    return opts.resolvedModel;
+  }
+  if (opts.requestedModel) {
+    return opts.requestedModel;
+  }
+  if (!opts.defaultIsAuto && opts.defaultModel) {
+    return opts.defaultModel;
+  }
+  return "unconfigured-mock-model";
+}
+
+function loadProviderInstance(preferredProvider: string): any {
+  try {
+    return getProvider(preferredProvider) || {};
+  } catch {
+    return {};
+  }
+}
+
 export function resolveRunModelAndProvider(request: CreateRunRequest, profile: LoadedProfile) {
   const rawRequested = request.model || request.runtime_overrides?.model;
-  const requestedModel =
-    rawRequested && rawRequested.trim().toLowerCase() !== "auto" ? rawRequested : undefined;
+  const requestedLower = rawRequested?.trim().toLowerCase();
+  const requestedModel = rawRequested && requestedLower !== "auto" ? rawRequested : undefined;
   const requestedProvider = request.runtime_overrides?.provider
     ? String(request.runtime_overrides.provider)
     : undefined;
 
   const defaultModel = profile.model_constraints.default_model;
   const defaultIsAuto = !defaultModel || defaultModel.trim().toLowerCase() === "auto";
-  const explicitAutoRequested = rawRequested?.trim().toLowerCase() === "auto";
+  const autoRequested = defaultIsAuto || requestedLower === "auto";
   const allowedProviders = profile.model_constraints.allowed_providers || [];
-  const defaultServed =
-    !defaultIsAuto &&
-    DynamicModelResolver.isModelAllowedForProfile(
-      defaultModel,
-      allowedProviders,
-      profile.role,
-    ).allowed;
-  const hasLiveAllowedHosts =
-    DynamicModelResolver.getCachedLiveHosts().some(
-      (h) =>
-        h.online &&
-        h.models.length > 0 &&
-        (allowedProviders.length === 0 || allowedProviders.includes(h.instanceId)),
-    );
-  const autoRequested = defaultIsAuto || explicitAutoRequested;
-  const modelHint =
-    requestedModel ??
-    (autoRequested
-      ? undefined
-      : defaultServed || !hasLiveAllowedHosts
-        ? defaultModel
-        : undefined);
+
+  const modelHint = computeRunModelHint({
+    requestedModel,
+    defaultModel,
+    defaultIsAuto,
+    autoRequested,
+    allowedProviders,
+    role: profile.role,
+  });
 
   const dynamicResolution = DynamicModelResolver.resolveProviderAndModel(
     profile.role,
@@ -865,33 +939,15 @@ export function resolveRunModelAndProvider(request: CreateRunRequest, profile: L
     requestedProvider,
   );
 
-  const resolvedModel = dynamicResolution?.model;
-  const isSentinel =
-    !resolvedModel ||
-    resolvedModel === "default-model" ||
-    resolvedModel.trim().toLowerCase() === "auto";
-  if (isSentinel && (defaultIsAuto || explicitAutoRequested) && !requestedModel) {
-    throw new Error(
-      `MODEL_UNAVAILABLE: No live model available on allowed providers (${allowedProviders.join(", ")}) for profile '${profile.profile_id}'`,
-    );
-  }
-  const requestedAllowed =
-    !!requestedModel &&
-    DynamicModelResolver.isModelAllowedForProfile(
-      requestedModel,
-      allowedProviders,
-      profile.role,
-    ).allowed;
-  if (requestedModel && !requestedAllowed) {
-    throw new Error(
-      `MODEL_UNAVAILABLE: Requested model '${requestedModel}' is not served on allowed providers (${allowedProviders.join(", ")}) for profile '${profile.profile_id}'`,
-    );
-  }
-  const selectedModel =
-    (!isSentinel ? resolvedModel : undefined) ||
-    requestedModel ||
-    (!defaultIsAuto ? defaultModel : undefined) ||
-    "unconfigured-mock-model";
+  const selectedModel = validateAndSelectRunModel({
+    resolvedModel: dynamicResolution?.model,
+    requestedModel,
+    defaultModel,
+    defaultIsAuto,
+    autoRequested,
+    allowedProviders,
+    profile,
+  });
 
   const preferredProvider =
     requestedProvider ||
@@ -900,13 +956,11 @@ export function resolveRunModelAndProvider(request: CreateRunRequest, profile: L
     profile.model_constraints.allowed_providers[0] ||
     "vllm-shim";
 
-  let provider: any = {};
-  try {
-    provider = getProvider(preferredProvider) || {};
-  } catch {
-    provider = {};
-  }
-  return { selectedModel, preferredProvider, provider };
+  return {
+    selectedModel,
+    preferredProvider,
+    provider: loadProviderInstance(preferredProvider),
+  };
 }
 
 function resolveRunMaxToolCalls(request: CreateRunRequest, profile: LoadedProfile): number {
