@@ -188,4 +188,59 @@ describe("Dynamic Model Resolution & Role Tiering", () => {
     );
     expect(resolvedQwen.provider).toBe("vllm");
   });
+
+  it("resolves auto and unhosted stale default models to live /v1/models", async () => {
+    const { resolveRunModelAndProvider } = await import(
+      "../../src/services/RunExecutionEngine.ts"
+    );
+    DynamicModelResolver.setMockStatuses([
+      {
+        instanceId: "vllm-2",
+        baseUrl: "http://10.0.0.141:8000",
+        nickname: "Gold Spark",
+        models: ["live-served-gold-model"],
+        online: true,
+      },
+      {
+        instanceId: "vllm",
+        baseUrl: "http://10.0.0.30:8000",
+        nickname: "Jetson",
+        models: ["live-served-jetson-model"],
+        online: true,
+      },
+    ]);
+
+    const autoResolved = DynamicModelResolver.resolveProviderAndModel(
+      "strategy-news-researcher",
+      ["vllm-2", "vllm"],
+      "auto",
+    );
+    expect(autoResolved).toEqual({
+      provider: "vllm-2",
+      model: "live-served-gold-model",
+    });
+
+    const profile = await ProfileRegistry.loadProfile("trading-strategy-chat-v1");
+    expect(profile).not.toBeNull();
+    expect(profile!.model_constraints.default_model).toBe("auto");
+    expect(() => {
+      ProfileRegistry.validateOverrides(profile!, { model: "auto" });
+    }).not.toThrow();
+
+    const runRes = resolveRunModelAndProvider({} as any, profile as any);
+    expect(runRes.selectedModel).toBe("live-served-gold-model");
+    expect(runRes.preferredProvider).toBe("vllm-2");
+
+    // Stale hardcoded default_model not present on any box still falls back to live /v1/models
+    const staleProfile = {
+      ...profile,
+      model_constraints: {
+        ...profile!.model_constraints,
+        default_model: "stale-unhosted-model-v0",
+      },
+    };
+    const fallbackRes = resolveRunModelAndProvider({} as any, staleProfile as any);
+    expect(fallbackRes.selectedModel).toBe("live-served-gold-model");
+    expect(fallbackRes.preferredProvider).toBe("vllm-2");
+  });
 });

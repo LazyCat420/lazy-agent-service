@@ -176,6 +176,15 @@ export class DynamicModelResolver {
       return { allowed: false, reason: "No local model instances are online" };
     }
 
+    if (modelName.trim().toLowerCase() === "auto") {
+      const autoHost =
+        onlineHosts.find((h) => allowedProviders.includes(h.instanceId) && h.models.length > 0) ||
+        onlineHosts.find((h) => h.models.length > 0);
+      if (autoHost) {
+        return { allowed: true, hostInstance: autoHost.instanceId };
+      }
+    }
+
     // Single-box fallback: If only one box is online, it does all jobs
     if (onlineHosts.length === 1) {
       const singleHost = onlineHosts[0];
@@ -232,9 +241,13 @@ export class DynamicModelResolver {
       if (resolved) return resolved;
     }
 
-    const normalizedRequestedModel = requestedModel
+    const effectiveRequested =
+      requestedModel && requestedModel.trim().toLowerCase() !== "auto"
+        ? requestedModel
+        : undefined;
+    const normalizedRequestedModel = effectiveRequested
       ? normalizeLocalModelId(
-          requestedModel,
+          effectiveRequested,
           onlineHosts.flatMap((h) => h.models),
         )
       : undefined;
@@ -286,9 +299,13 @@ export class DynamicModelResolver {
     const match = onlineHosts.find((h) => h.instanceId === requestedProvider);
     if (!match) return null;
     const hostModels = match.models;
+    const effectiveRequested =
+      requestedModel && requestedModel.trim().toLowerCase() !== "auto"
+        ? requestedModel
+        : undefined;
     // Resolved against THIS box's served ids: the request is going to it.
-    const normalizedRequestedModel = requestedModel
-      ? normalizeLocalModelId(requestedModel, hostModels)
+    const normalizedRequestedModel = effectiveRequested
+      ? normalizeLocalModelId(effectiveRequested, hostModels)
       : undefined;
     if (normalizedRequestedModel && hostModels.includes(normalizedRequestedModel)) {
       return { provider: requestedProvider, model: normalizedRequestedModel };

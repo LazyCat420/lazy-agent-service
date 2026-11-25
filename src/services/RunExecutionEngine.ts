@@ -823,21 +823,42 @@ function assembleRunSystemContext(
   });
 }
 
-function resolveRunModelAndProvider(request: CreateRunRequest, profile: LoadedProfile) {
-  const requestedModel = request.model || request.runtime_overrides?.model;
+export function resolveRunModelAndProvider(request: CreateRunRequest, profile: LoadedProfile) {
+  const rawRequested = request.model || request.runtime_overrides?.model;
+  const requestedModel =
+    rawRequested && rawRequested.trim().toLowerCase() !== "auto" ? rawRequested : undefined;
   const requestedProvider = request.runtime_overrides?.provider
     ? String(request.runtime_overrides.provider)
     : undefined;
 
+  const defaultModel = profile.model_constraints.default_model;
+  const defaultIsAuto = !defaultModel || defaultModel.trim().toLowerCase() === "auto";
+  const cachedHosts =
+    typeof DynamicModelResolver.getCachedLiveHosts === "function"
+      ? DynamicModelResolver.getCachedLiveHosts()
+      : [];
+  const hasOnlineModels = cachedHosts.some(
+    (h) => h.online && h.models.length > 0,
+  );
+  const defaultServed =
+    !defaultIsAuto &&
+    (!hasOnlineModels ||
+      (typeof DynamicModelResolver.isModelAllowedForProfile === "function" &&
+        DynamicModelResolver.isModelAllowedForProfile(
+          defaultModel,
+          profile.model_constraints.allowed_providers,
+          profile.role,
+        ).allowed));
+  const modelHint = requestedModel ?? (defaultServed ? defaultModel : undefined);
+
   const dynamicResolution = DynamicModelResolver.resolveProviderAndModel(
     profile.role,
     profile.model_constraints.allowed_providers,
-    requestedModel || profile.model_constraints.default_model,
+    modelHint,
     requestedProvider,
   );
 
-  const selectedModel =
-    requestedModel || dynamicResolution.model || profile.model_constraints.default_model;
+  const selectedModel = dynamicResolution.model || requestedModel || defaultModel;
 
   const preferredProvider =
     requestedProvider ||
