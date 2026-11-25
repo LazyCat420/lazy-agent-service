@@ -21,7 +21,7 @@ vi.mock("../../wrappers/MongoWrapper.ts", () => {
 vi.mock("../DynamicModelResolver.ts", () => ({
   DynamicModelResolver: {
     queryLiveHosts: async () => [],
-    resolveProviderAndModel: () => ({}),
+    resolveProviderAndModel: () => ({ provider: "vllm-2", model: "mock-live-model" }),
   },
 }));
 

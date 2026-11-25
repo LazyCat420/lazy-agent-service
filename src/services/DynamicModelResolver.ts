@@ -76,6 +76,9 @@ export class DynamicModelResolver {
     if (statuses) {
       this.cachedStatuses = statuses;
       this.lastProbeTime = Date.now();
+    } else {
+      this.cachedStatuses = [];
+      this.lastProbeTime = 0;
     }
   }
 
@@ -177,12 +180,18 @@ export class DynamicModelResolver {
     }
 
     if (modelName.trim().toLowerCase() === "auto") {
-      const autoHost =
-        onlineHosts.find((h) => allowedProviders.includes(h.instanceId) && h.models.length > 0) ||
-        onlineHosts.find((h) => h.models.length > 0);
+      const allowedOnline =
+        allowedProviders.length > 0
+          ? onlineHosts.filter((h) => allowedProviders.includes(h.instanceId))
+          : onlineHosts;
+      const autoHost = allowedOnline.find((h) => h.models.length > 0);
       if (autoHost) {
         return { allowed: true, hostInstance: autoHost.instanceId };
       }
+      return {
+        allowed: false,
+        reason: `No allowed online host (${allowedProviders.join(", ")}) currently serves a model for 'auto'`,
+      };
     }
 
     // Single-box fallback: If only one box is online, it does all jobs
@@ -230,6 +239,10 @@ export class DynamicModelResolver {
   ): { provider: string; model: string } {
     const statuses = this.getCachedLiveHosts();
     const onlineHosts = statuses.filter((h) => h.online);
+    const allowedOnlineHosts =
+      allowedProviders.length > 0
+        ? onlineHosts.filter((h) => allowedProviders.includes(h.instanceId))
+        : onlineHosts;
 
     // If requestedProvider is explicitly supplied and online, use it
     if (requestedProvider) {
@@ -245,32 +258,34 @@ export class DynamicModelResolver {
       requestedModel && requestedModel.trim().toLowerCase() !== "auto"
         ? requestedModel
         : undefined;
+    const candidateHosts = allowedOnlineHosts.length > 0 || allowedProviders.length > 0
+      ? allowedOnlineHosts
+      : onlineHosts;
     const normalizedRequestedModel = effectiveRequested
       ? normalizeLocalModelId(
           effectiveRequested,
-          onlineHosts.flatMap((h) => h.models),
+          candidateHosts.flatMap((h) => h.models),
         )
       : undefined;
 
-    // If requestedModel is supplied, find which online host serves it
+    // If requestedModel is supplied, find which allowed online host serves it
     if (normalizedRequestedModel) {
       const resolved = this.resolveRequestedModelHost(
         normalizedRequestedModel,
-        onlineHosts,
+        candidateHosts,
       );
       if (resolved) return resolved;
     }
 
-    // Single-box fallback: If only 1 box is online, it does all jobs
-    if (onlineHosts.length === 1) {
-      return this.resolveSingleHost(onlineHosts, normalizedRequestedModel);
+    // Single-box fallback within allowedProviders: only 1 allowed box is online
+    if (candidateHosts.length === 1) {
+      return this.resolveSingleHost(candidateHosts, normalizedRequestedModel);
     }
 
-    // Role-based tiering when both are online:
-    // Light/small roles prefer Jetson (vllm); smart/large roles prefer Gold Spark (vllm-2)
+    // Role-based tiering within allowedProviders when multiple allowed boxes are online
     const rolePreferred = this.resolveRolePreferredHost(
       role,
-      onlineHosts,
+      candidateHosts,
       normalizedRequestedModel,
     );
     if (rolePreferred) return rolePreferred;
@@ -278,7 +293,7 @@ export class DynamicModelResolver {
     // Fallback to whichever allowed provider is online
     const allowed = this.resolveAllowedProvider(
       allowedProviders,
-      onlineHosts,
+      candidateHosts,
       normalizedRequestedModel,
     );
     if (allowed) return allowed;

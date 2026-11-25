@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import { RunExecutionEngine as Engine } from "../../src/services/RunExecutionEngine.ts";
+import { DynamicModelResolver } from "../../src/services/DynamicModelResolver.ts";
 import { LocalToolContinuation } from "../../src/services/LocalToolContinuation.ts";
 import { ProfileRegistry } from "../../src/services/ProfileRegistry.ts";
 import { RunStore } from "../../src/services/RunStore.ts";
@@ -19,7 +20,10 @@ beforeEach(async () => {
   vi.stubEnv("RUNTIME_AUTH_SECRET", crypto.randomBytes(32).toString("hex"));
   await ProfileRegistry.loadProfilesFromDisk();
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  DynamicModelResolver.setMockStatuses(null);
+  vi.unstubAllEnvs();
+});
 
 describe("Canonical repair regressions", () => {
   it("rejects an exact unknown version, then permits a corrected admission with the same key", async () => {
@@ -49,6 +53,15 @@ describe("Canonical repair regressions", () => {
   });
 
   it("softly caps tool calls when budget is exceeded for non-zero budget, prompting model to synthesize", async () => {
+    DynamicModelResolver.setMockStatuses([
+      {
+        instanceId: "vllm-2",
+        baseUrl: "http://mock-vllm-2:8000",
+        nickname: "Mock Gold Spark",
+        models: ["mock-chat-model"],
+        online: true,
+      },
+    ]);
     runsLoop.run.mockImplementation(async context => {
       // First call (within budget)
       await context.runtimeToolExecutor!({ id: "call1", name: "global.time.now", args: {} });

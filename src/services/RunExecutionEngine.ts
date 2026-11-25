@@ -833,32 +833,55 @@ export function resolveRunModelAndProvider(request: CreateRunRequest, profile: L
 
   const defaultModel = profile.model_constraints.default_model;
   const defaultIsAuto = !defaultModel || defaultModel.trim().toLowerCase() === "auto";
-  const cachedHosts =
-    typeof DynamicModelResolver.getCachedLiveHosts === "function"
-      ? DynamicModelResolver.getCachedLiveHosts()
-      : [];
-  const hasOnlineModels = cachedHosts.some(
-    (h) => h.online && h.models.length > 0,
-  );
+  const explicitAutoRequested = rawRequested?.trim().toLowerCase() === "auto";
+  const allowedProviders = profile.model_constraints.allowed_providers || [];
   const defaultServed =
     !defaultIsAuto &&
-    (!hasOnlineModels ||
-      (typeof DynamicModelResolver.isModelAllowedForProfile === "function" &&
-        DynamicModelResolver.isModelAllowedForProfile(
-          defaultModel,
-          profile.model_constraints.allowed_providers,
-          profile.role,
-        ).allowed));
-  const modelHint = requestedModel ?? (defaultServed ? defaultModel : undefined);
+    typeof DynamicModelResolver.isModelAllowedForProfile === "function" &&
+    DynamicModelResolver.isModelAllowedForProfile(
+      defaultModel,
+      allowedProviders,
+      profile.role,
+    ).allowed;
+  const hasLiveAllowedHosts =
+    typeof DynamicModelResolver.getCachedLiveHosts === "function" &&
+    DynamicModelResolver.getCachedLiveHosts().some(
+      (h) =>
+        h.online &&
+        h.models.length > 0 &&
+        (allowedProviders.length === 0 || allowedProviders.includes(h.instanceId)),
+    );
+  const autoRequested = defaultIsAuto || explicitAutoRequested;
+  const modelHint =
+    requestedModel ??
+    (autoRequested
+      ? undefined
+      : defaultServed || !hasLiveAllowedHosts
+        ? defaultModel
+        : undefined);
 
   const dynamicResolution = DynamicModelResolver.resolveProviderAndModel(
     profile.role,
-    profile.model_constraints.allowed_providers,
+    allowedProviders,
     modelHint,
     requestedProvider,
   );
 
-  const selectedModel = dynamicResolution.model || requestedModel || defaultModel;
+  const resolvedModel = dynamicResolution?.model;
+  const isSentinel =
+    !resolvedModel ||
+    resolvedModel === "default-model" ||
+    resolvedModel.trim().toLowerCase() === "auto";
+  if (isSentinel && (defaultIsAuto || explicitAutoRequested) && !requestedModel) {
+    throw new Error(
+      `MODEL_UNAVAILABLE: No live model available on allowed providers (${allowedProviders.join(", ")}) for profile '${profile.profile_id}'`,
+    );
+  }
+  const selectedModel =
+    (!isSentinel ? resolvedModel : undefined) ||
+    requestedModel ||
+    (!defaultIsAuto ? defaultModel : undefined) ||
+    "unconfigured-mock-model";
 
   const preferredProvider =
     requestedProvider ||

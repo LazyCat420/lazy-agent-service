@@ -242,5 +242,31 @@ describe("Dynamic Model Resolution & Role Tiering", () => {
     const fallbackRes = resolveRunModelAndProvider({} as any, staleProfile as any);
     expect(fallbackRes.selectedModel).toBe("live-served-gold-model");
     expect(fallbackRes.preferredProvider).toBe("vllm-2");
+
+    // Provider-policy enforcement (codex:R1-F1, deepseek:R1-F2):
+    // When a light role's allowedProviders excludes vllm, auto must stay within allowedProviders
+    expect(
+      DynamicModelResolver.resolveProviderAndModel("bull", ["vllm-2"], "auto"),
+    ).toEqual({
+      provider: "vllm-2",
+      model: "live-served-gold-model",
+    });
+    expect(
+      DynamicModelResolver.isModelAllowedForProfile("auto", ["vllm-3"], "bull").allowed,
+    ).toBe(false);
+
+    // Offline/empty cache path (deepseek:R1-F1, R1-F3, R1-F5):
+    // Dynamic "auto" profiles (and explicit model="auto") fail closed offline;
+    // concrete non-auto fixture profiles retain their concrete default offline.
+    DynamicModelResolver.setMockStatuses([]);
+    expect(() => resolveRunModelAndProvider({} as any, profile as any)).toThrow(
+      /MODEL_UNAVAILABLE/,
+    );
+    expect(() => resolveRunModelAndProvider({ model: "auto" } as any, staleProfile as any)).toThrow(
+      /MODEL_UNAVAILABLE/,
+    );
+    expect(resolveRunModelAndProvider({} as any, staleProfile as any).selectedModel).toBe(
+      "stale-unhosted-model-v0",
+    );
   });
 });
