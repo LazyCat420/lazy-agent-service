@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveFinalReserveMs, resolveRunMaxTokens } from "../RunBudgetPolicy.ts";
+import { resolveCanonicalRunTokens, resolveFinalReserveMs, resolveRunMaxTokens } from "../RunBudgetPolicy.ts";
 import { ProfileRegistry, type AgentProfile } from "../ProfileRegistry.ts";
 import type { CreateRunRequest } from "../../types/run.ts";
 
@@ -22,9 +22,15 @@ const legacyProfile = {
 } satisfies AgentProfile;
 
 describe("resolveRunMaxTokens", () => {
-  it("lets the profile per-call cap win over a legacy client run budget", () => {
+  it("caps a legacy client request at the profile per-call limit", () => {
     const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
     expect(resolveRunMaxTokens(request, chatProfile)).toBe(2560);
+  });
+
+  it("honours a client asking for fewer tokens than the profile cap, including 0", () => {
+    expect(resolveRunMaxTokens({ budget: { max_tokens: 0 } }, chatProfile)).toBe(0);
+    expect(resolveRunMaxTokens({ budget: { max_tokens: 512 } }, chatProfile)).toBe(512);
+    expect(resolveRunMaxTokens({ budget: { max_tokens: 99999 } }, chatProfile)).toBe(2560);
   });
 
   it("keeps request-first precedence for profiles without max_output_tokens", () => {
@@ -32,9 +38,26 @@ describe("resolveRunMaxTokens", () => {
     expect(resolveRunMaxTokens(request, legacyProfile)).toBe(49152);
   });
 
-  it("falls back to the profile per-call cap, then the run budget, when the request sends none", () => {
+  it("falls back to the profile values when the request sends none", () => {
     expect(resolveRunMaxTokens({}, chatProfile)).toBe(2560);
     expect(resolveRunMaxTokens({}, legacyProfile)).toBe(49152);
+  });
+});
+
+describe("resolveCanonicalRunTokens", () => {
+  it("lets a funded profile own the run ceiling over a legacy request", () => {
+    const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
+    expect(resolveCanonicalRunTokens(request, chatProfile)).toBe(196608);
+  });
+
+  it("keeps request-first precedence for profiles without max_output_tokens", () => {
+    const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
+    expect(resolveCanonicalRunTokens(request, legacyProfile)).toBe(49152);
+  });
+
+  it("falls back to the profile run budget when the request sends none", () => {
+    expect(resolveCanonicalRunTokens({}, chatProfile)).toBe(196608);
+    expect(resolveCanonicalRunTokens({}, legacyProfile)).toBe(49152);
   });
 });
 

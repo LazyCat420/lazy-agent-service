@@ -6,18 +6,32 @@ import type { AgentProfile } from "./ProfileRegistry.ts";
  *
  * A profile may declare `model_constraints.max_output_tokens` as a hard
  * per-call ceiling (e.g. 2560 for the trading strategy chat). When it does,
- * it wins over any client-supplied `budget.max_tokens`, because that field is
- * also the canonical run budget — an old client still sending 49152 must not
- * raise the per-call cap above the profile's declared limit. Profiles without
- * the field keep the legacy request-first precedence.
+ * the smaller of the profile cap and the client request wins: a legacy client
+ * still sending 49152 is capped at 2560, while a client asking for fewer
+ * tokens (including 0, which keeps the pre-loop TOKEN_BUDGET_EXHAUSTED guard)
+ * keeps its smaller number. Profiles without the field keep the legacy
+ * request-first precedence.
  */
 export function resolveRunMaxTokens(request: CreateRunRequest, profile: AgentProfile): number {
-  return (
-    profile.model_constraints?.max_output_tokens ??
-    request.budget?.max_tokens ??
-    request.budget?.maxTokens ??
-    profile.budget_limits.max_tokens
-  );
+  const requested =
+    request.budget?.max_tokens ?? request.budget?.maxTokens ?? profile.budget_limits.max_tokens;
+  const cap = profile.model_constraints?.max_output_tokens;
+  return cap === undefined ? requested : Math.min(cap, requested);
+}
+
+/**
+ * The canonical run budget (the whole run's token pool).
+ *
+ * A profile that declares `model_constraints.max_output_tokens` owns its run
+ * ceiling, so a legacy request still sending `max_tokens: 49152` cannot shrink
+ * the funded 196608 run. Profiles without the field keep the legacy
+ * request-first precedence.
+ */
+export function resolveCanonicalRunTokens(request: CreateRunRequest, profile: AgentProfile): number {
+  if (profile.model_constraints?.max_output_tokens !== undefined) {
+    return profile.budget_limits.max_tokens;
+  }
+  return request.budget?.max_tokens ?? request.budget?.maxTokens ?? profile.budget_limits.max_tokens;
 }
 
 /**

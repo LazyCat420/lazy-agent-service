@@ -36,7 +36,11 @@ import { applyObservation, createSessionState, sessionStateHash } from "./Sessio
 import type { ToolCall } from "./harnesses/types.ts";
 import { PARALLEL_TOOL_HINT } from "./TradingToolProtocol.ts";
 import { openingBundleHint } from "./TradingToolStacks.ts";
-import { resolveFinalReserveMs, resolveRunMaxTokens } from "./RunBudgetPolicy.ts";
+import {
+  resolveCanonicalRunTokens,
+  resolveFinalReserveMs,
+  resolveRunMaxTokens,
+} from "./RunBudgetPolicy.ts";
 
 /** The reason a beforeToolCall decide hook gave for its denial. */
 function hookDenialReason(verdict: Record<string, unknown>): string {
@@ -173,7 +177,7 @@ export class RunExecutionEngine {
 
     const startTime = Date.now();
     const accounting = new CanonicalProviderBudget(
-      request.budget?.max_tokens ?? profile.budget_limits.max_tokens,
+      resolveCanonicalRunTokens(request, profile),
       abortController.signal,
       profile.model_constraints.max_output_tokens,
     );
