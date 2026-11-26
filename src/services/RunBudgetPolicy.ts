@@ -31,7 +31,7 @@ export function resolveRunMaxTokens(request: CreateRunRequest, profile: AgentPro
  * per-call cap.
  */
 export function resolveCanonicalRunTokens(request: CreateRunRequest, profile: AgentProfile): number {
-  if (profile.budget_limits.final_reserve_ms !== undefined) {
+  if ((profile.budget_limits.final_reserve_ms ?? 0) > 0) {
     return profile.budget_limits.max_tokens;
   }
   return request.budget?.max_tokens ?? request.budget?.maxTokens ?? profile.budget_limits.max_tokens;

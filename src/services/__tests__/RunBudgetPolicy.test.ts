@@ -62,6 +62,15 @@ describe("resolveCanonicalRunTokens", () => {
     expect(resolveCanonicalRunTokens(request, capOnlyProfile)).toBe(8192);
   });
 
+  it("treats an explicit zero reserve as unfunded, like an absent one", () => {
+    const zeroReserve = {
+      ...capOnlyProfile,
+      budget_limits: { ...capOnlyProfile.budget_limits, final_reserve_ms: 0 },
+    } satisfies AgentProfile;
+    const request = { budget: { max_tokens: 8192 } } satisfies CreateRunRequest;
+    expect(resolveCanonicalRunTokens(request, zeroReserve)).toBe(8192);
+  });
+
   it("keeps request-first precedence for profiles without max_output_tokens", () => {
     const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
     expect(resolveCanonicalRunTokens(request, legacyProfile)).toBe(49152);
