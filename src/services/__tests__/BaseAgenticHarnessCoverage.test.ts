@@ -458,6 +458,30 @@ describe("_emitContextExhaustedAndSpan", () => {
   });
 });
 
+describe("createProviderStream — cumulative token cap", () => {
+  it("uses canonicalBudget.limit for the pool, not the per-call options.maxTokens", async () => {
+    const provider = {
+      generateTextStream() {
+        return (async function* () {
+          yield "ok";
+        })();
+      },
+    };
+    const { harness, state } = buildHarness({
+      provider: provider as never,
+      options: { maxIterations: 2, maxTokens: 2560, autoApprove: true },
+      canonicalBudget: { limit: 100000, allowFinalPass: () => {} },
+    });
+    state.overallUsage.inputTokens = 3000;
+    state.overallUsage.outputTokens = 2000;
+
+    // 5000 consumed exceeds the 2560 per-call cap but not the 100000 pool.
+    await expect(
+      harness.createProviderStream([{ role: "user", content: "hi" }], {} as never),
+    ).resolves.toBeTruthy();
+  });
+});
+
 describe("finalize", () => {
   /** Provider that streams one text chunk and ends the turn. */
   function textProvider(text: string) {

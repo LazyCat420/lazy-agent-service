@@ -255,6 +255,20 @@ export class ProfileRegistry {
       );
     }
 
+    const finalReserveMs = budget_limits.final_reserve_ms;
+    if (finalReserveMs !== undefined) {
+      if (
+        typeof finalReserveMs !== "number" ||
+        !Number.isInteger(finalReserveMs) ||
+        finalReserveMs < 0 ||
+        finalReserveMs > 600000
+      ) {
+        throw new Error(
+          "budget_limits.final_reserve_ms must be an integer between 0 and 600000",
+        );
+      }
+    }
+
     const toolsToValidate = Array.from(
       new Set([
         ...tool_policy.whitelist,

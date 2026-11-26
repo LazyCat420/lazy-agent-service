@@ -695,7 +695,10 @@ export default class BaseAgenticHarness {
     }
 
     if (this.context.runtimeToolExecutor) {
-      const limit = this.context.options.maxTokens ?? 0;
+      const limit =
+        (this.context.canonicalBudget as { limit?: number } | undefined)?.limit ??
+        this.context.options.maxTokens ??
+        0;
       const consumed = this.state.overallUsage.inputTokens + this.state.overallUsage.outputTokens;
       const remaining = limit - consumed;
       if (remaining <= 0) {

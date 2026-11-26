@@ -21,6 +21,13 @@ const legacyProfile = {
   budget_limits: { max_tokens: 49152, max_tool_calls: 20, max_duration_ms: 300000 },
 } satisfies AgentProfile;
 
+/** Keeps a per-call cap but reserves no final-pass window — not funded. */
+const capOnlyProfile = {
+  ...chatProfile,
+  profile_id: "html-notes-v1",
+  budget_limits: { max_tokens: 196608, max_tool_calls: 20, max_duration_ms: 300000 },
+} satisfies AgentProfile;
+
 describe("resolveRunMaxTokens", () => {
   it("caps a legacy client request at the profile per-call limit", () => {
     const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
@@ -50,6 +57,11 @@ describe("resolveCanonicalRunTokens", () => {
     expect(resolveCanonicalRunTokens(request, chatProfile)).toBe(196608);
   });
 
+  it("keeps request-first precedence for a capped profile without a final-pass reserve", () => {
+    const request = { budget: { max_tokens: 8192 } } satisfies CreateRunRequest;
+    expect(resolveCanonicalRunTokens(request, capOnlyProfile)).toBe(8192);
+  });
+
   it("keeps request-first precedence for profiles without max_output_tokens", () => {
     const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
     expect(resolveCanonicalRunTokens(request, legacyProfile)).toBe(49152);
@@ -57,7 +69,25 @@ describe("resolveCanonicalRunTokens", () => {
 
   it("falls back to the profile run budget when the request sends none", () => {
     expect(resolveCanonicalRunTokens({}, chatProfile)).toBe(196608);
+    expect(resolveCanonicalRunTokens({}, capOnlyProfile)).toBe(196608);
     expect(resolveCanonicalRunTokens({}, legacyProfile)).toBe(49152);
+  });
+});
+
+describe("ProfileRegistry.validateProfileSchema budget_limits.final_reserve_ms", () => {
+  it("accepts a funded reserve of 240000", () => {
+    expect(() => ProfileRegistry.validateProfileSchema({ ...chatProfile })).not.toThrow();
+  });
+
+  it("rejects out-of-range or non-integer reserves", () => {
+    for (const value of [-1, 600001, "x"]) {
+      expect(() =>
+        ProfileRegistry.validateProfileSchema({
+          ...chatProfile,
+          budget_limits: { ...chatProfile.budget_limits, final_reserve_ms: value },
+        }),
+      ).toThrow("budget_limits.final_reserve_ms must be an integer between 0 and 600000");
+    }
   });
 });
 

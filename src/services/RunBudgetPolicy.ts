@@ -22,13 +22,16 @@ export function resolveRunMaxTokens(request: CreateRunRequest, profile: AgentPro
 /**
  * The canonical run budget (the whole run's token pool).
  *
- * A profile that declares `model_constraints.max_output_tokens` owns its run
- * ceiling, so a legacy request still sending `max_tokens: 49152` cannot shrink
- * the funded 196608 run. Profiles without the field keep the legacy
- * request-first precedence.
+ * Only a funded profile — one that reserves a final-pass window via
+ * `budget_limits.final_reserve_ms` — owns its run ceiling: a legacy request
+ * still sending `max_tokens: 49152` cannot shrink the funded 196608 run.
+ * Every other profile (including trading-junior-analyst-v1, music-player-v1
+ * and the html-notes-* profiles) keeps the legacy request-first precedence,
+ * even when it declares `model_constraints.max_output_tokens` for the
+ * per-call cap.
  */
 export function resolveCanonicalRunTokens(request: CreateRunRequest, profile: AgentProfile): number {
-  if (profile.model_constraints?.max_output_tokens !== undefined) {
+  if (profile.budget_limits.final_reserve_ms !== undefined) {
     return profile.budget_limits.max_tokens;
   }
   return request.budget?.max_tokens ?? request.budget?.maxTokens ?? profile.budget_limits.max_tokens;
