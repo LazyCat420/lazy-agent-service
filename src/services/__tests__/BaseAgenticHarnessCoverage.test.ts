@@ -480,6 +480,25 @@ describe("createProviderStream — cumulative token cap", () => {
       harness.createProviderStream([{ role: "user", content: "hi" }], {} as never),
     ).resolves.toBeTruthy();
   });
+
+  it("still exhausts when the client asked for zero per-call tokens", async () => {
+    const provider = {
+      generateTextStream() {
+        return (async function* () {
+          yield "ok";
+        })();
+      },
+    };
+    const { harness } = buildHarness({
+      provider: provider as never,
+      options: { maxIterations: 2, maxTokens: 0, autoApprove: true },
+      canonicalBudget: { limit: 100000, allowFinalPass: () => {} },
+    });
+
+    await expect(
+      harness.createProviderStream([{ role: "user", content: "hi" }], {} as never),
+    ).rejects.toMatchObject({ code: "TOKEN_BUDGET_EXHAUSTED" });
+  });
 });
 
 describe("finalize", () => {
