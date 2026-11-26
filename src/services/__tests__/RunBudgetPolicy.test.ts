@@ -127,8 +127,8 @@ describe("trading-strategy-chat-v1 profile", () => {
     expect(profile).not.toBeNull();
     expect(profile!.model_constraints.max_output_tokens).toBe(2560);
     expect(profile!.budget_limits.max_tokens).toBe(196608);
-    expect(profile!.budget_limits.max_duration_ms).toBe(480000);
-    expect(profile!.budget_limits.final_reserve_ms).toBe(240000);
+    expect(profile!.budget_limits.max_duration_ms).toBe(600000);
+    expect(profile!.budget_limits.final_reserve_ms).toBe(300000);
     expect(profile!.budget_limits.max_tool_calls).toBe(20);
     expect(() => ProfileRegistry.validateProfileSchema(profile!)).not.toThrow();
   });
