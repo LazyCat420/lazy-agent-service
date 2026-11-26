@@ -89,10 +89,11 @@
       "type": "object",
       "required": ["max_tokens", "max_tool_calls", "max_duration_ms"],
       "properties": {
-        "max_tokens": { "type": "integer", "maximum": 32768 },
+        "max_tokens": { "type": "integer", "maximum": 262144 },
         "max_tool_calls": { "type": "integer", "maximum": 50 },
         "max_retries": { "type": "integer", "maximum": 5 },
-        "max_duration_ms": { "type": "integer", "maximum": 300000 },
+        "max_duration_ms": { "type": "integer", "maximum": 600000 },
+        "final_reserve_ms": { "type": "integer", "minimum": 0, "maximum": 600000 },
         "max_concurrent_workers": { "type": "integer", "maximum": 10 }
       }
     },

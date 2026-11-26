@@ -94,10 +94,16 @@ An **Agent Profile** is a declarative, version-controlled manifest that defines 
       "type": "object",
       "required": ["max_tokens", "max_tool_calls", "max_duration_ms"],
       "properties": {
-        "max_tokens": { "type": "integer", "maximum": 32768 },
+        "max_tokens": { "type": "integer", "maximum": 262144 },
         "max_tool_calls": { "type": "integer", "maximum": 50 },
         "max_retries": { "type": "integer", "maximum": 5 },
-        "max_duration_ms": { "type": "integer", "maximum": 300000 },
+        "max_duration_ms": { "type": "integer", "maximum": 600000 },
+        "final_reserve_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600000,
+          "description": "Optional milliseconds of max_duration_ms held back for the final synthesis pass; 0 keeps the legacy 30% reserve."
+        },
         "max_concurrent_workers": { "type": "integer", "maximum": 10 }
       }
     },
@@ -230,4 +236,5 @@ An **Agent Profile** is a declarative, version-controlled manifest that defines 
    - The runtime strictly bounds overrides against profile limits:
      - `requested_budget.max_tokens <= profile.budget_limits.max_tokens`
      - `requested_model in profile.model_constraints.allowed_models`
+     - `profile.budget_limits.final_reserve_ms` (optional, default `0`) holds back up to that many ms of `max_duration_ms` for the final synthesis pass; when non-zero the reserve is floored at `90000` ms and capped at 60% of the deadline, while `0` keeps the legacy 30% reserve.
      - Overrides violating profile constraints are rejected with HTTP 400 `INVALID_RUN_REQUEST`.
