@@ -698,12 +698,13 @@ export default class BaseAgenticHarness {
       const perCallCap = this.context.options.maxTokens;
       const limit =
         (this.context.canonicalBudget as { limit?: number } | undefined)?.limit ?? perCallCap ?? 0;
+      const effectiveCap = passOptions.maxTokens ?? perCallCap;
       const consumed = this.state.overallUsage.inputTokens + this.state.overallUsage.outputTokens;
       const remaining = limit - consumed;
-      if (perCallCap === 0 || remaining <= 0) {
+      if (effectiveCap === 0 || remaining <= 0) {
         throw Object.assign(new Error("Canonical token budget exhausted"), { code: "TOKEN_BUDGET_EXHAUSTED" });
       }
-      passOptions = { ...passOptions, maxTokens: Math.min(passOptions.maxTokens ?? remaining, remaining) };
+      passOptions = { ...passOptions, maxTokens: Math.min(effectiveCap ?? remaining, remaining) };
     }
 
     const clampedMaxTokens = this.clampOutputTokens(messages, passOptions.maxTokens);

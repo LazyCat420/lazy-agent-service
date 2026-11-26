@@ -460,8 +460,10 @@ describe("_emitContextExhaustedAndSpan", () => {
 
 describe("createProviderStream — cumulative token cap", () => {
   it("uses canonicalBudget.limit for the pool, not the per-call options.maxTokens", async () => {
+    let forwarded: { maxTokens?: number } | undefined;
     const provider = {
-      generateTextStream() {
+      generateTextStream(_messages: unknown, _model: unknown, options: { maxTokens?: number }) {
+        forwarded = options;
         return (async function* () {
           yield "ok";
         })();
@@ -476,9 +478,15 @@ describe("createProviderStream — cumulative token cap", () => {
     state.overallUsage.outputTokens = 2000;
 
     // 5000 consumed exceeds the 2560 per-call cap but not the 100000 pool.
-    await expect(
-      harness.createProviderStream([{ role: "user", content: "hi" }], {} as never),
-    ).resolves.toBeTruthy();
+    const stream = await harness.createProviderStream(
+      [{ role: "user", content: "hi" }],
+      {} as never,
+    );
+    expect(stream).toBeTruthy();
+    for await (const _chunk of stream as AsyncIterable<unknown>) {
+      break;
+    }
+    expect(forwarded?.maxTokens).toBe(2560);
   });
 
   it("still exhausts when the client asked for zero per-call tokens", async () => {

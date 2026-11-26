@@ -12,7 +12,7 @@ import type { AgentProfile } from "./ProfileRegistry.ts";
  * keeps its smaller number. Profiles without the field keep the legacy
  * request-first precedence.
  */
-export function resolveRunMaxTokens(request: CreateRunRequest, profile: AgentProfile): number {
+export function resolveRunMaxTokens(request: Pick<CreateRunRequest, "budget">, profile: AgentProfile): number {
   const requested =
     request.budget?.max_tokens ?? request.budget?.maxTokens ?? profile.budget_limits.max_tokens;
   const cap = profile.model_constraints?.max_output_tokens;
@@ -30,7 +30,7 @@ export function resolveRunMaxTokens(request: CreateRunRequest, profile: AgentPro
  * even when it declares `model_constraints.max_output_tokens` for the
  * per-call cap.
  */
-export function resolveCanonicalRunTokens(request: CreateRunRequest, profile: AgentProfile): number {
+export function resolveCanonicalRunTokens(request: Pick<CreateRunRequest, "budget">, profile: AgentProfile): number {
   if ((profile.budget_limits.final_reserve_ms ?? 0) > 0) {
     return profile.budget_limits.max_tokens;
   }
