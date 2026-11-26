@@ -19,7 +19,7 @@
       0,
       0.4
     ],
-    "max_output_tokens": 2560
+    "max_output_tokens": 6144
   },
   "allowed_global_capabilities": [
     "global.web.search@1.2",

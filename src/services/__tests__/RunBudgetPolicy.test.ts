@@ -125,7 +125,7 @@ describe("trading-strategy-chat-v1 profile", () => {
   it("loads from disk, validates, and carries the funded budget", async () => {
     const profile = await ProfileRegistry.loadProfile("trading-strategy-chat-v1");
     expect(profile).not.toBeNull();
-    expect(profile!.model_constraints.max_output_tokens).toBe(2560);
+    expect(profile!.model_constraints.max_output_tokens).toBe(6144);
     expect(profile!.budget_limits.max_tokens).toBe(196608);
     expect(profile!.budget_limits.max_duration_ms).toBe(600000);
     expect(profile!.budget_limits.final_reserve_ms).toBe(300000);
