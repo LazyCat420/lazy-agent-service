@@ -30,7 +30,7 @@ const capOnlyProfile = {
 
 describe("resolveRunMaxTokens", () => {
   it("caps a legacy client request at the profile per-call limit", () => {
-    const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
+    const request = { budget: { max_tokens: 49152 } } satisfies Pick<CreateRunRequest, "budget">;
     expect(resolveRunMaxTokens(request, chatProfile)).toBe(2560);
   });
 
@@ -41,7 +41,7 @@ describe("resolveRunMaxTokens", () => {
   });
 
   it("keeps request-first precedence for profiles without max_output_tokens", () => {
-    const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
+    const request = { budget: { max_tokens: 49152 } } satisfies Pick<CreateRunRequest, "budget">;
     expect(resolveRunMaxTokens(request, legacyProfile)).toBe(49152);
   });
 
@@ -53,12 +53,12 @@ describe("resolveRunMaxTokens", () => {
 
 describe("resolveCanonicalRunTokens", () => {
   it("lets a funded profile own the run ceiling over a legacy request", () => {
-    const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
+    const request = { budget: { max_tokens: 49152 } } satisfies Pick<CreateRunRequest, "budget">;
     expect(resolveCanonicalRunTokens(request, chatProfile)).toBe(196608);
   });
 
   it("keeps request-first precedence for a capped profile without a final-pass reserve", () => {
-    const request = { budget: { max_tokens: 8192 } } satisfies CreateRunRequest;
+    const request = { budget: { max_tokens: 8192 } } satisfies Pick<CreateRunRequest, "budget">;
     expect(resolveCanonicalRunTokens(request, capOnlyProfile)).toBe(8192);
   });
 
@@ -67,12 +67,12 @@ describe("resolveCanonicalRunTokens", () => {
       ...capOnlyProfile,
       budget_limits: { ...capOnlyProfile.budget_limits, final_reserve_ms: 0 },
     } satisfies AgentProfile;
-    const request = { budget: { max_tokens: 8192 } } satisfies CreateRunRequest;
+    const request = { budget: { max_tokens: 8192 } } satisfies Pick<CreateRunRequest, "budget">;
     expect(resolveCanonicalRunTokens(request, zeroReserve)).toBe(8192);
   });
 
   it("keeps request-first precedence for profiles without max_output_tokens", () => {
-    const request = { budget: { max_tokens: 49152 } } satisfies CreateRunRequest;
+    const request = { budget: { max_tokens: 49152 } } satisfies Pick<CreateRunRequest, "budget">;
     expect(resolveCanonicalRunTokens(request, legacyProfile)).toBe(49152);
   });
 
