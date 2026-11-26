@@ -1160,7 +1160,7 @@
   },
   {
     "name": "buy_stock",
-    "description": "Propose a paper buy order for a stock ticker. Supports size_pct (portfolio fraction), quantity (share count), or amount_usd (dollar amount). Sizing and approval are subject to deterministic policy validation.",
+    "description": "Propose a paper buy order for a stock ticker. Supports size_pct (portfolio fraction), quantity (share count), or amount_usd (dollar amount). Sizing and approval are subject to deterministic policy validation. When the market is closed, both limit_min_price and limit_max_price are required (otherwise returns needs_clarification rather than guessing from a stale quote).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1179,6 +1179,14 @@
         "amount_usd": {
           "type": "number",
           "description": "Optional dollar notional to buy (alternative to size_pct)."
+        },
+        "limit_min_price": {
+          "type": "number",
+          "description": "Optional during regular market hours; required when the market is closed (minimum fill price bound, otherwise returns needs_clarification)."
+        },
+        "limit_max_price": {
+          "type": "number",
+          "description": "Optional during regular market hours; required when the market is closed (maximum fill price bound, otherwise returns needs_clarification)."
         }
       },
       "required": [
@@ -2332,7 +2340,7 @@
   },
   {
     "name": "sell_stock",
-    "description": "Execute a paper sell order to close or trim a position for a stock ticker. Supports full close (default), quantity (shares), amount_usd (dollars), or size_pct (fraction of holding).",
+    "description": "Execute a paper sell order to close or trim a position for a stock ticker. Supports full close (default), quantity (shares), amount_usd (dollars), or size_pct (fraction of holding). When the market is closed, both limit_min_price and limit_max_price are required (otherwise returns needs_clarification rather than guessing from a stale quote).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2351,6 +2359,14 @@
         "size_pct": {
           "type": "number",
           "description": "Optional fraction of the position to sell (0.01 to 1.0)."
+        },
+        "limit_min_price": {
+          "type": "number",
+          "description": "Optional during regular market hours; required when the market is closed (minimum fill price bound, otherwise returns needs_clarification)."
+        },
+        "limit_max_price": {
+          "type": "number",
+          "description": "Optional during regular market hours; required when the market is closed (maximum fill price bound, otherwise returns needs_clarification)."
         }
       },
       "required": [
