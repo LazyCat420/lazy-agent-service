@@ -31,6 +31,8 @@ export interface BudgetLimits {
   max_tool_calls: number;
   max_retries?: number;
   max_duration_ms: number;
+  /** Deadline slice held back for the final answer pass; absent means the legacy 30% cap. */
+  final_reserve_ms?: number;
   max_concurrent_workers?: number;
 }
 

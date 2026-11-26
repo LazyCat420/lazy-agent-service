@@ -36,6 +36,7 @@ import { applyObservation, createSessionState, sessionStateHash } from "./Sessio
 import type { ToolCall } from "./harnesses/types.ts";
 import { PARALLEL_TOOL_HINT } from "./TradingToolProtocol.ts";
 import { openingBundleHint } from "./TradingToolStacks.ts";
+import { resolveFinalReserveMs, resolveRunMaxTokens } from "./RunBudgetPolicy.ts";
 
 /** The reason a beforeToolCall decide hook gave for its denial. */
 function hookDenialReason(verdict: Record<string, unknown>): string {
@@ -503,7 +504,8 @@ function setupRunDeadlinesAndAbort(
     }, deadlineMs);
   }
 
-  const finalReserveMs = deadlineMs > 0 ? Math.min(90000, Math.floor(deadlineMs * 0.3)) : 0;
+  const requestedReserveMs = profile.budget_limits?.final_reserve_ms ?? 0;
+  const finalReserveMs = resolveFinalReserveMs(deadlineMs, requestedReserveMs);
   const softMs = deadlineMs > 0 ? deadlineMs - finalReserveMs : 0;
   if (softMs > 0) {
     softDeadlineTimer = setTimeout(() => {
@@ -968,14 +970,6 @@ function resolveRunMaxToolCalls(request: CreateRunRequest, profile: LoadedProfil
     request.budget?.max_tool_calls ??
     request.budget?.maxToolCalls ??
     profile.budget_limits.max_tool_calls
-  );
-}
-
-function resolveRunMaxTokens(request: CreateRunRequest, profile: LoadedProfile): number {
-  return (
-    request.budget?.max_tokens ??
-    request.budget?.maxTokens ??
-    profile.budget_limits.max_tokens
   );
 }
 

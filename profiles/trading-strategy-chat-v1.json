@@ -18,7 +18,8 @@
     "temperature_range": [
       0,
       0.4
-    ]
+    ],
+    "max_output_tokens": 2560
   },
   "allowed_global_capabilities": [
     "global.web.search@1.2",
@@ -26,10 +27,11 @@
     "global.time.now@1.2"
   ],
   "budget_limits": {
-    "max_tokens": 49152,
+    "max_tokens": 196608,
     "max_tool_calls": 20,
     "max_retries": 0,
-    "max_duration_ms": 300000
+    "max_duration_ms": 480000,
+    "final_reserve_ms": 240000
   },
   "retention_class": "AUDITED_SESSION",
   "allowed_local_tools": [
